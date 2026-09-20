@@ -1,6 +1,6 @@
 # 续作交接
 
-最后更新：2026-09-21 01:04（Asia/Singapore）
+最后更新：2026-09-21 01:40（Asia/Singapore）
 
 ## 用户目标与约束
 
@@ -22,6 +22,9 @@
 - 当前质量矩阵增量子模块提交：
   - `src/range-model-lib`: `b3bfb0f feat: persist structural mass matrix selection`
   - `src/range-solver-lib`: `049d7a8 feat: assemble selectable structural mass matrices`
+- 当前轴对称公式增量子模块提交：
+  - `src/range-model-lib`: `b453a49 feat: validate axisymmetric surface capability`
+  - `src/range-solver-lib`: `0040bad feat: solve axisymmetric structural surfaces`
 - 二维公式增量子模块提交：
   - `src/range-model-lib`: `dfa284d feat: add structural surface formulations`
   - `src/range-solver-lib`: `40b08cd feat: solve plane stress and plane strain surfaces`
@@ -54,8 +57,9 @@
 - 通用 DOF registry：`UX/UY/UZ/RX/RY/RZ`、电势、温度、压力。
 - ElementDescriptor：拓扑、阶次、节点数、自然维数、DOF、公式、积分、质量、材料、载荷和结果，并嵌入 capability JSON。
 - 既有基准：TRUSS1、TETRA1 静力/模态。
-- TRI3/QUAD4：曲面组持久化 `PlaneStress`、`PlaneStrain`、`Axisymmetric` 公式状态；平面应力/平面应变装配与恢复已完成，默认平面应变兼容旧文件，轴对称会明确拒绝而非误算。
-- TRI3/QUAD4 验证：四组多单元条带解析解覆盖位移、两个正应力分量和反力；两组自由热膨胀测试覆盖热等效节点力和热应力恢复。
+- TRI3/QUAD4：曲面组持久化 `PlaneStress`、`PlaneStrain`、`Axisymmetric` 公式状态；三类公式的装配与恢复均已完成，默认平面应变兼容旧文件。轴对称首版采用全局 XY 子午面（X = 半径、Y = 旋转轴、Z = 环向），按 `2*pi*r` 积分且不使用曲面厚度。
+- TRI3/QUAD4 验证：四组平面多单元条带解析解覆盖位移、两个正应力分量和反力；平面与轴对称自由热膨胀测试覆盖热等效节点力和热应力恢复；轴对称厚壁圆筒对 Lamé 解完成 2/4/8/16 径向网格收敛验证。
+- 轴对称载荷边界：二维区域上的 pressure/area traction 因语义不明确会被拒绝；压力应施加到子午面边界线，待 Stage 4 补齐一致边界线载荷。
 - 结构质量矩阵：`RProblemSetup` 已持久化一致/集中质量选择，默认一致质量兼容旧模型；线、面、体单元装配均采用该选择。
 - 结构质量验证：TRUSS1、TETRA1、TRI3、QUAD4 的固定—自由杆/膜解析模态均覆盖一致与集中质量，两者分别从解析值上方和下方收敛，误差小于 2%。
 - 局部坐标：线/面单元变换矩阵已纠正为节点块对角形式；静力/模态桁架和二维面单元回归均通过。
@@ -65,11 +69,10 @@
 
 仍待完成：
 
-1. TRI3/QUAD4 轴对称公式；补独立 patch 和网格收敛证据。面单元模态证据已由 TRI3/QUAD4 两种质量矩阵解析基准补齐。
-2. 通用 DOF 装配：`RSolverStress` 仍硬编码每节点 3 个平移 DOF。
-3. BEAM1/BEAM2 与框架：实现 `UX/UY/UZ/RX/RY/RZ`、局部坐标、截面和 6 DOF 装配。
-4. TRUSS2、TRI2、QUAD2 仍未实现；QUAD2 当前枚举定义为 9 节点。
-5. 材料接口的温度/内部状态依赖与后续压电耦合尚未实现。
+1. 通用 DOF 装配：`RSolverStress` 仍硬编码每节点 3 个平移 DOF。
+2. BEAM1/BEAM2 与框架：实现 `UX/UY/UZ/RX/RY/RZ`、局部坐标、截面和 6 DOF 装配。
+3. TRUSS2、TRI2、QUAD2 仍未实现；QUAD2 当前枚举定义为 9 节点。
+4. 材料接口的温度/内部状态依赖与后续压电耦合尚未实现。
 
 ### Stage 3：尚未接入新后端
 
@@ -82,8 +85,8 @@
 - `tst_problem_setup`：通过，覆盖质量矩阵默认值、复制、非法值拒绝及一致/集中质量的 ASCII/二进制往返。
 - `tst_surface`：通过，覆盖默认值、复制、无效公式及 ASCII/二进制往返。
 - `tst_element`：通过，包含线/面局部—全局变换矩阵块对角测试。
-- `tst_solver_stress`：通过；除既有静力、热应变和约束回归外，新增 TRUSS1、TETRA1、TRI3、QUAD4 的一致/集中质量解析模态测试。
-- Release 全量 CTest：32/32 通过，总耗时 21.16 秒。
+- `tst_solver_stress`：通过；除既有静力、热应变、约束和质量矩阵回归外，新增 TRI3/QUAD4 轴对称自由热膨胀、厚壁圆筒 Lamé 解网格收敛和非法子午面几何拒绝测试。
+- Release 全量 CTest：32/32 通过，总耗时 25.43 秒。
 - 无 Qt DLL 弹窗或测试超时。
 - 受影响测试目标的 Release 构建成功。
 
@@ -107,9 +110,9 @@
 
 ## 下一步
 
-1. 实现 TRI3/QUAD4 轴对称公式，并补独立 patch 与网格收敛验证。
-2. 设计通用 DOF equation book 与 6 DOF 梁/框架装配，完成 Stage 2 剩余退出条件。
-3. 补 TRUSS2、TRI2、QUAD2，或先通过 ADR 明确二次单元的优先级与 QUAD2 节点约定。
+1. 设计通用 DOF equation book 与 6 DOF 梁/框架装配，完成 Stage 2 核心剩余退出条件。
+2. 补 TRUSS2、TRI2、QUAD2，或先通过 ADR 明确二次单元的优先级与 QUAD2 节点约定。
+3. 扩展材料接口的温度/内部状态依赖，为后续压电和热耦合保留稳定契约。
 4. Stage 2 稳定后进行 Gmsh 适配 spike，不直接把第三方 API 散布到模型/GUI。
 
 推荐命令：
