@@ -379,6 +379,8 @@ applicationVersion, pluginVersions
 
 目标：将“structural-only 硬门禁”改造成可配置、可查询的能力系统。
 
+状态：完成。默认保留完整已注册功能，structural profile 仅在显式选择时生效。
+
 交付物：
 
 - capability registry 成为分析类型、单元、材料、约束、网格器和求解器的统一注册中心；

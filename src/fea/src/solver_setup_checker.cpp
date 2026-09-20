@@ -36,6 +36,10 @@ void SolverSetupChecker::perform(QStringList &warnings, QStringList &errors) con
     warnings.clear();
     errors.clear();
 
+    if (this->rModel.getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
+    {
+        errors.append(QObject::tr("No solver problem task is configured."));
+    }
     this->checkElements(warnings,errors);
     this->checkMaterials(warnings,errors);
     this->checkBoundaryConditions(warnings,errors);

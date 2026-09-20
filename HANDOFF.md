@@ -1,6 +1,6 @@
 # 续作交接
 
-最后更新：2026-09-20 16:15（Asia/Singapore）
+最后更新：2026-09-20 16:45（Asia/Singapore）
 
 ## 本次目标
 
@@ -13,7 +13,7 @@
 
 ### Stage 0
 
-已完成代码与验证，尚待提交：
+已完成并提交（`f39992c build: complete Windows runtime packaging baseline`）：
 
 - CMake 将 `libomp140.x86_64.dll` 纳入 Windows 安装树，缺失时配置失败。
 - 测试构建自动把 Qt runtime 与 `Qt6Test.dll` 部署到测试执行文件旁。
@@ -31,15 +31,19 @@
 
 ### Stage 1
 
-尚未开始本轮纠正。工作树中已有未提交的 structural profile/capability 实现，但其行为过度：GUI 会过滤或拒绝非结构功能，CLI 默认使用 `StructuralProduct`。应改为：
+实现与验证完成，子模块已提交，根仓库指针待提交：
 
-- 默认 `AllRegisteredSolvers`，保留旧功能；
-- structural workspace/profile 为显式可选模式；
-- 只有选择结构产品模式时才执行结构能力验证；
-- capability registry 可供 GUI、求解器和后续 Agent 查询；
-- 更新测试，确保默认模式允许声学/热等已注册功能，显式结构模式仍拒绝不支持配置。
+- 已移除 GUI、报告、材料、结果选择器和模型读取路径中的全局 structural-only 过滤/拒绝；非结构模型不会因打开文件被拒绝。
+- `RSolver` 默认策略已改为 `AllRegisteredSolvers`；`StructuralProduct` 仅在显式传入时验证结构能力。
+- 声学测试已改回默认构造，用于证明默认策略保留非结构求解。
+- 新增统一 `RCapabilityRegistry`，覆盖 analysis、element、material、boundary condition、initial condition、environment condition、mesher、solver 八个域；记录 registered、implemented、tested、validated 和 profile exposure，并支持版本化 JSON 序列化。
+- `RStructuralProductProfile` 已改为查询中央 registry，而不是重复维护分析/单元/材料/约束清单。
+- 新增 registry 域覆盖、full/structural exposure、JSON 往返和非法 JSON 测试；新增默认策略允许热求解器构造的测试。
+- `tst_structural_product_profile`、`tst_structural_solver_gate`、`tst_solver_acoustic` 聚焦测试 3/3 通过；Release 全量构建和 CTest 28/28 通过（约 9.06 秒）。
+- `range-model-lib` 已提交 `bf4a825 feat: add queryable product capability registry`。
+- `range-solver-lib` 已提交 `6722d36 feat: make structural solver policy opt-in`。
 
-涉及未提交改动：根仓库 `src/fea*` 多个文件，以及子模块 `src/range-model-lib`、`src/range-solver-lib`。不得粗暴还原；应逐项重构。
+未提交位置：根仓库子模块指针、`src/fea/src/solver_setup_checker.cpp`、阶段文档与本交接文件。应先完成根提交，再进入 Stage 2。
 
 ### Stage 2
 
@@ -62,7 +66,7 @@ git status --short
 Get-Process | Where-Object { $_.ProcessName -match 'fea|ctest|tst_' }
 ```
 
-先精确暂存并提交 Stage 0 文件，然后进入 Stage 1；不要把已有 Stage 1 草案混入 Stage 0 提交。
+提交 Stage 1 根仓库指针与记录，然后审计 Stage 2 的现有自由度、单元公式和测试覆盖。
 
 推荐回归命令：
 
@@ -76,6 +80,6 @@ ctest --test-dir build\vs2026 -C Release --output-on-failure -j 8 --timeout 120
 ## Git 状态约束
 
 - 当前分支：`feature/structural-profile`。
-- 最近提交：`485fc54 docs: plan dynamics control and agent roadmap`。
-- Stage 0 的 CMake 与文档修改尚未提交。
-- 两个子模块及 GUI/CLI 中存在先前未提交的 Stage 1 草案，提交 Stage 0 时只精确暂存 Stage 0 文件，避免混入 Stage 1。
+- 最近提交：`f39992c build: complete Windows runtime packaging baseline`。
+- Stage 0 已提交。
+- 两个子模块和根仓库中存在尚未提交的 Stage 1 实现；提交顺序必须是 model 子模块、solver 子模块、根仓库指针与记录。
