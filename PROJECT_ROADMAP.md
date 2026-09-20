@@ -401,7 +401,7 @@ applicationVersion, pluginVersions
 
 目标：为梁、板壳、压电和控制状态建立可扩展基础。
 
-状态：进行中。通用 DOF registry 与 ElementDescriptor 已完成；单元公式与求解器装配仍在补齐。
+状态：进行中。通用 DOF registry 与 ElementDescriptor 已完成；WEDGE6/HEX8 形函数、积分、质量、体积、边界面和三维弹性求解闭环已完成；二维公式选择与 6 DOF 梁/框架装配仍待补齐。
 
 交付物：
 
@@ -410,7 +410,7 @@ applicationVersion, pluginVersions
 - 线单元：桁架、二维/三维梁、框架；
 - 面单元：TRI3/QUAD4 平面应力、平面应变、轴对称；
 - 后续板壳单元的转动自由度和局部坐标基础；
-- 体单元：验证 TET4，增加 WEDGE6、HEX8；
+- 体单元：TET4 已有静力/模态基准；WEDGE6、HEX8 已完成形函数、Jacobian、质量、体积、边界面、仿射 patch 与轴向解析基准；
 - 一致质量/集中质量选项；
 - 材料接口允许温度和内部状态依赖。
 
@@ -426,6 +426,8 @@ applicationVersion, pluginVersions
 退出条件：每个暴露单元至少有单元测试、解析基准和网格收敛证据。
 
 ### Stage 3：一维、二维和三维网格工具
+
+状态：待 Stage 2 核心单元稳定后接入。现有 TetGen 保留为四面体后端；优先评估 Gmsh 官方 C++ API，先验证许可证、Windows 二进制依赖、单元/物理组映射与命名集合保真。
 
 交付物：
 

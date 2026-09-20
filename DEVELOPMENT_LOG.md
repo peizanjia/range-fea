@@ -33,3 +33,15 @@
 - descriptor JSON 嵌入 capability registry 元数据，后续 GUI 和 Agent 可直接查询，而不需要解析求解器分支。
 - 验证：新增 `tst_element_descriptor`；Release 全量 CTest 从 28 项增加到 29 项，29/29 通过，总耗时约 8.63 秒。
 - 子模块提交：`range-model-lib` 为 `2caf682`。
+
+## 2026-09-20 Stage 2 WEDGE6/HEX8 体单元闭环
+
+- `range-model-lib` 新增 WEDGE6 的三角形 3 点 × 轴向 2 点积分，以及 HEX8 的 `2×2×2` Gauss 积分；两类单元均提供形函数和自然坐标导数。
+- 补齐 WEDGE6/HEX8 的数值体积计算和外表面生成：WEDGE6 生成 2 个三角面与 3 个四边形面，HEX8 生成 6 个四边形面。
+- 新增 `tst_element_volume`，验证分片一致性、导数和为零、积分总权重、一致质量矩阵对称性、质量向量、Jacobian、仿射线性场梯度再现、体积和边界面拓扑。
+- 复用 `RSolverStress` 的通用三维实体装配，以 30 段轴向杆分别验证 WEDGE6 与 HEX8 的端位移、均匀轴向应力和支座反力。
+- 测试纠正：两个 WEDGE6 拼成方形截面时，四个端点的等分集中力不是一致等效载荷；改为按三角形分摊面积使用 `1/6, 1/3, 1/3, 1/6` 后，两类单元均精确再现解析轴向解。没有通过放宽容差掩盖该问题。
+- capability registry 已将 WEDGE6/HEX8 标记为结构公式 implemented、tested、validated，并暴露给 structural profile。
+- 验证：三个聚焦测试 3/3 通过；Release 全量 CTest 30/30 通过，总耗时约 12.21 秒。
+- 构建说明：受影响的三个测试目标均成功完成 Release 重建。`ALL_BUILD` 在未修改的 GUI `fea.vcxproj` 巨型单批次编译阶段超过 10 分钟工具上限后被终止；该命令把约百个 GUI 源文件交给单个无 `/MP` 的 `cl.exe`，属于现有构建性能问题，不是编译错误。
+- 子模块提交：`range-model-lib` 为 `f381f2f`；`range-solver-lib` 为 `88ff9d3`。

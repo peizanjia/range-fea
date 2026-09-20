@@ -1,100 +1,109 @@
 # 续作交接
 
-最后更新：2026-09-20 19:50（Asia/Singapore）
+最后更新：2026-09-20 20:12（Asia/Singapore）
 
-## 本次目标
+## 用户目标与约束
 
 1. 执行、纠错并完成 `PROJECT_ROADMAP.md` 的 Stage 0、Stage 1、Stage 2。
-2. Stage 3 网格能力优先集成成熟工具，不重复实现已有可靠算法。
-3. 保留仓库原有非结构功能；它们不是本轮开发任务，不应被全局硬门禁或删除。
-4. 在有独立价值且验证通过时自动提交，保持仓库整洁，并维护交互/开发记录。
+2. Stage 3 网格能力优先集成成熟工具，不重复实现可靠算法；现有 TetGen 继续保留。
+3. 保留仓库原有非结构功能；它们不是当前开发任务，不应被全局禁用或删除。
+4. 有独立价值且验证通过时自动提交；保持仓库整洁，维护 `DEVELOPMENT_LOG.md` 与本文件。
+5. 后续动力学必须预留控制输入、压电/拉索、全状态热耦合和其他控制耦合接口；Agent 最终作为与各阶段任务深度耦合的 GUI 侧栏，并可通过受控接口做二次开发。
+6. 若因额度或平台限制停止，必须先在本文件写清目标、进度、验证、故障和下一步。
 
-## 当前进度
+## 当前分支与已完成提交
 
-### Stage 0
+- 根仓库分支：`feature/structural-profile`。
+- Stage 0 根提交：`f39992c build: complete Windows runtime packaging baseline`。
+- Stage 1 根提交：`d770cfe feat: make structural workspace optional`。
+- Stage 2 元数据基础根提交：`1c19739 feat: establish stage 2 element metadata foundation`。
+- 本轮子模块提交：
+  - `src/range-model-lib`: `f381f2f feat: implement wedge and hexahedral solids`
+  - `src/range-solver-lib`: `88ff9d3 test: validate wedge and hexahedral solids`
+- 上述两个新子模块指针、路线图、开发日志和本 HANDOFF 尚待根仓库提交。
 
-已完成并提交（`f39992c build: complete Windows runtime packaging baseline`）：
+## 阶段状态
 
-- CMake 将 `libomp140.x86_64.dll` 纳入 Windows 安装树，缺失时配置失败。
-- 测试构建自动把 Qt runtime 与 `Qt6Test.dll` 部署到测试执行文件旁。
-- Inno Setup 探测支持当前用户安装目录 `%LOCALAPPDATA%/Programs/Inno Setup 6`。
-- Release 全量构建通过，CTest 28/28 通过。
-- 独立 install-tree 中 `fea-solver --version` 成功。
-- 已生成：
-  - `build/packages/range-fea-1.3.0-winnt-amd64.zip`
-  - `build/vs2026/range-fea-1.3.0-winnt-amd64.exe`
-- 正式安装器静默安装、CLI 启动和静默卸载均成功。
-- GUI 首次安装后启动时出现 `Crash report - Range FEA`，已确认是此前强制终止进程留下的过期 `range-fea.lck`。移走失效锁后，从独立 install-tree 启动得到正常主窗口（标题含 `[Beam]`、`Responding=True`），通过窗口关闭消息正常退出，退出码 0，锁文件正常清除。
-- 干净 Windows 虚拟机终验尚未执行；当前系统未发现可直接调用的 Windows Sandbox，查询可选功能还需要管理员权限。
+### Stage 0：完成
 
-关联文档：`DEVELOPMENT_LOG.md`、`STRUCTURAL_BASELINE.md`、`PROJECT_ROADMAP.md`。
+- Windows 测试目录自动部署 Qt runtime 与 `Qt6Test.dll`，已消除 `tst_structural_product_profile.exe` 缺少 `Qt6Core.dll` 的循环弹窗。
+- 安装树包含 MSVC runtime 与 `libomp140.x86_64.dll`；独立 `fea-solver --version` 成功。
+- ZIP 与 Inno Setup EXE 已生成；静默安装、CLI 启动、静默卸载成功。
+- GUI 从独立安装树启动、响应、正常关闭均成功。先前 crash report 是强制终止留下的过期 `range-fea.lck`，不是 Qt runtime 缺失。
+- 尚缺发布前的干净 Windows 虚拟机终验；当前主机没有可直接使用的 Windows Sandbox。
 
-### Stage 1
+### Stage 1：完成
 
-实现与验证完成，子模块已提交，根仓库指针待提交：
+- 非结构功能保留；GUI、文件读取、材料、结果和报告路径不再进行全局 structural-only 拒绝。
+- `RSolver` 默认使用 `AllRegisteredSolvers`；`StructuralProduct` 是显式可选策略。
+- `RCapabilityRegistry` 统一管理八个能力域及 registered/implemented/tested/validated/profile exposure，并支持版本化 JSON。
+- structural profile 查询中央 registry，不再维护重复清单。
 
-- 已移除 GUI、报告、材料、结果选择器和模型读取路径中的全局 structural-only 过滤/拒绝；非结构模型不会因打开文件被拒绝。
-- `RSolver` 默认策略已改为 `AllRegisteredSolvers`；`StructuralProduct` 仅在显式传入时验证结构能力。
-- 声学测试已改回默认构造，用于证明默认策略保留非结构求解。
-- 新增统一 `RCapabilityRegistry`，覆盖 analysis、element、material、boundary condition、initial condition、environment condition、mesher、solver 八个域；记录 registered、implemented、tested、validated 和 profile exposure，并支持版本化 JSON 序列化。
-- `RStructuralProductProfile` 已改为查询中央 registry，而不是重复维护分析/单元/材料/约束清单。
-- 新增 registry 域覆盖、full/structural exposure、JSON 往返和非法 JSON 测试；新增默认策略允许热求解器构造的测试。
-- `tst_structural_product_profile`、`tst_structural_solver_gate`、`tst_solver_acoustic` 聚焦测试 3/3 通过；Release 全量构建和 CTest 28/28 通过（约 9.06 秒）。
-- `range-model-lib` 已提交 `bf4a825 feat: add queryable product capability registry`。
-- `range-solver-lib` 已提交 `6722d36 feat: make structural solver policy opt-in`。
+### Stage 2：进行中
 
-未提交位置：根仓库子模块指针、`src/fea/src/solver_setup_checker.cpp`、阶段文档与本交接文件。应先完成根提交，再进入 Stage 2。
+已完成：
 
-### Stage 2
+- 通用 DOF registry：`UX/UY/UZ/RX/RY/RZ`、电势、温度、压力。
+- ElementDescriptor：拓扑、阶次、节点数、自然维数、DOF、公式、积分、质量、材料、载荷和结果，并嵌入 capability JSON。
+- 既有基准：TRUSS1、TETRA1 静力/模态；TRI1/QUAD1 当前为二维膜且本构实际对应平面应变。
+- WEDGE6：6 点积分、形函数/导数、质量、Jacobian、数值体积、2 TRI + 3 QUAD 外表面、仿射 patch、三维弹性轴向解析解与反力验证。
+- HEX8：`2×2×2` 积分、形函数/导数、质量、Jacobian、数值体积、6 QUAD 外表面、仿射 patch、三维弹性轴向解析解与反力验证。
+- capability registry 已将 WEDGE6/HEX8 暴露为 implemented/tested/validated 结构单元。
 
-正在执行现状盘点：
+仍待完成：
 
-- `RSolverStress` 的全局自由度目前硬编码为每节点 3 个平移量，无法直接承载梁/壳需要的 `RX/RY/RZ`。
-- `TRUSS1` 有轴向刚度、一致质量、热应变、重力、静力与模态解析测试。
-- `TRI1/QUAD1` 有 3D 空间中的二维膜公式和一致质量；当前本构矩阵实际对应平面应变。缺少独立平面应力/平面应变选择、轴对称公式和专用解析/收敛测试。
-- `TETRA1` 有 3D 线弹性、一致质量、热应变、静力与模态基准。
-- `TRUSS2/BEAM1/BEAM2/TRI2/QUAD2/WEDGE1/HEXA1` 在枚举中标记为未实现；形函数工厂对这些类型返回空，不能安全暴露给结构求解器。
-- 线、面、体装配均直接假定 3 平移自由度，必须先建立通用 DOF registry 和 element descriptor，再逐步重构装配。
+1. TRI3/QUAD4：增加显式平面应力、平面应变、轴对称公式选择；补解析、patch、网格收敛和静力/模态证据。
+2. 一致质量/集中质量的模型级选择，而不只保留静态元数据。
+3. 通用 DOF 装配：`RSolverStress` 仍硬编码每节点 3 个平移 DOF。
+4. BEAM1/BEAM2 与框架：实现 `UX/UY/UZ/RX/RY/RZ`、局部坐标、截面和 6 DOF 装配。
+5. TRUSS2、TRI2、QUAD2 仍未实现；QUAD2 当前枚举定义为 9 节点。
+6. 材料接口的温度/内部状态依赖与后续压电耦合尚未实现。
 
-已完成基础增量：
+### Stage 3：尚未接入新后端
 
-- 通用 DOF registry 与 element descriptor 已在 `range-model-lib` 提交为 `2caf682 feat: describe nodal dofs and element contracts`。
-- descriptor 覆盖全部单元枚举并以 JSON 嵌入 capability registry，供 GUI/Agent 查询。
-- 新增 `tst_element_descriptor` 后 Release 全量 CTest 为 29/29 通过（约 8.63 秒）。
+- 当前已有 TetGen 四面体体网格。
+- 计划：通过统一 mesher 接口保留 TetGen，并优先评估 Gmsh 官方 C++ API 作为线、面、四边形/六面体或混合网格及 CAD 网格后端。
+- 集成前先验证许可证、Windows 二进制依赖、节点/单元映射、物理组到命名集合的保真，以及材料/约束/传感器/执行器重映射。
 
-下一增量：先补齐 WEDGE6/HEX8 的形函数、Jacobian、质量与 3D 线弹性解析/patch test；这两类单元可复用现有每节点 3 平移 DOF 的体单元装配。随后补 TRI3/QUAD4 平面公式选择与测试，最后单独重构 6 DOF 梁/框架装配。
+## 本轮验证结果
 
-### Stage 3
+- `tst_element_volume`：通过。
+- `tst_structural_product_profile`：通过。
+- `tst_solver_stress`：通过，包含 WEDGE6/HEX8 两个新数据行。
+- 聚焦回归：3/3 通过。
+- Release 全量 CTest：30/30 通过，总耗时约 12.21 秒。
+- 无 Qt DLL 弹窗或测试超时。
+- 受影响测试目标的 Release 构建成功。
 
-尚未接入新工具。当前已有 TetGen 体网格。建议采用统一 `IMesher` 接口：保留 TetGen 作为四面体后端，评估 Gmsh 官方 C++ API 作为线/面/混合网格及后续 CAD 网格后端；先做许可证、二进制依赖、数据映射和命名集合保真验证，再决定集成方式。
+`ALL_BUILD` 说明：命令在 `fea.vcxproj` 编译阶段超过 10 分钟工具上限。其响应文件把约百个 GUI `.cpp` 一次交给单个没有 `/MP` 的 `cl.exe`；进程持续消耗 CPU且正常响应，没有编译错误。外层超时后仅终止该轮明确核对的 `cmake/MSBuild/cl` PID。三个受影响测试目标随后单独重建成功。不要把这次有界超时记录为全量构建通过，也不要误判为代码死锁。
 
-## 已知故障与纠正
+## 关键测试纠正
 
-- 首次 Release CTest 因测试目录缺少 `Qt6Core.dll`，Windows 连续弹出加载错误。已终止 CTest并修复部署规则。
-- 第二次单测缺少 `Qt6Test.dll` 并超时。顶层 CMake 现导入 `Qt6::Test` 并复制其 runtime；单测和 28 项全测随后通过。
-- 不要再次在 runtime 未验证前并行启动全部 Windows 测试；先运行 `tst_structural_product_profile`，再全量 CTest，并保留 `--timeout`。
+- 两个 WEDGE6 拼成方形截面时，端面四节点的等分集中力不是一致等效面力，会产生约 1.8% 的截面畸变。
+- 测试现按三角形分摊面积使用节点权重 `1/6, 1/3, 1/3, 1/6`；修正后端位移、轴向应力和总反力均通过 1% 解析解容差。
+- 该纠正应保留，不能改回等分节点力后再放宽容差。
 
-## 下一步命令
+## 已知构建/环境事项
+
+- PowerShell 读取中文文档必须使用 `Get-Content -Encoding utf8`，否则显示为乱码；文件本身是 UTF-8。
+- `pwsh.exe is not recognized` 是现有 post-build release note 脚本警告，目标仍成功生成。
+- MSBuild 的 `/nodemode ... /nodeReuse:true` 进程是正常编译节点，不要当作孤儿进程随意终止。
+- 测试顺序仍建议先聚焦再全量，并始终设置 `--timeout`。
+
+## 下一步
+
+1. 提交根仓库的两个子模块指针和三份记录文档。
+2. 审核 TRI1/QUAD1 当前二维本构、厚度、局部坐标与结果恢复路径，设计模型级 `PlaneStress/PlaneStrain/Axisymmetric` 选择，避免用 capability 元数据替代实际模型状态。
+3. 先实现平面应力/平面应变并建立单元 patch + 多单元解析/收敛测试；轴对称单独实现和验证。
+4. 完成二维增量后，再设计通用 DOF equation book 与 6 DOF 梁/框架装配。
+5. Stage 2 稳定后进行 Gmsh 适配 spike，不直接把第三方 API 散布到模型/GUI。
+
+推荐命令：
 
 ```powershell
 git status --short
-Get-Process | Where-Object { $_.ProcessName -match 'fea|ctest|tst_' }
-```
-
-提交 Stage 2 DOF/descriptor 根仓库指针与记录，然后实现 WEDGE6/HEX8 并更新 capability evidence。
-
-推荐回归命令：
-
-```powershell
-cmake -S src -B build\vs2026
-cmake --build build\vs2026 --config Release --target ALL_BUILD --parallel 8
-ctest --test-dir build\vs2026 -C Release -R '^tst_structural_product_profile$' --output-on-failure --timeout 30
+git submodule status
+cmake --build build\vs2026 --config Release --target tst_element_volume tst_structural_product_profile tst_solver_stress --parallel 8
+ctest --test-dir build\vs2026 -C Release -R '^(tst_element_volume|tst_structural_product_profile|tst_solver_stress)$' --output-on-failure -j 3 --timeout 120
 ctest --test-dir build\vs2026 -C Release --output-on-failure -j 8 --timeout 120
 ```
-
-## Git 状态约束
-
-- 当前分支：`feature/structural-profile`。
-- 最近提交：`f39992c build: complete Windows runtime packaging baseline`。
-- Stage 0 已提交。
-- 两个子模块和根仓库中存在尚未提交的 Stage 1 实现；提交顺序必须是 model 子模块、solver 子模块、根仓库指针与记录。
