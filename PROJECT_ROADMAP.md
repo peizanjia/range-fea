@@ -2,7 +2,7 @@
 
 状态：规划基线（后续通过小型、可验证提交持续更新）
 
-更新时间：2026-09-20
+更新时间：2026-09-21
 
 适用仓库：`range-fea` 及其 `range-model-lib`、`range-solver-lib`、`range-gui-lib`、`range-ai-lib` 子模块
 
@@ -21,11 +21,11 @@
 ### 2.1 已经完成
 
 - Windows 11、Visual Studio 2026、Qt 6.11 的 Debug/Release 构建基线已经建立；
-- 当前自动测试共 28 项，Debug 和 Release 均可通过；
+- 当前 Release 自动测试共 31 项，全部可通过；
 - 静力应力、模态、四面体杆、桁架和三维梁文件已经形成数值基线；
 - GUI、CLI 求解器、结果文件链和 OpenGL 加载已经在参考主机上完成冒烟验证；
 - 已有材料、边界条件、环境条件、结果变量、TetGen 四面体网格和报告框架；
-- 已有 capability registry 和 structural product profile 原型，但尚未形成正式集成提交；
+- capability registry 和 structural product profile 已形成正式集成提交；
 - `range-ai-lib` 已有多供应商对话、会话状态、HTTP 请求、重试和 Agent 设置管理基础。
 
 详细基线见 `STRUCTURAL_BASELINE.md`。
@@ -401,14 +401,14 @@ applicationVersion, pluginVersions
 
 目标：为梁、板壳、压电和控制状态建立可扩展基础。
 
-状态：进行中。通用 DOF registry 与 ElementDescriptor 已完成；WEDGE6/HEX8 形函数、积分、质量、体积、边界面和三维弹性求解闭环已完成；二维公式选择与 6 DOF 梁/框架装配仍待补齐。
+状态：进行中。通用 DOF registry 与 ElementDescriptor 已完成；WEDGE6/HEX8 三维弹性闭环已完成；TRI3/QUAD4 已完成模型级平面应力/平面应变选择、持久化、静力解析基准和热应变验证。轴对称公式、质量模型选择与 6 DOF 梁/框架装配仍待补齐。
 
 交付物：
 
 - 通用 DOF registry，支持 `UX/UY/UZ/RX/RY/RZ` 和电势等场自由度；
 - element descriptor：拓扑、自由度、积分、材料、载荷和结果能力；
 - 线单元：桁架、二维/三维梁、框架；
-- 面单元：TRI3/QUAD4 平面应力、平面应变、轴对称；
+- 面单元：TRI3/QUAD4 平面应力、平面应变已完成；轴对称仍待实现；
 - 后续板壳单元的转动自由度和局部坐标基础；
 - 体单元：TET4 已有静力/模态基准；WEDGE6、HEX8 已完成形函数、Jacobian、质量、体积、边界面、仿射 patch 与轴向解析基准；
 - 一致质量/集中质量选项；
@@ -670,12 +670,12 @@ Agent 发现能力缺口
 
 接下来建议按以下小步推进：
 
-1. 完成 Stage 1：保留 capability registry，解除 structural-only 全局硬门禁；
-2. 写出 DOF registry、ElementDescriptor 和控制时步接口的 ADR；
-3. 为现有杆、三角形、四边形、四面体建立统一验证矩阵；
+1. 完成 Stage 2 剩余二维公式：轴对称 TRI3/QUAD4、质量模型选择及相应解析/patch/模态验证；
+2. 设计并实现通用 DOF equation book，再补 6 DOF 梁/框架装配；
+3. 写出控制时步、状态编号与外部耦合协议 ADR；
 4. 实现二阶动力学最小垂直切片：单自由度 + Newmark + 状态记录；
 5. 实现控制耦合最小切片：单传感器、单执行器、进程内控制器、完整回放；
-6. 再扩展到梁单元、二维面单元网格和常用约束；
+6. Stage 2 退出条件满足后进行 Gmsh 适配 spike，并扩展二维面网格和常用约束；
 7. 压电、拉索和全状态热耦合在统一接口上分别落地；
 8. 核心命令接口稳定后启动 GUI 重构和 Agent 侧栏。
 

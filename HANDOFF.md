@@ -1,6 +1,6 @@
 # 续作交接
 
-最后更新：2026-09-20 20:12（Asia/Singapore）
+最后更新：2026-09-21 00:43（Asia/Singapore）
 
 ## 用户目标与约束
 
@@ -17,10 +17,14 @@
 - Stage 0 根提交：`f39992c build: complete Windows runtime packaging baseline`。
 - Stage 1 根提交：`d770cfe feat: make structural workspace optional`。
 - Stage 2 元数据基础根提交：`1c19739 feat: establish stage 2 element metadata foundation`。
-- 本轮子模块提交：
+- WEDGE6/HEX8 根提交：`b019a6f feat: complete wedge and hexahedral solid support`。
+- 当前二维公式增量子模块提交：
+  - `src/range-model-lib`: `dfa284d feat: add structural surface formulations`
+  - `src/range-solver-lib`: `40b08cd feat: solve plane stress and plane strain surfaces`
+- 上一体单元增量子模块提交：
   - `src/range-model-lib`: `f381f2f feat: implement wedge and hexahedral solids`
   - `src/range-solver-lib`: `88ff9d3 test: validate wedge and hexahedral solids`
-- 上述两个新子模块指针、路线图、开发日志和本 HANDOFF 尚待根仓库提交。
+- 当前两个新子模块指针、路线图、开发日志和本 HANDOFF 与本文件所在根提交一并交付。
 
 ## 阶段状态
 
@@ -45,14 +49,17 @@
 
 - 通用 DOF registry：`UX/UY/UZ/RX/RY/RZ`、电势、温度、压力。
 - ElementDescriptor：拓扑、阶次、节点数、自然维数、DOF、公式、积分、质量、材料、载荷和结果，并嵌入 capability JSON。
-- 既有基准：TRUSS1、TETRA1 静力/模态；TRI1/QUAD1 当前为二维膜且本构实际对应平面应变。
+- 既有基准：TRUSS1、TETRA1 静力/模态。
+- TRI3/QUAD4：曲面组持久化 `PlaneStress`、`PlaneStrain`、`Axisymmetric` 公式状态；平面应力/平面应变装配与恢复已完成，默认平面应变兼容旧文件，轴对称会明确拒绝而非误算。
+- TRI3/QUAD4 验证：四组多单元条带解析解覆盖位移、两个正应力分量和反力；两组自由热膨胀测试覆盖热等效节点力和热应力恢复。
+- 局部坐标：线/面单元变换矩阵已纠正为节点块对角形式；静力/模态桁架和二维面单元回归均通过。
 - WEDGE6：6 点积分、形函数/导数、质量、Jacobian、数值体积、2 TRI + 3 QUAD 外表面、仿射 patch、三维弹性轴向解析解与反力验证。
 - HEX8：`2×2×2` 积分、形函数/导数、质量、Jacobian、数值体积、6 QUAD 外表面、仿射 patch、三维弹性轴向解析解与反力验证。
 - capability registry 已将 WEDGE6/HEX8 暴露为 implemented/tested/validated 结构单元。
 
 仍待完成：
 
-1. TRI3/QUAD4：增加显式平面应力、平面应变、轴对称公式选择；补解析、patch、网格收敛和静力/模态证据。
+1. TRI3/QUAD4 轴对称公式；补独立 patch、网格收敛和面单元模态证据。
 2. 一致质量/集中质量的模型级选择，而不只保留静态元数据。
 3. 通用 DOF 装配：`RSolverStress` 仍硬编码每节点 3 个平移 DOF。
 4. BEAM1/BEAM2 与框架：实现 `UX/UY/UZ/RX/RY/RZ`、局部坐标、截面和 6 DOF 装配。
@@ -67,11 +74,10 @@
 
 ## 本轮验证结果
 
-- `tst_element_volume`：通过。
-- `tst_structural_product_profile`：通过。
-- `tst_solver_stress`：通过，包含 WEDGE6/HEX8 两个新数据行。
-- 聚焦回归：3/3 通过。
-- Release 全量 CTest：30/30 通过，总耗时约 12.21 秒。
+- `tst_surface`：8 个测试实例通过，覆盖默认值、复制、无效公式及 ASCII/二进制往返。
+- `tst_element`：通过，包含线/面局部—全局变换矩阵块对角测试。
+- `tst_solver_stress`：22 个测试实例通过，新增 TRI3/QUAD4 四组构成测试、两组热膨胀测试与轴对称拒绝测试；原有 WEDGE6/HEX8、桁架和约束测试保持通过。
+- Release 全量 CTest：31/31 通过，总耗时 12.39 秒。
 - 无 Qt DLL 弹窗或测试超时。
 - 受影响测试目标的 Release 构建成功。
 
@@ -82,6 +88,8 @@
 - 两个 WEDGE6 拼成方形截面时，端面四节点的等分集中力不是一致等效面力，会产生约 1.8% 的截面畸变。
 - 测试现按三角形分摊面积使用节点权重 `1/6, 1/3, 1/3, 1/6`；修正后端位移、轴向应力和总反力均通过 1% 解析解容差。
 - 该纠正应保留，不能改回等分节点力后再放宽容差。
+- 线/面单元的局部—全局变换必须是节点块对角矩阵；恢复旧的跨节点重复列会让二维刚度秩亏。桁架的 `B` 矩阵必须读取 `Rt[3*m+component][m]`，不能固定读取第 0 列。
+- 平面单元刚度必须乘厚度并逐积分点累加；热应力恢复不乘厚度，且二维各向同性热应变只有两个法向分量。
 
 ## 已知构建/环境事项
 
@@ -92,18 +100,17 @@
 
 ## 下一步
 
-1. 提交根仓库的两个子模块指针和三份记录文档。
-2. 审核 TRI1/QUAD1 当前二维本构、厚度、局部坐标与结果恢复路径，设计模型级 `PlaneStress/PlaneStrain/Axisymmetric` 选择，避免用 capability 元数据替代实际模型状态。
-3. 先实现平面应力/平面应变并建立单元 patch + 多单元解析/收敛测试；轴对称单独实现和验证。
-4. 完成二维增量后，再设计通用 DOF equation book 与 6 DOF 梁/框架装配。
-5. Stage 2 稳定后进行 Gmsh 适配 spike，不直接把第三方 API 散布到模型/GUI。
+1. 实现 TRI3/QUAD4 轴对称公式，并补独立 patch、网格收敛和面单元模态验证。
+2. 增加一致质量/集中质量的模型级选择。
+3. 设计通用 DOF equation book 与 6 DOF 梁/框架装配，完成 Stage 2 剩余退出条件。
+4. Stage 2 稳定后进行 Gmsh 适配 spike，不直接把第三方 API 散布到模型/GUI。
 
 推荐命令：
 
 ```powershell
 git status --short
 git submodule status
-cmake --build build\vs2026 --config Release --target tst_element_volume tst_structural_product_profile tst_solver_stress --parallel 8
-ctest --test-dir build\vs2026 -C Release -R '^(tst_element_volume|tst_structural_product_profile|tst_solver_stress)$' --output-on-failure -j 3 --timeout 120
+cmake --build build\vs2026 --config Release --target tst_element tst_surface tst_solver_stress --parallel 8
+ctest --test-dir build\vs2026 -C Release -R '^(tst_element|tst_surface|tst_solver_stress)$' --output-on-failure -j 3 --timeout 120
 ctest --test-dir build\vs2026 -C Release --output-on-failure -j 8 --timeout 120
 ```
