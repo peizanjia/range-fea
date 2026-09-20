@@ -77,3 +77,13 @@
 - 验证：TRI3 与 QUAD4 均通过自由轴对称热膨胀解析 patch；QUAD4 厚壁圆筒在 2、4、8、16 个径向单元上对 Lamé 位移和径向/轴向/环向应力严格收敛；非法子午面几何拒绝测试通过。
 - 全量验证：Release CTest 32/32 通过，总耗时 25.43 秒，无 Qt DLL 弹窗或测试超时。
 - 子模块提交：`range-model-lib` 为 `b453a49`；`range-solver-lib` 为 `0040bad`。
+
+## 2026-09-21 Stage 2 通用 equation book
+
+- 新增 `REquationBook`，以稳定的 `RDofDescriptor` 顺序建立节点与 DOF 类型到连续方程号的映射；不同节点可具有不同 DOF 集，停用约束后会确定性重排。
+- `RSolverStress` 不再以 `3*node+component` 作为结构方程地址；系统尺寸、位移恢复、约束消元和全局矩阵/质量矩阵装配均查询 equation book。
+- 单元装配维数改为读取 ElementDescriptor 的每节点 DOF 清单；现有 3 DOF 桁架、面和体单元行为保持不变，后续 BEAM1 可直接提交每节点 6 DOF 的局部矩阵。
+- 局部约束坐标变换已能按 ElementDescriptor 分别变换平移与转角三分量块，为 3D 框架装配保留正确的 6 DOF 变换结构。
+- 新增 `tst_equation_book`，覆盖混合 3/6 DOF 编号、DOF 停用后的连续重排和 resize 清空；`tst_solver_stress` 回归通过。
+- 全量验证：Release CTest 33/33 通过，总耗时 28.88 秒。
+- 子模块提交：`range-solver-lib` 为 `24566c4`。

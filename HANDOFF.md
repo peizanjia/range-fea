@@ -1,6 +1,6 @@
 # 续作交接
 
-最后更新：2026-09-21 01:40（Asia/Singapore）
+最后更新：2026-09-21 01:50（Asia/Singapore）
 
 ## 用户目标与约束
 
@@ -25,6 +25,8 @@
 - 当前轴对称公式增量子模块提交：
   - `src/range-model-lib`: `b453a49 feat: validate axisymmetric surface capability`
   - `src/range-solver-lib`: `0040bad feat: solve axisymmetric structural surfaces`
+- 当前通用 equation book 增量子模块提交：
+  - `src/range-solver-lib`: `24566c4 refactor: add structural equation book`
 - 二维公式增量子模块提交：
   - `src/range-model-lib`: `dfa284d feat: add structural surface formulations`
   - `src/range-solver-lib`: `40b08cd feat: solve plane stress and plane strain surfaces`
@@ -66,13 +68,14 @@
 - WEDGE6：6 点积分、形函数/导数、质量、Jacobian、数值体积、2 TRI + 3 QUAD 外表面、仿射 patch、三维弹性轴向解析解与反力验证。
 - HEX8：`2×2×2` 积分、形函数/导数、质量、Jacobian、数值体积、6 QUAD 外表面、仿射 patch、三维弹性轴向解析解与反力验证。
 - capability registry 已将 WEDGE6/HEX8 暴露为 implemented/tested/validated 结构单元。
+- 通用 equation book：新增节点与 `RDofType` 到连续方程号的稳定映射，支持不同节点具有不同 DOF 集；`RSolverStress` 的系统尺寸、约束消元和全局矩阵装配不再使用 `3*node+component`，而是读取 ElementDescriptor 的每节点 DOF 清单。
+- 6 DOF 变换基础：局部约束坐标变换已能分别旋转平移与转角三分量块；混合 3/6 DOF 编号、禁用后重排和清空重建有独立单元测试。
 
 仍待完成：
 
-1. 通用 DOF 装配：`RSolverStress` 仍硬编码每节点 3 个平移 DOF。
-2. BEAM1/BEAM2 与框架：实现 `UX/UY/UZ/RX/RY/RZ`、局部坐标、截面和 6 DOF 装配。
-3. TRUSS2、TRI2、QUAD2 仍未实现；QUAD2 当前枚举定义为 9 节点。
-4. 材料接口的温度/内部状态依赖与后续压电耦合尚未实现。
+1. BEAM1/BEAM2 与框架：实现 6 DOF 单元矩阵、截面属性、转角约束/载荷/结果和解析验证。
+2. TRUSS2、TRI2、QUAD2 仍未实现；QUAD2 当前枚举定义为 9 节点。
+3. 材料接口的温度/内部状态依赖与后续压电耦合尚未实现。
 
 ### Stage 3：尚未接入新后端
 
@@ -86,7 +89,8 @@
 - `tst_surface`：通过，覆盖默认值、复制、无效公式及 ASCII/二进制往返。
 - `tst_element`：通过，包含线/面局部—全局变换矩阵块对角测试。
 - `tst_solver_stress`：通过；除既有静力、热应变、约束和质量矩阵回归外，新增 TRI3/QUAD4 轴对称自由热膨胀、厚壁圆筒 Lamé 解网格收敛和非法子午面几何拒绝测试。
-- Release 全量 CTest：32/32 通过，总耗时 25.43 秒。
+- `tst_equation_book`：通过，覆盖混合 3/6 DOF 节点的确定性编号、约束停用后的连续重排和 resize 清空语义。
+- Release 全量 CTest：33/33 通过，总耗时 28.88 秒。
 - 无 Qt DLL 弹窗或测试超时。
 - 受影响测试目标的 Release 构建成功。
 
@@ -110,7 +114,7 @@
 
 ## 下一步
 
-1. 设计通用 DOF equation book 与 6 DOF 梁/框架装配，完成 Stage 2 核心剩余退出条件。
+1. 在已完成的通用 equation book 上实现 6 DOF BEAM1/框架装配，补截面、转角约束/载荷/结果和解析验证。
 2. 补 TRUSS2、TRI2、QUAD2，或先通过 ADR 明确二次单元的优先级与 QUAD2 节点约定。
 3. 扩展材料接口的温度/内部状态依赖，为后续压电和热耦合保留稳定契约。
 4. Stage 2 稳定后进行 Gmsh 适配 spike，不直接把第三方 API 散布到模型/GUI。

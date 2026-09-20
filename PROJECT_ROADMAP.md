@@ -21,7 +21,7 @@
 ### 2.1 已经完成
 
 - Windows 11、Visual Studio 2026、Qt 6.11 的 Debug/Release 构建基线已经建立；
-- 当前 Release 自动测试共 32 项，全部可通过；
+- 当前 Release 自动测试共 33 项，全部可通过；
 - 静力应力、模态、四面体杆、桁架和三维梁文件已经形成数值基线；
 - GUI、CLI 求解器、结果文件链和 OpenGL 加载已经在参考主机上完成冒烟验证；
 - 已有材料、边界条件、环境条件、结果变量、TetGen 四面体网格和报告框架；
@@ -401,7 +401,7 @@ applicationVersion, pluginVersions
 
 目标：为梁、板壳、压电和控制状态建立可扩展基础。
 
-状态：进行中。通用 DOF registry 与 ElementDescriptor 已完成；WEDGE6/HEX8 三维弹性闭环已完成；TRI3/QUAD4 已完成平面应力、平面应变与轴对称公式、持久化、静力解析基准、热应变、网格收敛和模态验证；一致质量/集中质量已形成模型级持久化选择，并用于线、面、体结构装配。通用 equation book 与 6 DOF 梁/框架装配仍待补齐。
+状态：进行中。通用 DOF registry、ElementDescriptor 与 equation book 已完成；结构装配已由硬编码 `3*node+component` 改为按节点和 DOF 类型编号，并支持混合 3/6 DOF 节点。WEDGE6/HEX8 三维弹性闭环及 TRI3/QUAD4 平面应力、平面应变与轴对称闭环已完成；一致质量/集中质量已用于线、面、体结构装配。6 DOF 梁/框架单元矩阵与转角约束/结果仍待补齐。
 
 交付物：
 
