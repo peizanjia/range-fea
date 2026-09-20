@@ -106,11 +106,7 @@ GUI 冒烟由隐藏窗口完成，只证明启动、模型读取和 OpenGL 初�
 
 ## 5. 运行方式
 
-build-tree 的 Qt DLL 被部署到配置目录下的 `qtlib` 子目录，Windows loader 不会自动搜索该子目录。直接运行 build-tree 程序或 CTest 前应临时把 Qt `bin` 放到 `PATH`：
-
-```powershell
-$env:PATH = 'D:\ProgramData\Qt\6.11.1\msvc2022_64\bin;' + $env:PATH
-```
+build-tree 的应用 Qt DLL 被部署到配置目录下的 `qtlib` 子目录。测试构建还会把 Qt runtime 和 `Qt6Test.dll` 镜像到测试执行文件所在目录，因此可直接运行 `ctest -C Debug` 或 `ctest -C Release`，不再依赖手工修改 `PATH`。
 
 Release install-tree 的 Qt DLL 和插件已经复制到 `bin`，可直接启动：
 
@@ -120,11 +116,11 @@ Release install-tree 的 Qt DLL 和插件已经复制到 `bin`，可直接启动
 
 ## 6. 已知限制和下一步
 
-1. `fea-solver.exe` 直接依赖 `libomp140.x86_64.dll`，当前 install-tree 没有携带该文件。本机 `C:\Windows\System32` 已有该 DLL，所以本机验证通过；尚不能据此声明安装目录可在没有 VS/LLVM OpenMP runtime 的干净机器上运行。
+1. install-tree、ZIP 和 Inno Setup 安装器现已携带 `libomp140.x86_64.dll`、Qt runtime 和所需 MSVC runtime。本机从独立 install-tree 启动验证通过；仍需在没有开发工具链的干净 Windows 虚拟机上做发布前终验。
 2. `windeployqt` 在当前 Release 链接结果中没有部署 Qt HTTP Server/WebSockets；现有 GUI/求解器启动不依赖它们，但后续 agent/HTTP 功能启用后要重新检查安装树。
-3. Inno Setup 未安装，因此没有生成正式安装器。
+3. Inno Setup 6.7.3 已接入；CMake 同时支持系统级和当前用户级安装路径，`package` 流程已生成正式 `.exe` 安装器与 ZIP 包。
 4. 本轮没有在 Visual Studio 图形界面中手工设置并命中断点；命令行 Debug 二进制和 PDB 已生成，但交互式断点仍需一次人工确认。
 5. 现有 CTest 没有 GUI 自动化或文件级 golden result；梁模型属于进程、文件 I/O 和数值收敛冒烟。
-6. Stage 1 前先修复或明确打包 LLVM OpenMP runtime，再建立 structural-only product profile 和 capability registry。
+6. LLVM OpenMP runtime 打包问题已关闭；下一步建立可选 structural profile 和 capability registry，不删除原有非结构功能。
 
-因此，第零阶段的“配置、Debug/Release 构建、自动测试、CLI 求解、GUI/OpenGL 和安装树本机运行”已经形成可复现基线；“干净机器可分发”和“VS 交互式断点”仍是明确待办。
+因此，第零阶段已形成可复现的构建、测试、CLI 求解、GUI/OpenGL、安装树和正式安装器基线；“干净 Windows 虚拟机终验”和“VS 交互式断点”仍作为发布检查项保留。

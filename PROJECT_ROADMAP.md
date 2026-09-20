@@ -355,7 +355,7 @@ applicationVersion, pluginVersions
 
 ### Stage 0：构建、测试与数值基线
 
-状态：主体完成。
+状态：本机交付闭环完成，待干净 Windows 发布终验。
 
 交付物：
 
@@ -365,12 +365,15 @@ applicationVersion, pluginVersions
 - GUI/CLI 冒烟；
 - 基线文档。
 
-剩余退出项：
+已完成：
 
-- 打包 LLVM OpenMP runtime；
-- 生成正式安装器；
-- 干净 Windows 机器验证；
-- 最小 GUI 自动化。
+- 打包 LLVM OpenMP runtime、Qt runtime 和 MSVC runtime；
+- 生成 ZIP 与 Inno Setup 正式安装器；
+- build-tree CTest runtime 自动部署，Release 28/28 通过；
+- 独立 install-tree CLI 启动验证；
+- GUI/OpenGL 隐藏窗口冒烟基线。
+
+发布前终验：在没有 Visual Studio、Qt 和 LLVM OpenMP 的干净 Windows 虚拟机安装、启动并运行固定梁算例。
 
 ### Stage 1：范围修正与能力注册中心
 

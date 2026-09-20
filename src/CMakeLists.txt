@@ -74,12 +74,37 @@ if(MSVC)
     set(OpenMP_RUNTIME_MSVC llvm)
 endif()
 find_package(OpenMP REQUIRED)
+
+# MSVC's LLVM OpenMP mode links against libomp140.x86_64.dll.  Unlike the
+# standard VC runtime DLLs collected by InstallRequiredSystemLibraries, this
+# runtime is not added to the install tree automatically.  Resolve it at
+# configure time so installed and packaged executables do not silently depend
+# on a copy that happens to be present in System32 on the build host.
+if(MSVC AND OpenMP_RUNTIME_MSVC STREQUAL "llvm")
+    find_file(RANGE_MSVC_LLVM_OPENMP_RUNTIME
+        NAMES libomp140.x86_64.dll
+        PATHS
+            "$ENV{SystemRoot}/System32"
+            "$ENV{WINDIR}/System32"
+        NO_DEFAULT_PATH
+        DOC "Redistributable MSVC LLVM OpenMP runtime"
+    )
+    if(NOT RANGE_MSVC_LLVM_OPENMP_RUNTIME)
+        message(FATAL_ERROR
+            "MSVC LLVM OpenMP runtime libomp140.x86_64.dll was not found. "
+            "Install the matching Microsoft Visual C++ Redistributable before configuring Range FEA.")
+    endif()
+    message(STATUS "MSVC LLVM OpenMP runtime: ${RANGE_MSVC_LLVM_OPENMP_RUNTIME}")
+endif()
 find_package(Qt6 6.10 REQUIRED COMPONENTS Core Concurrent HttpServer Network Widgets OpenGL OpenGLWidgets Multimedia PrintSupport LinguistTools)
 qt_standard_project_setup()
 
 # Unit tests (opt-in). Configure with -DRANGE_BUILD_TESTS=ON and run `ctest`.
 option(RANGE_BUILD_TESTS "Build unit tests" OFF)
 if(RANGE_BUILD_TESTS)
+    # Import Qt6::Test in the top-level directory as well as in individual
+    # test directories so the Windows runtime deployment target can copy it.
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Test)
     enable_testing()
 endif()
 
@@ -197,6 +222,25 @@ if(WIN32)
         COMMENT "Deploying Windows Qt libraries"
         VERBATIM
     )
+
+    # Visual Studio places every test executable beside fea.exe, while
+    # windeployqt stages the runtime in the qtlib subdirectory used by the
+    # installer.  Keep the staging directory clean for packaging and mirror
+    # its contents beside the tests so a plain `ctest -C <config>` works on a
+    # developer machine without modifying PATH.
+    if(RANGE_BUILD_TESTS)
+        add_custom_target(deploy-test-runtime ALL
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    ${_qt_deploy_dir}
+                    $<TARGET_FILE_DIR:${PROJECT_TARGET_NAME}>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:Qt6::Test>
+                    $<TARGET_FILE_DIR:${PROJECT_TARGET_NAME}>
+            DEPENDS deploy-qt
+            COMMENT "Deploying Qt runtime for Windows tests"
+            VERBATIM
+        )
+    endif()
 elseif(APPLE)
     # Put fea-solver into FEA.app/Contents/MacOS on macOS ---------------------
     # This copies the already-built fea-solver next to the main executable inside the bundle
@@ -344,6 +388,9 @@ endif()
 if(WIN32)
     install(TARGETS fea DESTINATION bin COMPONENT Application)
     install(TARGETS fea-solver DESTINATION bin COMPONENT Application)
+    if(RANGE_MSVC_LLVM_OPENMP_RUNTIME)
+        install(FILES "${RANGE_MSVC_LLVM_OPENMP_RUNTIME}" DESTINATION bin COMPONENT Application)
+    endif()
     install(DIRECTORY ${PROJECT_TARGET_NAME}/help/ DESTINATION help COMPONENT Application)
     install(DIRECTORY ${PROJECT_TARGET_NAME}/data/ DESTINATION data COMPONENT Application)
     install(DIRECTORY ${PROJECT_TARGET_NAME}/doc/ DESTINATION doc COMPONENT Application)
@@ -556,6 +603,7 @@ if(WIN32)
         PATHS
             "$ENV{ProgramFiles\(x86\)}/Inno Setup 6"
             "$ENV{ProgramFiles}/Inno Setup 6"
+            "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6"
         DOC "Inno Setup Compiler (iscc.exe)"
     )
 
