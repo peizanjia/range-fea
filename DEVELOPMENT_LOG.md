@@ -24,3 +24,12 @@
 - 通用检查：GUI 求解前明确报告“未配置问题任务”，不再依赖结构产品门禁提供该错误。
 - 验证：聚焦测试 3/3 通过；Release 全量构建通过；CTest 28/28 通过，总耗时约 9.06 秒。
 - 子模块提交：`range-model-lib` 为 `bf4a825`；`range-solver-lib` 为 `6722d36`。
+
+## 2026-09-20 Stage 2 自由度与单元契约基础
+
+- 新增通用 DOF registry：`UX/UY/UZ/RX/RY/RZ`、电势、温度和压力均有稳定 ID、名称、单位、物理场和分量元数据。
+- 新增 ElementDescriptor：覆盖全部现有单元枚举，声明拓扑、阶次、节点数、自然维数、每节点 DOF、候选公式、默认积分点、一致/集中质量能力、材料属性、载荷和结果。
+- 梁单元契约明确要求 6 DOF；连续体单元保持 3 平移 DOF；TRI/QUAD 显式列出平面应力、平面应变和轴对称目标公式。
+- descriptor JSON 嵌入 capability registry 元数据，后续 GUI 和 Agent 可直接查询，而不需要解析求解器分支。
+- 验证：新增 `tst_element_descriptor`；Release 全量 CTest 从 28 项增加到 29 项，29/29 通过，总耗时约 8.63 秒。
+- 子模块提交：`range-model-lib` 为 `2caf682`。

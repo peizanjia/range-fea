@@ -1,6 +1,6 @@
 # 续作交接
 
-最后更新：2026-09-20 16:45（Asia/Singapore）
+最后更新：2026-09-20 19:50（Asia/Singapore）
 
 ## 本次目标
 
@@ -47,7 +47,22 @@
 
 ### Stage 2
 
-尚未执行。必须先盘点现有 `RElement` 与 `RSolverStress` 的真实实现，再建立通用 DOF 注册和 `ElementDescriptor`。现状已知：TRUSS1、TRI1、QUAD1、TETRA1 有实现；梁、楔形、六面体等能力尚不完整。每个对外开放单元都需要单元测试、解析基准和网格收敛证据。
+正在执行现状盘点：
+
+- `RSolverStress` 的全局自由度目前硬编码为每节点 3 个平移量，无法直接承载梁/壳需要的 `RX/RY/RZ`。
+- `TRUSS1` 有轴向刚度、一致质量、热应变、重力、静力与模态解析测试。
+- `TRI1/QUAD1` 有 3D 空间中的二维膜公式和一致质量；当前本构矩阵实际对应平面应变。缺少独立平面应力/平面应变选择、轴对称公式和专用解析/收敛测试。
+- `TETRA1` 有 3D 线弹性、一致质量、热应变、静力与模态基准。
+- `TRUSS2/BEAM1/BEAM2/TRI2/QUAD2/WEDGE1/HEXA1` 在枚举中标记为未实现；形函数工厂对这些类型返回空，不能安全暴露给结构求解器。
+- 线、面、体装配均直接假定 3 平移自由度，必须先建立通用 DOF registry 和 element descriptor，再逐步重构装配。
+
+已完成基础增量：
+
+- 通用 DOF registry 与 element descriptor 已在 `range-model-lib` 提交为 `2caf682 feat: describe nodal dofs and element contracts`。
+- descriptor 覆盖全部单元枚举并以 JSON 嵌入 capability registry，供 GUI/Agent 查询。
+- 新增 `tst_element_descriptor` 后 Release 全量 CTest 为 29/29 通过（约 8.63 秒）。
+
+下一增量：先补齐 WEDGE6/HEX8 的形函数、Jacobian、质量与 3D 线弹性解析/patch test；这两类单元可复用现有每节点 3 平移 DOF 的体单元装配。随后补 TRI3/QUAD4 平面公式选择与测试，最后单独重构 6 DOF 梁/框架装配。
 
 ### Stage 3
 
@@ -66,7 +81,7 @@ git status --short
 Get-Process | Where-Object { $_.ProcessName -match 'fea|ctest|tst_' }
 ```
 
-提交 Stage 1 根仓库指针与记录，然后审计 Stage 2 的现有自由度、单元公式和测试覆盖。
+提交 Stage 2 DOF/descriptor 根仓库指针与记录，然后实现 WEDGE6/HEX8 并更新 capability evidence。
 
 推荐回归命令：
 

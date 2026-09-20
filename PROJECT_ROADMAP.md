@@ -401,6 +401,8 @@ applicationVersion, pluginVersions
 
 目标：为梁、板壳、压电和控制状态建立可扩展基础。
 
+状态：进行中。通用 DOF registry 与 ElementDescriptor 已完成；单元公式与求解器装配仍在补齐。
+
 交付物：
 
 - 通用 DOF registry，支持 `UX/UY/UZ/RX/RY/RZ` 和电势等场自由度；
