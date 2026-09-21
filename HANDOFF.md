@@ -1,6 +1,6 @@
 # 续作交接
 
-最后更新：2026-09-21 10:30（Asia/Singapore）
+最后更新：2026-09-21 16:38（Asia/Singapore）
 
 ## 用户目标与约束
 
@@ -31,6 +31,9 @@
   - `src/range-model-lib`: `90b51db feat: persist beam section properties`
 - 当前 BEAM1 结构内核增量子模块提交：
   - `src/range-solver-lib`: `8e98727 feat: implement beam1 structural kernel`
+- 当前梁转角与端力矩增量子模块提交：
+  - `src/range-model-lib`: `d355af4 feat: add frame rotation and moment contracts`
+  - `src/range-solver-lib`: `615f197 feat: solve frame rotations and end moments`
 - 二维公式增量子模块提交：
   - `src/range-model-lib`: `dfa284d feat: add structural surface formulations`
   - `src/range-solver-lib`: `40b08cd feat: solve plane stress and plane strain surfaces`
@@ -77,11 +80,13 @@
 - 梁截面模型：`RLine` 已增加非负 `Iy/Iz/J` 和归一化局部 Y 方向，连同既有面积 `A` 通过模型文件 1.3.3 的 ASCII/二进制格式持久化；旧模型读取时保持零惯性矩和默认方向。
 - BEAM1 内核：两节点 3D Euler-Bernoulli 12×12 刚度、一致/集中质量、热轴力、均布线载荷、重力和局部—全局坐标变换已完成；节点转角进入方程、瞬态旧状态和结果恢复。当前没有显式转角边界条件时，全三向平移固定节点临时解释为夹持端。
 - BEAM1 验证：局部 Y/Z 两个弯曲方向均复现悬臂三次位移曲线和支座反力；全局 Z 方向梁验证坐标变换；一致/集中质量均通过一阶弯曲频率解析基准。
+- 梁转角与端力矩：新增可序列化的全局 `RX/RY/RZ` 转角约束和点实体端弯矩/扭矩，支持非零指定转角；节点转角和节点内力矩现作为正式结果变量输出。旧文件仍保留“三向平移全固定即夹持”的兼容行为，显式 Rotation 条件会覆盖该回退语义。
+- 转角/力矩验证：悬臂端弯矩严格复现 `theta=M*L/(E*I)` 和 `v=M*L^2/(2*E*I)`；非零指定端转角严格复现 `v=L*theta/2` 与两端内力矩平衡。
 - 数值基础纠错：`Iy/Iz/J` 现随求解缩尺按长度四次方换算；CG/GMRES 使用常规相对残差，并取消“残差不变即收敛”的错误判定。
 
 仍待完成：
 
-1. BEAM1 产品闭环与 BEAM2：BEAM1 尚缺显式转角约束、端弯矩/扭矩、转角/内力矩结果和弯曲应力恢复；完成后才能在 structural product profile 启用。BEAM2 尚未实现。
+1. BEAM1 产品闭环与 BEAM2：BEAM1 尚缺截面模数契约以及弯曲/扭转应力恢复；完成后才能在 structural product profile 启用。BEAM2 尚未实现。
 2. TRUSS2、TRI2、QUAD2 仍未实现；QUAD2 当前枚举定义为 9 节点。
 3. 材料接口的温度/内部状态依赖与后续压电耦合尚未实现。
 
@@ -101,7 +106,7 @@
 - `tst_line`：通过，覆盖梁截面默认值、复制、非法负值/零方向拒绝以及模型 ASCII/二进制往返。
 - `tst_scales`：通过，新增梁截面面积二次矩/扭转常数按长度四次方缩放及往返恢复。
 - `tst_iteration_info_value`：通过，确认残差停滞不会被误判为收敛。
-- Release 全量 CTest（`OMP_NUM_THREADS=4`，串行调度）：34/34 通过，总耗时 9.91 秒。
+- Release 全量 CTest（`OMP_NUM_THREADS=4`，串行调度）：34/34 通过，总耗时 12.18 秒。
 - 无 Qt DLL 弹窗或测试超时。
 - 受影响测试目标的 Release 构建成功。
 
@@ -118,6 +123,7 @@
 - 平面单元刚度必须乘厚度并逐积分点累加；热应力恢复不乘厚度，且二维各向同性热应变只有两个法向分量。
 - 线单元质量矩阵必须通过 `R_t M_local R_t^T` 完整变换；仅保留方向余弦平方的全局对角项会遗漏不同全局分量之间的耦合。面单元集中质量应先在局部二维矩阵上形成，再变换到全局坐标。
 - 梁截面 `Iy/Iz/J` 的物理量纲是长度四次方，求解缩尺必须使用 `lengthScale^4`；只缩放节点和截面积会系统性放大或缩小弯曲/扭转刚度。
+- 转角是无量纲量，力矩的量纲是 `kg*m^2/s^2`；若把端力矩留在默认单位缩尺中，长度缩尺 1/2 时梁转角会放大 4 倍、回写内力矩会缩小 4 倍。
 - 迭代求解器不能把残差趋势为零当作收敛；块结构系统可能在前几步保持相同残差，必须以明确残差阈值判断。
 
 ## 已知构建/环境事项
@@ -131,7 +137,7 @@
 
 ## 下一步
 
-1. 补齐 BEAM1 显式转角约束、端弯矩/扭矩、转角/内力矩输出及弯曲应力恢复，并在闭环后更新 capability registry；随后实现 BEAM2。
+1. 为梁截面补充向后兼容的弯曲/扭转截面模数契约，完成 BEAM1 弯曲与扭转应力恢复，并在闭环后更新 capability registry；随后实现 BEAM2。
 2. 补 TRUSS2、TRI2、QUAD2，或先通过 ADR 明确二次单元的优先级与 QUAD2 节点约定。
 3. 扩展材料接口的温度/内部状态依赖，为后续压电和热耦合保留稳定契约。
 4. Stage 2 稳定后进行 Gmsh 适配 spike，不直接把第三方 API 散布到模型/GUI。
