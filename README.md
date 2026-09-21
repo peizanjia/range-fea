@@ -1,5 +1,7 @@
 # Range Software - FEA
 
+Project status, structural finite-element algorithms and meshing implementation are documented in [Stage 0-3 Technical Route](TECHNICAL_ROUTE_STAGE0_3.md). The dynamics, control-coupling, GUI and Agent plan is maintained in [Project Roadmap](PROJECT_ROADMAP.md).
+
 Range FEA is an open-source desktop application for computer-aided engineering using the Finite Element Method. It provides an integrated environment for mesh generation, simulation setup, and 3D visualisation of results across a range of physics domains — including structural stress, heat transfer, fluid dynamics, acoustics, electrostatics, and magnetostatics.
 
 The application is built on Qt6 and ships with a standalone CLI solver (`fea-solver`) alongside the main GUI (`fea`). Mesh generation uses the embedded TetGen library for automatic tetrahedral meshing.

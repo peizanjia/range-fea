@@ -166,6 +166,19 @@ foreach(tgt IN LISTS all_targets)
     endif()
 endforeach()
 
+if(WIN32 AND RANGE_GMSH_RUNTIME)
+    add_custom_target(deploy-gmsh-runtime ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${RANGE_GMSH_RUNTIME}"
+                "$<TARGET_FILE_DIR:fea>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${RANGE_GMSH_RUNTIME}"
+                "$<TARGET_FILE_DIR:fea-solver>"
+        DEPENDS fea fea-solver
+        COMMENT "Deploying optional Gmsh runtime"
+        VERBATIM)
+endif()
+
 # Generate RELEASE_NOTES.json (all platforms)
 # Chapters are listed in reverse all_targets order, so the top level
 # applications come first and the foundational libraries last.
@@ -390,6 +403,13 @@ if(WIN32)
     install(TARGETS fea-solver DESTINATION bin COMPONENT Application)
     if(RANGE_MSVC_LLVM_OPENMP_RUNTIME)
         install(FILES "${RANGE_MSVC_LLVM_OPENMP_RUNTIME}" DESTINATION bin COMPONENT Application)
+    endif()
+    if(RANGE_GMSH_RUNTIME)
+        install(FILES "${RANGE_GMSH_RUNTIME}" DESTINATION bin COMPONENT Application)
+        if(EXISTS "${RANGE_GMSH_ROOT}/share/doc/gmsh/LICENSE.txt")
+            install(FILES "${RANGE_GMSH_ROOT}/share/doc/gmsh/LICENSE.txt"
+                    DESTINATION doc RENAME LICENSE_GMSH.txt COMPONENT Application)
+        endif()
     endif()
     install(DIRECTORY ${PROJECT_TARGET_NAME}/help/ DESTINATION help COMPONENT Application)
     install(DIRECTORY ${PROJECT_TARGET_NAME}/data/ DESTINATION data COMPONENT Application)

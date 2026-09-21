@@ -117,3 +117,22 @@
 - 解析验证：悬臂端弯矩严格复现 `theta=M*L/(E*I)`、`v=M*L^2/(2*E*I)` 和两端力矩平衡；非零指定端转角严格复现 `v=L*theta/2`、`M=E*I*theta/L`。模型元数据与量纲因子另有单元测试。
 - 验证结果：聚焦测试 3/3 通过；Release 全量 CTest 串行 34/34 通过，总耗时 12.18 秒。
 - 子模块提交：`range-model-lib` 为 `d355af4`；`range-solver-lib` 为 `615f197`。
+
+## 2026-09-21 Stage 2 二次单元、梁应力与材料状态闭环
+
+- 梁截面增加 `Wy/Wz/Wt`，模型文件升级至 1.3.4 并向后兼容；BEAM1 完成弯曲极纤维和扭转 von Mises 应力恢复并正式暴露。
+- TRUSS2、TRI6、QUAD9 完成二次形函数、积分、边界拓扑与结构求解；BEAM2 采用两个精确 BEAM1 跨装配，中点为实际六自由度节点。
+- 新增材料评估上下文，统一传入温度等场、时间、应变和 committed state，返回 trial state；既有温度查表求解改走该接口。
+- 验证：二次形函数/拓扑、二次杆解析解、TRI6/QUAD9 线性场 patch、BEAM2 悬臂和材料状态测试通过。
+- 子模块提交：`range-model-lib` 为 `c8c4750`、`3085f11`；`range-solver-lib` 为 `1fb4c5e`、`7e8f102`。梁截面/应力提交分别为 `db1cd9b`、`30cb0a7`。
+
+## 2026-09-21 Stage 3 统一网格管线
+
+- 保留 TetGen 封闭三角面四面体化，新增 Gmsh 4.15.2 可选成熟后端；公共请求/结果不暴露第三方类型。
+- 覆盖偏置直线、样条曲线、TRUSS/BEAM 一二阶映射、受约束 TRI、transfinite 映射 QUAD、箱体 TET 和局部 Ball 尺寸场。
+- Gmsh physical group 转换为稳定命名集合；材料、约束、传感器和执行器以 stable ID + named set 显式成功/拒绝重映射。
+- 统一质量摘要覆盖最小 Jacobian、最大边长比、最大歪斜、最小角和翻转单元计数。
+- Windows SDK 的 MinGW C++ ABI 与 MSVC 不兼容，已采用 Gmsh 官方 C API C++ 包装层；运行 DLL和许可证纳入部署/安装规则。
+- `tst_mesh_pipeline` 覆盖 TetGen 立方体和 Gmsh 一维/二维/三维网格；跨阶段聚焦回归 5/5 通过。
+- 子模块提交：`range-model-lib` 为 `3d2e79c`。
+- 详细设计与公式：`TECHNICAL_ROUTE_STAGE0_3.md`。

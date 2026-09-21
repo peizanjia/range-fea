@@ -401,7 +401,7 @@ applicationVersion, pluginVersions
 
 目标：为梁、板壳、压电和控制状态建立可扩展基础。
 
-状态：进行中。通用 DOF registry、ElementDescriptor 与 equation book 已完成；结构装配已由硬编码 `3*node+component` 改为按节点和 DOF 类型编号，并支持混合 3/6 DOF 节点。WEDGE6/HEX8 三维弹性闭环及 TRI3/QUAD4 平面应力、平面应变与轴对称闭环已完成；一致质量/集中质量已用于线、面、体结构装配。梁截面的 `A/Iy/Iz/J` 与局部 Y 方向已经模型化并持久化。BEAM1 的 3D Euler-Bernoulli 12×12 刚度、一致/集中质量、热轴力、均布线载荷、重力和局部坐标变换已经进入求解内核，并通过双轴静力、旋转坐标系和一阶弯曲模态解析验证；显式全局转角约束、非零指定转角、点实体端弯矩/扭矩以及转角/节点内力矩结果已经闭环。尚缺截面模数契约和弯曲/扭转应力恢复，因此暂不向 structural product profile 暴露。
+状态：完成当前规划范围。通用 DOF registry、ElementDescriptor 与 equation book 已完成；结构装配按节点和 DOF 类型编号并支持混合 3/6 DOF。TRUSS1/2、BEAM1/2、TRI3/6、QUAD4/9、TET4、WEDGE6、HEX8 已形成结构求解路径和自动化证据；BEAM1/2 已覆盖截面模数、弯曲/扭转应力恢复。材料评估上下文支持温度等稳定场键、应变/增量以及 committed/trial 内部状态语义。详细算法见 `TECHNICAL_ROUTE_STAGE0_3.md`。
 
 交付物：
 
@@ -427,7 +427,7 @@ applicationVersion, pluginVersions
 
 ### Stage 3：一维、二维和三维网格工具
 
-状态：待 Stage 2 核心单元稳定后接入。现有 TetGen 保留为四面体后端；优先评估 Gmsh 官方 C++ API，先验证许可证、Windows 二进制依赖、单元/物理组映射与命名集合保真。
+状态：完成当前规划范围。现有 TetGen 保留为封闭三角面四面体后端；新增可选 Gmsh 4.15.2 后端与后端无关请求/结果契约，覆盖直线与样条曲线、偏置 seed、受约束三角形、映射四边形、箱体四面体、局部尺寸场、物理组/命名集合、质量指标和基于稳定命名集合的材料/约束/传感器/执行器重映射。Windows MSVC 使用官方 C API 包装层规避 MinGW C++ ABI 不兼容，DLL 与许可证进入部署规则。
 
 交付物：
 
