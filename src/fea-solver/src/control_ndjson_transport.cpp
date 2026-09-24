@@ -41,6 +41,16 @@ bool validId(const QString &id)
            !id.contains(QLatin1Char('\r'));
 }
 
+bool validSha256(const QString &value)
+{
+    if (value.size() != 64) return false;
+    for (const QChar character : value)
+        if (!((character >= QLatin1Char('0') && character <= QLatin1Char('9')) ||
+              (character >= QLatin1Char('a') && character <= QLatin1Char('f'))))
+            return false;
+    return true;
+}
+
 bool failLocal(const QString &message, QString *error)
 {
     if (error) *error = message;
@@ -71,7 +81,10 @@ bool ControlNdjsonTransport::start(QString *error)
         this->config.timeoutMs <= 0 || this->config.maxLineBytes < 1024 ||
         this->config.maxLineBytes > 16*1024*1024 ||
         this->config.sensorUnits.size() > maxCatalogEntries ||
-        this->config.actuatorIds.size() > maxCatalogEntries)
+        this->config.actuatorIds.size() > maxCatalogEntries ||
+        !validId(this->config.controllerId) ||
+        !validSha256(this->config.controllerRevision) ||
+        !validSha256(this->config.modelSnapshotSha256))
         return failLocal(QStringLiteral("Invalid control transport configuration"),error);
 
     QJsonArray sensors;
@@ -107,6 +120,11 @@ bool ControlNdjsonTransport::start(QString *error)
     const QJsonObject request{{QStringLiteral("protocolVersion"),protocolVersion},
                               {QStringLiteral("requestId"),requestId},
                               {QStringLiteral("op"),QStringLiteral("handshake")},
+                              {QStringLiteral("controllerId"),this->config.controllerId},
+                              {QStringLiteral("controllerRevision"),this->config.controllerRevision},
+                              {QStringLiteral("modelSnapshotSha256"),this->config.modelSnapshotSha256},
+                              {QStringLiteral("deterministicSeed"),
+                               QString::number(this->config.deterministicSeed)},
                               {QStringLiteral("capabilities"),QJsonObject{
                                   {QStringLiteral("pureStep"),true},
                                   {QStringLiteral("controlMode"),QStringLiteral("scalar-nodal-force")},
@@ -116,7 +134,12 @@ bool ControlNdjsonTransport::start(QString *error)
     if (!this->exchange(request,response,error)) return false;
     const QJsonValue capabilitiesValue = response.value(QStringLiteral("capabilities"));
     if (response.value(QStringLiteral("op")) != QStringLiteral("handshake") ||
-        response.value(QStringLiteral("ok")) != true || !capabilitiesValue.isObject())
+        response.value(QStringLiteral("ok")) != true || !capabilitiesValue.isObject() ||
+        response.value(QStringLiteral("controllerId")) != this->config.controllerId ||
+        response.value(QStringLiteral("controllerRevision")) != this->config.controllerRevision ||
+        response.value(QStringLiteral("modelSnapshotSha256")) != this->config.modelSnapshotSha256 ||
+        response.value(QStringLiteral("deterministicSeed")) !=
+            QString::number(this->config.deterministicSeed))
         return this->failRemote(QStringLiteral("Invalid controller handshake"),error);
     const QJsonObject capabilities = capabilitiesValue.toObject();
     if (capabilities.value(QStringLiteral("pureStep")) != true ||
@@ -168,6 +191,11 @@ bool ControlNdjsonTransport::compute(quint64 stepId, double time, double dt,
                         {QStringLiteral("requestId"),requestId},
                         {QStringLiteral("op"),QStringLiteral("compute")},
                         {QStringLiteral("stepId"),step},
+                        {QStringLiteral("controllerId"),this->config.controllerId},
+                        {QStringLiteral("controllerRevision"),this->config.controllerRevision},
+                        {QStringLiteral("modelSnapshotSha256"),this->config.modelSnapshotSha256},
+                        {QStringLiteral("deterministicSeed"),
+                         QString::number(this->config.deterministicSeed)},
                         {QStringLiteral("time"),time},
                         {QStringLiteral("dt"),dt},
                         {QStringLiteral("observations"),values},

@@ -22,7 +22,10 @@ def reply(request):
             "pureStep": True,
             "controlMode": "scalar-nodal-force",
             "actuatorIds": offered["actuatorIds"],
-        }}
+        }, "controllerId": request["controllerId"],
+            "controllerRevision": request["controllerRevision"],
+            "modelSnapshotSha256": request["modelSnapshotSha256"],
+            "deterministicSeed": request["deterministicSeed"]}
     if op == "compute":
         accepted = request["acceptedControllerState"]
         gain = float(accepted.get("gain", 0.0))

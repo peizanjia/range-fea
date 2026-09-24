@@ -12,6 +12,10 @@ struct ControlTransportConfig
 {
     QString program;
     QStringList arguments;
+    QString controllerId;
+    QString controllerRevision;
+    QString modelSnapshotSha256;
+    quint64 deterministicSeed = 0;
     QMap<QString,QString> sensorUnits;
     QStringList actuatorIds;
     int timeoutMs = 5000;

@@ -24,6 +24,10 @@ ControlTransportConfig config(const QString &mode = QStringLiteral("normal"))
     ControlTransportConfig value;
     value.program = fixturePath();
     value.arguments = {mode};
+    value.controllerId = QStringLiteral("fixture-controller");
+    value.controllerRevision = QString(64,QLatin1Char('a'));
+    value.modelSnapshotSha256 = QString(64,QLatin1Char('b'));
+    value.deterministicSeed = 17;
     value.sensorUnits.insert(QStringLiteral("tip-displacement"),QStringLiteral("m"));
     value.actuatorIds = {QStringLiteral("tip-force")};
     value.timeoutMs = 1000;
@@ -100,6 +104,10 @@ void TestControlNdjsonTransport::rejectsInvalidHandshake()
     QVERIFY(!transport.start(&error));
     QVERIFY(!transport.isReady());
     QVERIFY(error.contains(QStringLiteral("pure")));
+    ControlNdjsonTransport wrongIdentity(config(QStringLiteral("bad-identity")));
+    QVERIFY(!wrongIdentity.start(&error));
+    QVERIFY(!wrongIdentity.isReady());
+    QVERIFY(error.contains(QStringLiteral("handshake")));
 }
 
 void TestControlNdjsonTransport::rejectsRemoteFaults_data()

@@ -25,6 +25,13 @@ int main(int argc, char **argv)
         {
             const QJsonObject offered = request.value(QStringLiteral("capabilities")).toObject();
             response.insert(QStringLiteral("ok"),true);
+            for (const QString &field : {QStringLiteral("controllerId"),
+                                         QStringLiteral("controllerRevision"),
+                                         QStringLiteral("modelSnapshotSha256"),
+                                         QStringLiteral("deterministicSeed")})
+                response.insert(field,request.value(field));
+            if (mode == QStringLiteral("bad-identity"))
+                response.insert(QStringLiteral("controllerRevision"),QStringLiteral("wrong"));
             response.insert(QStringLiteral("capabilities"),QJsonObject{
                 {QStringLiteral("pureStep"),mode != QStringLiteral("bad-handshake")},
                 {QStringLiteral("controlMode"),QStringLiteral("scalar-nodal-force")},
