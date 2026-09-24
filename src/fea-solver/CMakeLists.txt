@@ -21,3 +21,7 @@ target_link_libraries(fea-solver
         Qt6::Network
         common_defines
 )
+
+if(RANGE_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

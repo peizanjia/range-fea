@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QCoreApplication>
+#include <optional>
 
 #include "solver_input.h"
 
@@ -20,7 +21,8 @@ class SolverTask : public QObject
         //! Monitoring file name.
         QString monitoringFileName;
         //! Number of threads to use.
-        uint nThreads;
+        //! CLI override only; absent means do not change OpenMP before RSolver.
+        std::optional<uint> nThreads;
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.

@@ -17,14 +17,27 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , restart(solverInput.restart)
     , app(app)
 {
-    this->nThreads = std::max(this->nThreads,uint(1));
-    this->nThreads = std::min(this->nThreads,uint(omp_get_max_threads()));
+    if (this->nThreads)
+    {
+        *this->nThreads = std::max(*this->nThreads,uint(1));
+        *this->nThreads = std::min(*this->nThreads,
+                                  uint(std::max(1,omp_get_max_threads())));
+    }
 }
 
 void SolverTask::run(void)
 {
-    RLogger::info("Threads = %u (max=%d)\n", this->nThreads, omp_get_max_threads());
-    omp_set_num_threads(this->nThreads);
+    if (this->nThreads)
+    {
+        RLogger::info("CLI thread override = %u (max=%d)\n",
+                      *this->nThreads,omp_get_max_threads());
+        omp_set_num_threads(int(*this->nThreads));
+    }
+    else
+    {
+        RLogger::info("No CLI thread override; using model/runtime parallel policy (max=%d)\n",
+                      omp_get_max_threads());
+    }
 
     RModel model;
 

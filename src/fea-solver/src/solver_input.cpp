@@ -6,6 +6,8 @@ void SolverInput::_init(const SolverInput *pSolverInput)
     {
         this->modelFileName = pSolverInput->modelFileName;
         this->convergenceFileName = pSolverInput->convergenceFileName;
+        this->monitoringFileName = pSolverInput->monitoringFileName;
+        this->nThreads = pSolverInput->nThreads;
         this->restart = pSolverInput->restart;
     }
 }
@@ -46,6 +48,11 @@ void SolverInput::setMonitoringFileName(const QString &monitoringFileName)
 void SolverInput::setNThreads(uint nThreads)
 {
     this->nThreads = nThreads;
+}
+
+std::optional<uint> SolverInput::getNThreadsOverride() const
+{
+    return this->nThreads;
 }
 
 void SolverInput::setRestart(bool restart)

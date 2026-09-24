@@ -2,6 +2,7 @@
 #define SOLVER_INPUT_H
 
 #include <QString>
+#include <optional>
 
 class SolverTask;
 
@@ -17,7 +18,8 @@ class SolverInput
         //! Monitoring file.
         QString monitoringFileName;
         //! Number of threads to use.
-        uint nThreads;
+        //! Explicit CLI override; unset leaves the model/runtime policy intact.
+        std::optional<uint> nThreads;
         //! Force to restart solver
         bool restart;
 
@@ -48,6 +50,9 @@ class SolverInput
 
         //! Set number of threads to use.
         void setNThreads(uint nThreads);
+
+        //! Empty when --nthreads was not supplied.
+        std::optional<uint> getNThreadsOverride() const;
 
         //! Set force restart solver.
         void setRestart(bool restart);
