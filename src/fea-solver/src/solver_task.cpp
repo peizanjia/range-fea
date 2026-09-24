@@ -5,6 +5,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonParseError>
 #include <QSet>
 
 #include <algorithm>
@@ -21,6 +24,7 @@
 #include <rsolver.h>
 
 #include "execution_event_journal.h"
+#include "control_ndjson_transport.h"
 #include "solver_task.h"
 
 namespace
@@ -157,6 +161,43 @@ QJsonObject parallelReportPayload(const RParallelExecutionReport &report)
             {QStringLiteral("fallback"),report.fallback},
             {QStringLiteral("diagnostic"),report.diagnostic}};
 }
+
+QString controllerRevision(const QString &program, const QStringList &arguments)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    auto addField = [&hash](const QByteArray &bytes)
+    {
+        hash.addData(QByteArray::number(bytes.size()));
+        hash.addData(":",1);
+        hash.addData(bytes);
+    };
+    addField(QByteArrayLiteral("range-control-transport-v1"));
+    addField(QFileInfo(program).canonicalFilePath().toUtf8());
+    addField(sha256File(program).toUtf8());
+    for (const QString &argument : arguments)
+    {
+        addField(argument.toUtf8());
+        const QFileInfo file(argument);
+        // Script/config arguments affect controller behaviour and restart identity.
+        if (file.isFile())
+        {
+            addField(file.canonicalFilePath().toUtf8());
+            addField(sha256File(file.absoluteFilePath()).toUtf8());
+        }
+    }
+    return QString::fromLatin1(hash.result().toHex());
+}
+
+QJsonArray controlSamplesJson(const RStructuralControlStepRecord &record)
+{
+    QJsonArray channels;
+    for (const auto &sample : record.appliedChannels)
+        channels.append(QJsonObject{{QStringLiteral("actuatorId"),sample.actuatorId},
+                                    {QStringLiteral("appliedForceN"),sample.command},
+                                    {QStringLiteral("endpointPowerW"),sample.endpointPower},
+                                    {QStringLiteral("cumulativeWorkJ"),sample.cumulativeWork}});
+    return channels;
+}
 }
 
 SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QObject *parent)
@@ -166,6 +207,9 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , monitoringFileName(solverInput.monitoringFileName)
     , nThreads(solverInput.nThreads)
     , requestedNThreads(solverInput.nThreads)
+    , controlProgram(solverInput.controlProgram)
+    , controlArguments(solverInput.controlArguments)
+    , controlTimeoutMs(solverInput.controlTimeoutMs)
     , restart(solverInput.restart)
     , app(app)
 {
@@ -188,6 +232,7 @@ void SolverTask::run(void)
     bool loggerIndented = false;
     bool solverEntered = false;
     bool finalModelWritten = false;
+    std::unique_ptr<ControlNdjsonTransport> controlTransport;
     const QString inputPath = QFileInfo(this->modelFileName).absoluteFilePath();
 
     auto appendAudit = [&](const QString &type, const QString &status,
@@ -262,6 +307,11 @@ void SolverTask::run(void)
 
         phase = QStringLiteral("load-model");
         model.read(this->modelFileName);
+        if (sha256File(inputPath) != inputArgumentHash ||
+            resolveModelTargetPath(inputPath) != inputTargetPath ||
+            sha256File(inputTargetPath) != inputTargetHash)
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "Input model link or target changed while it was being loaded.");
         RLogger::info("Model has been successfully loaded from file '%s'.\n",
                       qPrintable(this->modelFileName));
         model.getMatrixSolverConf(RMatrixSolverConf::CG).setOutputFileName(
@@ -272,6 +322,41 @@ void SolverTask::run(void)
         if (this->restart)
         {
             model.getProblemSetup().setRestart(true);
+        }
+
+        phase = QStringLiteral("control-setup");
+        const RStructuralControlSetup &controlSetup =
+            model.getProblemSetup().getStructuralControlSetup();
+        if (controlSetup.enabled != !this->controlProgram.isEmpty())
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "Enabled structural control requires --control-program; disabled control rejects one.");
+        QString controlRevision;
+        quint64 nextControlStepId = 1;
+        if (controlSetup.enabled)
+        {
+            controlRevision = controllerRevision(this->controlProgram,this->controlArguments);
+            const auto &restartData = model.getProblemSetup().getStructuralDynamicsRestartData();
+            if (this->restart && restartData.available)
+                nextControlStepId = quint64(restartData.completedSteps)+1;
+            ControlTransportConfig config;
+            config.program = this->controlProgram;
+            config.arguments = this->controlArguments;
+            config.controllerId = controlSetup.controllerId;
+            config.controllerRevision = controlRevision;
+            config.modelSnapshotSha256 = inputTargetHash;
+            config.deterministicSeed = controlSetup.deterministicSeed;
+            config.timeoutMs = int(this->controlTimeoutMs);
+            const auto &interaction = model.getProblemSetup().getStructuralInteractionSetup();
+            for (const auto &sensor : interaction.getSensors())
+                config.sensorUnits.insert(sensor.id,sensor.unit.isEmpty()
+                    ? RStructuralInteractionSetup::getSensorUnit(sensor.quantity) : sensor.unit);
+            for (const auto &actuator : interaction.getActuators())
+                config.actuatorIds.append(actuator.id);
+            controlTransport.reset(new ControlNdjsonTransport(std::move(config)));
+            QString transportError;
+            if (!controlTransport->start(&transportError))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "ControlHandshakeFailed: %s",qPrintable(transportError));
         }
 
         QJsonObject cliOverride{{QStringLiteral("provided"),bool(this->requestedNThreads)}};
@@ -296,6 +381,93 @@ void SolverTask::run(void)
         RLogger::indent();
         loggerIndented = true;
         RSolver solver(model,this->modelFileName,this->convergenceFileName);
+        if (controlTransport)
+        {
+            solver.setStructuralControlCallback(controlSetup.controllerId,controlRevision,
+                [&](const RStructuralControlObservation &observation)
+                {
+                    QJsonObject acceptedState;
+                    if (!observation.priorControllerState.isEmpty())
+                    {
+                        QJsonParseError parseError;
+                        const QJsonDocument document = QJsonDocument::fromJson(
+                            observation.priorControllerState,&parseError);
+                        if (parseError.error != QJsonParseError::NoError || !document.isObject())
+                            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                         "Checkpoint controller state is not a JSON object.");
+                        acceptedState = document.object();
+                    }
+                    QVector<ControlObservation> values;
+                    values.reserve(int(observation.sensors.size()));
+                    for (const auto &sample : observation.sensors)
+                        values.append({sample.sensorId,sample.value,sample.unit});
+                    ControlStepReply reply;
+                    QString error;
+                    if (!controlTransport->compute(nextControlStepId,observation.acceptedTime,
+                                                   observation.nextTime-observation.acceptedTime,
+                                                   values,acceptedState,reply,&error))
+                        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                     "ControlComputeFailed: %s",qPrintable(error));
+                    RStructuralControlDecision decision;
+                    QMap<QString,double> commandsById;
+                    for (const auto &command : reply.commands)
+                        commandsById.insert(command.actuatorId,command.force);
+                    for (const auto &actuator : model.getProblemSetup()
+                                                     .getStructuralInteractionSetup().getActuators())
+                        decision.requestedCommands.push_back(
+                            {actuator.id,commandsById.value(actuator.id)});
+                    decision.nextControllerState = QJsonDocument(reply.nextControllerState)
+                                                       .toJson(QJsonDocument::Compact);
+                    return decision;
+                });
+            solver.setStructuralControlStepObserver(
+                [&](const RStructuralControlStepRecord &record)
+                {
+                    QJsonArray requested;
+                    for (const auto &command : record.requestedCommands)
+                        requested.append(QJsonObject{{QStringLiteral("actuatorId"),command.actuatorId},
+                                                     {QStringLiteral("requestedForceN"),command.value}});
+                    QJsonArray conditioned;
+                    for (const auto &command : record.conditionedCommands)
+                        conditioned.append(QJsonObject{{QStringLiteral("actuatorId"),command.actuatorId},
+                                                       {QStringLiteral("conditionedForceN"),command.value}});
+                    QJsonArray sensors;
+                    for (const auto &sample : record.sensors)
+                        sensors.append(QJsonObject{{QStringLiteral("sensorId"),sample.sensorId},
+                                                   {QStringLiteral("value"),sample.value},
+                                                   {QStringLiteral("unit"),sample.unit}});
+                    const RTimeSolver &clock = model.getTimeSolver();
+                    const uint stepNumber = clock.getCurrentTimeStep()+1;
+                    const uint outputFrequency = clock.getOutputFrequency();
+                    const bool persisted = stepNumber == clock.getNTimeSteps() ||
+                        (outputFrequency > 0 && stepNumber % outputFrequency == 0);
+                    QJsonObject payload{
+                        {QStringLiteral("stepId"),QString::number(nextControlStepId)},
+                        {QStringLiteral("controllerId"),controlSetup.controllerId},
+                        {QStringLiteral("controllerRevision"),controlRevision},
+                        {QStringLiteral("deterministicSeed"),
+                         QString::number(controlSetup.deterministicSeed)},
+                        {QStringLiteral("acceptedTimeS"),record.acceptedTime},
+                        {QStringLiteral("nextTimeS"),record.nextTime},
+                        {QStringLiteral("sensors"),sensors},
+                        {QStringLiteral("requestedCommands"),requested},
+                        {QStringLiteral("conditionedCommands"),conditioned},
+                        {QStringLiteral("appliedChannels"),controlSamplesJson(record)},
+                        {QStringLiteral("controllerStateSha256"),
+                         QString::fromLatin1(record.controllerStateSha256)},
+                        {QStringLiteral("resultArtifactPersisted"),persisted}};
+                    if (persisted)
+                    {
+                        payload.insert(QStringLiteral("resultLinkPath"),
+                                       QFileInfo(this->modelFileName).absoluteFilePath());
+                        payload.insert(QStringLiteral("resultModelTargetPath"),
+                                       resolveModelTargetPath(this->modelFileName));
+                    }
+                    appendAudit(QStringLiteral("ControlStepAccepted"),
+                                QStringLiteral("accepted"),payload);
+                    ++nextControlStepId;
+                });
+        }
         solver.setParallelExecutionReportObserver(
             [&](const RParallelExecutionReport &report)
             {

@@ -25,6 +25,9 @@ class SolverTask : public QObject
         std::optional<uint> nThreads;
         //! Original CLI value before host-runtime clamping, for the audit trail.
         std::optional<uint> requestedNThreads;
+        QString controlProgram;
+        QStringList controlArguments;
+        uint controlTimeoutMs = 5000;
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.

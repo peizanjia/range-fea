@@ -4,7 +4,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QProcess>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 #include "execution_event_journal.h"
@@ -103,6 +106,38 @@ QString solverExecutablePath()
     return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("fea-solver"));
 #endif
 }
+
+QString controlFixturePath()
+{
+#ifdef Q_OS_WIN
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("control_ndjson_fixture.exe"));
+#else
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("control_ndjson_fixture"));
+#endif
+}
+
+void configureControl(RModel &model)
+{
+    auto &control = model.getProblemSetup().getStructuralControlSetup();
+    control.enabled = true;
+    control.controllerId = QStringLiteral("fixture-controller");
+    control.deterministicSeed = 17;
+    RStructuralActuator actuator;
+    actuator.id = QStringLiteral("tip-force");
+    actuator.target.nodeId = 1;
+    actuator.variable = R_VARIABLE_FORCE_X;
+    actuator.unit = RVariable::getUnits(R_VARIABLE_FORCE_X);
+    actuator.minimum = -100.0;
+    actuator.maximum = 100.0;
+    model.getProblemSetup().getStructuralInteractionSetup().getActuators().push_back(actuator);
+    RStructuralSensor sensor;
+    sensor.id = QStringLiteral("tip-displacement");
+    sensor.target.nodeId = 1;
+    sensor.quantity = RStructuralSensorQuantity::Displacement;
+    sensor.direction = RR3Vector(1.0,0.0,0.0);
+    sensor.unit = RStructuralInteractionSetup::getSensorUnit(sensor.quantity);
+    model.getProblemSetup().getStructuralInteractionSetup().getSensors().push_back(sensor);
+}
 }
 
 class TestSolverAuditCli : public QObject
@@ -112,6 +147,11 @@ class TestSolverAuditCli : public QObject
 private slots:
     void successKeepsLinkAndTargetHashesDistinct();
     void restartFailureRecordsStartedThenFailed();
+    void malformedExternalControlOptionsFailBeforeRun();
+    void externalControllerCommitsTwoStepsWithJournal();
+    void enabledControllerWithoutProgramFailsClosed();
+    void externalControllerTimeoutDoesNotAcceptStep();
+    void pythonPidControllerRunsWhenInterpreterAvailable();
 };
 
 void TestSolverAuditCli::successKeepsLinkAndTargetHashesDistinct()
@@ -208,6 +248,183 @@ void TestSolverAuditCli::restartFailureRecordsStartedThenFailed()
              QStringLiteral("solver-run"));
     QVERIFY(journal.events[1].payload.value(QStringLiteral("resultsMayAlreadyExist")).toBool());
     QCOMPARE(sha256(input),originalLinkHash);
+}
+
+void TestSolverAuditCli::malformedExternalControlOptionsFailBeforeRun()
+{
+    const QString executable = solverExecutablePath();
+    QVERIFY(QFile::exists(executable));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("input.ram"));
+    RModel model = makeModel();
+    model.write(input);
+    const QString originalHash = sha256(input);
+    QVERIFY(!originalHash.isEmpty());
+
+    const QVector<QStringList> invalidOptions{
+        {QStringLiteral("--control-args-json=[1]")},
+        {QStringLiteral("--control-program=")+executable,
+         QStringLiteral("--control-args-json=[1]")},
+        {QStringLiteral("--control-timeout-ms=0")},
+        {QStringLiteral("--control-timeout-ms=60001")},
+        {QStringLiteral("--control-timeout-ms=5000")}
+    };
+    for (const QStringList &options : invalidOptions)
+    {
+        QProcess process;
+        QStringList arguments{QStringLiteral("--file=")+input};
+        arguments.append(options);
+        process.start(executable,arguments);
+        QVERIFY2(process.waitForFinished(30000),qPrintable(process.errorString()));
+        QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+        QVERIFY2(process.exitCode() != 0,qPrintable(options.join(QLatin1Char(' '))));
+        QCOMPARE(sha256(input),originalHash);
+        QVERIFY(singleJournal(QDir(directory.path())).isEmpty());
+    }
+}
+
+void TestSolverAuditCli::externalControllerCommitsTwoStepsWithJournal()
+{
+    const QString executable = solverExecutablePath();
+    const QString controller = controlFixturePath();
+    QVERIFY(QFile::exists(executable));
+    QVERIFY(QFile::exists(controller));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("controlled.ram"));
+    RModel model = makeModel();
+    configureControl(model);
+    model.getProblemSetup().getStructuralDynamicsSetup().setOutputFrequency(2);
+    model.write(input);
+
+    QProcess process;
+    process.start(executable,{QStringLiteral("--file=")+input,
+                              QStringLiteral("--control-program=")+controller});
+    QVERIFY2(process.waitForFinished(30000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0,
+             qPrintable(QString::fromUtf8(process.readAllStandardOutput()+
+                                          process.readAllStandardError())));
+    const QString path = singleJournal(QDir(directory.path()));
+    QVERIFY(!path.isEmpty());
+    const auto journal = ExecutionEventJournal::read(path);
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(journal.events.size(),5);
+    QCOMPARE(journal.events[0].type,QStringLiteral("SolverRunStarted"));
+    for (int i=1;i<=2;i++)
+    {
+        const auto &event = journal.events[i];
+        QCOMPARE(event.type,QStringLiteral("ControlStepAccepted"));
+        QCOMPARE(event.payload.value(QStringLiteral("stepId")).toString(),QString::number(i));
+        QCOMPARE(event.payload.value(QStringLiteral("controllerId")).toString(),
+                 QStringLiteral("fixture-controller"));
+        QVERIFY(event.payload.value(QStringLiteral("nextTimeS")).toDouble() >
+                event.payload.value(QStringLiteral("acceptedTimeS")).toDouble());
+        const QJsonArray channels = event.payload.value(QStringLiteral("appliedChannels")).toArray();
+        QCOMPARE(channels.size(),1);
+        QCOMPARE(event.payload.value(QStringLiteral("conditionedCommands")).toArray().size(),1);
+        QCOMPARE(event.payload.value(QStringLiteral("resultArtifactPersisted")).toBool(),i == 2);
+        QCOMPARE(event.payload.contains(QStringLiteral("resultModelTargetPath")),i == 2);
+        QCOMPARE(channels[0].toObject().value(QStringLiteral("actuatorId")).toString(),
+                 QStringLiteral("tip-force"));
+        QVERIFY(channels[0].toObject().contains(QStringLiteral("cumulativeWorkJ")));
+    }
+    QCOMPARE(journal.events[3].type,QStringLiteral("RunComputed"));
+    QCOMPARE(journal.events[4].type,QStringLiteral("RunFinished"));
+}
+
+void TestSolverAuditCli::enabledControllerWithoutProgramFailsClosed()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("unbound.ram"));
+    RModel model = makeModel();
+    configureControl(model);
+    model.write(input);
+    const QString inputHash = sha256(input);
+    QProcess process;
+    process.start(solverExecutablePath(),{QStringLiteral("--file=")+input});
+    QVERIFY2(process.waitForFinished(30000),qPrintable(process.errorString()));
+    QVERIFY(process.exitCode() != 0);
+    QCOMPARE(sha256(input),inputHash);
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(journal.events.size(),1);
+    QCOMPARE(journal.events[0].type,QStringLiteral("RunFailed"));
+    QCOMPARE(journal.events[0].payload.value(QStringLiteral("phase")).toString(),
+             QStringLiteral("control-setup"));
+}
+
+void TestSolverAuditCli::externalControllerTimeoutDoesNotAcceptStep()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("timeout.ram"));
+    RModel model = makeModel();
+    configureControl(model);
+    model.write(input);
+    const QString before = sha256(input);
+    QProcess process;
+    const QString arguments = QString::fromUtf8(
+        QJsonDocument(QJsonArray{QStringLiteral("timeout")}).toJson(QJsonDocument::Compact));
+    process.start(solverExecutablePath(),
+                  {QStringLiteral("--file=")+input,
+                   QStringLiteral("--control-program=")+controlFixturePath(),
+                   QStringLiteral("--control-args-json=")+arguments,
+                   QStringLiteral("--control-timeout-ms=100")});
+    QVERIFY2(process.waitForFinished(30000),qPrintable(process.errorString()));
+    QVERIFY(process.exitCode() != 0);
+    QCOMPARE(sha256(input),before);
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(journal.events.size(),2);
+    QCOMPARE(journal.events[0].type,QStringLiteral("SolverRunStarted"));
+    QCOMPARE(journal.events[1].type,QStringLiteral("RunFailed"));
+}
+
+void TestSolverAuditCli::pythonPidControllerRunsWhenInterpreterAvailable()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python"));
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QVERIFY(QFile::exists(QStringLiteral(RANGE_PID_EXAMPLE_PATH)));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("python-pid.ram"));
+    RModel model = makeModel();
+    configureControl(model);
+    model.getProblemSetup().getStructuralDynamicsSetup().setNSteps(20);
+    model.write(input);
+    const QJsonArray controlArguments{QStringLiteral(RANGE_PID_EXAMPLE_PATH),
+                                      QStringLiteral("10000000"),QStringLiteral("0"),
+                                      QStringLiteral("5000")};
+    const QString args = QString::fromUtf8(QJsonDocument(controlArguments)
+                                               .toJson(QJsonDocument::Compact));
+    QProcess process;
+    process.start(solverExecutablePath(),
+                  {QStringLiteral("--file=")+input,
+                   QStringLiteral("--control-program=")+python,
+                   QStringLiteral("--control-args-json=")+args});
+    QVERIFY2(process.waitForFinished(60000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0,
+             qPrintable(QString::fromUtf8(process.readAllStandardOutput()+
+                                          process.readAllStandardError())));
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(journal.events.size(),23);
+    int nonzeroCommands = 0;
+    for (int i=1;i<=20;i++)
+    {
+        QCOMPARE(journal.events[i].type,QStringLiteral("ControlStepAccepted"));
+        const QJsonArray channels = journal.events[i].payload.value(QStringLiteral("appliedChannels"))
+                                       .toArray();
+        QCOMPARE(channels.size(),1);
+        nonzeroCommands += channels[0].toObject().value(QStringLiteral("appliedForceN"))
+                               .toDouble() != 0.0;
+    }
+    QVERIFY(nonzeroCommands > 0);
+    QCOMPARE(journal.events.last().type,QStringLiteral("RunFinished"));
 }
 
 int main(int argc,char *argv[])

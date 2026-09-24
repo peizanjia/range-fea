@@ -52,8 +52,10 @@ qt_add_executable(tst_solver_audit_cli
     ../src/execution_event_journal.cpp
 )
 target_include_directories(tst_solver_audit_cli PRIVATE ../src)
+target_compile_definitions(tst_solver_audit_cli PRIVATE
+    RANGE_PID_EXAMPLE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../examples/control_pid_python.py")
 target_link_libraries(tst_solver_audit_cli PRIVATE range-solver-lib Qt6::Test)
-add_dependencies(tst_solver_audit_cli fea-solver)
+add_dependencies(tst_solver_audit_cli fea-solver control_ndjson_fixture)
 add_test(NAME tst_solver_audit_cli COMMAND tst_solver_audit_cli)
 if(WIN32)
     set_tests_properties(tst_solver_audit_cli PROPERTIES

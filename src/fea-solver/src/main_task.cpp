@@ -122,6 +122,11 @@ void MainTask::run()
             throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                          "--control-args-json requires --control-program.");
         }
+        if (argumentsParser.isSet("control-timeout-ms") && !argumentsParser.isSet("control-program"))
+        {
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--control-timeout-ms requires --control-program.");
+        }
         if (argumentsParser.isSet("control-timeout-ms"))
         {
             const int timeout = argumentsParser.getValue("control-timeout-ms").toInt();
