@@ -166,3 +166,16 @@
 - 支承轨迹求解前覆盖域预检已改用模型 `evaluate()` 的同一端点容差；新增终点短 `1e-13 s` 的负例，必须在接受首步前拒绝，独立 Release FE/重启回归 2/2 通过。移动支承 FE 接线提交 `43a96b0`；`nodeForce` 只含单元弹性内力，不是含 `M a+C v` 的完整动力支承反力，不能用于控制功率。
 - 并行重复性基准提交 `f4fe095`。独立干净 Release 建置后 CTest 连跑 10/10，通过串行、2 线程、4 线程各三次对照：节点与 checkpoint 状态、外力、能量和耗散数值漂移均在设定容差内。该 32 单元/10 步小样本中串行中位约 27.9 ms，2/4 线程约 83.8/105.4 ms，不能宣称并行加速；基准只报告耗时，不设速度硬门槛。主建置全量 CTest 仍待完成。
 - 正并行审查下一增量：模态阻尼需有模态残差、质量正交、重根和规模护栏；结构化 InteractionRecord 应与可移植模型配置分离；完整动力支承反力需保留受限行并在接受步后算 `r_c=(M a+C v+K q-f)_c`，不能直接复用 `nodeForce`。这些均尚未计作已实现。
+- 主 `build/vs2026` 的 Release 全目标建置成功，包括 `fea.exe`、`windeployqt` 与测试运行时镜像；已核对 `Release/Qt6Core.dll` 和 `qtlib/platforms/qwindows.dll` 存在。第一次全量 CTest 因建置期间 FE 源更新后未重链 solver 库，出现旧预检错误消息、44/45；单独增量重编 solver/FE/restart 后，两项聚焦 2/2，原有完整 CTest 45/45 通过（`-j 2`、`OMP_NUM_THREADS=4`、10.46 秒），不应把混合对象误判为当前源码故障。
+- 命令行求解器 `--nthreads` 省略时读未初始化字段的 UB 已修：缺省不覆写 OpenMP，显式选项才生效；`SolverInput` 的监测文件与线程覆写在复制/指派时完整保留。根提交 `2167d28`，独立 Release 测试 1/1 通过。移动支承 BC mask 的 `5e-13` 微小非零值审查后改为严格零且有限，独立 FE/重启 2/2 通过，求解器提交 `c1dc466`；新的主全量回归仍待执行。
+- 后续完成模态阻尼有限规模首版：模型提交 `265abcf` 将 ratio ASCII 精度局部提至 17 位；同时发现并修复 `RModelData::selected` 默认未初始化导致原始 ASCII 布尔字节偶发为 `0x20`、读档错位的旧故障。模型独立 Release `tst_problem_setup` 连跑 20/20，模型全量 15/15。求解器 `6972a47` 在 MPC 消元坐标上合成 `C_r=Σ2ζ_i√λ_i(M_rφ_i)(M_rφ_i)^T`，增加正定、残差、正交、重根与规模护栏，拒绝与 Rayleigh/移动支承混用；主建置模态、FE、续算、特征值和模型聚焦 5/5 通过。`6c5dd91` 再加 384 杆 × 串行/2/4 线程 × 三次并行诊断，独立 Release 重复 3/3，通过数值对照而不设置耗时门槛。
+- 用户最新要求改为“当前 Stage 5 完成后退出”，不再持续推进 Stage 6。CLI 执行事件 journal 接线、支承动力反力/功率、旧一阶产品标记 QA 正并行处理中。主 `build/vs2026` 48 项 CTest 的一次尝试为 46 项通过、2 项新 CLI/journal 测试因未建置而 Not Run；必须完成全目标重建后重新全量运行，不能写成 48/48 通过。
+
+## 2026-09-24 Stage 5 被动二阶动力学结项
+
+- 本节覆盖并取代上节末尾的「进行中」快照。Stage 5/6 边界已修订为：本阶段验收控制输入关闭时的被动二阶求解、可复现执行、接受态约化有效力/阻尼功率、受支持的支座反力/功，以及运行级审计；控制器特有功率和逐步 InteractionRecord 属 Stage 6。此界线避免将尚未定义来源的总力误算为控制力。
+- 模型 `1174547` 升至 1.3.10，在 checkpoint 中持久化可选支承反力、功率、累计功及独立受限算子指纹，兼容 1.3.9 无功账旧文件；求解器 `761de0a` 在约束消元前保留 `M_c/K_c/f_c`，用 `R_c=(M a+C v+K q-f)_c` 计算支承施于结构的反力，并以 `P_c=R_c·v_c` 和梯形积分计算累计功。真实 `t0` 和接受步使用各自的装配行；观察回调在结果写出和步提交成功后通知，失败试步不通知且回滚。固定/移动杆解析、外力符号、ASCII/二进制双向续算及写失败测试均通过。首版只支持全局点节点平移且无阻尼/Rayleigh 阻尼，MPC/耦合、局部 frame、转角梁与模态阻尼组合明确拒绝。
+- 求解器 `645f1f9` 提供接受态 reduced 有效力/阻尼功率样本；它们和支承端物理功率是不同口径，都不能直接代表控制器功率或完整系统能量。CLI `523c31f` 的追加式 `.events.jsonl` 记录 run ID、连续序号、输入/结果工件 SHA-256 与并行执行报告；writer/QProcess 正负路径通过，但不承诺跨模型、link 与 journal 的单一事务。
+- 旧一阶应力瞬态与新二阶产品 profile 已分开标记，GUI 相关设置文字及帮助文档作了区分。384 杆基准在本机四线程相对串行只略快，CI 不设置速度阈值；多线程数值对照在设定误差范围内，但不宣称严格确定性。
+- 验证：`cmake --build build/vs2026 --config Release --parallel 4` 全目标成功（含 `fea.exe`、测试及 Qt runtime 部署）；`cmake -E env OMP_NUM_THREADS=4 ctest --test-dir build/vs2026 -C Release --output-on-failure -j 2 --timeout 180` 为 **49/49 通过、0 失败、9.28 秒**。`Release/Qt6Core.dll` 与 `Release/qtlib/platforms/qwindows.dll` 均在位；尚未在干净 Windows 机器做安装/启动终验。
+- Stage 5 按 `PROJECT_ROADMAP.md` 退出条件完成，本轮依用户要求停止，不进入 Stage 6。后续首先定义带来源标识的 `f_control`、传感器/执行器逐步协议、控制器状态检查点及 InteractionRecord，再考虑压电/拉索和全状态热耦合。已知限制详见 `HANDOFF.md` 与 `TECHNICAL_ROUTE_STAGE5.md`；历史尝试的 46/48 Not Run 与早期 45/45 属过程记录，不覆盖最终 49/49。

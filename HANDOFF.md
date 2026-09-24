@@ -1,20 +1,19 @@
 # 续作交接
 
-最后更新：2026-09-24（Asia/Singapore；Stage 5 开发进行中）
+最后更新：2026-09-24（Asia/Singapore；Stage 5 完成，本轮按用户要求退出）
 
 ## 当前续作快照（先读本节；下文 Stage 4 结项记录为历史快照）
 
-- 用户最新指令：继续按计划开发并使用多子代理，直到用户明确发出结束 follow-up 指令才整理进度并暂停；不要因较早“最近任务后退出”指令自行停止。中文交互用正体字，仓库技术文档沿用简体字。保持教学性说明、自动提交稳定增量、子模块先提交、根仓库整洁，持续维护开发日志和本 handoff。
-- 根分支 `feature/structural-profile`；Stage 4 由根提交 `c44a303` 结项，Stage 5 技术路线由 `d4960fc` 提交，最近一次根交接提交 `2980e64`。模型子模块当前 HEAD `1fd3c9e`：版本 1.3.9，二阶动力配置、并行配置、初始转角/角速度、磁盘 checkpoint、mesh/DOF/system 指纹，以及五次 Hermite 移动支承运动契约；motion ASCII knot 以 17 位精度写出，模型 15/15 测试通过。写模型时先提交 target 再发布 latest link，ASCII 结果变量名称和单位加引号以修复多词字段读回。基础库 `f19d290`、云库 `48d34a8` 与模型先前 `c31833c` 修复 Windows CTest 的 Qt PATH，禁止无 PATH 直接双击未部署测试 exe。
-- 求解器已提交阶段性 `46b695c`（二阶积分核）、`1d6cfab`（运行级并行上下文）、`fdfee13`（FE 接线、模态/动力 MPC 消元）、`855453c`（磁盘 checkpoint、系统指纹、中心差分保守 CFL 与时步事务）、`43a96b0`（全局平移移动支承 FE 接线）和 `f4fe095`（多线程重复性/耗时基准）。求解器工作树正研究下一独立模态阻尼数学核；不要丢弃未提交的新文件。主建置 Release 全量回归尚在进行中。
-- 已验证：`tst_solver_stress` 完整通过；`tst_structural_dynamics_fe`、`beam`、`integrator`、`loads`、`support` 5/5 通过；`failure_atomicity` 与 `rotational_initial` 2/2 通过。磁盘 `restart_io` 在主 `build/vs2026` 单次及连续 20 次、另一 `build/stage5-loads` 连续 20 次通过；第三套 `build/motion-support-vs2026` 仍在 OpenMP fork 处遇 `0xc0000005`，正在做该套的全依赖重编排查。全量 Release CTest 尚未重跑。
-- 失败步已有 `prepare` 拒绝后的尺度恢复及 `writeResults` 失败后的内存结果/checkpoint 回滚测试；同一 `RSolver` 修正输入后重试用例正在补充。当前交易通过每步复制整个模型/共享数据实现正确性基线，具有 O(model size) 成本；磁盘 target 成功而 link 失败时可能留孤儿工件，尚无统一磁盘事务。旧版 `updateOldRecords` 在续算前改写旧记录的行为正为结构动力路径隔离。
-- 移动支承 `K_fc g + C_fc g_dot + M_fc g_ddot` 及 MPC 特解 `p/p_dot/p_ddot` 的独立数学核已通过解析测试，但 FE 装配尚未保留 fc 块。模型 1.3.9 五次 Hermite 三联运动输入与 FE 接线正在并行开发；在解析 FE 回归通过前，产品执行仍明确拒绝移动支承，不能把核测试写成产品支持。首版只覆盖全局点节点平移，MPC/局部 frame 与转角 motion 组合先显式拒绝。
-- 文档待办：更新下文过期的“模态 MPC 不支持/结构瞬态仍是一阶”等描述、`PROJECT_ROADMAP.md` 和 `TECHNICAL_ROUTE_STAGE5.md`；完成磁盘重启、全量测试及事务修复后再提交根指针与最终 handoff。既有 Stage 0–4 记录保留供追溯。
+- 用户最新指令：完成当前 Stage 5 后退出；Stage 6 不在本轮范围。中文交互用正体字，仓库技术文档沿用简体字；稳定增量自动提交，子模块先提交、根仓库再提交指针。以下是结项快照，下文 Stage 4 记录是历史资料。
+- 根分支 `feature/structural-profile`。模型子模块 `1174547`（模型文件 1.3.10，可选支承功账与 ASCII/二进制续算）；求解器子模块 `761de0a`（接受步支承动力反力/功率/累计功与 observer）。此前 `265abcf` 修复模态阻尼比精度及未初始化的 `RModelData::selected`，`d931c11` 区分旧一阶与新二阶产品标记；求解器 `6972a47` 实现有限规模模态阻尼，`6c5dd91` 新增 384 杆并行基准，`645f1f9` 暴露约化有效力/阻尼功率。根仓库 `523c31f` 接入 CLI 运行事件，`2167d28` 修复默认线程覆写。最终根提交及子模块指针以 `git log -1` / `git submodule status` 为准。
+- Stage 5 在约定的**控制输入关闭的被动二阶结构动力学范围**完成：Newmark/广义 alpha/中心差分，Rayleigh/有限规模模态阻尼，MPC 消元、移动支承、磁盘 checkpoint、失败步回滚、可配置并行与运行级审计。移动支承受限行给出物理反力、功率、累计功，和约化自由 DOF 能量账分开；CLI `.events.jsonl` 有 run ID、顺序事件及输入/结果工件哈希，但不是完整 InteractionRecord。
+- 主 `build/vs2026` 的 Release **全目标重建成功，CTest 49/49 通过**（`OMP_NUM_THREADS=4`、`-j 2`、`--timeout 180`）。`fea.exe`、`Release/Qt6Core.dll`、`Release/qtlib/platforms/qwindows.dll` 已部署；本轮只验证文件存在及构建，没有重新做干净 Windows 机器上的安装/启动终验。更早的 46/48 Not Run 是未建置新测试的历史尝试，不代表最终结果。
+- 支承反力/功仅对全局点节点平移支承及无阻尼/Rayleigh 阻尼开放；MPC/耦合、局部坐标、含转角梁与模态阻尼组合明确拒绝。可选 observer 须在求解前开启；旧 checkpoint 无功账时不能中途开启，已有功账而不继续观察可续算核心状态。支承行 `R=(Ma+Cv+Kq-f)_c` 是支承施于结构的力，结构对支承的反力符号相反；`nodeForce` 不能替代。支承功和自由 DOF 有效力功均不能冒充控制器功率或全系统能量。
+- 剩余限制：步事务深复制模型与共享状态；target 成功但 latest link 失败可能留下孤儿 target，模型/事件 journal 不具跨工件统一原子性；系统指纹受旧 ASCII 精度约束；多线程可配置但不保证每个核实际并行、严格确定性或一定加速；移动支承与时变 MPC 的组合仍未接通。Stage 6 才建立控制力来源、逐步传感器—执行器协议、控制器状态回滚和完整 InteractionRecord；Stage 7/8 才做压电/拉索与全状态热耦合。详见 `TECHNICAL_ROUTE_STAGE5.md`。
 
 ## 用户目标与长期约束
 
-1. Stage 0–4 已完成当前规划范围；若当前阶段完成，继续推进后续 Stage。
+1. Stage 0–4 已完成当前规划范围；本轮完成 Stage 5 后即退出，Stage 6 留待用户下次要求。
 2. 网格优先使用成熟工具：TetGen 保留，Gmsh 作为可选 1D/2D/3D 后端；第三方 API 不扩散到 GUI/求解器。
 3. 原有非结构功能保留，不是当前主动开发任务。
 4. 稳定、可验证增量自动提交；子模块先提交，根仓库再提交指针和文档。
@@ -93,7 +92,7 @@
 - 旧版结构瞬态仍保留一阶历史路径，不能把它误标为新二阶结构动力学；必须显式启用 `RStructuralDynamicsSetup`。
 - Gmsh 当前不是完整 CAD 网格器；CAD 改形后的投影重映射、二次体单元和六面体体网格仍是后续扩展。
 
-## 紧接下一步：Stage 5
+## 历史 Stage 4 交接时建议的下一步：Stage 5（现已完成约定范围）
 
 1. 建立独立 `q/qDot/qDDot` 状态和可提交/回滚的时间步状态容器。
 2. 先实现 Newmark 平均加速度基线与 Rayleigh 阻尼，再做广义 alpha。

@@ -280,9 +280,10 @@ If the model is under-constrained the matrix is singular and the solve will not
 converge. Every static model needs enough constraints to suppress all six rigid
 body modes - three translations and three rotations.
 
-### 1.7 Transient analysis
+### 1.7 Legacy transient analysis and second-order structural dynamics
 
-With the time solver enabled, the solver marches
+With the legacy time solver enabled and `StructuralDynamicsSetup` disabled,
+stress analysis marches
 
 ```
 M * du/dt + K * u = f
@@ -295,11 +296,24 @@ with a theta scheme, where `alpha` is the time-march approximation coefficient
 ( M + alpha*dt*K ) * u_n+1 = dt*f + ( M - (1-alpha)*dt*K ) * u_n
 ```
 
-Note that this is a **first-order** march. There is no second time derivative of
+This legacy path is a **first-order** march. There is no second time derivative of
 the displacement in the assembled system, so this is a relaxation-type transient
 rather than true elastodynamics: it does not reproduce inertia waves, ringing or
 resonance. Use it for a load history applied slowly compared with the structural
 periods, and use *Modal analysis* to learn where the structural periods are.
+
+When the model's `StructuralDynamicsSetup` is enabled, the separate second-order
+structural dynamics path instead solves
+
+```
+M * q'' + C * q' + K * q = f(t)
+```
+
+Here `q`, `q'` and `q''` are displacement, velocity and acceleration. This path
+supports inertial response and damping; enabling the legacy time solver alone
+does **not** select it. Configure `StructuralDynamicsSetup` through the model
+API before a CLI solve. The current GUI does not yet provide a complete setup
+page for second-order structural dynamics.
 
 ### 1.8 Modal analysis
 
@@ -432,6 +446,9 @@ the in-plane `sigma_xx`, `sigma_yy` and `tau_xy`, and a line fills the axial
 
 ### 1.10 Static, transient or modal?
 
+The *Transient* column below describes only the legacy first-order stress
+solver. For second-order structural dynamics, see section 1.7.
+
 | | Static | Transient | Modal |
 |---|---|---|---|
 | Solves | `K*u = f` | `M*u' + K*u = f` in time | `K*phi = omega^2*M*phi` |
@@ -444,8 +461,11 @@ the in-plane `sigma_xx`, `sigma_yy` and `tau_xy`, and a line fills the axial
 reaction forces, self weight, pressure vessels, thermal stress. This is the
 default and covers most work.
 
-**Use a transient analysis for** a load that changes over time and where the
-structure follows it quasi-statically. Do not expect dynamic amplification.
+**Use the legacy transient analysis for** a load that changes over time and
+where the structure follows it quasi-statically. Do not expect dynamic amplification.
+
+**Use second-order structural dynamics for** inertial vibration, damping and
+dynamic amplification, with `StructuralDynamicsSetup` explicitly enabled.
 
 **Use a modal analysis for** natural frequencies and mode shapes, avoiding
 resonance with a known excitation, judging whether a structure is stiff enough
@@ -456,7 +476,7 @@ usually means a missing constraint or a disconnected part.
 
 ## 2. Graphical user interface
 
-Everything relevant lives in the **Solver** dock (`Problem`,
+For the legacy GUI workflow, the relevant controls live in the **Solver** dock (`Problem`,
 `Boundary conditions`, `Initial conditions`, `Environment conditions`,
 `Material`, `Results` tabs), the **Problem** menu and the **Model** dock.
 
@@ -465,8 +485,8 @@ Everything relevant lives in the **Solver** dock (`Problem`,
 `Problem` -> `Problem(s) task flow` (`Ctrl+P`) opens the problem task flow
 dialog. Add a task and pick either:
 
-- **Stress analysis** - "Stress and linear elasto-dynamics analysis including
-  modal analysis";
+- **Stress analysis** - legacy transient stress is first-order relaxation;
+  second-order elastodynamics requires `StructuralDynamicsSetup`;
 - **Modal analysis** - "Stress modal analysis".
 
 Stress analysis combines freely with other physics. Two useful chains are
@@ -479,7 +499,9 @@ analysis, which turns it into a prestressed modal analysis.
 ### 2.2 Problem tab
 
 **Time-solver** - shown for stress analysis, since it is a time-dependent
-problem type. Leave it disabled for a static analysis.
+problem type. In this GUI workflow it configures the legacy first-order stress
+transient, not second-order structural dynamics. Leave it disabled for a static
+analysis. The GUI does not yet expose a complete `StructuralDynamicsSetup` page.
 
 | Field | Meaning |
 |---|---|
@@ -887,11 +909,12 @@ converging rather than drifting.
 - **Linear elasticity only.** Small strains, small displacements, isotropic
   material, no plasticity, no contact, no large deformation and no buckling.
   Results are meaningful only while the structure stays in its linear range.
-- **Transient analysis is first order.** The assembled system is
+- **Legacy stress transient analysis is first order.** The assembled system is
   `M*u' + K*u = f`, not `M*u'' + C*u' + K*u = f`. There is no second time
   derivative and no damping matrix, so inertia waves, dynamic amplification and
   resonant response are not reproduced. Treat it as a relaxation-type march for
-  slowly changing loads, and use modal analysis for dynamic properties.
+  slowly changing loads, and use modal analysis for dynamic properties. This
+  limitation does not describe the separate `StructuralDynamicsSetup` path.
 - **Surface elements are plane strain.** A thin plate loaded in its own plane
   will be stiffer than a plane stress idealisation. Model thin structures with
   volume elements when the difference matters.

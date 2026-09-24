@@ -16,8 +16,11 @@ TimeSolverSetupWidget::TimeSolverSetupWidget(const RTimeSolver &timeSolver, QWid
     QHBoxLayout *mainLayout = new QHBoxLayout;
     this->setLayout(mainLayout);
 
-    QGroupBox *groupBox = new QGroupBox(tr("Time-solver"));
-    groupBox->setToolTip(tr("Enable/disable time-dependent solution."));
+    QGroupBox *groupBox = new QGroupBox(tr("Time-solver (stress: legacy first-order)"));
+    groupBox->setToolTip(tr("For stress analysis without StructuralDynamicsSetup, this time solver "
+                            "uses first-order relaxation. Configure StructuralDynamicsSetup via "
+                            "the model API before running the CLI for second-order structural dynamics. "
+                            "Other analyses use their own time-integration methods."));
     groupBox->setCheckable(true);
     groupBox->setChecked(this->timeSolver.getEnabled());
     mainLayout->addWidget(groupBox);
@@ -30,7 +33,10 @@ TimeSolverSetupWidget::TimeSolverSetupWidget(const RTimeSolver &timeSolver, QWid
     int groupLayoutRow = 0;
 
     // Time-march approximation
-    QString toolTipTimeApprox(tr("Time-march approximation method."));
+    QString toolTipTimeApprox(tr("For legacy stress transients, this selects the first-order "
+                                 "theta-scheme approximation. Central difference here does not "
+                                 "enable second-order structural dynamics; other analyses may "
+                                 "interpret this setting differently."));
 
     QLabel *labelTimeApprox = new QLabel(tr("Approximation"));
     labelTimeApprox->setToolTip(toolTipTimeApprox);
