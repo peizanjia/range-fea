@@ -1,6 +1,7 @@
 qt_add_executable(fea-solver
     src/application.cpp
     src/command_processor.cpp
+    src/execution_event_journal.cpp
     src/main.cpp
     src/main_task.cpp
     src/solver_input.cpp
@@ -8,6 +9,7 @@ qt_add_executable(fea-solver
 
     src/application.h
     src/command_processor.h
+    src/execution_event_journal.h
     src/main_task.h
     src/solver_input.h
     src/solver_task.h
