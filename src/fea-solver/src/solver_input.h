@@ -2,6 +2,7 @@
 #define SOLVER_INPUT_H
 
 #include <QString>
+#include <QStringList>
 #include <optional>
 
 class SolverTask;
@@ -20,6 +21,12 @@ class SolverInput
         //! Number of threads to use.
         //! Explicit CLI override; unset leaves the model/runtime policy intact.
         std::optional<uint> nThreads;
+        //! Optional executable implementing the versioned control protocol.
+        QString controlProgram;
+        //! Passed directly to QProcess, never interpreted by a shell.
+        QStringList controlArguments;
+        //! Wall-clock limit for one external control response.
+        uint controlTimeoutMs = 5000;
         //! Force to restart solver
         bool restart;
 
@@ -53,6 +60,12 @@ class SolverInput
 
         //! Empty when --nthreads was not supplied.
         std::optional<uint> getNThreadsOverride() const;
+
+        void setExternalControlProgram(const QString &program, const QStringList &arguments = {});
+        QString getExternalControlProgram() const;
+        QStringList getExternalControlArguments() const;
+        void setExternalControlTimeoutMs(uint timeoutMs);
+        uint getExternalControlTimeoutMs() const;
 
         //! Set force restart solver.
         void setRestart(bool restart);

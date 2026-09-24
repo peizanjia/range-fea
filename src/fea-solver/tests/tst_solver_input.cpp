@@ -22,6 +22,7 @@ private slots:
     void omittedThreadOptionDoesNotBecomeAnOverride();
     void explicitOverrideAndOtherOptionsSurviveCopyAndAssignment();
     void assigningDefaultClearsAnOldOverride();
+    void controlTransportOptionsSurviveCopyAndAssignment();
 };
 
 void TestSolverInput::omittedThreadOptionDoesNotBecomeAnOverride()
@@ -64,6 +65,29 @@ void TestSolverInput::assigningDefaultClearsAnOldOverride()
     QVERIFY(!assigned.getNThreadsOverride().has_value());
     QVERIFY(!assigned.restartEnabled());
     QVERIFY(assigned.monitoringFile().isEmpty());
+}
+
+void TestSolverInput::controlTransportOptionsSurviveCopyAndAssignment()
+{
+    InspectableSolverInput original(QStringLiteral("input.rbm"));
+    original.setExternalControlProgram(QStringLiteral("python.exe"),
+                                       {QStringLiteral("controller.py"),QStringLiteral("--strict")});
+    original.setExternalControlTimeoutMs(1250);
+    InspectableSolverInput copy(original);
+    QCOMPARE(copy.getExternalControlProgram(),QStringLiteral("python.exe"));
+    QCOMPARE(copy.getExternalControlArguments(),
+             QStringList({QStringLiteral("controller.py"),QStringLiteral("--strict")}));
+    QCOMPARE(copy.getExternalControlTimeoutMs(),1250u);
+
+    InspectableSolverInput assigned(QStringLiteral("other.rbm"));
+    assigned = copy;
+    QCOMPARE(assigned.getExternalControlProgram(),copy.getExternalControlProgram());
+    QCOMPARE(assigned.getExternalControlArguments(),copy.getExternalControlArguments());
+    QCOMPARE(assigned.getExternalControlTimeoutMs(),1250u);
+    assigned = InspectableSolverInput(QStringLiteral("default.rbm"));
+    QVERIFY(assigned.getExternalControlProgram().isEmpty());
+    QVERIFY(assigned.getExternalControlArguments().isEmpty());
+    QCOMPARE(assigned.getExternalControlTimeoutMs(),5000u);
 }
 
 QTEST_APPLESS_MAIN(TestSolverInput)

@@ -8,6 +8,9 @@ void SolverInput::_init(const SolverInput *pSolverInput)
         this->convergenceFileName = pSolverInput->convergenceFileName;
         this->monitoringFileName = pSolverInput->monitoringFileName;
         this->nThreads = pSolverInput->nThreads;
+        this->controlProgram = pSolverInput->controlProgram;
+        this->controlArguments = pSolverInput->controlArguments;
+        this->controlTimeoutMs = pSolverInput->controlTimeoutMs;
         this->restart = pSolverInput->restart;
     }
 }
@@ -53,6 +56,32 @@ void SolverInput::setNThreads(uint nThreads)
 std::optional<uint> SolverInput::getNThreadsOverride() const
 {
     return this->nThreads;
+}
+
+void SolverInput::setExternalControlProgram(const QString &program, const QStringList &arguments)
+{
+    this->controlProgram = program;
+    this->controlArguments = arguments;
+}
+
+QString SolverInput::getExternalControlProgram() const
+{
+    return this->controlProgram;
+}
+
+QStringList SolverInput::getExternalControlArguments() const
+{
+    return this->controlArguments;
+}
+
+void SolverInput::setExternalControlTimeoutMs(uint timeoutMs)
+{
+    this->controlTimeoutMs = timeoutMs;
+}
+
+uint SolverInput::getExternalControlTimeoutMs() const
+{
+    return this->controlTimeoutMs;
 }
 
 void SolverInput::setRestart(bool restart)

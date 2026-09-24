@@ -1,4 +1,7 @@
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonParseError>
 #include <QLoggingCategory>
 #include <QSettings>
 
@@ -32,6 +35,9 @@ void MainTask::run()
         validOptions.append(RArgumentOption("convergence-file",RArgumentOption::Path,QVariant(),"Convergence file name",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("monitoring-file",RArgumentOption::Path,QVariant(),"Monitoring file name",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("nthreads",RArgumentOption::Integer,QVariant(),"Optional OpenMP thread override; otherwise use the model/runtime policy",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("control-program",RArgumentOption::Path,QVariant(),"External control executable (requires enabled structural control setup)",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("control-args-json",RArgumentOption::String,QVariant(),"JSON string array passed as separate control process arguments",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("control-timeout-ms",RArgumentOption::Integer,QVariant(),"Positive per-request external control timeout in milliseconds (default 5000)",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("restart",RArgumentOption::Switch,QVariant(),"Restart solver",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-id",RArgumentOption::Path,QVariant(),"Task ID for inter process communication",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-server",RArgumentOption::Path,QVariant(),"Task server for inter process communication",RArgumentOption::Optional,false));
@@ -110,6 +116,41 @@ void MainTask::run()
         if (argumentsParser.isSet("nthreads"))
         {
             solverInput.setNThreads(argumentsParser.getValue("nthreads").toUInt());
+        }
+        if (argumentsParser.isSet("control-args-json") && !argumentsParser.isSet("control-program"))
+        {
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--control-args-json requires --control-program.");
+        }
+        if (argumentsParser.isSet("control-timeout-ms"))
+        {
+            const int timeout = argumentsParser.getValue("control-timeout-ms").toInt();
+            if (timeout <= 0 || timeout > 60000)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--control-timeout-ms must be in 1..60000.");
+            solverInput.setExternalControlTimeoutMs(uint(timeout));
+        }
+        if (argumentsParser.isSet("control-program"))
+        {
+            QStringList controlArguments;
+            if (argumentsParser.isSet("control-args-json"))
+            {
+                QJsonParseError parseError;
+                const QJsonDocument document = QJsonDocument::fromJson(
+                    argumentsParser.getValue("control-args-json").toString().toUtf8(),&parseError);
+                if (parseError.error != QJsonParseError::NoError || !document.isArray())
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "--control-args-json must be a JSON string array.");
+                for (const QJsonValue &value : document.array())
+                {
+                    if (!value.isString())
+                        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                     "--control-args-json must contain only strings.");
+                    controlArguments.push_back(value.toString());
+                }
+            }
+            solverInput.setExternalControlProgram(
+                argumentsParser.getValue("control-program").toString(),controlArguments);
         }
         if (argumentsParser.isSet("restart"))
         {
