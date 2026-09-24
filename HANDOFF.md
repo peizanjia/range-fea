@@ -1,6 +1,16 @@
 # 续作交接
 
-最后更新：2026-09-21（Asia/Singapore）
+最后更新：2026-09-24（Asia/Singapore；Stage 5 开发进行中）
+
+## 当前续作快照（先读本节；下文 Stage 4 结项记录为历史快照）
+
+- 用户最新指令：继续按计划开发并使用多子代理，直到用户明确发出结束 follow-up 指令才整理进度并暂停；不要因较早“最近任务后退出”指令自行停止。中文交互用正体字，仓库技术文档沿用简体字。保持教学性说明、自动提交稳定增量、子模块先提交、根仓库整洁，持续维护开发日志和本 handoff。
+- 根分支 `feature/structural-profile`；Stage 4 已由根提交 `c44a303` 结项，Stage 5 技术路线由 `d4960fc` 提交。模型子模块当前 HEAD `fe57b3b`：版本 1.3.8，二阶动力配置、并行配置、初始转角/角速度、磁盘 checkpoint、mesh/DOF/system 指纹；写模型时先提交 target 再发布 latest link，ASCII 结果变量名称和单位加引号以修复多词字段读回。基础库 `f19d290`、云库 `48d34a8` 与模型先前 `c31833c` 修复 Windows CTest 的 Qt PATH，禁止无 PATH 直接双击未部署测试 exe。
+- 求解器已提交阶段性 `46b695c`（二阶积分核）、`1d6cfab`（运行级并行上下文）、`fdfee13`（FE 接线、模态/动力 MPC 消元），以及 `855453c`（磁盘 checkpoint、系统指纹、中心差分保守 CFL、移动支承分块数学核、谐波/脉冲/旋转初态/重启/失败步测试和时步事务）。当前求解器工作树正在新增并行重复性基准和移动支承 FE 接线，勿丢弃未提交增量。
+- 已验证：`tst_solver_stress` 完整通过；`tst_structural_dynamics_fe`、`beam`、`integrator`、`loads`、`support` 5/5 通过；`failure_atomicity` 与 `rotational_initial` 2/2 通过。磁盘 `restart_io` 在主 `build/vs2026` 单次及连续 20 次、另一 `build/stage5-loads` 连续 20 次通过；第三套 `build/motion-support-vs2026` 仍在 OpenMP fork 处遇 `0xc0000005`，正在做该套的全依赖重编排查。全量 Release CTest 尚未重跑。
+- 失败步已有 `prepare` 拒绝后的尺度恢复及 `writeResults` 失败后的内存结果/checkpoint 回滚测试；同一 `RSolver` 修正输入后重试用例正在补充。当前交易通过每步复制整个模型/共享数据实现正确性基线，具有 O(model size) 成本；磁盘 target 成功而 link 失败时可能留孤儿工件，尚无统一磁盘事务。旧版 `updateOldRecords` 在续算前改写旧记录的行为正为结构动力路径隔离。
+- 移动支承 `K_fc g + C_fc g_dot + M_fc g_ddot` 及 MPC 特解 `p/p_dot/p_ddot` 的独立数学核已通过解析测试，但 FE 装配尚未保留 fc 块。模型 1.3.9 五次 Hermite 三联运动输入与 FE 接线正在并行开发；在解析 FE 回归通过前，产品执行仍明确拒绝移动支承，不能把核测试写成产品支持。首版只覆盖全局点节点平移，MPC/局部 frame 与转角 motion 组合先显式拒绝。
+- 文档待办：更新下文过期的“模态 MPC 不支持/结构瞬态仍是一阶”等描述、`PROJECT_ROADMAP.md` 和 `TECHNICAL_ROUTE_STAGE5.md`；完成磁盘重启、全量测试及事务修复后再提交根指针与最终 handoff。既有 Stage 0–4 记录保留供追溯。
 
 ## 用户目标与长期约束
 
