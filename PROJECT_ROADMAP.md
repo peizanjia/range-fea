@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 起尚未实施。第 2 节的「当前基线」是 2026-09-21 的历史基线，不代表 Stage 5 结项后的现状。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 控制耦合核心及修订后的控制步审计/数据契约已通过 Release 全量回归，MATLAB 持续进程适配器未验证。Stage 7 起未实施。第 2 节的「当前基线」是 2026-09-21 的历史基线，不代表当前结项现状；详见 `HANDOFF.md` 与 `TECHNICAL_ROUTE_STAGE6.md`。
 
 更新时间：2026-09-24
 
@@ -512,7 +512,7 @@ applicationVersion, pluginVersions
 
 交付物：
 
-- `IController`、`ISensor`、`IActuator`、`ICouplingTransport` 接口；
+- 控制器纯回调、稳定传感器/执行器目录、稀疏力映射和进程外传输适配器的实用契约；暂不为尚无第二实现的组件添加空的 `IController`/`ISensor`/`IActuator`/`ICouplingTransport` 继承层；确有多态需求时再提炼接口；
 - 每个接受时间步的观测—控制—求解协议；
 - 进程内 C++ 控制器；
 - Python/MATLAB 可接入的进程外原型；
@@ -520,7 +520,7 @@ applicationVersion, pluginVersions
 - 饱和、速率、时延、噪声和保持器；
 - 控制器状态检查点与求解器回滚同步；
 - 按执行器/控制通道标识的 `f_control`、控制器瞬时功率与累积功，并将控制输入及功账纳入检查点、回滚和重放；
-- 接受步及 GUI/Agent 操作的全过程 InteractionRecord，关联 run ID、控制命令、观测、状态与结果工件；
+- 接受步控制事件和版本化 InteractionRecord 数据契约，关联 run ID、控制命令、观测、状态与结果工件；GUI/Agent 操作写入同一契约的应用服务钩子属于 Stage 10–11，不能在服务尚不存在时假装完成；
 - 固定随机种子和控制轨迹重放。
 
 基准：
@@ -529,6 +529,10 @@ applicationVersion, pluginVersions
 - 多自由度结构的传感器—执行器映射；
 - 有延迟和饱和时的可重复响应；
 - 控制关闭时退化到 Stage 5 基准。
+
+阶段依赖修正：Stage 6 验收数值控制链、进程内/外协议、控制步审计和可验证的数据契约；Stage 10 建立 GUI/CLI/Agent 共用的命令/查询服务并接交互日志，Stage 11 才让 Agent 在授权下执行。模块 playbook 仅为按需导航，实际操作以版本化 schema、capability 和契约测试为准。
+
+2026-09-24 验收备注：上述数值/协议核心已完成，主 Release 53/53 CTest 通过，Python PID 已作为进程外控制器端到端测试。MATLAB `-batch` 可启动，但本机标准输入长驻握手未验证，暂不宣称 MATLAB 适配器可用；若将「MATLAB 实测」视为 Stage 6 的硬退出条件，则该一项仍未完成，不能将跨语言交付范围写成无保留完成。
 
 ### Stage 7：压电、拉索与结构执行器
 

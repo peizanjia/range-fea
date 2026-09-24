@@ -10,4 +10,4 @@
 
 Agent 工作方式：先查询 `RCapabilityRegistry::getBuiltIn().toJson()` 所给能力及产品验证结果（`src/range-model-lib/include/rml_capability_registry.h`、`rml_structural_product_profile.h`）；确认模型 revision、单位、稳定目标 ID 与当前阶段；以只读查询解释现状，再产生待验证的操作建议。**目前没有统一的 Command Service/Query API 及 GUI 同源的 Agent 工具调用闭环**；不能把聊天指令、文档或 `RModel` 私有 C++ 方法当作已经授权的修改接口。高影响模型修改、自动编程和外部进程启动都需由宿主应用确认权限与范围。不要传递或记录 API 密钥、令牌和口令。
 
-本目录不代替 `PROJECT_ROADMAP.md` 的 Stage 6–12 规划，也不表示所有规划功能已经实现。正在整合的代码须待独立构建、聚焦测试与全量回归通过后才可写成“可交付”。
+本目录不代替 `PROJECT_ROADMAP.md` 的 Stage 6–12 规划，也不表示所有规划功能已经实现。Stage 6 的 C++/Python 控制核心已通过 2026-09-24 主 Release 53/53 回归；MATLAB 适配器、GUI/Agent 共用命令服务和全流程交互接线仍不可用。

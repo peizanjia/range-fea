@@ -23,7 +23,16 @@ cmake --build build/vs2026 --config Release --target tst_structural_dynamics_par
 ctest --test-dir build/vs2026 -C Release -R '^tst_structural_dynamics_parallel_repro$' -V --timeout 180
 ```
 
-该测试的定义在 `../src/range-solver-lib/tests/tst_structural_dynamics_parallel_repro.cpp`：32 和 384 个 `TRUSS1` 单元、10 个 Newmark 步、串行/固定 2/固定 4 线程，每组合重复 3 次，打印 `BENCH elements=...` 的中位耗时、`serial/this`、线程请求/应用/探测值、降级与误差容限比；对节点与约化 `q/v/a`、能量和 checkpoint 作容差比较。测试**没有**最低加速比断言。其无磁盘模型输出，也没有控制进程和复杂 MPC/壳/实体，因此不能外推为真实大模型、外部控制、8 线程或 I/O 性能。当前提交只提供复现命令，没有在这个文档中填入未复测的数值。
+该测试的定义在 `../src/range-solver-lib/tests/tst_structural_dynamics_parallel_repro.cpp`：32 和 384 个 `TRUSS1` 单元、10 个 Newmark 步、串行/固定 2/固定 4 线程，每组合重复 3 次，打印 `BENCH elements=...` 的中位耗时、`serial/this`、线程请求/应用/探测值、降级与误差容限比；对节点与约化 `q/v/a`、能量和 checkpoint 作容差比较。测试**没有**最低加速比断言。其无磁盘模型输出，也没有控制进程和复杂 MPC/壳/实体，因此不能外推为真实大模型、外部控制、8 线程或 I/O 性能。
+
+2026-09-24 主 `build/vs2026` Release 独立运行一次上述 CTest（每组合内部 3 次取中位）所得：
+
+| TRUSS1 单元数 | 串行 | 2 线程 | 4 线程 | 4 线程相对串行 |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 24.726 ms | 68.365 ms | 83.695 ms | 0.295×（变慢） |
+| 384 | 175.868 ms | 158.218 ms | 144.151 ms | 1.220× |
+
+两个规模的节点及 checkpoint 数值比较均通过；4 线程实探测为 4，但并行归约未声明逐位确定性。此数据只是一台主机上的小样本，不是普遍的加速承诺；更大模型、控制进程和 I/O 尚未测。原始输出保留在本地 `build/vs2026/Testing/Temporary/LastTest.log`（忽略的构建产物，不入库）。
 
 性能测量应单独运行该测试，不与 `ctest -j` 多任务同时争用 CPU。收集 OS/CPU、构建配置、OMP 运行时、模型规模、线程报告、每步/全程耗时、中位数与离散度、峰值内存、迭代次数/残差及数值误差。用至少一个大于 384 单元的代表性梁/面/体模型补 1/2/4/8 线程测量；同一模型、同一固定 `dt`、同一输出频率、同一求解精度和控制输入才可比较。
 

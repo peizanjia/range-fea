@@ -1,14 +1,17 @@
 # 续作交接
 
-最后更新：2026-09-24（Asia/Singapore；按新指令继续 Stage 6，进行中）
+最后更新：2026-09-24（Asia/Singapore；Stage 6 C++/Python 控制核心结项后退出）
 
-## Stage 6 当前续作快照（先读；下方 Stage 5 为历史结项快照）
+## Stage 6 结项与下一轮接续入口（先读；下方 Stage 5 为历史快照）
 
-- 用户新指令覆盖上轮「Stage 5 后退出」：继续开发直到 Stage 6 完成；关注组装矩阵进入主迭代后的并行效率、不同动力积分算法的必要性、未来外部 API/Agent 的格式化契约、类似 skill 的模块手册，并延续自动提交、仓库整洁、教学式解释和 handoff。
-- 当前起点为根 `a40eb52`，模型 `1174547`，求解器 `761de0a`；干净工作树上的 Stage 5 Release 全量 49/49 CTest 已通过。Stage 6 尚未完成，不得将进行中的代码或独立聚焦测试误写成阶段结项。
-- 并行任务：模型子模块正在设计/实现 1.3.11 控制配置及多通道 checkpoint；求解器子模块正在实现接受步边界一次控制、Stage 4 节点力执行器映射、控制专属功账和固定步长有效矩阵缓存；CLI 子任务正在实现同机进程外 NDJSON 控制传输及契约测试，尚未接入 `SolverTask`。根仓库的 `AGENT_INTERFACE_DESIGN.md` 记录「机器可读契约为真源、按需短手册为导航」的架构决定，仍为设计草案。
+- 用户本轮要求完成 Stage 6 后退出，注意高效可并行算法、积分法选择、外部 API/Agent 契约、模块 playbook、自动提交、仓库整洁及交接；最新明确要求当前任务结束后退出。**不要自动进入 Stage 7**。本轮起点为根 `a40eb52`、模型 `1174547`、求解器 `761de0a`，Stage 5 基线 49/49。
+- 已完成并验证的 Stage 6 C++/Python 核心：模型子模块 `63a92b1`（1.3.12 控制配置、每通道调理策略与 checkpoint）；求解器子模块 `e8141d1`（线程隔离 CSR、接受态一次控制、稀疏节点力映射、N/W/J 专属功账、RCCE 状态、延迟/保持/固定种子噪声、双通道及重启）；基础库 `dca3785`（严格 InteractionRecord v1 **数据契约**）。根仓库的 NDJSON 传输、`SolverTask` 实际接线、Python PID 和 CLI 正负用例已通过主 Release 回归；最终根提交号以 `git log -1` 为准。
 - 已确认设计边界：现有 Newmark、广义 alpha、中心差分三法，先不盲增算法；控制器只在接受态步边界计算一次，命令在本步零阶保持，不进入单元装配或 CG/GMRES 内迭代。固定算子有效矩阵可按 dt/方法缓存，其他性能问题先分段计时和基准验证；现有每步重装配及模型深复制仍可能主导耗时。
-- 协商中的模型 checkpoint 字段：`controlAvailable`、控制指纹、顺序通道 ID、最近接受命令、各通道端点功率/累计功、至多 1 MiB 的控制器状态、确定性种子；旧文件默认为无控制账。外部协议必须显式版本、请求 ID、目录白名单、超时和失败策略。该合同未完成测试前不是稳定公开 API。
+- checkpoint 已保存控制指纹、顺序通道 ID、最近接受命令、各通道端点功率/累计功、至多 1 MiB 的复合控制器/调理状态和确定性种子；旧无控制模型照旧读取。1.3.11 的旧 **受控** raw-state checkpoint 缺调理历史，1.3.12 明确拒绝其受控续算，不会假装重播一致。外部 v1 协议有身份摘要、请求 ID、目录白名单、超时和失败关闭；不保证硬实时或认证控制程序。GUI/Agent 操作记录需待 Stage 10–11 共用命令服务接线，Stage 6 只做控制步事件及 InteractionRecord 数据契约。
+- 验证：`cmake --build build/vs2026 --config Release --parallel 4` 全目标成功；`OMP_NUM_THREADS=4`、CTest Release `-j 2 --timeout 180` **53/53 通过、0 失败**。`tst_solver_audit_cli` 覆盖外部 fixture、Python PID、失配与超时；输出频率跳步时审计不虚构持久工件。`Release/Qt6Core.dll` 和 `Release/qtlib/platforms/qwindows.dll` 存在，先前报错的 `tst_structural_product_profile.exe -silent` 直接运行退出码 0。仍未在干净 Windows 主机做安装终验。
+- 性能稽核见 `docs/STAGE6_PERFORMANCE_AUDIT.md`：32 杆串行/2/4 线程 24.726/68.365/83.695 ms，384 杆 175.868/158.218/144.151 ms，均为本机每组三次中位；小算例并行变慢，384 杆 4 线程仅本机 1.220×。装配和 CG/GMRES 局部已用 OpenMP、固定 `dt` 有效算子缓存、CSR 去全局锁；每步仍重装配/比对 M/K、重建预条件器并深拷贝模型，不宣称整体最优或大模型加速。
+- 保留问题：MATLAB R2022a `-batch` 基本启动通过，但用标准输入做长驻 NDJSON 握手未验证，**没有可声明可用的 MATLAB 适配器**；外部 Python 跨进程中断/恢复仍缺独立 CLI 对照（内核重启已验证）。1.3.11 旧受控 raw checkpoint 缺调理历史，1.3.12 明确 fail-closed；旧被动文件继续读。压电/拉索和全状态热耦合属 Stage 7/8；GUI/Agent 操作记录及命令服务属 Stage 10/11。
+- 下一轮若继续 Stage 6 缺口，先验证 MATLAB 可靠长驻 IPC 或采用命名管道/TCP 适配器，再做外部进程跨进程续算对照；若接受 C++/Python 已验收范围进入 Stage 7，先围绕压电/拉索建立基准，不要跳过上述限定。每步重装配/深复制优化需先加分段耗时、内存和大模型 A/B，不可直接删除事务校验。
 
 
 ## 当前续作快照（先读本节；下文 Stage 4 结项记录为历史快照）
