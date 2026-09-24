@@ -179,3 +179,10 @@
 - 旧一阶应力瞬态与新二阶产品 profile 已分开标记，GUI 相关设置文字及帮助文档作了区分。384 杆基准在本机四线程相对串行只略快，CI 不设置速度阈值；多线程数值对照在设定误差范围内，但不宣称严格确定性。
 - 验证：`cmake --build build/vs2026 --config Release --parallel 4` 全目标成功（含 `fea.exe`、测试及 Qt runtime 部署）；`cmake -E env OMP_NUM_THREADS=4 ctest --test-dir build/vs2026 -C Release --output-on-failure -j 2 --timeout 180` 为 **49/49 通过、0 失败、9.28 秒**。`Release/Qt6Core.dll` 与 `Release/qtlib/platforms/qwindows.dll` 均在位；尚未在干净 Windows 机器做安装/启动终验。
 - Stage 5 按 `PROJECT_ROADMAP.md` 退出条件完成，本轮依用户要求停止，不进入 Stage 6。后续首先定义带来源标识的 `f_control`、传感器/执行器逐步协议、控制器状态检查点及 InteractionRecord，再考虑压电/拉索和全状态热耦合。已知限制详见 `HANDOFF.md` 与 `TECHNICAL_ROUTE_STAGE5.md`；历史尝试的 46/48 Not Run 与早期 45/45 属过程记录，不覆盖最终 49/49。
+
+## 2026-09-24 Stage 6 控制耦合续作（进行中）
+
+- 用户新指令：继续开发至 Stage 6 完成，特别核对主迭代及其他耗时流程的可并行效率、现有/新增动力积分算法选择、面向外部 API 和未来全流程 Agent Copilot 的接口契约，并维持自动提交、仓库清洁、技术解释及交接。启动点：根 `a40eb52`、模型 `1174547`、求解器 `761de0a`，Stage 5 全量 49/49 是上一基线，不是 Stage 6 测试结果。
+- 架构审查：当前 FE 求解入口已有 Newmark 平均加速度、广义 alpha、中心差分三法；中心差分仍要解含阻尼的矩阵，不能称为无矩阵求解的显式法。积分器固定算子却每步重建有效稀疏矩阵/线性求解器；单元装配虽已有 OpenMP 线程缓冲，仍每步全量重装配和深复制模型。先优化可证明不改语义的固定 `dt/M/C/K` 有效矩阵缓存，同时计划分段计时、不同规模/线程数/误差的 A/B 测试；不靠新增算法掩盖瓶颈。
+- 控制协议决定：在已接受的 `q/v/a` 上采样传感器并调用控制器一次，验证/限制以稳定 actuator ID 标识的节点力命令，本步零阶保持，再试算、接受或回滚；控制器不在矩阵组装、CG/GMRES 内迭代或积分器可重复调用的力回调中推进内部状态。命令阶跃改变时须以新力刷新 `t_n` 初始加速度，避免把零阶保持误当端点斜坡；额外质量矩阵求解须进入性能账。
+- 并行子任务正在实现模型 1.3.11 控制配置/账本、求解器控制接口与接受态功账、CLI 进程外版本化 NDJSON 传输（尚未接到 `SolverTask`）。根仓库新增 `AGENT_INTERFACE_DESIGN.md` 草案：以后 GUI/CLI/Agent 共用版本化 Command/Query/Capability/Artifact/InteractionRecord 真源，模块短手册只作按需导航；目前不能把草案当已开放 API。
