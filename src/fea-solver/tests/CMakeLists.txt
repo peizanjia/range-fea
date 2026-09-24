@@ -30,3 +30,16 @@ if(WIN32)
     set_tests_properties(tst_execution_event_journal PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
+
+qt_add_executable(tst_solver_audit_cli
+    tst_solver_audit_cli.cpp
+    ../src/execution_event_journal.cpp
+)
+target_include_directories(tst_solver_audit_cli PRIVATE ../src)
+target_link_libraries(tst_solver_audit_cli PRIVATE range-solver-lib Qt6::Test)
+add_dependencies(tst_solver_audit_cli fea-solver)
+add_test(NAME tst_solver_audit_cli COMMAND tst_solver_audit_cli)
+if(WIN32)
+    set_tests_properties(tst_solver_audit_cli PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()

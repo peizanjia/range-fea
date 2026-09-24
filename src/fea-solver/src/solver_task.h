@@ -23,6 +23,8 @@ class SolverTask : public QObject
         //! Number of threads to use.
         //! CLI override only; absent means do not change OpenMP before RSolver.
         std::optional<uint> nThreads;
+        //! Original CLI value before host-runtime clamping, for the audit trail.
+        std::optional<uint> requestedNThreads;
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.
