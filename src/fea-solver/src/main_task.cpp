@@ -38,7 +38,7 @@ void MainTask::run()
         validOptions.append(RArgumentOption("control-program",RArgumentOption::Path,QVariant(),"External control executable (requires enabled structural control setup)",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("control-args-json",RArgumentOption::String,QVariant(),"JSON string array passed as separate control process arguments",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("control-timeout-ms",RArgumentOption::Integer,QVariant(),"Positive per-request external control timeout in milliseconds (default 5000)",RArgumentOption::Optional,false));
-        validOptions.append(RArgumentOption("thermal-steps",RArgumentOption::Integer,QVariant(),"Run this many thermal FE macrosteps; requires --thermal-checkpoint",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("thermal-steps",RArgumentOption::Integer,QVariant(),"Run 1..1000 thermal FE macrosteps; requires --thermal-checkpoint",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("thermal-checkpoint",RArgumentOption::Path,QVariant(),"Atomically write/resume the thermal FE .tfec checkpoint",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("restart",RArgumentOption::Switch,QVariant(),"Restart solver",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-id",RArgumentOption::Path,QVariant(),"Task ID for inter process communication",RArgumentOption::Optional,false));
@@ -116,9 +116,9 @@ void MainTask::run()
         {
             bool validStepCount = false;
             const qlonglong steps = argumentsParser.getValue("thermal-steps").toString().toLongLong(&validStepCount);
-            if (!validStepCount || steps < 1 || steps > 1000000)
+            if (!validStepCount || steps < 1 || steps > 1000)
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
-                             "--thermal-steps must be an integer in 1..1000000.");
+                             "--thermal-steps must be an integer in 1..1000.");
             if (argumentsParser.isSet("restart") || argumentsParser.isSet("control-program") ||
                 argumentsParser.isSet("control-args-json") || argumentsParser.isSet("control-timeout-ms"))
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,

@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QLockFile>
 #include <QSet>
 #include <QVector>
 
@@ -47,6 +48,41 @@ QString sha256File(const QString &path)
                      "Cannot hash '%s': %s",qPrintable(path),qPrintable(file.errorString()));
     }
     return QString::fromLatin1(hash.result().toHex());
+}
+
+QString canonicalTargetPath(const QString &fileName)
+{
+    QString path = QFileInfo(fileName).absoluteFilePath();
+    QSet<QString> visited;
+    for (uint depth=0;depth<16;depth++)
+    {
+        if (visited.contains(path))
+            throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
+                         "Checkpoint target symlink cycle starts at '%s'.",qPrintable(path));
+        visited.insert(path);
+        const QFileInfo info(path);
+        if (info.exists())
+        {
+            const QString canonical = info.canonicalFilePath();
+            if (!canonical.isEmpty()) return QDir::cleanPath(canonical);
+        }
+        if (info.isSymLink())
+        {
+            const QString target = info.symLinkTarget();
+            if (target.isEmpty())
+                throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
+                             "Cannot resolve checkpoint target symlink '%s'.",qPrintable(path));
+            path = QFileInfo(target).absoluteFilePath();
+            continue;
+        }
+        const QFileInfo parentInfo(info.absolutePath());
+        const QString canonicalParent = parentInfo.canonicalFilePath();
+        const QString parent = canonicalParent.isEmpty()
+            ? QDir::cleanPath(parentInfo.absoluteFilePath()) : QDir::cleanPath(canonicalParent);
+        return QDir(parent).filePath(info.fileName());
+    }
+    throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
+                 "Checkpoint target symlink chain is too deep.");
 }
 
 QString resolveModelTargetPath(const QString &inputPath)
@@ -249,8 +285,13 @@ void SolverTask::run(void)
     std::unique_ptr<ControlNdjsonTransport> controlTransport;
     const QString inputPath = QFileInfo(this->modelFileName).absoluteFilePath();
     const bool thermalMode = this->thermalMacrosteps > 0;
-    const QString thermalCheckpointPath = thermalMode
+    const QString requestedThermalCheckpointPath = thermalMode
         ? QFileInfo(this->thermalCheckpointFileName).absoluteFilePath() : QString();
+    QString thermalCheckpointPath = requestedThermalCheckpointPath;
+    std::unique_ptr<QLockFile> thermalCheckpointLock;
+    bool thermalCheckpointSnapshotTaken = false;
+    bool thermalCheckpointOriginalExists = false;
+    QString thermalCheckpointOriginalHash;
 
     auto appendAudit = [&](const QString &type, const QString &status,
                            const QJsonObject &payload)
@@ -274,16 +315,33 @@ void SolverTask::run(void)
         if (journal && !auditWriteFailed)
         {
             QString error;
-            const bool preservedThermalCheckpoint = thermalMode && !finalModelWritten &&
+            const bool thermalCheckpointExists = thermalMode &&
                 QFileInfo::exists(thermalCheckpointPath);
+            bool preservedThermalCheckpoint = false;
+            if (thermalMode && !finalModelWritten && thermalCheckpointSnapshotTaken &&
+                thermalCheckpointOriginalExists && thermalCheckpointExists)
+            {
+                try
+                {
+                    preservedThermalCheckpoint =
+                        sha256File(thermalCheckpointPath) == thermalCheckpointOriginalHash;
+                }
+                catch (...) {}
+            }
+            QString failureMessage = message;
+            if (thermalMode && finalModelWritten)
+                failureMessage += QStringLiteral(
+                    " Thermal checkpoint was already atomically published to '%1'; this process failed afterward, so the checkpoint may be committed despite the nonzero exit.")
+                    .arg(thermalCheckpointPath);
             const QJsonObject payload{
                 {QStringLiteral("phase"),phase},
-                {QStringLiteral("message"),message},
+                {QStringLiteral("message"),failureMessage},
                 {QStringLiteral("resultLinkPath"),thermalMode ? thermalCheckpointPath
                     : QFileInfo(this->modelFileName).absoluteFilePath()},
                 {QStringLiteral("resultsMayAlreadyExist"),solverEntered || finalModelWritten ||
-                    preservedThermalCheckpoint},
-                {QStringLiteral("thermalCheckpointPreserved"),preservedThermalCheckpoint}
+                    thermalCheckpointExists},
+                {QStringLiteral("thermalCheckpointPreserved"),preservedThermalCheckpoint},
+                {QStringLiteral("thermalCheckpointCommitted"),thermalMode && finalModelWritten}
             };
             if (!journal->append(QStringLiteral("RunFailed"),QStringLiteral("failed"),
                                  payload,QUuid::createUuid(),&error))
@@ -293,13 +351,20 @@ void SolverTask::run(void)
                                qPrintable(journalPath),qPrintable(error));
             }
         }
+        QString failureLogMessage = message;
+        if (thermalMode && finalModelWritten)
+            failureLogMessage += QStringLiteral(
+                " Thermal checkpoint was already atomically published to '%1'; this process failed afterward, so the checkpoint may be committed despite the nonzero exit.")
+                .arg(thermalCheckpointPath);
         RLogger::error("Failed during %s for model '%s': %s\n",
-                       qPrintable(phase),qPrintable(inputPath),qPrintable(message));
+                       qPrintable(phase),qPrintable(inputPath),qPrintable(failureLogMessage));
         if (auditWriteFailed || solverEntered || finalModelWritten)
         {
             RLogger::warning("Previous model result files may already exist; no rollback is claimed. Audit journal: '%s'\n",
                              qPrintable(journalPath));
         }
+        thermalCheckpointLock.reset();
+        journal.reset();
         emit this->finished();
         this->app->exit(1);
     };
@@ -312,12 +377,11 @@ void SolverTask::run(void)
                       qPrintable(journalPath),qPrintable(runId.toString(QUuid::WithoutBraces)));
 
         phase = QStringLiteral("input-hash");
-        const QString inputArgumentHash = sha256File(inputPath);
         const bool thermalCheckpointInput = thermalMode &&
             QFileInfo(inputPath).suffix().compare(QStringLiteral("tfec"),Qt::CaseInsensitive) == 0;
         if (thermalMode)
         {
-            if (QFileInfo(thermalCheckpointPath).suffix().compare(
+            if (QFileInfo(requestedThermalCheckpointPath).suffix().compare(
                     QStringLiteral("tfec"),Qt::CaseInsensitive) != 0)
                 throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
                              "--thermal-checkpoint must name a .tfec file.");
@@ -329,7 +393,31 @@ void SolverTask::run(void)
                     throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
                                  "Thermal FE input must be a .ram/.rbm model or a .tfec checkpoint.");
             }
+            thermalCheckpointPath = canonicalTargetPath(requestedThermalCheckpointPath);
+            phase = QStringLiteral("thermal-checkpoint-lock");
+            thermalCheckpointLock.reset(
+                new QLockFile(thermalCheckpointPath+QStringLiteral(".lock")));
+            thermalCheckpointLock->setStaleLockTime(0);
+            if (!thermalCheckpointLock->tryLock(0))
+            {
+                qint64 ownerPid = 0;
+                QString ownerHost,ownerApp;
+                QString ownerInfo;
+                if (thermalCheckpointLock->error() == QLockFile::LockFailedError &&
+                    thermalCheckpointLock->getLockInfo(&ownerPid,&ownerHost,&ownerApp))
+                    ownerInfo = QStringLiteral(" (owner pid %1, host '%2')")
+                                    .arg(ownerPid).arg(ownerHost);
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "ThermalCheckpointLocked: cannot acquire the checkpoint writer lock for '%s'%s.",
+                             qPrintable(thermalCheckpointPath),qPrintable(ownerInfo));
+            }
+            thermalCheckpointOriginalExists = QFileInfo::exists(thermalCheckpointPath);
+            if (thermalCheckpointOriginalExists)
+                thermalCheckpointOriginalHash = sha256File(thermalCheckpointPath);
+            thermalCheckpointSnapshotTaken = true;
+            phase = QStringLiteral("input-hash");
         }
+        const QString inputArgumentHash = sha256File(inputPath);
         const QString inputTargetPath = thermalCheckpointInput ? inputPath
                                                                : resolveModelTargetPath(inputPath);
         const QString inputTargetHash = thermalCheckpointInput ? inputArgumentHash
@@ -443,6 +531,24 @@ void SolverTask::run(void)
             }
 
             phase = QStringLiteral("thermal-checkpoint-publish");
+            const bool checkpointExistsNow = QFileInfo::exists(thermalCheckpointPath);
+            bool checkpointUnchanged = checkpointExistsNow == thermalCheckpointOriginalExists;
+            if (checkpointUnchanged && checkpointExistsNow)
+            {
+                try
+                {
+                    checkpointUnchanged =
+                        sha256File(thermalCheckpointPath) == thermalCheckpointOriginalHash;
+                }
+                catch (...)
+                {
+                    checkpointUnchanged = false;
+                }
+            }
+            if (!checkpointUnchanged)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "ThermalCheckpointConflict: target '%s' changed after this run began; the candidate was not published.",
+                             qPrintable(thermalCheckpointPath));
             RStructuralThermalFEAdapter::writeCheckpoint(
                 thermalCheckpointPath,model,scheduler,acceptedThermalState);
             finalModelWritten = true;
@@ -467,6 +573,8 @@ void SolverTask::run(void)
                  {QStringLiteral("completedMacrosteps"),
                   double(acceptedThermalState.completedMechanicalMacrosteps)},
                  {QStringLiteral("acceptedTimeSeconds"),acceptedThermalState.acceptedTimeSeconds}});
+            thermalCheckpointLock.reset();
+            journal.reset();
             emit this->finished();
             return;
         }
@@ -674,5 +782,6 @@ void SolverTask::run(void)
         finishWithFailure(QStringLiteral("Unknown exception"));
         return;
     }
+    journal.reset();
     emit this->finished();
 }
