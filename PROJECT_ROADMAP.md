@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压及节点电势/电荷一维压电 FE/CLI、非线性拉索 Newmark 动力 FE；拉索动力控制/重启和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、一维 Heat→Stress、受限一维 Heat→节点电势压电、温度相关模态频率、QUAD2 穿厚度温差热弯曲、实际点加热器瞬态热 FE/宏步末准静力 FE 与独立一维热机分区/多速率核；稳态 Heat→Stress 有任务级结果发布交易。暂态任务树跨场事务、双向热回馈、控制配置持久化与 CLI 重启仍未完成，不可判定 Stage 8 完成。全目标 Release 重建及 CTest 70/70 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压及节点电势/电荷一维压电 FE/CLI、非线性拉索 Newmark 动力 FE；拉索动力控制/重启和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、一维 Heat→Stress、受限一维 Heat→节点电势压电、温度相关模态频率、QUAD2 穿厚度温差热弯曲、点加热器瞬态热 FE/宏步末准静力 FE、受限双向黏性耗散回热杆件 FE、热控持久配置及原子 CLI 续算、稳态及受限暂态两叶 Heat→Stress 结果事务、调用方物理 ID 场快照和显式参考面/体热容量。通用监测输出事务、跨重网格稳定身份、广义双向热回馈及单体耦合仍未验收，不能判定 Stage 8 完成。全目标 Release 构建及 CTest 72/72 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
 更新时间：2026-09-26
 
