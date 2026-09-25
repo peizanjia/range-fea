@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，2026-09-25 另补 Python 跨程序续算验证，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索/压电数学核、拉索受限非线性静力 FE/CLI，以及 1.3.14 固定电压压电杆静力 FE/CLI；拉索动力学/控制和压电梁片/电压控制尚未完成。按最新要求完成本增量后停止，Stage 8 起未实施。最新 Release CTest 61/61 通过。第 2 节是 2026-09-21 历史基线；详见 `HANDOFF.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压压电杆静力 FE/CLI、新增节点电势/电荷一维 FE 与独立非线性拉索动力候选步；拉索动力 FE/控制和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、真实一维 Heat→Stress 解析基准、温度相关模态频率、独立一维热机分区候选步和多速率热控制调度核，但跨场事务、热弯梁、热—压电 FE、控制器实际 FE 接线与重启仍未完成，不可判定 Stage 8 完成。最新 Release CTest 69/69 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
 更新时间：2026-09-25
 
