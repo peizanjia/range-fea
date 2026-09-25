@@ -28,6 +28,8 @@ class SolverTask : public QObject
         QString controlProgram;
         QStringList controlArguments;
         uint controlTimeoutMs = 5000;
+        uint thermalMacrosteps = 0;
+        QString thermalCheckpointFileName;
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.

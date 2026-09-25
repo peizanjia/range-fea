@@ -27,6 +27,10 @@ class SolverInput
         QStringList controlArguments;
         //! Wall-clock limit for one external control response.
         uint controlTimeoutMs = 5000;
+        //! Number of persisted thermal FE macrosteps requested by the CLI.
+        uint thermalMacrosteps = 0;
+        //! Atomic single-file destination for the accepted thermal state.
+        QString thermalCheckpointFileName;
         //! Force to restart solver
         bool restart;
 
@@ -66,6 +70,8 @@ class SolverInput
         QStringList getExternalControlArguments() const;
         void setExternalControlTimeoutMs(uint timeoutMs);
         uint getExternalControlTimeoutMs() const;
+
+        void setThermalControlRun(uint macrosteps,const QString &checkpointFileName);
 
         //! Set force restart solver.
         void setRestart(bool restart);

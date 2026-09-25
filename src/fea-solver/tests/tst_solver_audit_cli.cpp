@@ -16,6 +16,7 @@
 
 #include "execution_event_journal.h"
 #include "rml_model.h"
+#include "rstructural_thermal_fe_adapter.h"
 
 namespace
 {
@@ -120,6 +121,116 @@ RModel makeStaticTrussModel()
     return model;
 }
 
+void configureControl(RModel &model);
+
+RModel makeThermalControlModel(bool unbalancedAxialLoad = false,
+                              bool enableForceController = false)
+{
+    RModel model;
+    model.setNNodes(2);
+    model.getNode(0).set(0.0,0.0,0.0);
+    model.getNode(1).set(1.0,0.0,0.0);
+    RElement rod(R_ELEMENT_TRUSS1);
+    rod.setNodeId(0,0);
+    rod.setNodeId(1,1);
+    model.addElement(rod,true,0);
+
+    RMaterial material(RMaterial::Solid);
+    const auto addProperty = [&material](RMaterialProperty::Type type,double value)
+    {
+        RMaterialProperty property(type);
+        property.add(293.15,value);
+        material.add(property);
+    };
+    addProperty(RMaterialProperty::ModulusOfElasiticity,10.0);
+    addProperty(RMaterialProperty::PoissonRatio,0.0);
+    addProperty(RMaterialProperty::ThermalExpansionCoefficient,0.01);
+    addProperty(RMaterialProperty::ThermalConductivity,1.0);
+    addProperty(RMaterialProperty::HeatCapacity,3.0);
+    addProperty(RMaterialProperty::Density,1.0);
+    addProperty(RMaterialProperty::Emissivity,0.0);
+    RLine &line = model.getLine(0);
+    line.setCrossArea(1.0);
+    line.setMaterial(material);
+
+    for (uint node=0;node<2;node++)
+    {
+        RElement point(R_ELEMENT_POINT);
+        point.setNodeId(0,node);
+        model.addElement(point,true,node);
+        RBoundaryCondition support(R_BOUNDARY_CONDITION_DISPLACEMENT);
+        RConditionComponent &axial = support.getComponent(
+            support.findComponentPosition(R_VARIABLE_DISPLACEMENT_X));
+        if (node == 0 && !unbalancedAxialLoad)
+            axial.add(0.0,0.0);
+        else
+            axial.setEnabled(false);
+        support.getComponent(support.findComponentPosition(R_VARIABLE_DISPLACEMENT_Y))
+               .add(0.0,0.0);
+        support.getComponent(support.findComponentPosition(R_VARIABLE_DISPLACEMENT_Z))
+               .add(0.0,0.0);
+        model.getPoint(node).addBoundaryCondition(support);
+    }
+    RBoundaryCondition anchorTemperature(R_BOUNDARY_CONDITION_TEMPERATURE);
+    anchorTemperature.getComponent(anchorTemperature.findComponentPosition(R_VARIABLE_TEMPERATURE))
+                     .add(0.0,293.15);
+    model.getPoint(0).addBoundaryCondition(anchorTemperature);
+    if (unbalancedAxialLoad)
+    {
+        RBoundaryCondition force(R_BOUNDARY_CONDITION_FORCE);
+        force.getComponent(force.findComponentPosition(R_VARIABLE_FORCE_X)).add(0.0,1.0);
+        model.getPoint(1).addBoundaryCondition(force);
+    }
+
+    RProblemTaskItem sequence;
+    sequence.addChild(RProblemTaskItem(R_PROBLEM_HEAT));
+    sequence.addChild(RProblemTaskItem(R_PROBLEM_STRESS));
+    model.setProblemTaskTree(sequence);
+    model.getMatrixSolverConf(RMatrixSolverConf::CG).setSolverCvgValue(1.0e-12);
+
+    auto &catalog = model.getProblemSetup().getStructuralInteractionSetup();
+    RStructuralActuator actuator;
+    actuator.id = QStringLiteral("heater-fe");
+    actuator.type = RStructuralActuatorType::HeatSource;
+    actuator.target.scope = RStructuralTargetScope::Node;
+    actuator.target.nodeId = 1;
+    actuator.variable = R_VARIABLE_HEAT;
+    actuator.unit = QStringLiteral("W");
+    actuator.minimum = 0.0;
+    actuator.maximum = 2.0;
+    catalog.getActuators().push_back(actuator);
+    RStructuralSensor sensor;
+    sensor.id = QStringLiteral("sensor-fe");
+    sensor.target.scope = RStructuralTargetScope::Node;
+    sensor.target.nodeId = 1;
+    sensor.quantity = RStructuralSensorQuantity::Temperature;
+    sensor.aggregation = RStructuralSensorAggregation::Point;
+    sensor.unit = QStringLiteral("K");
+    catalog.getSensors().push_back(sensor);
+
+    if (enableForceController)
+        configureControl(model);
+
+    auto &thermal = model.getProblemSetup().getStructuralThermalControlSetup();
+    thermal.enabled = true;
+    thermal.thermalSubstepSeconds = 1.0;
+    thermal.thermalSubstepsPerMechanicalMacrostep = 1;
+    thermal.mechanicalMacrostepsPerControllerSample = 1;
+    const QString nodeId = RStructuralThermalFEAdapter::nodeId(model,1);
+    RStructuralThermalControlChannelSetup channel;
+    channel.actuatorId = actuator.id;
+    channel.heaterNodeId = nodeId;
+    channel.temperatureSensorId = sensor.id;
+    channel.temperatureSensorNodeId = nodeId;
+    channel.turnOnBelowKelvin = 400.0;
+    channel.turnOffAtOrAboveKelvin = 401.0;
+    channel.onPowerWatts = 2.0;
+    channel.maximumPowerWatts = 2.0;
+    thermal.channels = {channel};
+    thermal.sparseObservationNodeIds = {nodeId};
+    return model;
+}
+
 QString singleJournal(const QDir &directory)
 {
     const QStringList paths = directory.entryList({QStringLiteral("*.events.jsonl")},QDir::Files);
@@ -181,6 +292,10 @@ private slots:
     void externalControllerTimeoutDoesNotAcceptStep();
     void pythonPidControllerRunsWhenInterpreterAvailable();
     void pythonPidRestartMatchesUninterrupted();
+    void thermalCliRestartMatchesUninterrupted();
+    void thermalCliRejectsCorruptCheckpoint();
+    void thermalFailedMacrostepPreservesCheckpoint();
+    void thermalCliRejectsEnabledForceController();
     void staticCablePersistsCertifiedResult_data();
     void staticCablePersistsCertifiedResult();
     void staticPiezoPersistsElectrodeCharge_data();
@@ -767,6 +882,231 @@ void TestSolverAuditCli::pythonPidRestartMatchesUninterrupted()
             }
         }
     }
+}
+
+void TestSolverAuditCli::thermalCliRestartMatchesUninterrupted()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QDir root(directory.path());
+    for (const QString &name : {QStringLiteral("full"),QStringLiteral("split-initial"),
+                                QStringLiteral("split-resume")})
+        QVERIFY(root.mkdir(name));
+
+    const QString fullInput = root.filePath(QStringLiteral("full/input.ram"));
+    const QString fullCheckpoint = root.filePath(QStringLiteral("full/state.tfec"));
+    const QString firstInput = root.filePath(QStringLiteral("split-initial/input.ram"));
+    const QString firstCheckpoint = root.filePath(QStringLiteral("split-initial/state.tfec"));
+    const QString resumeCheckpoint = root.filePath(QStringLiteral("split-resume/state.tfec"));
+    makeThermalControlModel().write(fullInput);
+    makeThermalControlModel().write(firstInput);
+
+    QString diagnostic;
+    auto run = [&](const QString &input,const QString &checkpoint,uint steps)
+    {
+        QProcess process;
+        process.start(solverExecutablePath(),
+            {QStringLiteral("--file=")+input,
+             QStringLiteral("--thermal-steps=")+QString::number(steps),
+             QStringLiteral("--thermal-checkpoint=")+checkpoint});
+        const bool finished = process.waitForFinished(60000);
+        diagnostic = QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError());
+        if (!finished)
+        {
+            process.kill();
+            process.waitForFinished();
+            diagnostic += process.errorString();
+        }
+        return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    };
+
+    QVERIFY2(run(fullInput,fullCheckpoint,3),qPrintable(diagnostic));
+    QVERIFY2(run(firstInput,firstCheckpoint,1),qPrintable(diagnostic));
+    QVERIFY(QFile::copy(firstCheckpoint,resumeCheckpoint));
+    QVERIFY2(run(resumeCheckpoint,resumeCheckpoint,2),qPrintable(diagnostic));
+
+    RModel fullModel,resumedModel;
+    RStructuralThermalControlState fullState,resumedState;
+    RStructuralThermalFEAdapter::readConfiguredCheckpoint(fullCheckpoint,fullModel,fullState);
+    RStructuralThermalFEAdapter::readConfiguredCheckpoint(resumeCheckpoint,resumedModel,resumedState);
+    const auto fullScheduler = RStructuralThermalFEAdapter::schedulerFromModel(fullModel);
+    const auto resumedScheduler = RStructuralThermalFEAdapter::schedulerFromModel(resumedModel);
+    QCOMPARE(fullState.completedMechanicalMacrosteps,quint64(3));
+    QCOMPARE(resumedState.completedMechanicalMacrosteps,quint64(3));
+    QCOMPARE(fullState.completedControllerSamples,quint64(3));
+    QCOMPARE(resumedState.completedControllerSamples,quint64(3));
+    QCOMPARE(fullState.acceptedTimeSeconds,3.0);
+    QCOMPARE(resumedState.acceptedTimeSeconds,3.0);
+    QCOMPARE(fullScheduler.serialize(fullState),resumedScheduler.serialize(resumedState));
+
+    const uint temperature = fullModel.findVariable(R_VARIABLE_TEMPERATURE);
+    const uint displacement = fullModel.findVariable(R_VARIABLE_DISPLACEMENT);
+    const uint resumedTemperature = resumedModel.findVariable(R_VARIABLE_TEMPERATURE);
+    const uint resumedDisplacement = resumedModel.findVariable(R_VARIABLE_DISPLACEMENT);
+    QVERIFY(temperature != RConstants::eod && displacement != RConstants::eod);
+    QVERIFY(resumedTemperature != RConstants::eod && resumedDisplacement != RConstants::eod);
+    for (uint node=0;node<fullModel.getNNodes();node++)
+    {
+        QCOMPARE(fullModel.getVariable(temperature).getValue(0,node),
+                 resumedModel.getVariable(resumedTemperature).getValue(0,node));
+        QCOMPARE(fullModel.getVariable(displacement).getValue(0,node),
+                 resumedModel.getVariable(resumedDisplacement).getValue(0,node));
+    }
+
+    const auto fullJournal = ExecutionEventJournal::read(singleJournal(QDir(root.filePath("full"))));
+    const auto firstJournal = ExecutionEventJournal::read(
+        singleJournal(QDir(root.filePath("split-initial"))));
+    const auto resumeJournal = ExecutionEventJournal::read(
+        singleJournal(QDir(root.filePath("split-resume"))));
+    QVERIFY(fullJournal.error.isEmpty() && firstJournal.error.isEmpty() && resumeJournal.error.isEmpty());
+    auto acceptedCount = [](const ExecutionEventReadResult &journal)
+    {
+        return int(std::count_if(journal.events.begin(),journal.events.end(),[](const auto &event) {
+            return event.type == QStringLiteral("ThermalMacrostepAccepted");
+        }));
+    };
+    QCOMPARE(acceptedCount(fullJournal),3);
+    QCOMPARE(acceptedCount(firstJournal),1);
+    QCOMPARE(acceptedCount(resumeJournal),2);
+    QCOMPARE(fullJournal.events.back().payload.value(QStringLiteral("thermalCheckpointPath")).toString(),
+             QFileInfo(fullCheckpoint).absoluteFilePath());
+    QCOMPARE(fullJournal.events.back().payload.value(QStringLiteral("acceptedTimeSeconds")).toDouble(),3.0);
+}
+
+void TestSolverAuditCli::thermalCliRejectsCorruptCheckpoint()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("setup")));
+    const QString input = directory.filePath(QStringLiteral("setup/input.ram"));
+    const QString validCheckpoint = directory.filePath(QStringLiteral("setup/valid.tfec"));
+    makeThermalControlModel().write(input);
+
+    QProcess create;
+    create.start(solverExecutablePath(),
+        {QStringLiteral("--file=")+input,QStringLiteral("--thermal-steps=1"),
+         QStringLiteral("--thermal-checkpoint=")+validCheckpoint});
+    QVERIFY2(create.waitForFinished(60000),qPrintable(create.errorString()));
+    QCOMPARE(create.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(create.exitCode() == 0,
+             qPrintable(QString::fromUtf8(create.readAllStandardOutput()+create.readAllStandardError())));
+
+    const QString corruptCheckpoint = directory.filePath(QStringLiteral("corrupt.tfec"));
+    QVERIFY(QFile::copy(validCheckpoint,corruptCheckpoint));
+    QFile corrupt(corruptCheckpoint);
+    QVERIFY(corrupt.open(QIODevice::ReadWrite));
+    QByteArray bytes = corrupt.readAll();
+    QVERIFY(bytes.size() > 8);
+    bytes[bytes.size()-1] = char(bytes.back() ^ 0x5a);
+    corrupt.close();
+    QVERIFY(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(corrupt.write(bytes),qint64(bytes.size()));
+    corrupt.close();
+    const QString corruptHash = sha256(corruptCheckpoint);
+
+    const QString output = directory.filePath(QStringLiteral("preserve.tfec"));
+    QFile sentinel(output);
+    QVERIFY(sentinel.open(QIODevice::WriteOnly));
+    const QByteArray sentinelContents("existing thermal checkpoint stays intact");
+    QCOMPARE(sentinel.write(sentinelContents),qint64(sentinelContents.size()));
+    sentinel.close();
+    const QString outputHash = sha256(output);
+
+    QProcess resume;
+    resume.start(solverExecutablePath(),
+        {QStringLiteral("--file=")+corruptCheckpoint,QStringLiteral("--thermal-steps=1"),
+         QStringLiteral("--thermal-checkpoint=")+output});
+    QVERIFY2(resume.waitForFinished(60000),qPrintable(resume.errorString()));
+    QCOMPARE(resume.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(resume.exitCode() != 0,
+             qPrintable(QString::fromUtf8(resume.readAllStandardOutput()+resume.readAllStandardError())));
+    QCOMPARE(sha256(corruptCheckpoint),corruptHash);
+    QCOMPARE(sha256(output),outputHash);
+
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QVERIFY(!journal.events.empty());
+    QCOMPARE(journal.events.back().type,QStringLiteral("RunFailed"));
+    QVERIFY(journal.events.back().payload.value(QStringLiteral("resultsMayAlreadyExist")).toBool());
+    QVERIFY(journal.events.back().payload.value(QStringLiteral("thermalCheckpointPreserved")).toBool());
+}
+
+void TestSolverAuditCli::thermalFailedMacrostepPreservesCheckpoint()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("unbalanced.ram"));
+    const QString checkpoint = directory.filePath(QStringLiteral("previous.tfec"));
+    makeThermalControlModel(true).write(input);
+    const QString inputHash = sha256(input);
+    QFile sentinel(checkpoint);
+    QVERIFY(sentinel.open(QIODevice::WriteOnly));
+    const QByteArray sentinelContents("previous accepted checkpoint");
+    QCOMPARE(sentinel.write(sentinelContents),qint64(sentinelContents.size()));
+    sentinel.close();
+    const QString checkpointHash = sha256(checkpoint);
+    const auto nonJournalFiles = [](const QDir &dir)
+    {
+        QStringList files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot,QDir::Name);
+        files.erase(std::remove_if(files.begin(),files.end(),[](const QString &name) {
+            return name.endsWith(QStringLiteral(".events.jsonl"));
+        }),files.end());
+        return files;
+    };
+    const QStringList filesBefore = nonJournalFiles(QDir(directory.path()));
+
+    QProcess process;
+    process.start(solverExecutablePath(),
+        {QStringLiteral("--file=")+input,QStringLiteral("--thermal-steps=2"),
+         QStringLiteral("--thermal-checkpoint=")+checkpoint});
+    QVERIFY2(process.waitForFinished(60000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() != 0,
+             qPrintable(QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError())));
+    QCOMPARE(sha256(input),inputHash);
+    QCOMPARE(sha256(checkpoint),checkpointHash);
+    QCOMPARE(nonJournalFiles(QDir(directory.path())),filesBefore);
+    QVERIFY(singleJournal(QDir(directory.path())).size() > 0);
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(journal.events.back().type,QStringLiteral("RunFailed"));
+    QCOMPARE(journal.events.size(),2);
+    QVERIFY(journal.events.back().payload.value(QStringLiteral("resultsMayAlreadyExist")).toBool());
+    QVERIFY(journal.events.back().payload.value(QStringLiteral("thermalCheckpointPreserved")).toBool());
+    QVERIFY(std::none_of(journal.events.begin(),journal.events.end(),[](const auto &event) {
+        return event.type == QStringLiteral("ThermalMacrostepAccepted");
+    }));
+    QCOMPARE(QDir(directory.path()).entryList({QStringLiteral("*.rbm")},QDir::Files).size(),0);
+}
+
+void TestSolverAuditCli::thermalCliRejectsEnabledForceController()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString input = directory.filePath(QStringLiteral("ambiguous.ram"));
+    const QString checkpoint = directory.filePath(QStringLiteral("unused.tfec"));
+    makeThermalControlModel(false,true).write(input);
+    const QString inputHash = sha256(input);
+
+    QProcess process;
+    process.start(solverExecutablePath(),
+        {QStringLiteral("--file=")+input,QStringLiteral("--thermal-steps=1"),
+         QStringLiteral("--thermal-checkpoint=")+checkpoint});
+    QVERIFY2(process.waitForFinished(60000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() != 0,
+             qPrintable(QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError())));
+    QCOMPARE(sha256(input),inputHash);
+    QVERIFY(!QFile::exists(checkpoint));
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(journal.events.back().type,QStringLiteral("RunFailed"));
+    QVERIFY(journal.events.back().payload.value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("structural force controller")));
 }
 
 

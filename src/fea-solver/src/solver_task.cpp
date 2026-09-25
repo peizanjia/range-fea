@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSet>
+#include <QVector>
 
 #include <algorithm>
 #include <exception>
@@ -22,6 +23,7 @@
 
 #include <rparallel_execution_context.h>
 #include <rsolver.h>
+#include <rstructural_thermal_fe_adapter.h>
 
 #include "execution_event_journal.h"
 #include "control_ndjson_transport.h"
@@ -198,6 +200,16 @@ QJsonArray controlSamplesJson(const RStructuralControlStepRecord &record)
                                     {QStringLiteral("cumulativeWorkJ"),sample.cumulativeWork}});
     return channels;
 }
+
+bool isSupportedThermalTaskTree(const RProblemTaskItem &root)
+{
+    return root.getProblemType() == R_PROBLEM_NONE && root.getNIterations() == 1 &&
+           root.getNChildren() == 2 &&
+           root.getChild(0).getProblemType() == R_PROBLEM_HEAT &&
+           root.getChild(0).getNChildren() == 0 &&
+           root.getChild(1).getProblemType() == R_PROBLEM_STRESS &&
+           root.getChild(1).getNChildren() == 0;
+}
 }
 
 SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QObject *parent)
@@ -210,6 +222,8 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , controlProgram(solverInput.controlProgram)
     , controlArguments(solverInput.controlArguments)
     , controlTimeoutMs(solverInput.controlTimeoutMs)
+    , thermalMacrosteps(solverInput.thermalMacrosteps)
+    , thermalCheckpointFileName(solverInput.thermalCheckpointFileName)
     , restart(solverInput.restart)
     , app(app)
 {
@@ -234,6 +248,9 @@ void SolverTask::run(void)
     bool finalModelWritten = false;
     std::unique_ptr<ControlNdjsonTransport> controlTransport;
     const QString inputPath = QFileInfo(this->modelFileName).absoluteFilePath();
+    const bool thermalMode = this->thermalMacrosteps > 0;
+    const QString thermalCheckpointPath = thermalMode
+        ? QFileInfo(this->thermalCheckpointFileName).absoluteFilePath() : QString();
 
     auto appendAudit = [&](const QString &type, const QString &status,
                            const QJsonObject &payload)
@@ -257,11 +274,16 @@ void SolverTask::run(void)
         if (journal && !auditWriteFailed)
         {
             QString error;
+            const bool preservedThermalCheckpoint = thermalMode && !finalModelWritten &&
+                QFileInfo::exists(thermalCheckpointPath);
             const QJsonObject payload{
                 {QStringLiteral("phase"),phase},
                 {QStringLiteral("message"),message},
-                {QStringLiteral("resultLinkPath"),QFileInfo(this->modelFileName).absoluteFilePath()},
-                {QStringLiteral("resultsMayAlreadyExist"),solverEntered || finalModelWritten}
+                {QStringLiteral("resultLinkPath"),thermalMode ? thermalCheckpointPath
+                    : QFileInfo(this->modelFileName).absoluteFilePath()},
+                {QStringLiteral("resultsMayAlreadyExist"),solverEntered || finalModelWritten ||
+                    preservedThermalCheckpoint},
+                {QStringLiteral("thermalCheckpointPreserved"),preservedThermalCheckpoint}
             };
             if (!journal->append(QStringLiteral("RunFailed"),QStringLiteral("failed"),
                                  payload,QUuid::createUuid(),&error))
@@ -291,8 +313,27 @@ void SolverTask::run(void)
 
         phase = QStringLiteral("input-hash");
         const QString inputArgumentHash = sha256File(inputPath);
-        const QString inputTargetPath = resolveModelTargetPath(inputPath);
-        const QString inputTargetHash = sha256File(inputTargetPath);
+        const bool thermalCheckpointInput = thermalMode &&
+            QFileInfo(inputPath).suffix().compare(QStringLiteral("tfec"),Qt::CaseInsensitive) == 0;
+        if (thermalMode)
+        {
+            if (QFileInfo(thermalCheckpointPath).suffix().compare(
+                    QStringLiteral("tfec"),Qt::CaseInsensitive) != 0)
+                throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
+                             "--thermal-checkpoint must name a .tfec file.");
+            if (!thermalCheckpointInput)
+            {
+                const QString extension = QFileInfo(inputPath).suffix();
+                if (extension.compare(RModel::getDefaultFileExtension(false),Qt::CaseInsensitive) != 0 &&
+                    extension.compare(RModel::getDefaultFileExtension(true),Qt::CaseInsensitive) != 0)
+                    throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
+                                 "Thermal FE input must be a .ram/.rbm model or a .tfec checkpoint.");
+            }
+        }
+        const QString inputTargetPath = thermalCheckpointInput ? inputPath
+                                                               : resolveModelTargetPath(inputPath);
+        const QString inputTargetHash = thermalCheckpointInput ? inputArgumentHash
+                                                                : sha256File(inputTargetPath);
         if (this->nThreads)
         {
             RLogger::info("CLI thread override = %u (max=%d)\n",
@@ -306,19 +347,133 @@ void SolverTask::run(void)
         }
 
         phase = QStringLiteral("load-model");
-        model.read(this->modelFileName);
+        RStructuralThermalControlState acceptedThermalState;
+        if (thermalCheckpointInput)
+        {
+            RStructuralThermalFEAdapter::readConfiguredCheckpoint(
+                inputPath,model,acceptedThermalState);
+        }
+        else
+        {
+            model.read(this->modelFileName);
+        }
         if (sha256File(inputPath) != inputArgumentHash ||
-            resolveModelTargetPath(inputPath) != inputTargetPath ||
-            sha256File(inputTargetPath) != inputTargetHash)
+            (!thermalCheckpointInput && resolveModelTargetPath(inputPath) != inputTargetPath) ||
+            (!thermalCheckpointInput && sha256File(inputTargetPath) != inputTargetHash))
             throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                          "Input model link or target changed while it was being loaded.");
         RLogger::info("Model has been successfully loaded from file '%s'.\n",
                       qPrintable(this->modelFileName));
-        model.getMatrixSolverConf(RMatrixSolverConf::CG).setOutputFileName(
-            RFileUtils::getFileNameWithSuffix(this->convergenceFileName,RMatrixSolverConf::getId(RMatrixSolverConf::CG)));
-        model.getMatrixSolverConf(RMatrixSolverConf::GMRES).setOutputFileName(
-            RFileUtils::getFileNameWithSuffix(this->convergenceFileName,RMatrixSolverConf::getId(RMatrixSolverConf::GMRES)));
+        if (thermalMode && this->convergenceFileName.isEmpty())
+        {
+            model.getMatrixSolverConf(RMatrixSolverConf::CG).setOutputFileName(QString());
+            model.getMatrixSolverConf(RMatrixSolverConf::GMRES).setOutputFileName(QString());
+        }
+        else
+        {
+            model.getMatrixSolverConf(RMatrixSolverConf::CG).setOutputFileName(
+                RFileUtils::getFileNameWithSuffix(this->convergenceFileName,RMatrixSolverConf::getId(RMatrixSolverConf::CG)));
+            model.getMatrixSolverConf(RMatrixSolverConf::GMRES).setOutputFileName(
+                RFileUtils::getFileNameWithSuffix(this->convergenceFileName,RMatrixSolverConf::getId(RMatrixSolverConf::GMRES)));
+        }
         model.getMonitoringPointManager().setOutputFileName(this->monitoringFileName);
+
+        if (thermalMode)
+        {
+            phase = QStringLiteral("thermal-control-setup");
+            if (!isSupportedThermalTaskTree(model.getProblemTaskTree()))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Thermal FE CLI supports exactly one sequential Heat then Stress task pair.");
+            if (model.getProblemSetup().getStructuralDynamicsSetup().getEnabled())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Thermal FE CLI does not support structural dynamics.");
+            if (model.getProblemSetup().getStructuralControlSetup().enabled)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Thermal FE mode cannot be combined with an enabled structural force controller.");
+
+            const RStructuralThermalControlScheduler scheduler =
+                RStructuralThermalFEAdapter::schedulerFromModel(model);
+            if (!thermalCheckpointInput)
+            {
+                acceptedThermalState = scheduler.initialState(
+                    RStructuralThermalFEAdapter::capture(model),
+                    model.getTimeSolver().getComputedTime());
+            }
+
+            QJsonObject startedPayload{
+                {QStringLiteral("inputArgumentPath"),inputPath},
+                {QStringLiteral("inputArgumentSha256"),inputArgumentHash},
+                {QStringLiteral("inputModelTargetPath"),inputTargetPath},
+                {QStringLiteral("inputModelTargetSha256"),inputTargetHash},
+                {QStringLiteral("thermalCheckpointInput"),thermalCheckpointInput},
+                {QStringLiteral("thermalCheckpointPath"),thermalCheckpointPath},
+                {QStringLiteral("thermalMacrostepsRequested"),double(this->thermalMacrosteps)},
+                {QStringLiteral("completedMacrostepsBeforeRun"),
+                 double(acceptedThermalState.completedMechanicalMacrosteps)},
+                {QStringLiteral("acceptedTimeSeconds"),acceptedThermalState.acceptedTimeSeconds},
+                {QStringLiteral("modelParallelConfig"),modelParallelConfig(
+                    model.getProblemSetup().getParallelExecutionConfig())}
+            };
+            phase = QStringLiteral("thermal-fe-run");
+            appendAudit(QStringLiteral("SolverRunStarted"),QStringLiteral("started"),startedPayload);
+            RLogger::info("Running %u thermal FE macrosteps; checkpoint target '%s'.\n",
+                          this->thermalMacrosteps,qPrintable(thermalCheckpointPath));
+
+            QVector<QJsonObject> acceptedMacrostepPayloads;
+            acceptedMacrostepPayloads.reserve(int(this->thermalMacrosteps));
+            for (uint step=0;step<this->thermalMacrosteps;step++)
+            {
+                const auto result = RStructuralThermalFEAdapter::advance(
+                    model,scheduler,acceptedThermalState);
+                acceptedThermalState = result.candidate;
+                QJsonArray channels;
+                for (const auto &channel : result.channels)
+                    channels.append(QJsonObject{
+                        {QStringLiteral("actuatorId"),channel.actuatorId},
+                        {QStringLiteral("requestedPowerW"),channel.requestedPowerWatts},
+                        {QStringLiteral("conditionedPowerW"),channel.conditionedPowerWatts},
+                        {QStringLiteral("appliedAveragePowerW"),channel.appliedAveragePowerWatts},
+                        {QStringLiteral("appliedEnergyJ"),channel.appliedEnergyJoules}});
+                acceptedMacrostepPayloads.append(
+                    {{QStringLiteral("macrostep"),double(acceptedThermalState.completedMechanicalMacrosteps)},
+                     {QStringLiteral("acceptedTimeSeconds"),acceptedThermalState.acceptedTimeSeconds},
+                     {QStringLiteral("controllerSampled"),result.controllerSampled},
+                     {QStringLiteral("channels"),channels},
+                     {QStringLiteral("thermalCheckpointPath"),thermalCheckpointPath}});
+            }
+
+            phase = QStringLiteral("thermal-checkpoint-publish");
+            RStructuralThermalFEAdapter::writeCheckpoint(
+                thermalCheckpointPath,model,scheduler,acceptedThermalState);
+            finalModelWritten = true;
+
+            for (const QJsonObject &payload : acceptedMacrostepPayloads)
+                appendAudit(QStringLiteral("ThermalMacrostepAccepted"),QStringLiteral("accepted"),payload);
+
+            phase = QStringLiteral("run-computed-audit");
+            appendAudit(QStringLiteral("RunComputed"),QStringLiteral("computed"),
+                {{QStringLiteral("computedTime"),model.getTimeSolver().getComputedTime()},
+                 {QStringLiteral("acceptedTimeSeconds"),acceptedThermalState.acceptedTimeSeconds},
+                 {QStringLiteral("completedMacrosteps"),
+                  double(acceptedThermalState.completedMechanicalMacrosteps)},
+                 {QStringLiteral("thermalCheckpointPath"),thermalCheckpointPath}});
+
+            phase = QStringLiteral("thermal-checkpoint-hash");
+            const QString checkpointHash = sha256File(thermalCheckpointPath);
+            phase = QStringLiteral("run-finished-audit");
+            appendAudit(QStringLiteral("RunFinished"),QStringLiteral("finished"),
+                {{QStringLiteral("thermalCheckpointPath"),thermalCheckpointPath},
+                 {QStringLiteral("thermalCheckpointSha256"),checkpointHash},
+                 {QStringLiteral("completedMacrosteps"),
+                  double(acceptedThermalState.completedMechanicalMacrosteps)},
+                 {QStringLiteral("acceptedTimeSeconds"),acceptedThermalState.acceptedTimeSeconds}});
+            emit this->finished();
+            return;
+        }
+
+        if (model.getProblemSetup().getStructuralThermalControlSetup().enabled)
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "Enabled thermal control setup requires --thermal-steps and --thermal-checkpoint.");
         if (this->restart)
         {
             model.getProblemSetup().setRestart(true);

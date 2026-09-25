@@ -11,6 +11,8 @@ void SolverInput::_init(const SolverInput *pSolverInput)
         this->controlProgram = pSolverInput->controlProgram;
         this->controlArguments = pSolverInput->controlArguments;
         this->controlTimeoutMs = pSolverInput->controlTimeoutMs;
+        this->thermalMacrosteps = pSolverInput->thermalMacrosteps;
+        this->thermalCheckpointFileName = pSolverInput->thermalCheckpointFileName;
         this->restart = pSolverInput->restart;
     }
 }
@@ -82,6 +84,12 @@ void SolverInput::setExternalControlTimeoutMs(uint timeoutMs)
 uint SolverInput::getExternalControlTimeoutMs() const
 {
     return this->controlTimeoutMs;
+}
+
+void SolverInput::setThermalControlRun(uint macrosteps,const QString &checkpointFileName)
+{
+    this->thermalMacrosteps = macrosteps;
+    this->thermalCheckpointFileName = checkpointFileName;
 }
 
 void SolverInput::setRestart(bool restart)
