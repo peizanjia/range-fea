@@ -157,7 +157,84 @@ private slots:
     void externalControllerTimeoutDoesNotAcceptStep();
     void pythonPidControllerRunsWhenInterpreterAvailable();
     void pythonPidRestartMatchesUninterrupted();
+    void staticCablePersistsCertifiedResult_data();
+    void staticCablePersistsCertifiedResult();
 };
+
+void TestSolverAuditCli::staticCablePersistsCertifiedResult_data()
+{
+    QTest::addColumn<bool>("binary");
+    QTest::newRow("ascii") << false;
+    QTest::newRow("binary") << true;
+}
+
+void TestSolverAuditCli::staticCablePersistsCertifiedResult()
+{
+    QFETCH(bool,binary);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    RModel model = makeModel();
+    model.getProblemSetup().getStructuralDynamicsSetup().setEnabled(false);
+    model.getPoint(1).removeAllInitialConditions();
+    // This benchmark has only an applied point force; cable v1 rejects gravity.
+    for (uint group=0;group<model.getNElementGroups();group++)
+    {
+        auto &gravity = model.getElementGroupPtr(group)->getEnvironmentCondition(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+        for (uint component=0;component<gravity.size();component++)
+        {
+            gravity.getComponent(component).clear();
+            gravity.getComponent(component).add(0.0,0.0);
+        }
+    }
+    RMaterial material(RMaterial::Solid);
+    RMaterialProperty modulus(RMaterialProperty::ModulusOfElasiticity);
+    modulus.add(293.15,1000.0);
+    material.add(modulus);
+    model.getLine(0).setMaterial(material);
+    model.getLine(0).setCrossArea(0.5);
+    RBoundaryCondition force(R_BOUNDARY_CONDITION_FORCE);
+    for (RVariableType type : {R_VARIABLE_FORCE_X,R_VARIABLE_FORCE_Y,R_VARIABLE_FORCE_Z})
+    {
+        auto &component = force.getComponent(force.findComponentPosition(type));
+        component.clear();
+        component.setEnabled(true);
+        component.add(0.0,type == R_VARIABLE_FORCE_X ? 10.0 : 0.0);
+    }
+    model.getPoint(1).addBoundaryCondition(force);
+    auto &cable = model.getProblemSetup().getStructuralCableSetup();
+    cable.enabled = true;
+    cable.members = {{0,2.0,5.0}};
+    cable.bindToModel(model);
+    const QString path = directory.filePath("cable."+RModel::getDefaultFileExtension(binary));
+    model.write(path);
+    QProcess process;
+    process.start(solverExecutablePath(),{QStringLiteral("--file=")+path});
+    QVERIFY2(process.waitForFinished(30000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    const QByteArray diagnostics = process.readAllStandardError()+process.readAllStandardOutput();
+    QVERIFY2(process.exitCode() == 0,diagnostics.constData());
+
+    RModel result;
+    result.read(path);
+    QVERIFY(result.getProblemSetup().getStructuralCableSetup().enabled);
+    result.getProblemSetup().getStructuralCableSetup().validate(result);
+    const uint displacement = result.findVariable(R_VARIABLE_DISPLACEMENT);
+    const uint internalForce = result.findVariable(R_VARIABLE_FORCE);
+    const uint normalStress = result.findVariable(R_VARIABLE_STRESS_NORMAL);
+    QVERIFY(displacement != RConstants::eod);
+    QVERIFY(internalForce != RConstants::eod);
+    QVERIFY(normalStress != RConstants::eod);
+    // EA/L0=250 N/m; N0=5 N, F=10 N => u=0.02 m, stress=20 Pa.
+    QVERIFY(std::abs(result.getVariable(displacement).getValue(0,1)-0.02) < 1e-10);
+    QVERIFY(std::abs(result.getVariable(internalForce).getValue(0,1)-10.0) < 1e-8);
+    QVERIFY(std::abs(result.getVariable(normalStress).getValue(0,0)-20.0) < 1e-8);
+    QCOMPARE(result.getNode(1).getX(),2.0);
+    const auto journal = ExecutionEventJournal::read(singleJournal(QDir(directory.path())));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QVERIFY(!journal.truncatedTail);
+    QVERIFY(!journal.events.empty());
+    QCOMPARE(journal.events.back().type,QStringLiteral("RunFinished"));
+}
 
 void TestSolverAuditCli::successKeepsLinkAndTargetHashesDistinct()
 {

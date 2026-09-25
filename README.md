@@ -1,6 +1,6 @@
 # Range Software - FEA
 
-The current [reliability audit](docs/RELIABILITY_AUDIT.md) separates verified results from remaining gaps. [Stage 7](TECHNICAL_ROUTE_STAGE7.md) is in progress: cable and piezoelectric kernels are being verified before FE and control integration.
+The current [reliability audit](docs/RELIABILITY_AUDIT.md) separates verified results from remaining gaps. [Stage 7](TECHNICAL_ROUTE_STAGE7.md) is in progress: cable and piezoelectric kernels are verified, and a bounded static cable FE path has model persistence and CLI tests. Cable dynamics/control and piezoelectric FE integration remain pending.
 
 Project status, structural finite-element algorithms and meshing implementation are documented in [Stage 0-3 Technical Route](TECHNICAL_ROUTE_STAGE0_3.md). Structural constraints, couplings, sensors and actuators are documented in [Stage 4 Technical Route](TECHNICAL_ROUTE_STAGE4.md). The dynamics and control implementation is documented in [Stage 5 Technical Route](TECHNICAL_ROUTE_STAGE5.md) and [Stage 6 Technical Route](TECHNICAL_ROUTE_STAGE6.md). The GUI and Agent plan is maintained in [Project Roadmap](PROJECT_ROADMAP.md). See [Handoff](HANDOFF.md) for the latest verified state and [Agent Playbooks](docs/agent_playbooks/README.md) for bounded interface guidance.
 
