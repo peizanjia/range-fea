@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压及节点电势/电荷一维压电 FE/CLI、非线性拉索 Newmark 动力 FE；拉索动力控制/重启和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、一维 Heat→Stress、受限一维 Heat→节点电势压电、温度相关模态频率、QUAD2 穿厚度温差热弯曲、点加热器瞬态热 FE/宏步末准静力 FE、受限双向黏性耗散回热杆件 FE、热控持久配置及原子 CLI 续算、稳态及受限暂态两叶 Heat→Stress 结果事务和显式参考面/体热容量。新增 1.3.17 模型内物理 ID、模型 ID 场快照及受限暂态监测文件事务已通过各自聚焦测试，尚待全目标回归。跨重网格映射、广义双向热回馈及单体耦合仍未验收，不能判定 Stage 8 完成。前一全目标 Release 构建及 CTest 72/72 通过，不包含上述最新增量；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态：Stage 0 已完成本机交付闭环，仍待干净 Windows 发布终验；Stage 1–5 在各自注明的范围内完成；Stage 6 C++/Python 核心已回归，MATLAB 长驻适配器无实测握手。Stage 7 有受限拉索 Newmark FE 和节点电势压电杆 FE，拉索磁盘重启/控制、压电梁片/电压控制尚待验收。Stage 8 有热残差认证、一维 Heat→Stress/压电、真实 Heat→Modal 材料刚度效应、QUAD2 热弯曲、点加热器多速率 FE、黏性耗散回热、受限 CLI 续算与两叶结果事务、持久物理 ID/稀疏快照和参考面/体热容量。最新物理 ID 失败原子性、跨角色输出锁及热—压电联合 FE 仅通过聚焦测试；完整 Release 回归待重跑。跨重网格对应、广义双向及多维单体热弹 FE、热预应力几何刚度模态频移仍未验收，因此 Stage 8 与 Stage 0–8 整体不能标为完成。前一完整 CTest 72/72 是历史基线；第 2 节亦为 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
 更新时间：2026-09-26
 
@@ -538,7 +538,7 @@ applicationVersion, pluginVersions
 
 ### Stage 7：压电、拉索与结构执行器
 
-当前进度：拉索受限非线性静力 FE/CLI、1.3.14 固定电压压电杆静力 FE/CLI、1.3.15 节点电势/电荷一维压电 FE/CLI，以及独立拉索非线性动力候选步已通过现有基准和回归。拉索动力核尚未接入 FE/控制/重启，压电梁片和电压控制亦未完成，完整交付物尚未验收。详见 `TECHNICAL_ROUTE_STAGE7.md` 和 `HANDOFF.md`。
+当前进度：拉索受限非线性静力 FE/CLI、1.3.14 固定电压压电杆静力 FE/CLI、1.3.15 节点电势/电荷一维压电 FE/CLI，以及受限 TRUSS1 拉索 Newmark 动力 FE 的解析单步与失败步回滚已通过聚焦测试。拉索动力磁盘重启、Stage 6 控制接线、压电梁片和电压控制尚未验收；不能判定完整 Stage 7 交付。详见 `TECHNICAL_ROUTE_STAGE7.md` 和 `HANDOFF.md`。
 
 压电交付物：
 
