@@ -185,6 +185,8 @@ private slots:
     void staticCablePersistsCertifiedResult();
     void staticPiezoPersistsElectrodeCharge_data();
     void staticPiezoPersistsElectrodeCharge();
+    void nodalPiezoPersistsPotentialAndCharge_data();
+    void nodalPiezoPersistsPotentialAndCharge();
 };
 
 void TestSolverAuditCli::staticCablePersistsCertifiedResult_data()
@@ -292,6 +294,82 @@ void TestSolverAuditCli::staticPiezoPersistsElectrodeCharge()
     QVERIFY(!journal.truncatedTail);
     QVERIFY(!journal.events.empty());
     QCOMPARE(journal.events.back().type,QStringLiteral("RunFinished"));
+}
+
+void TestSolverAuditCli::nodalPiezoPersistsPotentialAndCharge_data()
+{
+    QTest::addColumn<bool>("binary");
+    QTest::newRow("ascii") << false;
+    QTest::newRow("binary") << true;
+}
+
+void TestSolverAuditCli::nodalPiezoPersistsPotentialAndCharge()
+{
+    QFETCH(bool,binary);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    RModel model = makeStaticTrussModel();
+    RMaterial material(RMaterial::Solid);
+    RMaterialProperty modulus(RMaterialProperty::ModulusOfElasiticity);
+    modulus.add(293.15,10.0);
+    material.add(modulus);
+    model.getLine(0).setMaterial(material);
+
+    RBoundaryCondition force(R_BOUNDARY_CONDITION_FORCE);
+    for (RVariableType type : {R_VARIABLE_FORCE_X,R_VARIABLE_FORCE_Y,R_VARIABLE_FORCE_Z})
+    {
+        auto &component = force.getComponent(force.findComponentPosition(type));
+        component.clear();
+        component.setEnabled(true);
+        component.add(0.0,type == R_VARIABLE_FORCE_X ? 0.025 : 0.0);
+    }
+    model.getPoint(1).addBoundaryCondition(force);
+
+    auto &piezo = model.getProblemSetup().getStructuralPiezoSetup();
+    piezo.enabled = true;
+    piezo.electricalMode = RStructuralPiezoElectricalMode::NodalPotential;
+    piezo.ports = {{QStringLiteral("rod-network"),0,2.0,4.0,0.0}};
+    piezo.nodalBoundaryConditions.push_back(
+        {0,RStructuralPiezoBoundaryType::Potential,0.0});
+    piezo.nodalBoundaryConditions.push_back(
+        {1,RStructuralPiezoBoundaryType::ConductorCharge,0.0});
+    piezo.bindToModel(model);
+
+    const QString path = directory.filePath("nodal-piezo."+RModel::getDefaultFileExtension(binary));
+    model.write(path);
+    QProcess process;
+    process.start(solverExecutablePath(),{QStringLiteral("--file=")+path});
+    QVERIFY2(process.waitForFinished(30000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    const QByteArray diagnostics = process.readAllStandardError()+process.readAllStandardOutput();
+    QVERIFY2(process.exitCode() == 0,diagnostics.constData());
+
+    RModel result;
+    result.read(path);
+    QCOMPARE(int(result.getProblemSetup().getStructuralPiezoSetup().electricalMode),
+             int(RStructuralPiezoElectricalMode::NodalPotential));
+    result.getProblemSetup().getStructuralPiezoSetup().validate(result);
+    const uint displacement = result.findVariable(R_VARIABLE_DISPLACEMENT);
+    const uint potential = result.findVariable(R_VARIABLE_ELECTRIC_POTENTIAL);
+    const uint charge = result.findVariable(R_VARIABLE_ELECTRIC_CHARGE);
+    QVERIFY(displacement != RConstants::eod);
+    QVERIFY(potential != RConstants::eod);
+    QVERIFY(charge != RConstants::eod);
+    QCOMPARE(result.getVariable(potential).getApplyType(),R_VARIABLE_APPLY_NODE);
+    QCOMPARE(result.getVariable(charge).getApplyType(),R_VARIABLE_APPLY_NODE);
+    const double forceScale = 0.025*2.0/0.5;
+    const double determinant = 10.0*4.0+2.0*2.0;
+    // The current ASCII result writer keeps eight significant digits for
+    // variable values; binary preserves the tighter in-memory solution.
+    const double persistedTolerance = binary ? 1.0e-10 : 1.0e-8;
+    const double displacementValue = result.getVariable(displacement).getValue(0,1);
+    QVERIFY2(std::abs(displacementValue-forceScale*4.0/determinant) < persistedTolerance,
+             qPrintable(QString("CLI nodal piezo displacement %1 vs analytic %2")
+                        .arg(displacementValue,0,'g',17)
+                        .arg(forceScale*4.0/determinant,0,'g',17)));
+    QVERIFY(std::abs(result.getVariable(potential).getValue(0,1)
+                     -forceScale*2.0/determinant) < persistedTolerance);
+    QVERIFY(std::abs(result.getVariable(charge).getValue(0,1)) < 1.0e-10);
 }
 
 void TestSolverAuditCli::successKeepsLinkAndTargetHashesDistinct()
