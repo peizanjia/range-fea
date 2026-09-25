@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，2026-09-25 另补 Python 跨程序续算验证，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索/压电数学核及拉索配置、受限非线性静力 FE/CLI；拉索动力学/控制和压电 FE 尚未完成。Stage 8 起未实施。最新 Release CTest 59/59 通过。第 2 节是 2026-09-21 历史基线；详见 `HANDOFF.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，2026-09-25 另补 Python 跨程序续算验证，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索/压电数学核、拉索受限非线性静力 FE/CLI，以及 1.3.14 固定电压压电杆静力 FE/CLI；拉索动力学/控制和压电梁片/电压控制尚未完成。按最新要求完成本增量后停止，Stage 8 起未实施。最新 Release CTest 61/61 通过。第 2 节是 2026-09-21 历史基线；详见 `HANDOFF.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
 更新时间：2026-09-25
 
@@ -538,7 +538,7 @@ applicationVersion, pluginVersions
 
 ### Stage 7：压电、拉索与结构执行器
 
-当前进度：两个数学核及拉索 1.3.13 模型配置、受限非线性静力 FE/CLI 已通过解析、有限差分与全量回归（59/59）。尚无拉索动力学/控制和压电 FE/电势接线，下面的完整交付物未全部完成。详见 `TECHNICAL_ROUTE_STAGE7.md`。
+当前进度：两个数学核、拉索受限非线性静力 FE/CLI，以及 1.3.14 固定电压压电端口杆静力 FE/CLI 已通过解析和全量回归（61/61）。尚无拉索动力学/控制、压电梁片、内部电势/开路约束或电压控制接线，下面的完整交付物未全部完成。本轮按用户要求停止。详见 `TECHNICAL_ROUTE_STAGE7.md`。
 
 压电交付物：
 

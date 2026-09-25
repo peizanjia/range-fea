@@ -1,6 +1,6 @@
 # Stage 7 技术路线：拉索与压电
 
-更新时间：2026-09-25。状态：数学核、拉索配置持久化及受限静力 FE/CLI 已验证，完整 Release 回归 59/59；尚未完成拉索动力学/控制、压电 FE 或本阶段验收。
+更新时间：2026-09-25。状态：数学核、拉索配置与受限静力 FE/CLI、固定电压压电杆配置与静力 FE/CLI 已验证，最终 Release 回归 61/61；按用户指令完成本增量后停止。Stage 7 整体未验收，动力/控制和压电梁片等仍待实现。
 
 ## 1. 拉索的本构与一致切线
 
@@ -83,3 +83,16 @@ H = A/(2L) * (c*u^2 + 2e*u*V - eps*V^2)
 - 求解器提交 `a95e6f3`。针对性 CTest 3/3；全目标 Release 重建成功，完整 CTest **59/59、0 失败、15.28 秒**（`OMP_NUM_THREADS=4`、`-j 2 --timeout 180`）。证据为 `cable-full-build.log`、`cable-full-ctest.log`、`cable-integration-ctest-verified.log`、`cable-equilibrium-qtest-verified.txt`、`cable-fe-qtest-verified.txt`、`cable-cli-qtest-verified.txt`。
 
 可复现配置入口见模型 `tests/tst_structural_cable_setup.cpp`、求解器 `tests/tst_structural_cable_fe.cpp` 和根 CLI `src/fea-solver/tests/tst_solver_audit_cli.cpp`。只启用已有 TRUSS1 元素还不会获得拉索语义；必须填写显式 cable setup 并在最终参考网格上 `bindToModel(model)`。
+
+
+### 第三增量：固定电压端口杆静力 FE
+
+范围是参考轴小应变 TRUSS1，每个非点元素恰有一个端口；端口保存有符号 `e`、绝对 `epsS` 和 `V=phi(node1)-phi(node0)`。共用 helper 提取全局约束、点载荷、材料及结果发布，拉索的本构 `L0` 仍由独立配置给定；按元素 ID 映射，不能依赖配置排列顺序。模型尾部升至 1.3.14，旧 1.3.13 默认关闭压电。
+
+固定电压不引入电势未知量。令 `b=[-n,+n]`、`k=c*A/L`、`alpha=e*A/L`，装配 `K=k*b*b^T`，将电压项 `b*alpha*V` 移到右端并消去指定机械位移。只将机械自由块送入 Jacobi-CG，随后重新计算 `b_rhs-K*u` 及恢复内力的自由 DOF 平衡残差，均须满足 `max(1e-8,cfgTolerance)*max(||rhs||,||fext_free||)+1e-12`；有限性检查先于结果发布。正对角不构成正定性、唯一性或整体稳定性证明。
+
+右电极导体电荷 `qR=-Qflux=(eps*A/L)*V-(e*A/L)*u_axial` 以独立元素标量 `R_VARIABLE_ELECTRIC_CHARGE` 输出，单位 C，尺度为 ampere*second；点元素槽为零。`FORCE` 仍是内部节点力，不是支承反力；电焓可以为负，不冒充正定机械能。专用路径采用 SI 单位尺度，不复用旧相对介电常数的缩放规则。
+
+此增量拒绝与拉索同时启用、动力学、模态、控制、重启、MPC、局部框架、非参考热场或非零重力。没有开路电荷边界、内部电势自由度、梁/片压电、非线性动力事务及 GUI 配置入口。Stage 6 控制命令仍以 N 为契约，不将 V 塞入力命令；电压控制、功率和检查点需要后续独立增量。用户要求本次收尾后停止，不自动继续。
+
+最终验证：全目标 Release 构建成功、CTest 61/61（14.92 秒），压电设置/FE/CLI QTest 分别 11/10/14 passed，无失败或跳过；子模块模型 `872c060`、求解器 `d743997`。日志与过程问题见审计文件。
