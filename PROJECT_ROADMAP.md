@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压压电杆静力 FE/CLI、新增节点电势/电荷一维 FE 与独立非线性拉索动力候选步；拉索动力 FE/控制和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、真实一维 Heat→Stress 解析基准、温度相关模态频率、独立一维热机分区候选步和多速率热控制调度核，但跨场事务、热弯梁、热—压电 FE、控制器实际 FE 接线与重启仍未完成，不可判定 Stage 8 完成。最新 Release CTest 69/69 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压及节点电势/电荷一维压电 FE/CLI、独立非线性拉索动力候选步；拉索动力 FE/控制和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、一维 Heat→Stress、温度相关模态频率、QUAD2 穿厚度温差热弯曲，以及独立一维热机分区/多速率热控制核；稳态 Heat→Stress 有任务级结果发布交易。暂态跨场事务、热—压电 FE、控制器实际 FE 接线与重启仍未完成，不可判定 Stage 8 完成。全目标 Release 重建及 CTest 70/70 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
 更新时间：2026-09-25
 
@@ -538,7 +538,7 @@ applicationVersion, pluginVersions
 
 ### Stage 7：压电、拉索与结构执行器
 
-当前进度：拉索受限非线性静力 FE/CLI、1.3.14 固定电压压电杆静力 FE/CLI、1.3.15 节点电势/电荷一维压电 FE，以及独立拉索非线性动力候选步已通过现有基准和回归（69/69）。拉索动力核尚未接入 FE/控制/重启，压电梁片和电压控制亦未完成，完整交付物尚未验收。详见 `TECHNICAL_ROUTE_STAGE7.md` 和 `HANDOFF.md`。
+当前进度：拉索受限非线性静力 FE/CLI、1.3.14 固定电压压电杆静力 FE/CLI、1.3.15 节点电势/电荷一维压电 FE/CLI，以及独立拉索非线性动力候选步已通过现有基准和回归。拉索动力核尚未接入 FE/控制/重启，压电梁片和电压控制亦未完成，完整交付物尚未验收。详见 `TECHNICAL_ROUTE_STAGE7.md` 和 `HANDOFF.md`。
 
 压电交付物：
 
@@ -560,7 +560,7 @@ applicationVersion, pluginVersions
 
 ### Stage 8：全状态热—结构耦合
 
-当前进度：热求解已增加新鲜残差认证；一维 Heat→Stress 自由/固定杆、积分热膨胀以及持久温度进入模态材料查表的 FE 基准已通过。另有独立一维热机分区与多速率控制调度核。跨场任务事务、热弯曲梁、实际热—压电 FE、控制器与真实 FE 接线、重启及 CLI 往返仍缺验收，不能判定 Stage 8 完成。
+当前进度：热求解已增加新鲜残差认证；一维 Heat→Stress 自由/固定杆、积分热膨胀、持久温度进入模态材料查表，以及穿厚度温差 QUAD2 悬臂梁均通过解析 FE 基准。精确的稳态 Heat→Stress 顺序任务在两子任务完成后单次发布结果，并有故障注入与同一求解器重试测试。另有独立一维热机分区与多速率控制调度核。暂态跨场事务、实际热—压电 FE、控制器与真实 FE 接线、重启及完整 CLI 往返仍缺验收，不能判定 Stage 8 完成。
 
 交付物：
 
