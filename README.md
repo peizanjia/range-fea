@@ -1,5 +1,7 @@
 # Range Software - FEA
 
+The current [reliability audit](docs/RELIABILITY_AUDIT.md) separates verified results from remaining gaps. [Stage 7](TECHNICAL_ROUTE_STAGE7.md) is in progress: cable and piezoelectric kernels are being verified before FE and control integration.
+
 Project status, structural finite-element algorithms and meshing implementation are documented in [Stage 0-3 Technical Route](TECHNICAL_ROUTE_STAGE0_3.md). Structural constraints, couplings, sensors and actuators are documented in [Stage 4 Technical Route](TECHNICAL_ROUTE_STAGE4.md). The dynamics and control implementation is documented in [Stage 5 Technical Route](TECHNICAL_ROUTE_STAGE5.md) and [Stage 6 Technical Route](TECHNICAL_ROUTE_STAGE6.md). The GUI and Agent plan is maintained in [Project Roadmap](PROJECT_ROADMAP.md). See [Handoff](HANDOFF.md) for the latest verified state and [Agent Playbooks](docs/agent_playbooks/README.md) for bounded interface guidance.
 
 Range FEA is an open-source desktop application for computer-aided engineering using the Finite Element Method. It provides an integrated environment for mesh generation, simulation setup, and 3D visualisation of results across a range of physics domains — including structural stress, heat transfer, fluid dynamics, acoustics, electrostatics, and magnetostatics.

@@ -1,5 +1,9 @@
 #include <QtTest>
 
+#include <algorithm>
+#include <cmath>
+#include "rstructural_control_conditioner.h"
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -152,6 +156,7 @@ private slots:
     void enabledControllerWithoutProgramFailsClosed();
     void externalControllerTimeoutDoesNotAcceptStep();
     void pythonPidControllerRunsWhenInterpreterAvailable();
+    void pythonPidRestartMatchesUninterrupted();
 };
 
 void TestSolverAuditCli::successKeepsLinkAndTargetHashesDistinct()
@@ -426,6 +431,131 @@ void TestSolverAuditCli::pythonPidControllerRunsWhenInterpreterAvailable()
     QVERIFY(nonzeroCommands > 0);
     QCOMPARE(journal.events.last().type,QStringLiteral("RunFinished"));
 }
+
+void TestSolverAuditCli::pythonPidRestartMatchesUninterrupted()
+{
+    const QString python = QStandardPaths::findExecutable(QStringLiteral("python"));
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QDir root(directory.path());
+    for (const QString &name : {QStringLiteral("full"),QStringLiteral("first"),QStringLiteral("resume")})
+        QVERIFY(root.mkdir(name));
+    const QString fullPath = root.filePath(QStringLiteral("full/input.ram"));
+    const QString firstPath = root.filePath(QStringLiteral("first/input.ram"));
+    const QString resumePath = root.filePath(QStringLiteral("resume/input.ram"));
+    auto configured = [](uint steps)
+    {
+        RModel model = makeModel();
+        configureControl(model);
+        model.getProblemSetup().getStructuralDynamicsSetup().setNSteps(steps);
+        RStructuralControlChannelConditioning conditioning;
+        conditioning.actuatorId = QStringLiteral("tip-force");
+        conditioning.delaySteps = 2;
+        conditioning.holdSteps = 3;
+        conditioning.noiseAmplitude = 0.01;
+        model.getProblemSetup().getStructuralControlSetup().channelConditioning.push_back(conditioning);
+        return model;
+    };
+    configured(20).write(fullPath);
+    configured(8).write(firstPath);
+    // Nonzero integral gain and a split inside a hold interval exercise both
+    // external PID state and the solver's delay/hold/noise checkpoint envelope.
+    const QJsonArray args{QStringLiteral(RANGE_PID_EXAMPLE_PATH),QStringLiteral("1000000"),
+                          QStringLiteral("100000000"),QStringLiteral("100")};
+    const QString encoded = QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact));
+    QString error;
+    auto run = [&](const QString &path,bool restart)
+    {
+        QStringList arguments{QStringLiteral("--file=")+path,
+                              QStringLiteral("--control-program=")+python,
+                              QStringLiteral("--control-args-json=")+encoded};
+        if (restart) arguments.append(QStringLiteral("--restart"));
+        QProcess process;
+        process.start(solverExecutablePath(),arguments);
+        const bool finished = process.waitForFinished(60000);
+        error = QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError());
+        if (!finished) { process.kill(); process.waitForFinished(); error += process.errorString(); }
+        return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    };
+    QVERIFY2(run(fullPath,false),qPrintable(error));
+    QVERIFY2(run(firstPath,false),qPrintable(error));
+    RModel resumed;
+    resumed.read(firstPath);
+    QCOMPARE(resumed.getProblemSetup().getStructuralDynamicsRestartData().completedSteps,8u);
+    resumed.getProblemSetup().getStructuralDynamicsSetup().setNSteps(12);
+    resumed.write(resumePath);
+    QVERIFY2(run(resumePath,true),qPrintable(error));
+    RModel full,actual;
+    full.read(fullPath);
+    actual.read(resumePath);
+    const auto &expectedState = full.getProblemSetup().getStructuralDynamicsRestartData();
+    const auto &actualState = actual.getProblemSetup().getStructuralDynamicsRestartData();
+    QVERIFY(expectedState.controlAvailable && actualState.controlAvailable);
+    QCOMPARE(actualState.completedSteps,20u);
+    QCOMPARE(actualState.controlFingerprint,expectedState.controlFingerprint);
+    QCOMPARE(actualState.controlChannelIds,expectedState.controlChannelIds);
+    auto near = [](double a,double b) { return std::abs(a-b) <= 1e-11*(1.0+std::max(std::abs(a),std::abs(b))); };
+    auto vectorsNear = [&](const std::vector<double> &a,const std::vector<double> &b)
+    {
+        if (a.size()!=b.size()) return false;
+        for (std::size_t i=0;i<a.size();++i) if (!near(a[i],b[i])) return false;
+        return true;
+    };
+    QVERIFY(vectorsNear(actualState.q,expectedState.q));
+    QVERIFY(vectorsNear(actualState.v,expectedState.v));
+    QVERIFY(vectorsNear(actualState.a,expectedState.a));
+    QVERIFY(vectorsNear(actualState.externalForce,expectedState.externalForce));
+    QVERIFY(vectorsNear(actualState.controlLastCommands,expectedState.controlLastCommands));
+    QVERIFY(vectorsNear(actualState.controlPowers,expectedState.controlPowers));
+    QVERIFY(vectorsNear(actualState.cumulativeControlWork,expectedState.cumulativeControlWork));
+    QVERIFY(near(actualState.cumulativeExternalWork,expectedState.cumulativeExternalWork));
+    const auto expectedEnvelope = RStructuralControlStateEnvelope::deserialize(expectedState.controlControllerState);
+    const auto actualEnvelope = RStructuralControlStateEnvelope::deserialize(actualState.controlControllerState);
+    const auto expectedPid = QJsonDocument::fromJson(expectedEnvelope.controllerState).object();
+    const auto actualPid = QJsonDocument::fromJson(actualEnvelope.controllerState).object();
+    QVERIFY(!expectedPid.isEmpty() && !actualPid.isEmpty());
+    QCOMPARE(actualPid.value("sampleCount").toInt(),20);
+    QVERIFY(near(actualPid.value("integral").toDouble(),expectedPid.value("integral").toDouble()));
+    QVERIFY(near(actualPid.value("previousError").toDouble(),expectedPid.value("previousError").toDouble()));
+    const auto fullJournal = ExecutionEventJournal::read(singleJournal(QDir(root.filePath("full"))));
+    const auto firstJournal = ExecutionEventJournal::read(singleJournal(QDir(root.filePath("first"))));
+    const auto resumeJournal = ExecutionEventJournal::read(singleJournal(QDir(root.filePath("resume"))));
+    QVERIFY(fullJournal.error.isEmpty() && firstJournal.error.isEmpty() && resumeJournal.error.isEmpty());
+    auto steps = [](const ExecutionEventReadResult &journal)
+    {
+        QVector<QJsonObject> result;
+        for (const auto &event : journal.events)
+            if (event.type == QStringLiteral("ControlStepAccepted")) result.append(event.payload);
+        return result;
+    };
+    const auto expected = steps(fullJournal);
+    auto split = steps(firstJournal);
+    split += steps(resumeJournal);
+    QCOMPARE(expected.size(),20);
+    QCOMPARE(split.size(),20);
+    for (int i=0;i<20;i++)
+    {
+        QCOMPARE(split[i].value("stepId"),expected[i].value("stepId"));
+        QVERIFY(near(split[i].value("nextTimeS").toDouble(),expected[i].value("nextTimeS").toDouble()));
+        for (const QString &key : {QStringLiteral("requestedCommands"),QStringLiteral("conditionedCommands"),QStringLiteral("appliedChannels")})
+        {
+            const auto a = split[i].value(key).toArray();
+            const auto b = expected[i].value(key).toArray();
+            QCOMPARE(a.size(),1);
+            QCOMPARE(b.size(),1);
+            const auto ao = a[0].toObject();
+            const auto bo = b[0].toObject();
+            QCOMPARE(ao.keys(),bo.keys());
+            for (const QString &field : bo.keys())
+            {
+                if (bo[field].isDouble()) QVERIFY(near(ao[field].toDouble(),bo[field].toDouble()));
+                else QCOMPARE(ao[field],bo[field]);
+            }
+        }
+    }
+}
+
 
 int main(int argc,char *argv[])
 {

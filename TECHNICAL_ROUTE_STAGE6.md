@@ -1,6 +1,6 @@
 # Stage 6 技术路线：控制耦合、功率归属与外部协议
 
-更新时间：2026-09-24
+更新时间：2026-09-25
 
 状态：2026-09-24 已完成 Stage 6 的 C++/Python 数值控制链、控制步事件和 InteractionRecord 数据契约，主 Release 53/53 CTest 通过。MATLAB 长驻进程适配器尚未验证；GUI/Agent 操作接线按依赖移至 Stage 10–11。细节以源码、测试与 `HANDOFF.md` 为准。
 
@@ -77,4 +77,6 @@ W_j[n+1] = W_j[n] + dt/2 * (P_j(t_n) + P_j(t_n+dt))
 - 已验证：传输版本/请求号/未知执行器/非法数值/超时拒绝。MATLAB R2022a 的 `-batch` 能启动，但本机标准输入长驻握手试验未得响应，未交付可验证 MATLAB 适配器；语言无关协议允许后续采用可靠进程/IPC 适配器。
 - 已验证：固定步长有效算子缓存、线程隔离 CSR 并发/地址复用回归、Release 全目标编译与 **53/53 CTest**，`tst_structural_product_profile.exe` 直接启动成功且已部署 `Qt6Core.dll`。32/384 杆 1/2/4 线程基准结果见 `docs/STAGE6_PERFORMANCE_AUDIT.md`；32 杆多线程变慢、384 杆 4 线程仅本机 1.220×，每步重装配/深复制与大模型内存指标仍是后续优化。
 
-结论须分层表述：Stage 6 的已验证 C++/Python 核心范围可移交下一阶段；MATLAB 长驻适配器、外部控制进程跨进程续算测试、完整 GUI/Agent 操作记录、硬实时和大模型性能优化仍未完成。后两项按 Stage 10–11/性能后续工作处理，不得用本阶段测试代替。
+以上为 2026-09-24 结项快照。2026-09-25 增补验证：`pythonPidRestartMatchesUninterrupted` 已实际通过 Python + CLI 完整 20 步对照 8+12 步分段执行，第二段重新启动求解器和控制器。用例含非零 PID 积分增益、2 步延迟、3 步保持、固定种子噪声，逐步比对请求/调理/实际命令及功账，并核对最终 q/v/a、外力、控制功率/累计功、PID sampleCount/积分/前次误差。CLI QTest 为 10 passed、0 failed、0 skipped；因此先前的“外部 Python 跨进程重启缺独立验证”限制已由此限定算例补齐，不能外推成任意控制程序、任意格式或异常终止下的磁盘原子性保证。
+
+结论须分层表述：Stage 6 的已验证 C++/Python 核心范围可移交下一阶段；MATLAB 长驻适配器、完整 GUI/Agent 操作记录、硬实时和大模型性能优化仍未完成。GUI/Agent 与性能后续工作按 Stage 10–11/性能任务处理，不得用本阶段测试代替。

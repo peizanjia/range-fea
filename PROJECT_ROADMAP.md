@@ -1,8 +1,8 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 控制耦合核心及修订后的控制步审计/数据契约已通过 Release 全量回归，MATLAB 持续进程适配器未验证。Stage 7 起未实施。第 2 节的「当前基线」是 2026-09-21 的历史基线，不代表当前结项现状；详见 `HANDOFF.md` 与 `TECHNICAL_ROUTE_STAGE6.md`。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，2026-09-25 另补 Python 跨程序续算验证，MATLAB 持续进程适配器仍未验证。Stage 7 已完成首个拉索/压电数学核增量，模型/FE/控制接线尚未完成；Stage 8 起未实施。本轮可靠性修补后 Release CTest 55/55 通过。第 2 节是 2026-09-21 历史基线；详见 `HANDOFF.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
-更新时间：2026-09-24
+更新时间：2026-09-25
 
 适用仓库：`range-fea` 及其 `range-model-lib`、`range-solver-lib`、`range-gui-lib`、`range-ai-lib` 子模块
 
@@ -537,6 +537,8 @@ applicationVersion, pluginVersions
 2026-09-24 验收备注：上述数值/协议核心已完成，主 Release 53/53 CTest 通过，Python PID 已作为进程外控制器端到端测试。MATLAB `-batch` 可启动，但本机标准输入长驻握手未验证，暂不宣称 MATLAB 适配器可用；若将「MATLAB 实测」视为 Stage 6 的硬退出条件，则该一项仍未完成，不能将跨语言交付范围写成无保留完成。
 
 ### Stage 7：压电、拉索与结构执行器
+
+当前进度：拉索仅受拉力/一致切线/能量与均匀端口压电电焓数学核已集成并通过解析、有限差分与全量回归；这不代表下列模型、FE 和控制交付物已完成。详见 `TECHNICAL_ROUTE_STAGE7.md`。
 
 压电交付物：
 
