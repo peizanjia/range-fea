@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0 已完成本机交付闭环，仍待干净 Windows 发布终验；Stage 1–5 在各自注明的范围内完成；Stage 6 C++/Python 核心已回归，MATLAB 长驻适配器无实测握手。Stage 7 有受限拉索 Newmark FE 和节点电势压电杆 FE，拉索磁盘重启/控制、压电梁片/电压控制尚待验收。Stage 8 有热残差认证、一维 Heat→Stress/压电、真实 Heat→Modal 材料刚度效应、QUAD2 热弯曲、点加热器多速率 FE、黏性耗散回热、受限 CLI 续算与两叶结果事务、持久物理 ID/稀疏快照和参考面/体热容量。最新物理 ID 失败原子性、跨角色输出锁及热—压电联合 FE 仅通过聚焦测试；完整 Release 回归待重跑。跨重网格对应、广义双向及多维单体热弹 FE、热预应力几何刚度模态频移仍未验收，因此 Stage 8 与 Stage 0–8 整体不能标为完成。前一完整 CTest 72/72 是历史基线；第 2 节亦为 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态（2026-09-26 最新 Release 基线）：Stage 0 本机交付闭环已测，干净 Windows 发布终验受本机虚拟机权限阻挡；Stage 1–5 在注明的范围内完成，Stage 2 新增所有暴露结构单元的解析四网格收敛矩阵；Stage 6 C++/Python 控制已回归，MATLAB 长驻握手未实测。Stage 7 受限拉索 Newmark FE、ASCII/binary 磁盘续算与节点电势压电杆 FE 已测，但控制接线及压电梁/片仍在补。Stage 8 的显式交付物在指定一维/二维 FE 路径已有热残差认证、Heat→Stress/压电、温度材料查表、QUAD2 热弯曲、点加热器多速率控制及 CLI 续算、一维耗散回热与常系数单体 RModel 适配、物理 ID/稀疏场、参考热质量、两叶结果事务和 BEAM1 热预应力模态；全目标 Release 构建及 CTest **78/78 通过**。单体适配器限 C++ direct entry/x 向 TRUSS1，广义多维双向耦合、跨重网格对应和任意任务树事务仍无验收；Stage 7 及 Stage 0 的上述缺口意味着 Stage 0–8 整体不能标为完成。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 与 `docs/STAGE0_8_AUDIT_20260926.md`。
 
 更新时间：2026-09-26
 

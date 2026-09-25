@@ -1,6 +1,14 @@
 # 续作交接
 
-## 2026-09-26 Stage 0–8 交付复核进行中（本节优先于以下历史快照）
+## 2026-09-26 Stage 8 全量 Release 基线与 Stage 0–8 缺口（最新）
+
+本轮已提交：持久物理 ID 分配/读档失败原子性和 capability registry 的独立验证标记及可选 Gmsh 可用性；高刚度/高连接度热—节点压电残差舍入证书；ASCII 结果变量 17 位精度；精确两叶 Heat→Stress 监测/结果跨进程锁；拉索 Newmark ASCII/binary 接受态续算与逐分量篡改拒绝；TRUSS2、BEAM1/2、TRI1/2、QUAD2、TETRA1、WEDGE1、HEXA1 的四网格解析模态收敛；真实 Heat→Modal 材料刚度与受限 BEAM1 Heat→Stress→Modal 热初应力几何刚度；一维常系数 TRUSS1 RModel 单体热机 FE 适配器。热—应力—节点压电联合 FE 的高刚度回归、300 支杆热力相消和失效回滚均有聚焦测试。子仓库提交及根指针以本轮 `git log`、`git submodule status` 为准。
+
+全目标 `cmake --build build/vs2026 --config Release --parallel 2` 成功；其后完整 `ctest --test-dir build/vs2026 -C Release -j 2 --output-on-failure --timeout 600` **78/78 通过，0 失败，69.42 s**。首次全套曾因模型格式升到 1.3.17 后三个旧测试仍断言 1.3.16 而得 75/78；已仅修正四处预期并重建三个目标，最终全套重新执行通过。较早交接中的 72/72、75 项和“待重测”均为历史快照。
+
+Stage 8 的显式交付物在受限一维/指定二维基准已有上述真 FE、能量/残差、控制采样与续算证据；单体适配器仍为 C++ direct entry、限常系数 x 向 TRUSS1，BEAM1 热预应力仅接受同次静态 Heat→Stress 的轴力。跨重网格对应、一般多维双向单体耦合和任意任务树事务不在已验证范围。Stage 7 仍缺 Stage 6 拉索力及长度/张力/锚点控制、压电梁/片与 V/C 控制；当前正在继续补齐，不得把上述 78/78 宣称为 Stage 0–8 全部完成。Stage 0 的干净 Windows VM 安装终验受本机 Hyper-V/Windows Sandbox 权限阻挡，现象见已忽略的 `build/audit-20260926/external-validation-limits.md`；Stage 6 MATLAB 长驻 stdin 握手仍未有成功实测。完整逐项证据与限制见 `docs/STAGE0_8_AUDIT_20260926.md`。
+
+## 2026-09-26 Stage 0–8 交付复核早期快照（以下本节为历史）
 
 用户当前要求先完成 Stage 8 全部交付，再审查并补齐 Stage 0–8；稳定增量自动提交，完成后退出。精确两叶暂态 Heat→Stress 的文件监测、结果 latest link 和时间步记录现在按实际目标共用跨进程锁；求解器 `896e81a` 的跨角色并发聚焦测试通过。求解器 `2f36d61` 新增真实 Heat→Modal FE 顺序基准，均匀 300/400 K 求解后的频率比符合 `sqrt(0.5)`；另有 2/4/8 段空间收敛断言正在待测，不能将尚未执行的断言计作证据。模型 `cf67497` 修复物理 ID 耗尽时部分扩容及读档失败覆盖旧对象，聚焦 Release 测试通过。热—应力—节点压电联合真实 FE、热流/电荷平衡与发布失败同求解器重试在求解器 `49f3d52` 聚焦测试通过；高刚度试验的机械新鲜残差认证失败单独记录于忽略的 `build/audit-20260926/thermal-piezo-investigation.md`，不以较小材料尺度推论任意刚度可靠。
 
