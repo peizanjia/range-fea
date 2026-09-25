@@ -1,8 +1,8 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压及节点电势/电荷一维压电 FE/CLI、独立非线性拉索动力候选步；拉索动力 FE/控制和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、一维 Heat→Stress、温度相关模态频率、QUAD2 穿厚度温差热弯曲，以及独立一维热机分区/多速率热控制核；稳态 Heat→Stress 有任务级结果发布交易。暂态跨场事务、热—压电 FE、控制器实际 FE 接线与重启仍未完成，不可判定 Stage 8 完成。全目标 Release 重建及 CTest 70/70 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
+状态：Stage 0–5 已按各阶段注明的范围完成；Stage 6 的 C++/Python 核心已通过回归，MATLAB 持续进程适配器仍未验证。Stage 7 已验证拉索静力 FE/CLI、固定电压及节点电势/电荷一维压电 FE/CLI、非线性拉索 Newmark 动力 FE；拉索动力控制/重启和压电梁片/电压控制尚未完成。Stage 8 已验证热求解残差认证、一维 Heat→Stress、受限一维 Heat→节点电势压电、温度相关模态频率、QUAD2 穿厚度温差热弯曲、实际点加热器瞬态热 FE/宏步末准静力 FE 与独立一维热机分区/多速率核；稳态 Heat→Stress 有任务级结果发布交易。暂态任务树跨场事务、双向热回馈、控制配置持久化与 CLI 重启仍未完成，不可判定 Stage 8 完成。全目标 Release 重建及 CTest 70/70 通过；第 2 节是 2026-09-21 历史基线。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 和 `docs/RELIABILITY_AUDIT.md`。
 
-更新时间：2026-09-25
+更新时间：2026-09-26
 
 适用仓库：`range-fea` 及其 `range-model-lib`、`range-solver-lib`、`range-gui-lib`、`range-ai-lib` 子模块
 
