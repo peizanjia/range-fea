@@ -25,6 +25,7 @@
 #include <rparallel_execution_context.h>
 #include <rsolver.h>
 #include <rstructural_thermal_fe_adapter.h>
+#include "typed_control_task.h"
 
 #include "execution_event_journal.h"
 #include "control_ndjson_transport.h"
@@ -260,6 +261,10 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , controlTimeoutMs(solverInput.controlTimeoutMs)
     , thermalMacrosteps(solverInput.thermalMacrosteps)
     , thermalCheckpointFileName(solverInput.thermalCheckpointFileName)
+    , typedControlSteps(solverInput.typedControlSteps)
+    , typedCheckpointFileName(solverInput.typedCheckpointFileName)
+    , typedControllerIdentity(solverInput.typedControllerIdentity)
+    , typedConfigurationFileName(solverInput.typedConfigurationFileName)
     , restart(solverInput.restart)
     , app(app)
 {
@@ -273,6 +278,25 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
 
 void SolverTask::run(void)
 {
+    if (this->typedControlSteps>0)
+    {
+        TypedControlTaskInput input;
+        input.inputFile=this->modelFileName;
+        input.checkpointFile=this->typedCheckpointFileName;
+        input.controllerIdentity=this->typedControllerIdentity;
+        input.configurationFile=this->typedConfigurationFileName;
+        input.program=this->controlProgram;
+        input.arguments=this->controlArguments;
+        input.timeoutMs=this->controlTimeoutMs;
+        input.steps=this->typedControlSteps;
+        input.nThreads=this->nThreads;
+        QString error;
+        const int exitCode=runTypedControlTask(input,error);
+        if (exitCode) RLogger::error("%s\n",qPrintable(error));
+        this->app->exit(exitCode);
+        emit this->finished();
+        return;
+    }
     RModel model;
     QUuid runId;
     QString journalPath;

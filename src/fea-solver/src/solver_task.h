@@ -30,6 +30,10 @@ class SolverTask : public QObject
         uint controlTimeoutMs = 5000;
         uint thermalMacrosteps = 0;
         QString thermalCheckpointFileName;
+        uint typedControlSteps = 0;
+        QString typedCheckpointFileName;
+        QString typedControllerIdentity;
+        QString typedConfigurationFileName;
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.

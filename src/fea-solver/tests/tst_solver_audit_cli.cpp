@@ -1,7 +1,11 @@
 #include <QtTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
+#include <utility>
+#include <vector>
 #include "rstructural_control_conditioner.h"
 
 #include <QCryptographicHash>
@@ -11,6 +15,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QLockFile>
 #include <QStandardPaths>
@@ -19,6 +24,8 @@
 #include "execution_event_journal.h"
 #include "rml_model.h"
 #include "rstructural_thermal_fe_adapter.h"
+#include "rstructural_typed_control.h"
+#include "rstructural_typed_fe_control.h"
 
 namespace
 {
@@ -257,6 +264,278 @@ QString controlFixturePath()
 #endif
 }
 
+QString typedControlPython()
+{
+    QString python = QStandardPaths::findExecutable(QStringLiteral("python"));
+    if (python.isEmpty()) python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    return python;
+}
+
+QString typedControlArguments(
+    const QString &mode,
+    const QString &commandsJson = QStringLiteral("{\"length\":1.98,\"prestress\":8.0,\"anchor\":0.05}"))
+{
+    const QJsonArray arguments{
+        QStringLiteral(RANGE_TYPED_CONTROL_EXAMPLE_PATH),
+        mode,
+        commandsJson};
+    return QString::fromUtf8(QJsonDocument(arguments).toJson(QJsonDocument::Compact));
+}
+
+RModel makeTypedCableNativeModel()
+{
+    RModel model = makeStaticTrussModel();
+    RBoundaryCondition force(R_BOUNDARY_CONDITION_FORCE);
+    for (RVariableType type : {R_VARIABLE_FORCE_X,R_VARIABLE_FORCE_Y,R_VARIABLE_FORCE_Z})
+    {
+        auto &component = force.getComponent(force.findComponentPosition(type));
+        component.clear();
+        component.setEnabled(true);
+        component.add(0.0,type == R_VARIABLE_FORCE_X ? 10.0 : 0.0);
+    }
+    model.getPoint(1).addBoundaryCondition(force);
+
+    auto &cable = model.getProblemSetup().getStructuralCableSetup();
+    cable.enabled = true;
+    cable.members = {{0,2.0,5.0}};
+    cable.bindToModel(model);
+    return model;
+}
+
+void writeTypedCableSeed(const QString &path)
+{
+    using Quantity = RStructuralTypedControlQuantity;
+    RModel model = makeTypedCableNativeModel();
+    std::vector<RStructuralTypedControlChannel> catalog;
+    for (const auto &definition : {
+             std::pair<QString,Quantity>{QStringLiteral("length"),Quantity::CableReferenceLength},
+             std::pair<QString,Quantity>{QStringLiteral("prestress"),Quantity::CableInitialTension},
+             std::pair<QString,Quantity>{QStringLiteral("anchor"),Quantity::CableAnchorDisplacement}})
+    {
+        RStructuralTypedControlChannel channel;
+        channel.channelId = definition.first;
+        channel.quantity = definition.second;
+        channel.initialCommand = definition.first == QStringLiteral("length") ? 2.0 :
+                                definition.first == QStringLiteral("prestress") ? 5.0 : 0.0;
+        catalog.push_back(channel);
+    }
+    RStructuralTypedControlSession session(17,0.1,std::move(catalog),
+                                           QStringLiteral("python-typed-v2"));
+    const std::vector<RStructuralTypedFEControlBinding> bindings{
+        {QStringLiteral("length"),0,0,0},
+        {QStringLiteral("prestress"),0,0,0},
+        {QStringLiteral("anchor"),0,0,0}};
+    auto driver = RStructuralTypedFEControlDriver::cable(model,session,bindings);
+    driver->writeCheckpoint(path);
+}
+
+void setTypedBeamComponent(RCondition &condition,
+                           RVariableType type,
+                           bool enabled,
+                           double value = 0.0)
+{
+    const uint position = condition.findComponentPosition(type);
+    RConditionComponent &component = condition.getComponent(position);
+    component.setEnabled(enabled);
+    component.clear();
+    if (enabled) component.add(0.0,value);
+}
+
+RBoundaryCondition typedBeamTranslation(const std::array<bool,3> &enabled)
+{
+    RBoundaryCondition condition(R_BOUNDARY_CONDITION_DISPLACEMENT);
+    const RVariableType types[3] = {R_VARIABLE_DISPLACEMENT_X,
+                                    R_VARIABLE_DISPLACEMENT_Y,
+                                    R_VARIABLE_DISPLACEMENT_Z};
+    for (uint axis=0;axis<3;axis++) setTypedBeamComponent(condition,types[axis],enabled[axis]);
+    return condition;
+}
+
+RBoundaryCondition typedBeamRotation(const std::array<bool,3> &enabled)
+{
+    RBoundaryCondition condition(R_BOUNDARY_CONDITION_ROTATION);
+    const RVariableType types[3] = {R_VARIABLE_ROTATION_X,
+                                    R_VARIABLE_ROTATION_Y,
+                                    R_VARIABLE_ROTATION_Z};
+    for (uint axis=0;axis<3;axis++) setTypedBeamComponent(condition,types[axis],enabled[axis]);
+    return condition;
+}
+
+constexpr double typedBeamLength = 1.0;
+constexpr double typedBeamYoungModulus = 1000.0;
+constexpr double typedBeamArea = 0.5;
+constexpr double typedBeamIz = 0.02;
+constexpr double typedPatchArea = 0.01;
+constexpr double typedPatchThickness = 0.1;
+constexpr double typedPatchOffset = 0.2;
+constexpr double typedPatchYoungModulus = 800.0;
+constexpr double typedPiezoCoupling = -0.05;
+constexpr double typedPermittivity = 0.0015;
+constexpr double typedVoltage = 100.0;
+
+RModel makeTypedPiezoBeamModel()
+{
+    RModel model;
+    model.setNNodes(2);
+    model.getNode(0).set(0.0,0.0,0.0);
+    model.getNode(1).set(typedBeamLength,0.0,0.0);
+    RElement beam(R_ELEMENT_BEAM1);
+    beam.setNodeId(0,0);
+    beam.setNodeId(1,1);
+    model.addElement(beam,true,0);
+
+    RLine &line = model.getLine(0);
+    line.setCrossArea(typedBeamArea);
+    line.setSecondMomentY(typedBeamIz);
+    line.setSecondMomentZ(typedBeamIz);
+    line.setTorsionalConstant(typedBeamIz);
+    line.setLocalYDirection(RR3Vector(0.0,1.0,0.0));
+    REnvironmentCondition &gravity =
+        line.getEnvironmentCondition(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+    for (RVariableType type : {R_VARIABLE_G_ACCELERATION_X,
+                               R_VARIABLE_G_ACCELERATION_Y,
+                               R_VARIABLE_G_ACCELERATION_Z})
+        setTypedBeamComponent(gravity,type,true,0.0);
+
+    RMaterial material(RMaterial::Solid);
+    RMaterialProperty modulus(RMaterialProperty::ModulusOfElasiticity);
+    modulus.add(293.15,typedBeamYoungModulus);
+    material.add(modulus);
+    RMaterialProperty density(RMaterialProperty::Density);
+    density.add(293.15,1.0);
+    material.add(density);
+    line.setMaterial(material);
+
+    for (uint node=0;node<2;node++)
+    {
+        RElement point(R_ELEMENT_POINT);
+        point.setNodeId(0,node);
+        model.addElement(point,true,node);
+        if (node==0)
+        {
+            model.getPoint(node).addBoundaryCondition(typedBeamTranslation({{true,true,true}}));
+            model.getPoint(node).addBoundaryCondition(typedBeamRotation({{true,true,true}}));
+        }
+        else
+        {
+            model.getPoint(node).addBoundaryCondition(typedBeamTranslation({{false,false,true}}));
+            model.getPoint(node).addBoundaryCondition(typedBeamRotation({{true,true,false}}));
+        }
+    }
+    model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS));
+    RMatrixSolverConf &gmres = model.getMatrixSolverConf(RMatrixSolverConf::GMRES);
+    gmres.setNInnerIterations(80);
+    gmres.setNOuterIterations(20);
+    gmres.setSolverCvgValue(1.0e-12);
+    return model;
+}
+
+QJsonObject typedCableBootstrapManifest(const QString &fault = {})
+{
+    QJsonObject length{{"id","length"},{"quantity","cable_reference_length"},
+                       {"element",0},{"initial",2.0},{"minimum",0.1},{"maximum",3.0}};
+    QJsonObject tension{{"id","tension"},{"quantity","cable_initial_tension"},
+                        {"element",0},{"initial",5.0},{"minimum",0.0},{"maximum",100.0}};
+    QJsonObject anchor{{"id","anchor"},{"quantity","cable_anchor_displacement"},
+                       {"node",0},{"axis",0},{"initial",0.0},{"minimum",-0.1},{"maximum",0.1}};
+    if (fault==QStringLiteral("fractional-element")) length[QStringLiteral("element")]=0.5;
+    if (fault==QStringLiteral("missing-initial")) length.remove(QStringLiteral("initial"));
+    if (fault==QStringLiteral("misspelled-limit")) length[QStringLiteral("maxium")]=1.99;
+    return {{"version",1},{"mode","cable"},{"seed","17"},{"dt",0.1},
+            {"controller","python-typed-v2"},{"channels",QJsonArray{length,tension,anchor}}};
+}
+
+QJsonObject typedPiezoBootstrapManifest()
+{
+    const QJsonObject channel{{"id","patch"},{"quantity","voltage"},{"element",0},
+                              {"initial",0.0},{"minimum",-100.0},{"maximum",100.0},
+                              {"rate",1000.0}};
+    const QJsonObject patch{{"element",0},{"area",typedPatchArea},
+                            {"thickness",typedPatchThickness},{"offset",typedPatchOffset},
+                            {"modulus",typedPatchYoungModulus},{"coupling",typedPiezoCoupling},
+                            {"permittivity",typedPermittivity},{"initial",0.0}};
+    return {{"version",1},{"mode","piezo_beam"},{"seed","17"},{"dt",0.1},
+            {"controller","python-typed-v2"},{"electricMode","voltage"},
+            {"channels",QJsonArray{channel}},{"patches",QJsonArray{patch}}};
+}
+
+bool writeJsonObject(const QString &path,const QJsonObject &object)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly|QIODevice::Truncate)) return false;
+    const QByteArray bytes = QJsonDocument(object).toJson(QJsonDocument::Indented);
+    return file.write(bytes)==bytes.size();
+}
+
+bool runTypedControlCli(const QString &input,
+                        const QString &checkpoint,
+                        const QString &steps,
+                        const QString &program,
+                        const QString &mode,
+                        QString &diagnostic)
+{
+    QProcess process;
+    process.start(solverExecutablePath(),
+        {QStringLiteral("--file=")+input,
+         QStringLiteral("--typed-steps=")+steps,
+         QStringLiteral("--typed-checkpoint=")+checkpoint,
+         QStringLiteral("--typed-controller-id=python-typed-v2"),
+         QStringLiteral("--control-program=")+program,
+         QStringLiteral("--control-args-json=")+typedControlArguments(mode)});
+    const bool finished = process.waitForFinished(60000);
+    diagnostic = QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError());
+    if (!finished)
+    {
+        process.kill();
+        process.waitForFinished();
+        diagnostic += process.errorString();
+    }
+    return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+bool runTypedBootstrapCli(const QString &input,
+                          const QString &configuration,
+                          const QString &checkpoint,
+                          const QString &steps,
+                          const QString &program,
+                          const QString &mode,
+                          const QString &commandsJson,
+                          QString &diagnostic)
+{
+    QProcess process;
+    process.start(solverExecutablePath(),
+        {QStringLiteral("--file=")+input,
+         QStringLiteral("--typed-config=")+configuration,
+         QStringLiteral("--typed-steps=")+steps,
+         QStringLiteral("--typed-checkpoint=")+checkpoint,
+         QStringLiteral("--typed-controller-id=python-typed-v2"),
+         QStringLiteral("--control-program=")+program,
+         QStringLiteral("--control-args-json=")+typedControlArguments(mode,commandsJson)});
+    const bool finished = process.waitForFinished(60000);
+    diagnostic = QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError());
+    if (!finished)
+    {
+        process.kill();
+        process.waitForFinished();
+        diagnostic += process.errorString();
+    }
+    return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+QVector<QJsonObject> typedPreparedSteps(const ExecutionEventReadResult &journal)
+{
+    QVector<QJsonObject> steps;
+    for (const auto &event : journal.events)
+        if (event.type == QStringLiteral("TypedStepPrepared")) steps.append(event.payload);
+    return steps;
+}
+
+bool closeTypedValue(double actual,double expected)
+{
+    return std::isfinite(actual) && std::isfinite(expected) &&
+           std::abs(actual-expected) <= 1.0e-11*(1.0+std::max(std::abs(actual),std::abs(expected)));
+}
+
 void configureControl(RModel &model)
 {
     auto &control = model.getProblemSetup().getStructuralControlSetup();
@@ -301,6 +580,14 @@ private slots:
     void thermalCliRejectsConcurrentCheckpointWriter();
     void thermalCliRejectsOversizedMacrostepRequest();
     void thermalCliDetectsCheckpointChangeBeforePublish();
+    void typedCableCliRestartMatchesUninterrupted();
+    void typedCableCliInvalidUnitPreservesCheckpoint();
+    void typedCableCliRejectsLockedCheckpoint();
+    void typedCableCliRejectsOversizedStepCount();
+    void typedCableBootstrapUsesNativeModelAndPythonController();
+    void typedCableBootstrapRejectsMalformedManifest_data();
+    void typedCableBootstrapRejectsMalformedManifest();
+    void typedPiezoBootstrapUsesNativeBeamAndPythonController();
     void staticCablePersistsCertifiedResult_data();
     void staticCablePersistsCertifiedResult();
     void staticPiezoPersistsElectrodeCharge_data();
@@ -1262,6 +1549,335 @@ void TestSolverAuditCli::thermalCliDetectsCheckpointChangeBeforePublish()
     QVERIFY(std::none_of(journal.events.begin(),journal.events.end(),[](const auto &event) {
         return event.type == QStringLiteral("ThermalMacrostepAccepted");
     }));
+}
+
+void TestSolverAuditCli::typedCableCliRestartMatchesUninterrupted()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QVERIFY(QFile::exists(QStringLiteral(RANGE_TYPED_CONTROL_EXAMPLE_PATH)));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QDir root(directory.path());
+    for (const QString &name : {QStringLiteral("full"),QStringLiteral("split"),
+                                QStringLiteral("resume")})
+        QVERIFY(root.mkdir(name));
+
+    const QString fullSeed = root.filePath(QStringLiteral("full/seed.sfec"));
+    const QString fullCheckpoint = root.filePath(QStringLiteral("full/out.sfec"));
+    const QString splitSeed = root.filePath(QStringLiteral("split/seed.sfec"));
+    const QString partialCheckpoint = root.filePath(QStringLiteral("split/first.sfec"));
+    const QString finalCheckpoint = root.filePath(QStringLiteral("resume/final.sfec"));
+    writeTypedCableSeed(fullSeed);
+    writeTypedCableSeed(splitSeed);
+    const QString fullSeedHash = sha256(fullSeed);
+    const QString splitSeedHash = sha256(splitSeed);
+    QVERIFY(!fullSeedHash.isEmpty() && !splitSeedHash.isEmpty());
+
+    QString diagnostic;
+    QVERIFY2(runTypedControlCli(fullSeed,fullCheckpoint,QStringLiteral("3"),python,
+                                QStringLiteral("normal"),diagnostic),qPrintable(diagnostic));
+    QVERIFY2(runTypedControlCli(splitSeed,partialCheckpoint,QStringLiteral("1"),python,
+                                QStringLiteral("normal"),diagnostic),qPrintable(diagnostic));
+    const QString partialHash = sha256(partialCheckpoint);
+    QVERIFY(!partialHash.isEmpty());
+    QVERIFY2(runTypedControlCli(partialCheckpoint,finalCheckpoint,QStringLiteral("2"),python,
+                                QStringLiteral("normal"),diagnostic),qPrintable(diagnostic));
+    QCOMPARE(sha256(fullSeed),fullSeedHash);
+    QCOMPARE(sha256(splitSeed),splitSeedHash);
+    QCOMPARE(sha256(partialCheckpoint),partialHash);
+
+    auto uninterrupted = RStructuralTypedFEControlDriver::readCheckpoint(
+        fullCheckpoint,QStringLiteral("python-typed-v2"));
+    auto resumed = RStructuralTypedFEControlDriver::readCheckpoint(
+        finalCheckpoint,QStringLiteral("python-typed-v2"));
+    const auto &fullState = uninterrupted->state();
+    const auto &resumedState = resumed->state();
+    QCOMPARE(fullState.completedSteps,quint64(3));
+    QCOMPARE(resumedState.completedSteps,quint64(3));
+    QVERIFY(closeTypedValue(fullState.acceptedTime,0.3));
+    QVERIFY(closeTypedValue(resumedState.acceptedTime,0.3));
+    QVERIFY(closeTypedValue(fullState.acceptedTime,resumedState.acceptedTime));
+    QCOMPARE(fullState.controllerState,QByteArrayLiteral("3"));
+    QCOMPARE(resumedState.controllerState,fullState.controllerState);
+    QCOMPARE(resumedState.lastAppliedValues.size(),fullState.lastAppliedValues.size());
+    for (std::size_t i=0;i<fullState.lastAppliedValues.size();i++)
+        QVERIFY(closeTypedValue(resumedState.lastAppliedValues[i],fullState.lastAppliedValues[i]));
+    QCOMPARE(resumedState.cumulativeWorkJ.size(),fullState.cumulativeWorkJ.size());
+    for (std::size_t i=0;i<fullState.cumulativeWorkJ.size();i++)
+        QVERIFY(closeTypedValue(resumedState.cumulativeWorkJ[i],fullState.cumulativeWorkJ[i]));
+
+    const auto tipDisplacement = [](const RStructuralTypedFEControlDriver &driver)
+    {
+        const RModel &model = driver.model();
+        const uint variable = model.findVariable(R_VARIABLE_DISPLACEMENT);
+        return variable == RConstants::eod ? std::numeric_limits<double>::quiet_NaN()
+                                           : model.getVariable(variable).getValue(0,1);
+    };
+    const double fullTip = tipDisplacement(*uninterrupted);
+    const double resumedTip = tipDisplacement(*resumed);
+    QVERIFY(std::isfinite(fullTip) && std::isfinite(resumedTip));
+    QVERIFY(closeTypedValue(fullTip,resumedTip));
+
+    const auto fullJournal = ExecutionEventJournal::read(fullCheckpoint+QStringLiteral(".events.ndjson"));
+    const auto firstJournal = ExecutionEventJournal::read(partialCheckpoint+QStringLiteral(".events.ndjson"));
+    const auto resumeJournal = ExecutionEventJournal::read(finalCheckpoint+QStringLiteral(".events.ndjson"));
+    QVERIFY2(fullJournal.error.isEmpty(),qPrintable(fullJournal.error));
+    QVERIFY2(firstJournal.error.isEmpty(),qPrintable(firstJournal.error));
+    QVERIFY2(resumeJournal.error.isEmpty(),qPrintable(resumeJournal.error));
+    QVERIFY(!fullJournal.events.empty() && !firstJournal.events.empty() &&
+            !resumeJournal.events.empty());
+    QCOMPARE(fullJournal.events.back().type,QStringLiteral("RunFinished"));
+    QCOMPARE(firstJournal.events.back().type,QStringLiteral("RunFinished"));
+    QCOMPARE(resumeJournal.events.back().type,QStringLiteral("RunFinished"));
+    const auto fullSteps = typedPreparedSteps(fullJournal);
+    auto splitSteps = typedPreparedSteps(firstJournal);
+    splitSteps += typedPreparedSteps(resumeJournal);
+    QCOMPARE(fullSteps.size(),3);
+    QCOMPARE(splitSteps.size(),3);
+    for (int step=0;step<3;step++)
+    {
+        QCOMPARE(fullSteps[step].value(QStringLiteral("stepId")).toString(),QString::number(step+1));
+        QCOMPARE(splitSteps[step].value(QStringLiteral("stepId")),
+                 fullSteps[step].value(QStringLiteral("stepId")));
+        QVERIFY(closeTypedValue(splitSteps[step].value(QStringLiteral("acceptedTime")).toDouble(),
+                                fullSteps[step].value(QStringLiteral("acceptedTime")).toDouble()));
+        const QJsonArray fullChannels = fullSteps[step].value(QStringLiteral("channels")).toArray();
+        const QJsonArray splitChannels = splitSteps[step].value(QStringLiteral("channels")).toArray();
+        QCOMPARE(fullChannels.size(),3);
+        QCOMPARE(splitChannels.size(),3);
+        for (int channel=0;channel<3;channel++)
+        {
+            const QJsonObject expected = fullChannels[channel].toObject();
+            const QJsonObject actual = splitChannels[channel].toObject();
+            QCOMPARE(actual.value(QStringLiteral("id")),expected.value(QStringLiteral("id")));
+            QCOMPARE(actual.value(QStringLiteral("quantity")),expected.value(QStringLiteral("quantity")));
+            QCOMPARE(actual.value(QStringLiteral("unit")),expected.value(QStringLiteral("unit")));
+            for (const QString &field : {QStringLiteral("requested"),QStringLiteral("conditioned"),
+                                         QStringLiteral("applied"),QStringLiteral("cumulativeWorkJ"),
+                                         QStringLiteral("averagePowerW")})
+                QVERIFY(closeTypedValue(actual.value(field).toDouble(),expected.value(field).toDouble()));
+        }
+    }
+    for (const auto *journal : {&fullJournal,&firstJournal,&resumeJournal})
+        QCOMPARE(int(std::count_if(journal->events.begin(),journal->events.end(),[](const auto &event) {
+            return event.type == QStringLiteral("TypedCheckpointCommitted");
+        })),1);
+}
+
+void TestSolverAuditCli::typedCableCliInvalidUnitPreservesCheckpoint()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString seed = directory.filePath(QStringLiteral("seed.sfec"));
+    const QString checkpoint = directory.filePath(QStringLiteral("preserve.sfec"));
+    writeTypedCableSeed(seed);
+    QVERIFY(QFile::copy(seed,checkpoint));
+    const QString seedHash = sha256(seed);
+    const QString checkpointHash = sha256(checkpoint);
+    QString diagnostic;
+    QVERIFY(!runTypedControlCli(seed,checkpoint,QStringLiteral("1"),python,
+                                QStringLiteral("invalid-unit"),diagnostic));
+    QVERIFY(!diagnostic.isEmpty());
+    QCOMPARE(sha256(seed),seedHash);
+    QCOMPARE(sha256(checkpoint),checkpointHash);
+    const auto journal = ExecutionEventJournal::read(checkpoint+QStringLiteral(".events.ndjson"));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QVERIFY(!journal.events.empty());
+    QCOMPARE(journal.events.back().type,QStringLiteral("RunFinished"));
+    QVERIFY(std::none_of(journal.events.begin(),journal.events.end(),[](const auto &event) {
+        return event.type == QStringLiteral("TypedCheckpointCommitted");
+    }));
+}
+
+void TestSolverAuditCli::typedCableCliRejectsLockedCheckpoint()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString seed = directory.filePath(QStringLiteral("seed.sfec"));
+    const QString checkpoint = directory.filePath(QStringLiteral("locked.sfec"));
+    writeTypedCableSeed(seed);
+    const QString seedHash = sha256(seed);
+    QLockFile heldLock(QFileInfo(checkpoint).absoluteFilePath()+QStringLiteral(".lock"));
+    heldLock.setStaleLockTime(0);
+    QVERIFY(heldLock.tryLock(0));
+    QString diagnostic;
+    QVERIFY(!runTypedControlCli(seed,checkpoint,QStringLiteral("1"),python,
+                                QStringLiteral("normal"),diagnostic));
+    QVERIFY(!diagnostic.isEmpty());
+    QCOMPARE(sha256(seed),seedHash);
+    QVERIFY(!QFile::exists(checkpoint));
+    QVERIFY(!QFile::exists(checkpoint+QStringLiteral(".events.ndjson")));
+}
+
+void TestSolverAuditCli::typedCableCliRejectsOversizedStepCount()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString seed = directory.filePath(QStringLiteral("seed.sfec"));
+    const QString checkpoint = directory.filePath(QStringLiteral("unused.sfec"));
+    writeTypedCableSeed(seed);
+    const QString seedHash = sha256(seed);
+    QString diagnostic;
+    QVERIFY(!runTypedControlCli(seed,checkpoint,QStringLiteral("1001"),python,
+                                QStringLiteral("normal"),diagnostic));
+    QVERIFY(!diagnostic.isEmpty());
+    QCOMPARE(sha256(seed),seedHash);
+    QVERIFY(!QFile::exists(checkpoint));
+    QVERIFY(!QFile::exists(checkpoint+QStringLiteral(".events.ndjson")));
+}
+
+void TestSolverAuditCli::typedCableBootstrapUsesNativeModelAndPythonController()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QVERIFY(QFile::exists(QStringLiteral(RANGE_TYPED_CONTROL_EXAMPLE_PATH)));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString native = directory.filePath(QStringLiteral("cable.rbm"));
+    const QString configuration = directory.filePath(QStringLiteral("cable.json"));
+    const QString checkpoint = directory.filePath(QStringLiteral("accepted.sfec"));
+    RModel model = makeTypedCableNativeModel();
+    model.write(native,false);
+    QVERIFY(writeJsonObject(configuration,typedCableBootstrapManifest()));
+    const QString inputHash = sha256(native);
+    const QString configurationHash = sha256(configuration);
+    const QString commands = QStringLiteral("{\"length\":1.98,\"tension\":8.0,\"anchor\":0.05}");
+
+    QString diagnostic;
+    QVERIFY2(runTypedBootstrapCli(native,configuration,checkpoint,QStringLiteral("3"),python,
+                                  QStringLiteral("normal"),commands,diagnostic),qPrintable(diagnostic));
+    QCOMPARE(sha256(native),inputHash);
+    QCOMPARE(sha256(configuration),configurationHash);
+    auto accepted = RStructuralTypedFEControlDriver::readCheckpoint(
+        checkpoint,QStringLiteral("python-typed-v2"));
+    QCOMPARE(accepted->state().completedSteps,quint64(3));
+    QVERIFY(closeTypedValue(accepted->state().acceptedTime,0.3));
+    QCOMPARE(accepted->state().controllerState,QByteArrayLiteral("3"));
+    const uint displacement = accepted->model().findVariable(R_VARIABLE_DISPLACEMENT);
+    QVERIFY(displacement != RConstants::eod);
+    const double tipDisplacement = accepted->model().getVariable(displacement).getValue(0,1);
+    QVERIFY(std::abs(tipDisplacement-0.03792)<1.0e-10);
+
+    const auto journal = ExecutionEventJournal::read(checkpoint+QStringLiteral(".events.ndjson"));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    QCOMPARE(typedPreparedSteps(journal).size(),3);
+    QVERIFY(std::any_of(journal.events.begin(),journal.events.end(),[](const auto &event) {
+        return event.type == QStringLiteral("TypedCheckpointCommitted");
+    }));
+}
+
+void TestSolverAuditCli::typedCableBootstrapRejectsMalformedManifest_data()
+{
+    QTest::addColumn<QString>("fault");
+    QTest::newRow("fractional member index") << QStringLiteral("fractional-element");
+    QTest::newRow("missing initial command") << QStringLiteral("missing-initial");
+    QTest::newRow("misspelled safety limit") << QStringLiteral("misspelled-limit");
+}
+
+void TestSolverAuditCli::typedCableBootstrapRejectsMalformedManifest()
+{
+    QFETCH(QString,fault);
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString native = directory.filePath(QStringLiteral("cable.rbm"));
+    const QString configuration = directory.filePath(QStringLiteral("invalid.json"));
+    const QString seed = directory.filePath(QStringLiteral("seed.sfec"));
+    const QString checkpoint = directory.filePath(QStringLiteral("preserve.sfec"));
+    makeTypedCableNativeModel().write(native,false);
+    QVERIFY(writeJsonObject(configuration,typedCableBootstrapManifest(fault)));
+    writeTypedCableSeed(seed);
+    QVERIFY(QFile::copy(seed,checkpoint));
+    const QString nativeHash = sha256(native);
+    const QString checkpointHash = sha256(checkpoint);
+
+    QString diagnostic;
+    const QString commands = QStringLiteral("{\"length\":1.98,\"tension\":8.0,\"anchor\":0.05}");
+    QVERIFY(!runTypedBootstrapCli(native,configuration,checkpoint,QStringLiteral("1"),python,
+                                  QStringLiteral("normal"),commands,diagnostic));
+    QVERIFY(!diagnostic.isEmpty());
+    QCOMPARE(sha256(native),nativeHash);
+    QCOMPARE(sha256(checkpoint),checkpointHash);
+}
+
+void TestSolverAuditCli::typedPiezoBootstrapUsesNativeBeamAndPythonController()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    const QString python = typedControlPython();
+    if (python.isEmpty()) QSKIP("Python is not available on this test host");
+    QVERIFY(QFile::exists(QStringLiteral(RANGE_TYPED_CONTROL_EXAMPLE_PATH)));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString native = directory.filePath(QStringLiteral("beam.rbm"));
+    const QString configuration = directory.filePath(QStringLiteral("beam.json"));
+    const QString checkpoint = directory.filePath(QStringLiteral("accepted.sfec"));
+    RModel model = makeTypedPiezoBeamModel();
+    model.write(native,false);
+    QVERIFY(writeJsonObject(configuration,typedPiezoBootstrapManifest()));
+    const QString inputHash = sha256(native);
+
+    QString diagnostic;
+    QVERIFY2(runTypedBootstrapCli(native,configuration,checkpoint,QStringLiteral("1"),python,
+                                  QStringLiteral("normal"),QStringLiteral("{\"patch\":100.0}"),
+                                  diagnostic),qPrintable(diagnostic));
+    QCOMPARE(sha256(native),inputHash);
+    auto accepted = RStructuralTypedFEControlDriver::readCheckpoint(
+        checkpoint,QStringLiteral("python-typed-v2"));
+    QCOMPARE(accepted->state().completedSteps,quint64(1));
+    QCOMPARE(accepted->state().controllerState,QByteArrayLiteral("1"));
+
+    const double axialStiffness = typedBeamYoungModulus*typedBeamArea+
+                                  typedPatchYoungModulus*typedPatchArea;
+    const double bendingStiffness = typedBeamYoungModulus*typedBeamIz+
+        typedPatchYoungModulus*typedPatchArea*typedPatchOffset*typedPatchOffset*
+            typedBeamYoungModulus*typedBeamArea/axialStiffness;
+    const double piezoMoment = typedPiezoCoupling*typedPatchArea*typedPatchOffset*
+        typedVoltage/typedPatchThickness*typedBeamYoungModulus*typedBeamArea/axialStiffness;
+    const double curvature = piezoMoment/bendingStiffness;
+    const double axialStrain =
+        (typedPatchYoungModulus*typedPatchArea*typedPatchOffset*curvature-
+         typedPiezoCoupling*typedPatchArea*typedVoltage/typedPatchThickness)/axialStiffness;
+    const double patchStrain = axialStrain-typedPatchOffset*curvature;
+    const double expectedCharge =
+        (typedPermittivity*typedPatchArea*typedVoltage/
+             (typedPatchThickness*typedPatchThickness)-
+         typedPiezoCoupling*typedPatchArea*patchStrain/typedPatchThickness)*typedBeamLength;
+    const double expectedTipY = 0.5*curvature*typedBeamLength*typedBeamLength;
+    const uint displacement = accepted->model().findVariable(R_VARIABLE_DISPLACEMENT);
+    const uint charge = accepted->model().findVariable(R_VARIABLE_ELECTRIC_CHARGE);
+    QVERIFY(displacement != RConstants::eod && charge != RConstants::eod);
+    const double tipY = accepted->model().getVariable(displacement).getValue(1,1);
+    const double terminalCharge = accepted->model().getVariable(charge).getValue(0,0);
+    QVERIFY(std::abs(tipY)>1.0e-8);
+    QVERIFY(std::abs(tipY-expectedTipY)<1.0e-8*(1.0+std::abs(expectedTipY)));
+    QVERIFY(std::abs(terminalCharge)>1.0e-8);
+    QVERIFY(std::abs(terminalCharge-expectedCharge)<1.0e-8*(1.0+std::abs(expectedCharge)));
+    const double expectedWork = 0.5*typedVoltage*expectedCharge;
+    QCOMPARE(accepted->state().cumulativeWorkJ.size(),std::size_t(1));
+    QVERIFY(std::abs(accepted->state().cumulativeWorkJ[0]-expectedWork)<
+            1.0e-8*(1.0+std::abs(expectedWork)));
+    const auto journal = ExecutionEventJournal::read(checkpoint+QStringLiteral(".events.ndjson"));
+    QVERIFY2(journal.error.isEmpty(),qPrintable(journal.error));
+    const auto steps = typedPreparedSteps(journal);
+    QCOMPARE(steps.size(),1);
+    const QJsonArray channels = steps[0].value(QStringLiteral("channels")).toArray();
+    QCOMPARE(channels.size(),1);
+    QVERIFY(std::abs(channels[0].toObject().value(QStringLiteral("cumulativeWorkJ")).toDouble()-expectedWork)<
+            1.0e-8*(1.0+std::abs(expectedWork)));
 }
 
 

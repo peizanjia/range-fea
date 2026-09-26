@@ -2,6 +2,8 @@ qt_add_executable(fea-solver
     src/application.cpp
     src/command_processor.cpp
     src/control_ndjson_transport.cpp
+    src/control_typed_ndjson_transport.cpp
+    src/typed_control_task.cpp
     src/execution_event_journal.cpp
     src/main.cpp
     src/main_task.cpp
@@ -11,6 +13,8 @@ qt_add_executable(fea-solver
     src/application.h
     src/command_processor.h
     src/control_ndjson_transport.h
+    src/control_typed_ndjson_transport.h
+    src/typed_control_task.h
     src/execution_event_journal.h
     src/main_task.h
     src/solver_input.h
@@ -18,6 +22,11 @@ qt_add_executable(fea-solver
 )
 
 add_dependencies(fea-solver range-base-lib range-model-lib range-solver-lib)
+
+install(DIRECTORY examples/ DESTINATION examples/control COMPONENT Application
+    FILES_MATCHING PATTERN "*.py" PATTERN "*.json")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/TYPED_FE_CONTROL.md"
+    DESTINATION doc COMPONENT Application)
 
 target_link_libraries(fea-solver
     PRIVATE

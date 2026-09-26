@@ -31,6 +31,10 @@ class SolverInput
         uint thermalMacrosteps = 0;
         //! Atomic single-file destination for the accepted thermal state.
         QString thermalCheckpointFileName;
+        uint typedControlSteps = 0;
+        QString typedCheckpointFileName;
+        QString typedControllerIdentity;
+        QString typedConfigurationFileName;
         //! Force to restart solver
         bool restart;
 
@@ -72,6 +76,7 @@ class SolverInput
         uint getExternalControlTimeoutMs() const;
 
         void setThermalControlRun(uint macrosteps,const QString &checkpointFileName);
+        void setTypedControlRun(uint steps,const QString &checkpointFileName,const QString &controllerIdentity,const QString &configurationFileName = {});
 
         //! Set force restart solver.
         void setRestart(bool restart);

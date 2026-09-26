@@ -13,6 +13,10 @@ void SolverInput::_init(const SolverInput *pSolverInput)
         this->controlTimeoutMs = pSolverInput->controlTimeoutMs;
         this->thermalMacrosteps = pSolverInput->thermalMacrosteps;
         this->thermalCheckpointFileName = pSolverInput->thermalCheckpointFileName;
+        this->typedControlSteps = pSolverInput->typedControlSteps;
+        this->typedCheckpointFileName = pSolverInput->typedCheckpointFileName;
+        this->typedControllerIdentity = pSolverInput->typedControllerIdentity;
+        this->typedConfigurationFileName = pSolverInput->typedConfigurationFileName;
         this->restart = pSolverInput->restart;
     }
 }
@@ -95,4 +99,12 @@ void SolverInput::setThermalControlRun(uint macrosteps,const QString &checkpoint
 void SolverInput::setRestart(bool restart)
 {
     this->restart = restart;
+}
+
+void SolverInput::setTypedControlRun(uint steps,const QString &checkpointFileName,const QString &controllerIdentity,const QString &configurationFileName)
+{
+    this->typedControlSteps=steps;
+    this->typedCheckpointFileName=checkpointFileName;
+    this->typedControllerIdentity=controllerIdentity;
+    this->typedConfigurationFileName=configurationFileName;
 }

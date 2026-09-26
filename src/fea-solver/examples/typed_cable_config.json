@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "mode": "cable",
+  "seed": "17",
+  "dt": 0.1,
+  "controller": "python-typed-v2",
+  "channels": [
+    {"id": "length", "quantity": "cable_reference_length", "element": 0, "initial": 2.0, "minimum": 0.1, "maximum": 3.0},
+    {"id": "tension", "quantity": "cable_initial_tension", "element": 0, "initial": 5.0, "minimum": 0.0, "maximum": 100.0},
+    {"id": "anchor", "quantity": "cable_anchor_displacement", "node": 0, "axis": 0, "initial": 0.0, "minimum": -0.1, "maximum": 0.1}
+  ]
+}

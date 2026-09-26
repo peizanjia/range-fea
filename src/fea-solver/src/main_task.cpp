@@ -40,6 +40,10 @@ void MainTask::run()
         validOptions.append(RArgumentOption("control-timeout-ms",RArgumentOption::Integer,QVariant(),"Positive per-request external control timeout in milliseconds (default 5000)",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("thermal-steps",RArgumentOption::Integer,QVariant(),"Run 1..1000 thermal FE macrosteps; requires --thermal-checkpoint",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("thermal-checkpoint",RArgumentOption::Path,QVariant(),"Atomically write/resume the thermal FE .tfec checkpoint",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("typed-config",RArgumentOption::Path,QVariant(),"Start typed FE control from a native model and version-1 JSON configuration",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("typed-steps",RArgumentOption::Integer,QVariant(),"Run 1..1000 quasistatic typed cable/piezo control steps from a .sfec bundle",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("typed-checkpoint",RArgumentOption::Path,QVariant(),"Atomic accepted typed FE .sfec destination",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("typed-controller-id",RArgumentOption::String,QVariant(),"Expected typed controller implementation/revision identity",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("restart",RArgumentOption::Switch,QVariant(),"Restart solver",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-id",RArgumentOption::Path,QVariant(),"Task ID for inter process communication",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-server",RArgumentOption::Path,QVariant(),"Task server for inter process communication",RArgumentOption::Optional,false));
@@ -107,6 +111,28 @@ void MainTask::run()
                              application);
 
         SolverInput solverInput(argumentsParser.getValue("file").toString());
+        const bool typedMode=argumentsParser.isSet("typed-steps");
+        if (typedMode != argumentsParser.isSet("typed-checkpoint") ||
+            typedMode != argumentsParser.isSet("typed-controller-id"))
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--typed-steps, --typed-checkpoint and --typed-controller-id must be supplied together.");
+        if (argumentsParser.isSet("typed-config") && !typedMode)
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,"--typed-config requires typed FE mode.");
+        if (typedMode)
+        {
+            bool valid=false;
+            const auto steps=argumentsParser.getValue("typed-steps").toString().toLongLong(&valid);
+            if (!valid || steps<1 || steps>1000)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,"--typed-steps must be an integer in 1..1000.");
+            if (!argumentsParser.isSet("control-program") || argumentsParser.isSet("thermal-steps") ||
+                argumentsParser.isSet("thermal-checkpoint") || argumentsParser.isSet("restart") ||
+                argumentsParser.isSet("convergence-file") || argumentsParser.isSet("monitoring-file"))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Typed FE mode requires --control-program and cannot combine thermal, restart or legacy result-file options.");
+            solverInput.setTypedControlRun(uint(steps),argumentsParser.getValue("typed-checkpoint").toString(),
+                argumentsParser.getValue("typed-controller-id").toString(),
+                argumentsParser.isSet("typed-config") ? argumentsParser.getValue("typed-config").toString() : QString());
+        }
         if (argumentsParser.isSet("thermal-steps") != argumentsParser.isSet("thermal-checkpoint"))
         {
             throw RError(RError::Type::InvalidInput,R_ERROR_REF,
