@@ -1,5 +1,22 @@
 # 续作交接
 
+## 2026-09-26 Stage 0–8 审查与本轮交付结束（最新）
+
+用户要求恢复401中断、继续补齐Stage 0–8，完成后退出；反复无法排除的环境问题须详细保留临时记录。当前完成本轮受限Stage 7/8增量、全量回归和发布包；不进入Stage 9。不能无保留宣称Stage 0–8全部能力完成：Stage 0干净Windows终验与Stage 6 MATLAB适配器仍未交付，适用范围之外的模型也没有验收。
+
+- 稳定源码：根 `0b4c7b7`（typed Python/CLI）、`b575ad3`（FE driver集成），求解器 `4a59719`；早期恢复及导数/回呼防护分别见 `4e24c95`、`a63f4f4`、`9e443ae`。模型 `baec0fe`。最终文档提交见 `git log -1`。
+- 验证：全目标Release构建退出0；`OMP_NUM_THREADS=4`、完整CTest `-j2 --timeout600` **83/83通过，0失败，38.68s**。CLI QTest **32 passed / 0 failed / 0 skipped**，真实Python子程序执行，不能将此跳过写成通过。型别会话/实际索/梁/力控制/进程协议聚焦5/5。
+- Stage 7：实际拉索Newmark NodalForce/N接受步、功账与ASCII/binary续算；L0/N0/两端锚点解析输入导数、实际准静态长度/初张力/规定锚点命令；BEAM1独立片V/C解析弯曲、互易、N/Nm/C认证与原子结果。200步速度回授索振与独立标量递推吻合，末振动能量<被动基线0.001倍，能量变化和控制功一致。
+- 外部交付：typed NDJSON v2严格绑定通道物理量/单位；原生完整模型+version1 JSON初始化；.sfec嵌入模型/片/目录及接受控制、条件化与功状态，支持跨程序续算。输入/配置/目标锁与哈希、QSaveFile一次发布，失败保留旧包，日志区分prepared/committed；示例和用法见 `docs/TYPED_FE_CONTROL.md`。默认串行确定性；显式多线程审计的actualThreads是作用域入口探测，非每个kernel的实际线程数。
+- 审查修补：忽略原生MPC/非应力任务、回呼重入、配置键拼错取消限幅三个发现均关闭且回归；梁温度/竞争设置/时间曲线拒绝、时钟FMA精确绑定、候选封印和非结构结果回呼防护均有测试。独立只读复查没有发现上述路径仍未关闭的重大缺陷，不等于证明任意工况正确。
+- Stage 8：在既定一维/指定二维与BEAM1范围完成显式交付；热残差、Heat→Stress/节点压电、温变材料/热弯曲/热初应力模态、点加热器多速率续算、物理ID/稀疏场、参考热质量、分区/一维常系数单体和耗散回热，以及精确两叶结果事务。常系数单体是C++ direct entry；一般多维单体、跨重网格及任意任务树不在范围。
+- 安装/打包：`build/audit-20260926/install-final`，缩减PATH的GUI/CLI --help均退出0；Qt/OpenMP/MSVC、typed示例及说明文件齐全。ZIP约91.88MB，Inno安装器约62.33MB成功生成，ZIP的CLI SHA与安装树一致。这是本机冒烟及包内容核对，没有运行干净VM安装器，也没有作完整GUI建模操作终验。
+- 包：`build/audit-20260926/packages-final/range-fea-1.3.0-winnt-amd64.zip`、`build/vs2026/range-fea-1.3.0-winnt-amd64.exe`；SHA记录 `build/audit-20260926/final-package-sha256.json`。最终证据 `final-all-release-build.log`、`final-full-ctest.log`、`typed-cli-qtest-final.txt`、`final-install.log`、`final-package.log`。
+- 外部阻碍：Hyper-V无权限、Sandbox需提权；MATLAB R2022a的fgetl(0)、Java System.in、input三种stdin读入均失败，简单batch还发生connector退出崩溃。按用户异常退出规则保留 `build/audit-20260926/external-validation-limits.md` 和 `matlab-stdin-ndjson-investigation.md`；没有可用MATLAB适配器。下次入口：有授权的干净Windows VM终验；MATLAB Engine或明确本地TCP/命名管道桥验证，然后真实FE/恢复验收。
+- 拉索初态边界：新起算保留节点u/v但清除a，被动力路径a0默认0，没有任意非平衡q0的平衡加速度投影或自定义a0入口；控制力变化会刷新右极限a。当前索振基准是与a0=0相容的平衡位移初态加初速度。不应推广为任意初态支持；若扩展需明确初始化契约并重验既有首步载荷基准。
+- 401：发生在Codex responses认证层，当时构建后来成功退出0。本机是ChatGPT认证，无个人API key/自定义位址。同期官方Codex内部事故与现象相符，但无法逐请求证明根因；没有改认证/计费，密钥未写入日志。详见 `resume-auth-and-regression-investigation.md`。
+- 根目录既有未跟踪 `.agents/`、`.codex/`、`AGENTS.md` 保留且不混入功能提交；临时日志只在被忽略build下，没有push。下面是历史快照，旧停止/未完成条目以本节为准。
+
 ## 2026-09-26 401 中断恢复与 Stage 7 继续补齐（最新，工作仍进行中）
 
 用户最新要求解释意外中断并继续审查/补齐 Stage 0–8，未授权把剩余开发缺口省略。中断来自 Codex responses 的 401 认证错误，非项目编译错误。本机 auth_mode=chatgpt，无个人 API key/自定义 API 位址；同期 OpenAI 官方事故页 https://status.openai.com/incidents/01M3DCNWMW57HYK8FJ5FBFPA39 记载 Codex 内部故障且已恢复。该关联不是个别请求的服务端根因证明。没有改动认证或计费。

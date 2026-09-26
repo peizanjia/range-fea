@@ -1,6 +1,6 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-状态（2026-09-26 最新 Release 基线）：Stage 0 本机交付闭环已测，干净 Windows 发布终验受本机虚拟机权限阻挡；Stage 1–5 在注明的范围内完成，Stage 2 新增所有暴露结构单元的解析四网格收敛矩阵；Stage 6 C++/Python 控制已回归，MATLAB 长驻握手未实测。Stage 7 受限拉索 Newmark FE、ASCII/binary 磁盘续算与节点电势压电杆 FE 已测，但控制接线及压电梁/片仍在补。Stage 8 的显式交付物在指定一维/二维 FE 路径已有热残差认证、Heat→Stress/压电、温度材料查表、QUAD2 热弯曲、点加热器多速率控制及 CLI 续算、一维耗散回热与常系数单体 RModel 适配、物理 ID/稀疏场、参考热质量、两叶结果事务和 BEAM1 热预应力模态；全目标 Release 构建及 CTest **78/78 通过**。单体适配器限 C++ direct entry/x 向 TRUSS1，广义多维双向耦合、跨重网格对应和任意任务树事务仍无验收；Stage 7 及 Stage 0 的上述缺口意味着 Stage 0–8 整体不能标为完成。详见 `HANDOFF.md`、`TECHNICAL_ROUTE_STAGE8.md` 与 `docs/STAGE0_8_AUDIT_20260926.md`。
+状态（2026-09-26）：Stage 0 本机交付闭环已有测试，干净 Windows 发布终验受 Hyper-V/Sandbox 权限阻挡；Stage 1–5 在注明范围内完成。Stage 6 C++/Python 与版本化控制协议已测，MATLAB R2022a 重定向 stdin 三种读入方式均失败，不能宣称可用适配器。Stage 7 已补受限拉索 Newmark NodalForce 接受步、功账、磁盘续算与主动减振；L0/N0/锚点线性化及实际准静态型别控制、BEAM1 梁片 V/C、解析弯曲/互易与 NDJSON v2 Python/CLI 原子续算均有证据。Stage 8 显式交付物在指定一维/二维路径已有热残差认证、热弹/压电、温度材料查表、热弯曲、点加热器多速率控制与续算、一维耗散回热和常系数单体 RModel 适配、物理 ID/稀疏场、参考热质量、两叶结果事务和 BEAM1 热初应力模态。最终全目标Release构建、CTest83/83（38.68s）及本机安装/ZIP内容核对通过，Inno安装器生成成功；详见HANDOFF.md。一般多维耦合、跨重网格及任意任务树事务未验收；Stage 0/6 环境缺口仍阻止无保留的 Stage 0–8 全部完成声明。
 
 更新时间：2026-09-26
 
@@ -538,7 +538,7 @@ applicationVersion, pluginVersions
 
 ### Stage 7：压电、拉索与结构执行器
 
-当前进度：拉索受限非线性静力 FE/CLI、1.3.14 固定电压压电杆静力 FE/CLI、1.3.15 节点电势/电荷一维压电 FE/CLI，以及受限 TRUSS1 拉索 Newmark 动力 FE 的解析单步与失败步回滚已通过聚焦测试。拉索动力磁盘重启、Stage 6 控制接线、压电梁片和电压控制尚未验收；不能判定完整 Stage 7 交付。详见 `TECHNICAL_ROUTE_STAGE7.md` 和 `HANDOFF.md`。
+当前进度：拉索非线性静力、Newmark 动力与 NodalForce 控制、ASCII/binary 接受态分段续算；L0/N0/两端锚点解析导数与实际准静态型别控制；BEAM1 独立片 V/C 平面静力、2/4/8 解析弯曲与互易、分别 N/Nm/C 残差认证和四结果原子发布；已有节点电势/电荷杆 FE。新增 typed NDJSON v2 保留 Stage 6 接受态纯回调/条件化语义和观测格式，支持 Python 子进程、原生模型+JSON 初始化、单包磁盘续算、功账和失败保护。力 v1 保持动态语义；型别梁/参数宏步是准静态，不宣称压电动态电路或所有曲梁/壳片。详见 TECHNICAL_ROUTE_STAGE7.md、docs/TYPED_FE_CONTROL.md、HANDOFF.md。
 
 压电交付物：
 
@@ -560,7 +560,7 @@ applicationVersion, pluginVersions
 
 ### Stage 8：全状态热—结构耦合
 
-当前进度：热求解已有新鲜残差认证；一维 Heat→Stress 自由/固定杆、受限 Heat→节点电势压电杆、积分热膨胀、持久温度进入模态材料查表，以及穿厚度温差 QUAD2 悬臂梁均通过解析 FE 基准。精确的 Heat→Stress 两叶任务已有稳态整任务及受限暂态逐步结果交易、故障回滚与同一求解器重试测试；暂态监测点文件输出已进入同一步事务，其他任务形状仍拒绝。另有一维实际点加热器多速率热 FE/准静力机械宏步、1.3.16 持久热控设置、原子单文件接受态 checkpoint、损坏拒绝及磁盘续算对照；受限杆件热容按参考质量修正。CLI 已能从模型或 `.tfec` 按受限热控配置运行/续算并原子发布。1.3.17 模型提供持久物理节点/单元 ID；同网格全温度及可用机械场稀疏快照可直接读取这些 ID，并按求解器实际六个应力分量读取结果；不生成跨重网格对应关系。受限 TRUSS1 RModel 双向黏性耗散回热已通过实际 FE 能量/应力测试，分区解与同一一维方程的独立同时根一致；黏性系数尚由调用方按单元索引提供。显式启用的参考热容量在 QUAD1/QUAD2/TETRA1 变形脉冲基准保留参考质量；其他面/体单元及扭曲网格仍缺专门验收。通用单体耦合/可逆热弹性回馈仍缺验收，不能判定 Stage 8 完成。
+当前进度：在受限一维与指定二维/BEAM1 基准完成显式交付：热新鲜残差、自由/固定杆与节点压电、积分热应变、温变材料模态、QUAD2 热弯曲、精确两叶稳态/暂态结果/监测事务；点加热器多速率闭环和原子 .tfec CLI 续算；1.3.17 物理 ID 与温度/机械稀疏场；TRUSS1 RModel 双向物理黏性回热，分区与独立同时根对照；一维常系数单体 RModel FE 的可逆热弹交换/黏性回热及残差能量；QUAD1/QUAD2/TETRA1 参考热质量；BEAM1 Heat→Stress→Modal 从接受轴力装配几何刚度，2/4/8 收敛至独立梁柱频率约39.23Hz。单体仍是 C++ direct entry，仅常系数 x 向 TRUSS1；非匹配重网格、一般多维温变材料单体及任意任务树不在边界。完整回归见 HANDOFF.md 与 TECHNICAL_ROUTE_STAGE8.md。
 
 交付物：
 
