@@ -1,6 +1,24 @@
 # 续作交接
 
-## 2026-09-26 Stage 0–8 审查与本轮交付结束（最新）
+## 2026-09-26 Stage 9 数值交付与全阶回代（最新）
+
+用户后续已授权：只要此前环境疑难不影响后续开发，推进至 Stage 9；旧的“不进入 Stage 9”停止条件已被该指令覆盖。本轮实现 Stage 9 路线全部八项交付，在下述受限物理范围内验证完成；完成发布核对后停止，不进入 Stage 10。
+
+- 稳定源码：根 `af48742`，求解器 `a6292c8`；模型仍为 `baec0fe`。最后证据/交接提交见 `git log -1`。
+- 原生 `RStructuralLinearModel` / `--linear-model-output` 在私有副本组装真实 FE 物理 SI M/C/K/B、q/v/a 感测行和完整工作点/DOF/源哈希。线弹性参考几何静态平衡、非线性缆索收敛后严格绷紧切线均可导出。常支承非零位移和点弯矩经真实 RHS 处理；既有位移结果与旧时间步算子不会污染矩阵。完整模型文件/目标协作锁、读取前后哈希及 QSaveFile 原子发布；失败保留已有结果。
+- `stage9_analysis.py` 提供 E/A/B/C/D（含加速度直接馈通）、质量归一化模态截断、CB 静态/固定界面模态、复数 FRF、尺度化实际特征值 PBH、各通道全阶/降阶误差。模态/CB 新鲜残差和质量正交误差可核对；重复模态簇截断、奇异频点和非法矩阵显式失败。ROM 工作点残差明确继承全阶源证据，不声称投影坐标已重新平衡。绝对误差按单位统计。
+- `stage9_velocity_controller.py` 离线共点速度回授设计、全阶极点核对、绑定原生源哈希的 NDJSON v1 控制、独立 NumPy 零阶保持 Newmark 回放。输出覆盖实际 ROM 时间域预测误差和投影误差、q/v/a、控制功与被动基线，不把单模态阻尼目标等同全阶精度。
+- 全目标 Release 成功；完整 CTest **87/87，44.52 s**，其中 Python 分析 9 项、控制器 21 项。独立只读审查提出的旧模态组装、非零支承、弯矩、旧历史、ROM 向量/目录、PBH 近根、文件覆盖、源身份及时间域误差问题均已修正并有回归；最终源码审查无未解决的重大发现。
+- 真 FE 四段杆、dt=0.005 s、400 步主动与被动算例均与独立 NumPy 回放吻合。受控终态最大位移/速度差 **1.98e−11 m / 8.74e−10 m/s**；被动终态差 **2.53e−10 m / 2.84e−8 m/s**。真实 FE 末能量主动 **7.22431e−6 J**、被动 **6.08964e−4 J**，比值 **0.0118633**。两模态/CB（一个界面+两个固定界面模态）在 30 rad/s 的最大相对 FRF 误差分别 **28.70% / 1.2020%**；单模态加速度与通道零点附近仍有较大相对误差，不能假装任意频带准确。
+- 本机独立解释器 Python **3.13.5**、NumPy **2.1.3**、SciPy **1.15.3**。CMake 明确配置 `-DPython3_EXECUTABLE=D:/ProgramData/anaconda3/python.exe`（自动发现的 Python3.14 不含这些数值依赖）。最低支持版本声明统一为 Python3.10+。安装包含脚本、依赖清单、字节保真的完整原生算例和矩阵 JSON；解释器/数值库需要单独环境。
+- 本机安装树 `build/stage9-install` 的原生导出、已安装 Python 分析/设计、400步 FE 控制与 GUI `--help` 均退出0，PATH 仅保留安装/bin 与 Windows 系统目录，外部 Python 使用绝对路径；这不替代干净 Windows VM 或完整 GUI 建模认证。
+- 最终打包成功：`build/vs2026/range-fea-1.3.0-winnt-amd64.zip` **91,927,986 bytes**，SHA256 `0e2f9d414c27de0ffbbeff9bbc4e0a6c368488c931a7bb9f189eb79d2dbbeef8`；Inno `.exe` **62,339,015 bytes**，SHA256 `958978c693a56a8cb7568838462d7bd5348778d37ad05324148f73cb3377fc6f`。ZIP内两脚本、依赖清单、原生/矩阵算例、两份Stage9文档及CLI可执行文件均与源码/安装树逐字节一致；核对见 `build/stage9-package-verification.json`。Inno56.156s编译成功，未在干净VM执行安装。
+
+复跑入口：[使用说明](docs/STAGE9_CONTROL_ANALYSIS.md)、[算法和边界](TECHNICAL_ROUTE_STAGE9.md)、`src/fea-solver/examples/stage9/`。首轮和最终证据分别在已忽略 `build/stage9-validation*`；完整回归 `build/stage9-full-ctest.log`，安装工作流 `build/stage9-installed-run/`，构建/安装/打包日志在 `build/stage9-*.log`。
+
+边界：POINT/TRUSS1/BEAM1、1–256独立机械坐标、各≤64输入/输出、固定支承与常载、293.15 K、正定质量/稳定正定切线；仅全局节点力和点节点q/v/a目录。MPC/移动支承、压电电路状态、一般热工作点、缆索切换点、刚体/奇异系统和通用非线性 descriptor 不在认证范围。Stage 0 干净VM、Stage 6 MATLAB长驻适配、一般多维耦合与跨重网格等历史缺口仍独立保留；不得将 Stage 9完成改写为无保留 Stage0–9全部完成。此前401是Codex认证中断，本轮未修改认证配置；它没有破坏原生建置，也没有阻挡已验证C++/Python路径。
+
+## 2026-09-26 Stage 0–8 审查与本轮交付结束（历史）
 
 用户要求恢复401中断、继续补齐Stage 0–8，完成后退出；反复无法排除的环境问题须详细保留临时记录。当前完成本轮受限Stage 7/8增量、全量回归和发布包；不进入Stage 9。不能无保留宣称Stage 0–8全部能力完成：Stage 0干净Windows终验与Stage 6 MATLAB适配器仍未交付，适用范围之外的模型也没有验收。
 

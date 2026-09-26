@@ -4,6 +4,8 @@
 
 更新时间：2026-09-26
 
+后续状态：用户已授权并完成本轮受限 **Stage 9** 全部八项交付，根 `af48742` / 求解器 `a6292c8`，全目标 Release 与完整 CTest **87/87（44.52s）**。原生工作点导出、descriptor、模态/CB、FRF/PBH、误差评估和 Python 控制器真 FE 回代均有证据；物理/数值边界与精度见 `TECHNICAL_ROUTE_STAGE9.md`、`docs/STAGE9_CONTROL_ANALYSIS.md`。此前83/83是Stage0–8历史基线。Stage0/6环境缺口未被这些结果关闭，当前停止在Stage9，不进入Stage10。
+
 适用仓库：`range-fea` 及其 `range-model-lib`、`range-solver-lib`、`range-gui-lib`、`range-ai-lib` 子模块
 
 ## 1. 文档目的
@@ -582,6 +584,8 @@ applicationVersion, pluginVersions
 - 热—结构—压电联合算例。
 
 ### Stage 9：控制导向的分析与模型降阶
+
+状态：在1–256独立坐标、POINT/TRUSS1/BEAM1固定支承常载及严格绷紧缆索工作点范围完成。Python3.10+与NumPy/SciPy是离线工具的独立依赖；MPC/移动支承、奇异descriptor、电路/一般热状态不在首轮认证范围。全阶/降阶误差须随模型一起检查，不能用阶段完成推论任意降阶精度。真实400步FE与独立回放、87/87回归及独立源码审查已完成，具体发布证据见HANDOFF。
 
 交付物：
 
