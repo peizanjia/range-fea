@@ -3,6 +3,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QFile>
+#include <QTemporaryDir>
 
 #include <limits>
 
@@ -52,7 +54,25 @@ private slots:
     void rejectsRemoteFaults();
     void timesOutAndClosesProcess();
     void keepsStderrSeparateFromProtocol();
+    void stopAllowsBoundedCleanEof();
 };
+
+void TestControlNdjsonTransport::stopAllowsBoundedCleanEof()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto path = directory.filePath("controller-clean-exit.txt");
+    auto settings = config("eof-marker");
+    settings.arguments.append(path);
+    ControlNdjsonTransport transport(settings);
+    QString error;
+    QVERIFY2(transport.start(&error), qPrintable(error));
+    transport.stop();
+    QVERIFY(!transport.isReady());
+    QFile marker(path);
+    QVERIFY(marker.open(QIODevice::ReadOnly));
+    QCOMPARE(marker.readAll(), QByteArray("clean-eof"));
+}
 
 void TestControlNdjsonTransport::roundTripsPureStepsAndKeepsAcceptedStateWithCaller()
 {

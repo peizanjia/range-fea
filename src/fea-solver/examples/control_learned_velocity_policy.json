@@ -1,0 +1,101 @@
+{
+  "format": "range-fea-learned-velocity-policy-v1",
+  "version": 1,
+  "kind": "supervised-collocated-velocity-gain-distillation",
+  "controlMode": "scalar-nodal-force",
+  "sensorCatalog": [
+    {
+      "sensorId": "tip-velocity-x",
+      "unit": "m/s"
+    }
+  ],
+  "actuatorCatalog": [
+    {
+      "actuatorId": "tip-force-x",
+      "unit": "N"
+    }
+  ],
+  "normalization": {
+    "inputOffset": 0.0,
+    "inputScale": 0.1,
+    "inputDomain": [
+      -0.1,
+      0.1
+    ],
+    "outputOffset": 0.0,
+    "outputScale": 2.17901299684881
+  },
+  "network": {
+    "activation": "tanh",
+    "layerSizes": [
+      1,
+      8,
+      1
+    ],
+    "layers": [
+      {
+        "weights": [
+          [
+            0.09893440336919722
+          ],
+          [
+            0.10046094616848225
+          ],
+          [
+            0.10027482546659641
+          ],
+          [
+            0.10056920193579738
+          ],
+          [
+            0.10022939509784164
+          ],
+          [
+            0.0996740699704827
+          ],
+          [
+            0.09914611191721381
+          ],
+          [
+            0.09887013007525278
+          ]
+        ],
+        "bias": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "weights": [
+          [
+            -1.2709193003920927,
+            -1.2579743897194706,
+            -1.2590157888154732,
+            -1.2389075728137797,
+            -1.2476954984622937,
+            -1.2540309574915076,
+            -1.2602992797024823,
+            -1.2545815570437575
+          ]
+        ],
+        "bias": [
+          0.0
+        ]
+      }
+    ]
+  },
+  "distillation": {
+    "law": "force=-gain*velocity",
+    "gainNSecondsPerMeter": 21.7901299684881,
+    "trainingSamples": 257,
+    "holdoutSamples": 1025,
+    "epochs": 600,
+    "seed": 17
+  }
+}

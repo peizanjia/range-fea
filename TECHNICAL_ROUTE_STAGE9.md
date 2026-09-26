@@ -1,5 +1,7 @@
 # Stage 9：控制导向分析与模型降阶
 
+2026-09-26 后续增量：`--auto-modal-relative-tolerance` 按给定频点和所有通道选择达到相对 FRF 误差门槛的最低完整模态簇，可用 `--max-auto-modes` 限制阶数；无法达标返回失败和逐候选证据。它不保证频点之间的精度或闭环稳定。四杆 1% 示例须保留全部四模态。MATLAB 已通过 TCP 替代适配器完成真实 FE 回代，旧 stdin 环境问题仍保留为历史排查；详见 `docs/CONTROLLER_ADAPTERS.md`。
+
 本阶段以可核对的原生有限元素模型为起点，交付工作点矩阵、降阶、频率响应、控制诊断与控制器全阶回代。Stage 0 的干净 Windows VM 终验及 Stage 6 的 MATLAB stdin 适配问题不阻挡 C++/Python 路径；它们仍是独立的未关闭项。
 
 ## 数据和物理边界

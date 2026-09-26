@@ -830,6 +830,46 @@ def compare_models(full: LinearModel, rom: LinearModel,
             "relativeFloor": floor, "frequencies": comparisons}
 
 
+def select_modal_order(model: LinearModel, omegas: Sequence[float],
+                       tolerance: float, maximum_modes: int | None = None) -> dict[str, Any]:
+    """Choose the first whole modal cluster passing all supplied FRF samples.
+
+    This is a sampled-frequency error gate, not a continuous-band or closed-loop
+    stability certificate. Near channel zeros the existing denominator floor
+    remains conservative; absolute errors are retained in each comparison.
+    """
+    limit = model.n if maximum_modes is None else _check_integer_k(maximum_modes, model.n, False)
+    tolerance = _number(tolerance, "relative tolerance")
+    if not 0 < tolerance < 1:
+        raise AnalysisError("relative tolerance must be in (0,1)")
+    if not omegas or len(omegas) > MAX_FREQUENCIES:
+        raise AnalysisError("automatic modal selection requires a bounded non-empty frequency list")
+    # Invalid/singular full-order samples must not be hidden as failed ROMs.
+    for omega in omegas:
+        frequency_response(model, omega)
+    attempts: list[dict[str, Any]] = []
+    selected = None
+    for count in range(1, limit + 1):
+        try:
+            reduction = modal_reduce(model, count)
+            comparison = compare_models(model, reduction.model, omegas)
+            maximum = max(row["maximumRelativeError"] for row in comparison["frequencies"])
+        except AnalysisError as error:
+            attempts.append({"modes": count, "error": str(error)})
+            continue
+        selected = {"modes": count, "maximumRelativeError": maximum,
+                    "metTolerance": maximum <= tolerance, "comparison": comparison}
+        attempts.append({"modes": count, "maximumRelativeError": maximum,
+                         "metTolerance": selected["metTolerance"]})
+        if selected["metTolerance"]:
+            break
+    if selected is None:
+        raise AnalysisError("no valid whole-cluster modal order within maximum_modes")
+    return {**selected, "relativeTolerance": tolerance, "maximumModes": limit,
+            "scope": "supplied angular-frequency samples only; no intersample or stability guarantee",
+            "attempts": attempts}
+
+
 def _array_json(array: np.ndarray) -> list[Any]:
     return np.asarray(array).tolist()
 
@@ -1046,6 +1086,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="JSON array of physical DOF indices for Craig-Bampton reduction")
     parser.add_argument("--frequencies-json", default="[]",
                         help="JSON array of angular frequencies in rad/s")
+    parser.add_argument("--auto-modal-relative-tolerance", type=float,
+                        help="Choose the first modal order meeting this relative FRF error at every supplied sample")
+    parser.add_argument("--max-auto-modes", type=int,
+                        help="Maximum retained modes for automatic selection; defaults to full order")
     arguments = parser.parse_args(argv)
     model_path = Path(arguments.model)
     output_path = Path(arguments.output)
@@ -1061,7 +1105,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not isinstance(boundaries, list):
                 raise AnalysisError("--boundary-indices-json must be a JSON array")
         model = load_model(model_path)
-        report = analyze_model(model, arguments.modes, boundaries, frequencies)
+        selection = None
+        modes = arguments.modes
+        if arguments.auto_modal_relative_tolerance is not None:
+            if modes != 0 or boundaries is not None:
+                raise AnalysisError("automatic modal selection cannot combine with --modes or Craig-Bampton boundaries")
+            selection = select_modal_order(model, frequencies, arguments.auto_modal_relative_tolerance, arguments.max_auto_modes)
+            modes = selection["modes"]
+        elif arguments.max_auto_modes is not None:
+            raise AnalysisError("--max-auto-modes requires --auto-modal-relative-tolerance")
+        report = analyze_model(model, modes, boundaries, frequencies)
+        if selection is not None:
+            report["modalSelection"] = selection
+            if not selection["metTolerance"]:
+                report["errors"].append({"stage": "modalSelection", "message": "requested sampled FRF tolerance not met within maximum modes"})
         report["provenance"]["modelPath"] = str(model_path.resolve())
         atomic_write_json(output_path, report)
         return 1 if report["errors"] else 0

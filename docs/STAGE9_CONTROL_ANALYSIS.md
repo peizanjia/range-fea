@@ -1,5 +1,7 @@
 # Stage 9 控制分析：原生 FE → 降阶 → 控制设计 → 全阶回代
 
+2026-09-26 增量：可以用 `--auto-modal-relative-tolerance 0.01 --frequencies-json '[0,5,15,30]'` 自动选择达到指定采样频点误差门槛的完整模态簇；`--max-auto-modes` 限制最大阶数。此选项不与显式 `--modes` 或 CB 边界同时使用。报告 `modalSelection` 保留各阶误差；未达标返回1并写入 `errors`。四杆示例要求1%时选择4模态；限制到2模态会明确失败，不能把28.70%误差作为1%认证。只证明给定频点，绝不保证频点之间或闭环稳定。更多控制器部署与真 FE 对照见 `CONTROLLER_ADAPTERS.md`。
+
 CLI 原生程序负责真实 FE 组装及求解，离线分析使用独立 Python 3.10+、NumPy、SciPy。Python 解释器和数值依赖不打入 Windows 安装程序；依赖清单随示例安装。本机验证版本最终写入交接。源码示例在 `src/fea-solver/examples/stage9/`，安装后在 `examples/control/stage9/`。
 
 ## 导出

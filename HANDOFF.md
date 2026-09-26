@@ -1,6 +1,25 @@
 # 续作交接
 
-## 2026-09-26 Stage 9 数值交付与全阶回代（最新）
+## 2026-09-26 控制器替代路径与阶段缺口修复（最新）
+
+用户要求暂缓需要手动调整本机权限的事项，继续分别修复报错/功能缺口，并考虑 Python 学习型、C++、板端等主流控制部署路径。本轮未更改认证、系统权限或进入 Stage10–11；源代码、测试和交接自动提交，未推送。求解器子模块提交 `535a6fb`，模型仍为 `baec0fe`；根提交见 `git log -1`。
+
+- **MATLAB 替代接口已验证**：旧 R2022a stdin 三种 API 失败记录保留；新 Java TCP 服务器 + Python NDJSON 桥接完成握手、同接受态重复计算、重连接受状态、31秒请求间空闲、实际400步 FE及正常退出。第一次真实FE握手暴露多感测器目录假设，已按ID选择速度并验证全部目录；随后发现 QProcess 强制终止桥接使 MATLAB `Connection reset`，已改为有界 stdin EOF→terminate/kill，回归证明正常清理。远端源代码+增益 SHA256 可固定到桥接参数/求解器指纹，不宣称网络认证。
+- **控制器选择**：新增 `range-control-velocity` C++ 进程；PyTorch 离线训练零偏置、符号约束 `1-8-1` tanh 网络，导出 JSON，由无 PyTorch 依赖的 Python 运行时推论。训练域外观测拒绝，状态由求解器显式携带；不是通用强化学习或任意稳定性证明。TCP 桥接也可接纯计算端点，但无实物板卡、串口/CAN、固件部署或硬实时认证。
+- **指纹审查修复**：`--policy=path`/`--weights=path` 等 `--key=value` 文件参数现在也纳入控制器版本摘要。实际FE续算测试对两个别名修改有效权重JSON字节，均命中特定控制指纹错误并保持输出文件不变。
+- **拉索初始化**：真新起算在首个控制观测前按集中质量平衡求 a0，保留q0/v0；后续步/重启/已有checkpoint不覆盖已接受加速度。已更新独立首步载荷基准，增加非零初位移/速度/载荷、初始加速度感测及checkpoint保留校核。
+- **热机几何扩展**：常系数单体 `RStructuralThermoMonolithic1DFEAdapter` 支持任意3D方向共线直杆；标量条件沿确定性正向轴，位移回到全局，应力保持线单元局部轴向xx。旋转/反向连接两步推进的温度、位移、应力与能量等价；弯折网络及横向接受位移拒绝且不发布。其他分区适配器仍保留各自限制。
+- **Stage9 精度门槛**：按指定频点逐阶选择完整模态簇，未达到请求误差则失败并保留候选证据。四杆0/5/15/30rad/s，1/2/3模态最大相对误差约140.33%/28.70%/11.06%，1%门槛选择全部4模态（误差1.08e-15）。没有保证频点之间或闭环稳定。
+- **最终数值验证**：全目标 Release 构建成功；完整CTest **91/91通过、0失败、124.46s**。400步实际FE对独立NumPy Newmark：C++终态q/v最大差 **1.9764e-11m / 8.7381e-10m/s**；MATLAB TCP **1.9764e-11m / 8.7381e-10m/s**；学习型对教师基准 **4.5855e-7m / 1.90575e-6m/s**。终态能量分别约 **7.22431e-6J / 7.22431e-6J / 7.15962e-6J**。这些只证明该四杆、dt=.005s、400步、指定域的运行。
+- **训练验证**：PyTorch `2.9.0+cu126`，显式CPU float64，seed17/600epochs；留出1025点最大/RMS教师力误差 **0.002834872/0.001090645N**，导出推论相对PyTorch最大差 **6.66e-16N**。权重示例与依赖说明随包安装，推论无需训练框架。
+- **安装/打包**：`build/controller-adapters-install`在仅安装bin及Windows系统目录的PATH下，C++/学习型各400步、GUI `--help`和自动模态分析均退出0；外部Python以绝对路径调用。ZIP **91,973,142 bytes**，SHA256 `274975a3e102571492e8d3948e0d2f5f90f67df2fec4f1cb4518186e071be6b4`；Inno EXE **62,363,999 bytes**，SHA256 `7a1ce5bb0eb41d373f346e30585e3a446bdef6198fdc5cff2eb480ede00d3048`。13个关键包内文件与安装树逐字节相同；Inno56.062s编译成功。没有做干净VM安装或完整GUI建模终验。
+- **审查**：独立只读审查覆盖控制器/传输、学习型推论和训练、拉索/热机数值与自动选阶；发现的MATLAB闲置超时和组合参数指纹问题均修复并复核。无未解决的已确认重大源码发现。
+
+复跑说明：`docs/CONTROLLER_ADAPTERS.md`。证据：`build/controller-adapters-final-build.log`、`build/controller-adapters-full-ctest.log`、`build/controller-adapters-qtest-details.log`、`build/controller-adapters-validation/`、`build/controller-adapters-package-verification.json`。完整现象/试错记录：`build/audit-20260926/controller-adapter-followup-investigation.md`；临时脚本及结果留在忽略的build目录，未混入产品源码。
+
+仍待开发：一般多维/弯折网络/温变材料单体热机、通用单体CLI派发、跨重网格物理对应和任意任务树事务；更复杂ONNX/MCU推论后端、真实板卡时序/物理施加协议。没有实际板型信息，不能宣称板端固件已交付。按用户指示不再试探Hyper-V/Sandbox权限。旧stdin失败和最初MATLAB外层launcher100秒未就绪的精确原因仍未解决，但直接二进制TCP替代已经可用，不阻挡已验证的C++/Python/MATLAB路径。后续可从上述明确范围继续，不得把本轮进展改写为任意模型的Stage0–9全能力完成。
+
+## 2026-09-26 Stage 9 数值交付与全阶回代（历史）
 
 用户后续已授权：只要此前环境疑难不影响后续开发，推进至 Stage 9；旧的“不进入 Stage 9”停止条件已被该指令覆盖。本轮实现 Stage 9 路线全部八项交付，在下述受限物理范围内验证完成；完成发布核对后停止，不进入 Stage 10。
 

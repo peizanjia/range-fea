@@ -103,6 +103,26 @@ class DescriptorAndFrequencyTests(unittest.TestCase):
 
 
 class ReductionTests(unittest.TestCase):
+    def test_automatic_modal_order_rejects_inaccurate_truncation(self) -> None:
+        model = analysis.parse_model(model_document(
+            np.eye(2), np.eye(2)*0.1, np.diag([4.0,9.0]),
+            [[1.0],[1.0]], [[1.0,1.0]]))
+        insufficient = analysis.select_modal_order(model, [0.0,1.0,4.0], 0.01, 1)
+        self.assertFalse(insufficient["metTolerance"])
+        self.assertGreater(insufficient["maximumRelativeError"], .01)
+        selected = analysis.select_modal_order(model, [0.0,1.0,4.0], .01)
+        self.assertEqual(selected["modes"], 2)
+        self.assertTrue(selected["metTolerance"])
+        self.assertLess(selected["maximumRelativeError"], 1e-12)
+        with self.assertRaises(analysis.AnalysisError):
+            analysis.select_modal_order(model, [], .01)
+        clustered = analysis.parse_model(model_document(
+            np.eye(2), np.eye(2)*.1, np.eye(2)*4,
+            [[1.0],[1.0]], [[1.0,1.0]]))
+        selected = analysis.select_modal_order(clustered, [0.0], .01)
+        self.assertEqual(selected["modes"], 2)
+        self.assertIn("error", selected["attempts"][0])
+
     def test_modal_reduction_projects_force_and_round_trips_rom(self) -> None:
         document = model_document(
             [[2.0, 0.0], [0.0, 1.0]], [[0.2, 0.0], [0.0, 0.3]],
@@ -243,6 +263,19 @@ class ValidationAndDiagnosticsTests(unittest.TestCase):
 
 
 class CliReportTests(unittest.TestCase):
+    def test_auto_selection_unmet_tolerance_has_failure_status_and_evidence(self) -> None:
+        document=model_document(np.eye(2),np.eye(2)*.1,np.diag([4.,9.]),[[1.],[1.]],[[1.,1.]])
+        with tempfile.TemporaryDirectory() as temporary:
+            model_path=Path(temporary)/"model.json"
+            output_path=Path(temporary)/"report.json"
+            model_path.write_text(json.dumps(document),encoding="utf-8")
+            status=analysis.main(["--model",str(model_path),"--output",str(output_path),
+                "--frequencies-json","[0,1,4]","--auto-modal-relative-tolerance",".01","--max-auto-modes","1"])
+            self.assertEqual(status,1)
+            report=json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertFalse(report["modalSelection"]["metTolerance"])
+            self.assertEqual(report["errors"][-1]["stage"],"modalSelection")
+
     def test_cli_writes_bounded_atomic_report_with_model_hash(self) -> None:
         document = model_document([[2.0]], [[0.2]], [[8.0]], [[1.0]], [[1.0]])
         with tempfile.TemporaryDirectory() as temporary:

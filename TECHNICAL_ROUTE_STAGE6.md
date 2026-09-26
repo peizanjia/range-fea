@@ -1,5 +1,7 @@
 # Stage 6 技术路线：控制耦合、功率归属与外部协议
 
+2026-09-26 后续增量：已补 PyTorch 离线训练/标准库推论、C++ 外部速度控制器，以及有界 TCP 桥接。MATLAB R2022a 的 stdin 失败仍保留，但 Java TCP 替代路径已通过协议重试/重连、31秒空闲及真 FE 400步，正常退出。控制进程退出先尝试 stdin EOF；`--key=文件` 参数内容也纳入控制器指纹。当前能力与复跑入口见 `docs/CONTROLLER_ADAPTERS.md`、最新 `HANDOFF.md`；下文阶段基线为历史记录。
+
 更新时间：2026-09-25
 
 状态：2026-09-24 已完成 Stage 6 的 C++/Python 数值控制链、控制步事件和 InteractionRecord 数据契约，主 Release 53/53 CTest 通过。MATLAB 长驻进程适配器尚未验证；GUI/Agent 操作接线按依赖移至 Stage 10–11。细节以源码、测试与 `HANDOFF.md` 为准。

@@ -8,9 +8,35 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME tst_control_tcp_bridge COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_control_tcp_bridge.py")
+    add_test(NAME tst_control_learned COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_control_learned.py")
+    add_test(NAME tst_control_velocity_cpp COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_control_velocity_cpp.py" "$<TARGET_FILE:range-control-velocity>")
+    if(WIN32)
+        set_tests_properties(tst_control_velocity_cpp PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import numpy,scipy"
         RESULT_VARIABLE stage9_python_dependencies OUTPUT_QUIET ERROR_QUIET)
     if(stage9_python_dependencies EQUAL 0)
+        qt_add_executable(tst_controller_adapters_cli tst_controller_adapters_cli.cpp)
+        target_include_directories(tst_controller_adapters_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../range-solver-lib/tests")
+        target_link_libraries(tst_controller_adapters_cli PRIVATE range-solver-lib Qt6::Test)
+        target_compile_definitions(tst_controller_adapters_cli PRIVATE
+            RANGE_CONTROL_PYTHON="${Python3_EXECUTABLE}"
+            RANGE_CONTROL_EXAMPLES="${CMAKE_CURRENT_SOURCE_DIR}/../examples")
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import torch"
+            RESULT_VARIABLE control_torch_available OUTPUT_QUIET ERROR_QUIET)
+        if(control_torch_available EQUAL 0)
+            target_compile_definitions(tst_controller_adapters_cli PRIVATE RANGE_CONTROL_TORCH_AVAILABLE=1)
+        else()
+            message(STATUS "PyTorch unavailable: learned policy training/FE integration not registered")
+        endif()
+        add_dependencies(tst_controller_adapters_cli fea-solver range-control-velocity)
+        add_test(NAME tst_controller_adapters_cli COMMAND tst_controller_adapters_cli)
+        if(WIN32)
+            set_tests_properties(tst_controller_adapters_cli PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
         add_test(NAME tst_stage9_analysis COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_analysis.py")
         add_test(NAME tst_stage9_velocity_controller COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_velocity_controller.py")
         qt_add_executable(tst_stage9_cli tst_stage9_cli.cpp)

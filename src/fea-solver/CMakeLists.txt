@@ -25,11 +25,19 @@ qt_add_executable(fea-solver
 
 add_dependencies(fea-solver range-base-lib range-model-lib range-solver-lib)
 
+qt_add_executable(range-control-velocity examples/control_velocity_cpp.cpp)
+target_link_libraries(range-control-velocity PRIVATE Qt6::Core)
+install(TARGETS range-control-velocity RUNTIME DESTINATION bin COMPONENT Application)
+
 install(DIRECTORY examples/ DESTINATION examples/control COMPONENT Application
-    FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "*.ram"
+    FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "*.ram" PATTERN "*.m" PATTERN "*.cpp"
     PATTERN "__pycache__" EXCLUDE)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/stage9/stage9-requirements.txt"
     DESTINATION examples/control/stage9 COMPONENT Application)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/control-learning-requirements.txt"
+    DESTINATION examples/control COMPONENT Application)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/CONTROLLER_ADAPTERS.md"
+    DESTINATION doc COMPONENT Application)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/TYPED_FE_CONTROL.md"
     DESTINATION doc COMPONENT Application)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/STAGE9_CONTROL_ANALYSIS.md"

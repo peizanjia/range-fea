@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -73,6 +74,11 @@ int main(int argc, char **argv)
         if (mode == QStringLiteral("wrong-request"))
             response.insert(QStringLiteral("requestId"),QStringLiteral("wrong"));
         std::cout << QJsonDocument(response).toJson(QJsonDocument::Compact).constData() << std::endl;
+    }
+    if (mode == QStringLiteral("eof-marker") && argc == 3)
+    {
+        QFile marker(QString::fromLocal8Bit(argv[2]));
+        if (!marker.open(QIODevice::WriteOnly) || marker.write("clean-eof") != 9) return 5;
     }
     return 0;
 }

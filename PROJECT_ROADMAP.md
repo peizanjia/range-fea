@@ -1,5 +1,7 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
+最新增量（2026-09-26）：按用户要求继续修复阶段缺口，权限相关的干净 Windows 验收暂缓。已补 MATLAB TCP 替代接口、Python/PyTorch 训练及独立推论、C++ 控制器、可验证纯计算 TCP 桥接；已补拉索初始平衡加速度、三维任意方向共线直杆单体热机适配，以及 Stage9 指定频点的自适应模态阶数精度门槛。全目标 Release 和完整 CTest **91/91（124.46s）**，MATLAB/C++/学习型控制器均有真实400步 FE 对照；详见 `docs/CONTROLLER_ADAPTERS.md` 与最新 `HANDOFF.md`。一般多维/重网格/任意任务树和实物板卡/硬实时仍未交付，未进入Stage10–11。
+
 状态（2026-09-26）：Stage 0 本机交付闭环已有测试，干净 Windows 发布终验受 Hyper-V/Sandbox 权限阻挡；Stage 1–5 在注明范围内完成。Stage 6 C++/Python 与版本化控制协议已测，MATLAB R2022a 重定向 stdin 三种读入方式均失败，不能宣称可用适配器。Stage 7 已补受限拉索 Newmark NodalForce 接受步、功账、磁盘续算与主动减振；L0/N0/锚点线性化及实际准静态型别控制、BEAM1 梁片 V/C、解析弯曲/互易与 NDJSON v2 Python/CLI 原子续算均有证据。Stage 8 显式交付物在指定一维/二维路径已有热残差认证、热弹/压电、温度材料查表、热弯曲、点加热器多速率控制与续算、一维耗散回热和常系数单体 RModel 适配、物理 ID/稀疏场、参考热质量、两叶结果事务和 BEAM1 热初应力模态。最终全目标Release构建、CTest83/83（38.68s）及本机安装/ZIP内容核对通过，Inno安装器生成成功；详见HANDOFF.md。一般多维耦合、跨重网格及任意任务树事务未验收；Stage 0/6 环境缺口仍阻止无保留的 Stage 0–8 全部完成声明。
 
 更新时间：2026-09-26

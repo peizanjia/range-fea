@@ -216,7 +216,16 @@ QString controllerRevision(const QString &program, const QStringList &arguments)
     for (const QString &argument : arguments)
     {
         addField(argument.toUtf8());
-        const QFileInfo file(argument);
+        // Both '--policy path' and '--policy=path' are conventional argv forms.
+        // Bind the latter's file contents too, so edited weights cannot retain
+        // the same accepted checkpoint identity merely by using an '=' option.
+        QString argumentPath = argument;
+        if (argument.startsWith(QStringLiteral("--")))
+        {
+            const qsizetype separator = argument.indexOf(QLatin1Char('='));
+            if (separator > 2) argumentPath = argument.mid(separator+1);
+        }
+        const QFileInfo file(argumentPath);
         // Script/config arguments affect controller behaviour and restart identity.
         if (file.isFile())
         {

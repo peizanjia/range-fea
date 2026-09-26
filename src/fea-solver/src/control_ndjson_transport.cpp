@@ -300,11 +300,17 @@ void ControlNdjsonTransport::stop()
     this->collectStderr();
     if (this->process.state() != QProcess::NotRunning)
     {
-        this->process.terminate();
+        // A pure controller can finish on stdin EOF, releasing sockets and other
+        // resources normally. Keep bounded termination for an unresponsive child.
+        this->process.closeWriteChannel();
         if (!this->process.waitForFinished(200))
         {
-            this->process.kill();
-            this->process.waitForFinished(1000);
+            this->process.terminate();
+            if (!this->process.waitForFinished(200))
+            {
+                this->process.kill();
+                this->process.waitForFinished(1000);
+            }
         }
     }
     this->collectStderr();

@@ -1,0 +1,3 @@
+# Offline training only. Runtime JSON policy inference uses the standard library.
+# Tested on CPU with torch 2.9.0+cu126; local build suffix may differ.
+torch==2.9.0
