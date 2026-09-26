@@ -1,12 +1,22 @@
 # 续作交接
 
+## 2026-09-26 401 中断恢复与 Stage 7 继续补齐（最新，工作仍进行中）
+
+用户最新要求解释意外中断并继续审查/补齐 Stage 0–8，未授权把剩余开发缺口省略。中断来自 Codex responses 的 401 认证错误，非项目编译错误。本机 auth_mode=chatgpt，无个人 API key/自定义 API 位址；同期 OpenAI 官方事故页 https://status.openai.com/incidents/01M3DCNWMW57HYK8FJ5FBFPA39 记载 Codex 内部故障且已恢复。该关联不是个别请求的服务端根因证明。没有改动认证或计费。
+
+中断前全目标 Release 建置已成功。其后 CTest 79/80 的唯一失败是旧 cable restart 测试仍要求一律拒绝控制；提供合法 controllerId 后改验没有 NodalForce actuator 目录必须拒绝，聚焦通过并自动提交。重新完整执行 **80/80 通过，62.13 s**。本机安装树 CLI/GUI `--help` 均退出0，qwindows.dll/OpenMP/MSVC DLL核对存在；不能替代干净VM实际操作终验。
+
+已提交的新 Stage 7 交付：受限 BEAM1 梁片静态 V/C FE、独立2/4/8网格与互易测试、分别以 N/Nm/C 认证残差、私有候选seal及四输出原子发布；真实拉索 Newmark NodalForce接受步控制与功账、ASCII/binary分段控制续算、时钟/控制配置/物理目录回呼竄改拒绝；真实FE预张力几何刚度与松弛再张紧。后续解析 `B=-df_int/dinput` 支持 L0/N0/两端锚点及相应势能导数，尚只是线性化，不等于长度/张力/锚点接受步控制接线。回呼注入任意非结构结果也已拒绝、回滚并可重试。新增三个聚焦目标 **3/3通过**；最新包含这些增量的全目标回归还待最终执行，不能把80/80扩写成81/81。
+
+正在补：有独立量纲的 Stage 6 typed-control companion及实际FE消费；V/C 不得塞进原v1牛顿命令。Stage7完整退出条件、干净VM终验与MATLAB适配仍未关闭。诊断、构建、测试日志统一在忽略的 `build/audit-20260926/`；401与回归记录为 `resume-auth-and-regression-investigation.md`。根/子仓提交以git log为准；用户未跟踪配置保留，未push。
+
 ## 2026-09-26 Stage 8 全量 Release 基线与 Stage 0–8 缺口（最新）
 
 本轮已提交：持久物理 ID 分配/读档失败原子性和 capability registry 的独立验证标记及可选 Gmsh 可用性；高刚度/高连接度热—节点压电残差舍入证书；ASCII 结果变量 17 位精度；精确两叶 Heat→Stress 监测/结果跨进程锁；拉索 Newmark ASCII/binary 接受态续算与逐分量篡改拒绝；TRUSS2、BEAM1/2、TRI1/2、QUAD2、TETRA1、WEDGE1、HEXA1 的四网格解析模态收敛；真实 Heat→Modal 材料刚度与受限 BEAM1 Heat→Stress→Modal 热初应力几何刚度；一维常系数 TRUSS1 RModel 单体热机 FE 适配器。热—应力—节点压电联合 FE 的高刚度回归、300 支杆热力相消和失效回滚均有聚焦测试。子仓库提交及根指针以本轮 `git log`、`git submodule status` 为准。
 
 全目标 `cmake --build build/vs2026 --config Release --parallel 2` 成功；其后完整 `ctest --test-dir build/vs2026 -C Release -j 2 --output-on-failure --timeout 600` **78/78 通过，0 失败，69.42 s**。首次全套曾因模型格式升到 1.3.17 后三个旧测试仍断言 1.3.16 而得 75/78；已仅修正四处预期并重建三个目标，最终全套重新执行通过。较早交接中的 72/72、75 项和“待重测”均为历史快照。
 
-Stage 8 的显式交付物在受限一维/指定二维基准已有上述真 FE、能量/残差、控制采样与续算证据；单体适配器仍为 C++ direct entry、限常系数 x 向 TRUSS1，BEAM1 热预应力仅接受同次静态 Heat→Stress 的轴力。跨重网格对应、一般多维双向单体耦合和任意任务树事务不在已验证范围。Stage 7 仍缺 Stage 6 拉索力及长度/张力/锚点控制、压电梁/片与 V/C 控制；当前正在继续补齐，不得把上述 78/78 宣称为 Stage 0–8 全部完成。Stage 0 的干净 Windows VM 安装终验受本机 Hyper-V/Windows Sandbox 权限阻挡，现象见已忽略的 `build/audit-20260926/external-validation-limits.md`；Stage 6 MATLAB 长驻 stdin 握手仍未有成功实测。完整逐项证据与限制见 `docs/STAGE0_8_AUDIT_20260926.md`。
+Stage 8 的显式交付物在受限一维/指定二维基准已有上述真 FE、能量/残差、控制采样与续算证据；单体适配器仍为 C++ direct entry、限常系数 x 向 TRUSS1，BEAM1 热预应力仅接受同次静态 Heat→Stress 的轴力。跨重网格对应、一般多维双向单体耦合和任意任务树事务不在已验证范围。Stage 7 仍缺 Stage 6 拉索力及长度/张力/锚点控制、压电梁/片与 V/C 控制；当前正在继续补齐，不得把上述 78/78 宣称为 Stage 0–8 全部完成。Stage 0 的干净 Windows VM 安装终验受本机 Hyper-V/Windows Sandbox 权限阻挡，现象见已忽略的 `build/audit-20260926/external-validation-limits.md`；Stage 6 MATLAB R2022a `-batch` 长驻 stdin 握手已用三条读取路径实测失败，不存在可交付的 MATLAB 适配器，详见已忽略的 `build/audit-20260926/matlab-stdin-ndjson-investigation.md`。完整逐项证据与限制见 `docs/STAGE0_8_AUDIT_20260926.md`。
 
 ## 2026-09-26 Stage 0–8 交付复核早期快照（以下本节为历史）
 
