@@ -6,6 +6,32 @@ endif()
 
 set(CMAKE_AUTOMOC ON)
 
+find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import numpy,scipy"
+        RESULT_VARIABLE stage9_python_dependencies OUTPUT_QUIET ERROR_QUIET)
+    if(stage9_python_dependencies EQUAL 0)
+        add_test(NAME tst_stage9_analysis COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_analysis.py")
+        add_test(NAME tst_stage9_velocity_controller COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_velocity_controller.py")
+        qt_add_executable(tst_stage9_cli tst_stage9_cli.cpp)
+        target_include_directories(tst_stage9_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../range-solver-lib/tests")
+        target_link_libraries(tst_stage9_cli PRIVATE range-solver-lib Qt6::Test)
+        target_compile_definitions(tst_stage9_cli PRIVATE
+            RANGE_STAGE9_PYTHON="${Python3_EXECUTABLE}"
+            RANGE_STAGE9_EXAMPLES="${CMAKE_CURRENT_SOURCE_DIR}/../examples/stage9")
+        add_dependencies(tst_stage9_cli fea-solver)
+        add_test(NAME tst_stage9_cli COMMAND tst_stage9_cli)
+        if(WIN32)
+            set_tests_properties(tst_stage9_cli PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    else()
+        message(WARNING "Stage 9 Python tests require NumPy and SciPy; install examples/stage9/stage9-requirements.txt")
+    endif()
+else()
+    message(WARNING "Stage 9 analysis/controller workflow requires Python 3.10+; integration tests not registered")
+endif()
+
 qt_add_executable(tst_fea_solver_input
     tst_solver_input.cpp
     ../src/solver_input.cpp

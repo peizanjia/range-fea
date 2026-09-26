@@ -1,0 +1,3 @@
+# These shipped reference artifacts carry byte-level provenance digests.
+src/fea-solver/examples/stage9/stage9_truss4.ram -text
+src/fea-solver/examples/stage9/stage9_truss4_linear_model.json -text

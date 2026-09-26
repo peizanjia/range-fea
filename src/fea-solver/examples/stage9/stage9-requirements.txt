@@ -1,0 +1,3 @@
+# Python 3.10+ Stage 9 offline analysis; not bundled into the native executable.
+numpy>=1.26,<3
+scipy>=1.11,<2

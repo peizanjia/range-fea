@@ -1,0 +1,288 @@
+{
+    "B": [
+        [
+            0
+        ],
+        [
+            0
+        ],
+        [
+            0
+        ],
+        [
+            1
+        ]
+    ],
+    "C": [
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ]
+    ],
+    "D": [
+        [
+            0
+        ],
+        [
+            0
+        ],
+        [
+            0
+        ]
+    ],
+    "K": [
+        [
+            8000,
+            -4000,
+            0,
+            0
+        ],
+        [
+            -4000,
+            8000,
+            -4000,
+            0
+        ],
+        [
+            0,
+            -4000,
+            8000,
+            -4000
+        ],
+        [
+            0,
+            0,
+            -4000,
+            4000
+        ]
+    ],
+    "M": [
+        [
+            3.3333333333333335,
+            0.8333333333333331,
+            0,
+            0
+        ],
+        [
+            0.8333333333333331,
+            3.3333333333333335,
+            0.8333333333333331,
+            0
+        ],
+        [
+            0,
+            0.8333333333333331,
+            3.3333333333333335,
+            0.8333333333333331
+        ],
+        [
+            0,
+            0,
+            0.8333333333333331,
+            1.6666666666666667
+        ]
+    ],
+    "Sa": [
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            1
+        ]
+    ],
+    "Sq": [
+        [
+            0,
+            0,
+            0,
+            1
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ]
+    ],
+    "Sv": [
+        [
+            0,
+            0,
+            0,
+            0
+        ],
+        [
+            0,
+            0,
+            0,
+            1
+        ],
+        [
+            0,
+            0,
+            0,
+            0
+        ]
+    ],
+    "dofs": [
+        {
+            "dof": "UZ",
+            "frame": "constraint-local",
+            "globalDirection": [
+                1,
+                0,
+                0
+            ],
+            "nodePhysicalId": "7118",
+            "nodePosition": 1,
+            "unit": "m"
+        },
+        {
+            "dof": "UZ",
+            "frame": "constraint-local",
+            "globalDirection": [
+                1,
+                0,
+                0
+            ],
+            "nodePhysicalId": "7135",
+            "nodePosition": 2,
+            "unit": "m"
+        },
+        {
+            "dof": "UZ",
+            "frame": "constraint-local",
+            "globalDirection": [
+                1,
+                0,
+                0
+            ],
+            "nodePhysicalId": "7152",
+            "nodePosition": 3,
+            "unit": "m"
+        },
+        {
+            "dof": "UZ",
+            "frame": "constraint-local",
+            "globalDirection": [
+                1,
+                0,
+                0
+            ],
+            "nodePhysicalId": "7169",
+            "nodePosition": 4,
+            "unit": "m"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "tip-force-x",
+            "nodePhysicalId": "7169",
+            "nodePosition": 4,
+            "unit": "N"
+        }
+    ],
+    "operating_point": {
+        "a": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "force": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "outputs": [
+            0,
+            0,
+            0
+        ],
+        "q": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "residual": 0,
+        "v": [
+            0,
+            0,
+            0,
+            0
+        ]
+    },
+    "outputs": [
+        {
+            "id": "tip-displacement-x",
+            "nodePhysicalId": "7169",
+            "nodePosition": 4,
+            "quantity": "Displacement",
+            "unit": "m"
+        },
+        {
+            "id": "tip-velocity-x",
+            "nodePhysicalId": "7169",
+            "nodePosition": 4,
+            "quantity": "Velocity",
+            "unit": "m/s"
+        },
+        {
+            "id": "tip-acceleration-x",
+            "nodePhysicalId": "7169",
+            "nodePosition": 4,
+            "quantity": "Acceleration",
+            "unit": "m/s^2"
+        }
+    ],
+    "schema": "range-fea-linear-model",
+    "source": {
+        "coordinateMeaning": "perturbations about static equilibrium",
+        "fileName": "stage9_truss4.ram",
+        "kind": "linear-elastic-FE",
+        "massConvention": "consistent",
+        "sha256": "a2e0b5caaca3b720d2b77afa9eb133b114de1a4b1566392ba3fbc93d3c972bd6",
+        "units": "SI"
+    },
+    "version": 1
+}

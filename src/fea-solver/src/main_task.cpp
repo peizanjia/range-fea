@@ -4,6 +4,7 @@
 #include <QJsonParseError>
 #include <QLoggingCategory>
 #include <QSettings>
+#include <exception>
 
 #include <rbl_arguments_parser.h>
 #include <rbl_error.h>
@@ -13,6 +14,8 @@
 #include "main_task.h"
 #include "solver_task.h"
 #include "command_processor.h"
+#include "linear_model_task.h"
+#include <rparallel_execution_context.h>
 
 MainTask::MainTask(QObject *parent) :
     QObject(parent)
@@ -41,6 +44,7 @@ void MainTask::run()
         validOptions.append(RArgumentOption("thermal-steps",RArgumentOption::Integer,QVariant(),"Run 1..1000 thermal FE macrosteps; requires --thermal-checkpoint",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("thermal-checkpoint",RArgumentOption::Path,QVariant(),"Atomically write/resume the thermal FE .tfec checkpoint",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("typed-config",RArgumentOption::Path,QVariant(),"Start typed FE control from a native model and version-1 JSON configuration",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("linear-model-output",RArgumentOption::Path,QVariant(),"Export Stage-9 SI working-point M/C/K and force/sensor matrices to JSON",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("typed-steps",RArgumentOption::Integer,QVariant(),"Run 1..1000 quasistatic typed cable/piezo control steps from a .sfec bundle",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("typed-checkpoint",RArgumentOption::Path,QVariant(),"Atomic accepted typed FE .sfec destination",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("typed-controller-id",RArgumentOption::String,QVariant(),"Expected typed controller implementation/revision identity",RArgumentOption::Optional,false));
@@ -103,6 +107,30 @@ void MainTask::run()
         if (argumentsParser.isSet("log-file"))
         {
             RLogger::getInstance().setFile(argumentsParser.getValue("log-file").toString());
+        }
+
+        if (argumentsParser.isSet("linear-model-output"))
+        {
+            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server"})
+                if (argumentsParser.isSet(option))
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "Linear-model export cannot combine simulation/control/task output options.");
+            // Offline matrix assembly defaults to deterministic serial execution.
+            RParallelExecutionConfig policy;
+            policy.setMode(RParallelExecutionMode::SerialDeterministic);
+            if (argumentsParser.isSet("nthreads")) {
+                bool valid=false;
+                const auto count=argumentsParser.getValue("nthreads").toString().toUInt(&valid);
+                if (!valid || count==0)
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,"--nthreads must be a positive integer.");
+                policy.setMode(RParallelExecutionMode::FixedThreads);
+                policy.setRequestedThreads(count);
+            }
+            RParallelExecutionContext execution(policy);
+            exportStructuralLinearModel(argumentsParser.getValue("file").toString(),
+                                        argumentsParser.getValue("linear-model-output").toString());
+            application->exit(0);
+            return;
         }
 
         // Command processor.
@@ -226,6 +254,11 @@ void MainTask::run()
     catch (const RError &error)
     {
         RLogger::error("Failed to start solver. %s\n",error.getMessage().toUtf8().constData());
+        application->exit(1);
+    }
+    catch (const std::exception &error)
+    {
+        RLogger::error("Failed to start solver. %s\n",error.what());
         application->exit(1);
     }
 }

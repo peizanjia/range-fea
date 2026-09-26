@@ -7,6 +7,7 @@ qt_add_executable(fea-solver
     src/execution_event_journal.cpp
     src/main.cpp
     src/main_task.cpp
+    src/linear_model_task.cpp
     src/solver_input.cpp
     src/solver_task.cpp
 
@@ -17,6 +18,7 @@ qt_add_executable(fea-solver
     src/typed_control_task.h
     src/execution_event_journal.h
     src/main_task.h
+    src/linear_model_task.h
     src/solver_input.h
     src/solver_task.h
 )
@@ -24,8 +26,14 @@ qt_add_executable(fea-solver
 add_dependencies(fea-solver range-base-lib range-model-lib range-solver-lib)
 
 install(DIRECTORY examples/ DESTINATION examples/control COMPONENT Application
-    FILES_MATCHING PATTERN "*.py" PATTERN "*.json")
+    FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "*.ram"
+    PATTERN "__pycache__" EXCLUDE)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/stage9/stage9-requirements.txt"
+    DESTINATION examples/control/stage9 COMPONENT Application)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/TYPED_FE_CONTROL.md"
+    DESTINATION doc COMPONENT Application)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/STAGE9_CONTROL_ANALYSIS.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../TECHNICAL_ROUTE_STAGE9.md"
     DESTINATION doc COMPONENT Application)
 
 target_link_libraries(fea-solver

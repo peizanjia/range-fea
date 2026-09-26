@@ -5,3 +5,5 @@ build*
 .DS_Store
 .clangd
 CLAUDE.md
+__pycache__/
+*.py[cod]
