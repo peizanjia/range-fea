@@ -1,6 +1,6 @@
 # 应用服务：模态配置编辑会话 v1
 
-本模块是 Stage 10A 的首个实际配置服务，位于 `src/range-application-lib`。它依赖 Qt Core 和模型库，不依赖 GUI 或求解器。此阶段仅交付内存会话及契约测试；GUI/CLI 接线、文件发布和持久审计须分别验收。
+本模块是 Stage 10A 的首个实际配置服务，位于 `src/range-application-lib`。它依赖 Qt Core 和模型库，不依赖 GUI 或求解器。当前增加模态配置 GUI 接线和独立 CLI 文件适配器；服务内存事务、CLI 单文件发布与 GUI 既有撤销栈是不同边界，持久审计仍待 10A.3。
 
 ## 所有权与边界
 
@@ -49,3 +49,29 @@
 ## 验证
 
 `tst_model_command_session` 验证真实 RModel 配置、输入隔离、预览、参数反例、身份/版本、幂等冲突、失败原子性、撤销/重做和容量上限。以主构建注册的 CTest 运行，构建和结果记录见 HANDOFF.md。
+
+
+## CLI 文件入口与 GUI 接线
+
+`range-model-command` 使用同一服务验证配置。先查询完整原生模型（不接受 latest-link）：
+
+```powershell
+range-model-command --input input.ram --query
+```
+
+查询输出为 JSON，包含 `sourceSha256`。创建参数 JSON（根对象仅允许这两个字段）：
+
+```json
+{"sourceSha256":"查询所得SHA256","parameters":{"method":"multiple","iterations":100,"modes":3,"tolerance":1e-9,"unit":"1"}}
+```
+
+```powershell
+range-model-command --input input.ram --parameters modal.json --dry-run
+range-model-command --input input.ram --parameters modal.json --output configured.ram
+```
+
+CLI 每次创建独立内存会话，源 SHA256 承担跨进程过期检查，不承诺跨进程幂等账本或撤销。正式输出必须与源模型和参数文件不同；支持 `.ram/.rbm`。输出先在同目录临时子目录序列化，再经 QSaveFile 单文件发布；失败保持旧输出。输入/参数/目标使用有序协作锁，发布前复核路径和哈希；这不构成对不遵守锁的外部写入者的原子比较交换。stdout 输出 JSON、诊断走 stderr；`published` 只在文件提交后返回。配置成功不代表该模型已求解，原结果不被冒充为新配置的结果。
+
+现有 GUI 模态设置调用同一服务校验；所有选中模型校验通过后才更新配置，并进入既有 GUI Undo/Redo 栈。活动任务期间拒绝修改；容差输入上限与服务一致。GUI 当前每个同步操作使用临时编辑会话，不把它宣传成全应用版本体系。多模型配置在验证层面先全检，内存分配失败时尚无跨模型统一回滚保证。完整窗口操作自动化、持久操作记录和一般任务取消仍属后续里程碑。
+
+新增验证入口：`tst_model_command_cli`（真实进程与原生文件发布/失败保护）、`tst_modal_command_widget`（离屏控件到服务参数一致性）。控件测试不替代完整窗口的项目加载/Undo/Redo 操作终验。

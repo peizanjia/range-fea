@@ -362,6 +362,7 @@ target_link_libraries(fea
     PRIVATE
         range-gui-lib
         range-solver-lib
+        range-application-lib
         OpenGL::GL
         Qt6::OpenGL
         Qt6::OpenGLWidgets
@@ -639,3 +640,19 @@ qt_add_translations(fea
         translations/sk.ts
     RESOURCE_PREFIX /i18n/fea
 )
+
+if(RANGE_BUILD_TESTS)
+    qt_add_executable(tst_modal_command_widget
+        tests/tst_modal_command_widget.cpp
+        src/modal_setup_widget.cpp src/modal_setup_widget.h
+        src/value_line_edit.cpp src/value_line_edit.h)
+    target_include_directories(tst_modal_command_widget PRIVATE src)
+    target_link_libraries(tst_modal_command_widget PRIVATE range-application-lib Qt6::Widgets Qt6::Test)
+    add_test(NAME tst_modal_command_widget COMMAND tst_modal_command_widget -o -,txt)
+    set_tests_properties(tst_modal_command_widget PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins")
+    if(WIN32)
+        set_tests_properties(tst_modal_command_widget PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+endif()

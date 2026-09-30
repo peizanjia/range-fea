@@ -4,7 +4,10 @@
 
 - 用户已授权按修订计划开发、审查、验收并自动 commit；覆盖下方历史停止要求。执行清单为 `docs/DEVELOPMENT_PLAN.md`：P0 状态/CI → Stage 10A 共用服务 → 10B/10C 工作流/GUI → Stage 11/12；质量线同步推进。
 - 起点根 `46e7318`，模型 `baec0fe`，求解器 `535a6fb`。本日复跑现有 Release CTest 91/91、0 失败、62.52 s；未重新构建、未重跑 MATLAB 实机或干净安装。旧 124.46 s 是此前完整构建后的回归。
-- 计划修订已提交 `e38bd8b`。10A.1 新增独占模型副本的模态配置服务（严格 JSON、预览、版本/幂等、Undo/Redo、256 命令上限），Release 聚焦测试通过，独立审查无重大问题；仍未接 GUI/CLI 或持久审计。P0.2 无密钥 Windows 回归流程、必跑清单和数值依赖门槛已完成；严格配置/全目标 Release 构建及 92/92 CTest（64.20 s）通过，清单验证 92 项、工具测试 7/7。远程 CI 尚未运行。下一增量是 GUI/CLI 模态配置接线。临时证据放 `build/audit-20261001/`，既有未跟踪用户配置保持原样；不自动 push，不调整系统权限。
+- 已提交计划 `e38bd8b`、内存应用服务 `c832eec`、CI 门槛 `916c77a`；模态 GUI/CLI 增量提交见本节对应的 git log。服务拥有模型副本，提供严格 JSON、预览、版本/幂等、Undo/Redo 和 256 命令上限。`range-model-command` 已支持原生 ASCII/二进制模型查询、源哈希绑定和独立目标单文件发布；GUI 模态设置接同一验证服务并保留既有撤销栈。持久审计和全应用版本体系尚未交付。
+- 最新验收：严格数值依赖配置、全目标 Release 构建成功；必跑清单 94 项，完整 CTest **94/94、0 失败、69.62 s**，清单工具测试 7/7。新增三个目标分别覆盖内存事务、真实 CLI 文件往返/拒绝保护和离屏 GUI 控件。独立源码审查无未解决重大问题；真实 CLI 测试发现的日志污染 stdout 已修复并复审。完整窗口 Session/Undo/Redo/保存重开尚待 10A.2b 终验。
+- 安装树 `build/audit-20261001/install` 已生成，包含新 CLI 和 `doc/APPLICATION_SERVICE.md`；仅安装 bin 与 Windows 系统目录 PATH 的 CLI `--help` 退出 0。未做干净 VM 安装、远程 CI 或本日 MATLAB 实机重测，不将本机冒烟扩大成发布终验。
+- 下一步按计划执行 10A.2b 完整 GUI 终验 → 10A.3a 生命周期 → 10A.3b InteractionRecord/工件 → 10B.1 四杆完整工作流。临时证据统一在 `build/audit-20261001/`（`final-full-build.log`、`final-inventory.json`、`final-ctest.log`、`final-install.log`、`installed-cli-help.log`）；用户配置保持原样，不自动 push，不调整系统权限。
 - 下方 2026-09-26 及更早内容全部为历史快照；其中“最新”“停止”“仍未完成”等状态仅对该快照有效，当前状态以本节与计划清单为准。
 
 ## 2026-09-26 控制器替代路径与阶段缺口修复（最新）

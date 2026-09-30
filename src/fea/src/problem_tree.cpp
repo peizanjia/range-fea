@@ -5,6 +5,12 @@
 #include "modal_setup_widget.h"
 #include "radiation_setup_widget.h"
 #include "time_solver_setup_widget.h"
+#include "solver_manager.h"
+#include <rmodel_command_session.h>
+#include <QMessageBox>
+#include <QMutexLocker>
+#include <QTimer>
+#include <QUuid>
 
 typedef enum _ProblemTreeColumn
 {
@@ -138,13 +144,54 @@ void ProblemTree::onTimeSolverChanged(const RTimeSolver &timeSolver)
 
 void ProblemTree::onModalSetupChanged(const RModalSetup &modalSetup)
 {
-    QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
-
-    for (int i=0;i<modelIDs.size();i++)
+    auto *session = Application::instance()->getSession();
+    const QList<uint> modelIDs = session->getSelectedModelIDs();
+    // This adapter is a synchronous GUI edit, not an externally retained
+    // revision. Validate all selected models before touching any live setup.
+    if (SolverManager::getInstance().getNRunning() || SolverManager::getInstance().getNWaiting()
+        || RJobManager::getInstance().getNRunning() || RJobManager::getInstance().getNWaiting())
     {
-        Application::instance()->getSession()->getModel(modelIDs[i]).getProblemSetup().setModalSetup(modalSetup);
-        Application::instance()->getSession()->setProblemChanged(modelIDs[i]);
+        QMessageBox::warning(this, tr("Modal configuration"), tr("Wait for active model tasks to finish before changing modal settings."));
+        QTimer::singleShot(0, this, &ProblemTree::populate);
+        return;
     }
+    QString failure;
+    QVector<RModalSetup> accepted;
+    {
+        QMutexLocker guard(session->getMutex());
+        for (const uint id : modelIDs)
+        {
+            RModelCommandSession editing(session->getModel(id));
+            const auto current = editing.query();
+            const QJsonObject command{{"apiVersion", "range.application/v1"},
+                {"commandId", "analysis.modal.configure"}, {"commandVersion", 1},
+                {"modelId", current["modelId"]}, {"expectedRevision", current["revision"]},
+                {"requestId", QUuid::createUuid().toString()}, {"idempotencyKey", QUuid::createUuid().toString()},
+                {"parameters", RModelCommandSession::modalParameters(modalSetup)}, {"dryRun", false}};
+            const auto result = editing.execute(command);
+            if (result.value("status") != QJsonValue("accepted"))
+            {
+                failure = result.value("message").toString();
+                break;
+            }
+            accepted.append(editing.model().getProblemSetup().getModalSetup());
+        }
+        if (failure.isEmpty())
+        {
+            for (qsizetype i = 0; i < modelIDs.size(); ++i)
+            {
+                session->storeCurentModelVersion(modelIDs[i], tr("Configure modal analysis"));
+                session->getModel(modelIDs[i]).getProblemSetup().setModalSetup(accepted[i]);
+            }
+        }
+    }
+    if (!failure.isEmpty())
+    {
+        QMessageBox::warning(this, tr("Modal configuration"), failure);
+        QTimer::singleShot(0, this, &ProblemTree::populate);
+        return;
+    }
+    for (const uint id : modelIDs) session->setProblemChanged(id);
 }
 
 void ProblemTree::onAcousticSetupChanged(const RAcousticSetup &acousticSetup)

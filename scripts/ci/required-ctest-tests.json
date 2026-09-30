@@ -39,7 +39,8 @@
       "tst_model_physical_ids"
     ],
     "range-application-lib": [
-      "tst_model_command_session"
+      "tst_model_command_session",
+      "tst_model_command_cli"
     ],
     "range-solver-lib": [
       "tst_scales",
@@ -104,6 +105,9 @@
       "tst_control_ndjson_transport",
       "tst_solver_audit_cli",
       "tst_control_typed_ndjson_transport"
+    ],
+    "gui-contract": [
+      "tst_modal_command_widget"
     ]
   }
 }

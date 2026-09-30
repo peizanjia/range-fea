@@ -1,5 +1,7 @@
 # Agent 全流程接口设计与模块手册策略
 
+2026-10-01 增量：已新增 `range-application-lib` 的受限模态配置编辑会话，当前可用命令与模型所有权边界见 `docs/APPLICATION_SERVICE.md`。下文通用 Command/Query/Agent 封套仍为目标设计，不是该首个服务的已开放接口；CLI/GUI 的受限接线不表示通用工作流 Agent 已交付。
+
 状态：架构决策草案（2026-09-24）。本文件规定 Stage 6 控制协议与后续 Stage 9–12 GUI/Agent 集成的边界；所列未来命令不是当前已开放的 API。实际可调用能力必须以运行时 capability 查询和契约测试为准。
 
 ## 1. 结论：手册是导航，不是执行契约

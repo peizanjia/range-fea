@@ -30,6 +30,6 @@ ctest --test-dir build/ci-windows -C Release `
   --no-tests=error --output-on-failure -j2 --timeout 180
 ```
 
-测试清单校验器会将 CTest `--show-only=json-v1` 输出中的测试名称与必需测试清单逐项比较。缺少必需测试、必需测试被禁用、清单格式错误或为空、CTest 清单格式错误或为空，以及 CTest 查询失败，都会导致校验失败。额外注册的测试可以保留，因此新增普通测试无需同步修改总数。当前必需清单包含启用数值依赖时的 91 个测试，以及 `tst_model_command_session`。
+测试清单校验器会将 CTest `--show-only=json-v1` 输出中的测试名称与必需测试清单逐项比较。缺少必需测试、必需测试被禁用、清单格式错误或为空、CTest 清单格式错误或为空，以及 CTest 查询失败，都会导致校验失败。额外注册的测试可以保留，因此新增普通测试无需同步修改总数。当前必需清单包含启用数值依赖时的 91 个测试，以及 `tst_model_command_session`、`tst_model_command_cli` 和 `tst_modal_command_widget`。
 
-该工作流不验证可选的 PyTorch 训练或学习策略有限元集成、MATLAB 实时控制以及可选的 Gmsh 运行时。这些功能需要独立环境和验证。
+该工作流不验证可选的 PyTorch 训练或学习策略有限元集成、MATLAB 实机控制器测试以及可选的 Gmsh 运行时。这些功能需要独立环境和验证。

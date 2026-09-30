@@ -27,6 +27,7 @@ ModalSetupWidget::ModalSetupWidget(const RModalSetup &modalSetup, QWidget *paren
     groupLayout->addWidget(labelModalMethod,groupLayoutRow,0);
 
     QComboBox *comboModalMethod = new QComboBox();
+    comboModalMethod->setObjectName("modalMethod");
     for (uint i=0;i<R_MODAL_N_TYPES;i++)
     {
         comboModalMethod->addItem(RModalSetup::getMethodName(RModalMethod(i)));
@@ -41,6 +42,7 @@ ModalSetupWidget::ModalSetupWidget(const RModalSetup &modalSetup, QWidget *paren
     groupLayout->addWidget(labelNIterations,groupLayoutRow,0);
 
     this->spinNIterations = new QSpinBox;
+    this->spinNIterations->setObjectName("modalIterations");
     this->spinNIterations->setMinimum(R_MODAL_ITERATIONS_MIN_NUMBER);
     this->spinNIterations->setMaximum(R_MODAL_ITERATIONS_MAX_NUMBER);
     this->spinNIterations->setValue(this->modalSetup.getNIterations());
@@ -55,6 +57,7 @@ ModalSetupWidget::ModalSetupWidget(const RModalSetup &modalSetup, QWidget *paren
     groupLayout->addWidget(labelNModes,groupLayoutRow,0);
 
     this->spinNModesExtract = new QSpinBox;
+    this->spinNModesExtract->setObjectName("modalModes");
     this->spinNModesExtract->setMinimum(R_MODAL_MODES_MIN_NUMBER);
     this->spinNModesExtract->setMaximum(R_MODAL_MODES_MAX_NUMBER);
     this->spinNModesExtract->setValue(this->modalSetup.getNModesToExtract());
@@ -68,7 +71,8 @@ ModalSetupWidget::ModalSetupWidget(const RModalSetup &modalSetup, QWidget *paren
     QLabel *labelConvergenceValue = new QLabel(tr("Convergence value"));
     groupLayout->addWidget(labelConvergenceValue,groupLayoutRow,0);
 
-    ValueLineEdit *lineConvergenceValue = new ValueLineEdit(1.0e-99,1.0e99);
+    ValueLineEdit *lineConvergenceValue = new ValueLineEdit(1.0e-99,R_MODAL_CONVERGENCE_MAX_VALUE);
+    lineConvergenceValue->setObjectName("modalTolerance");
     lineConvergenceValue->setValue(this->modalSetup.getConvergenceValue());
     lineConvergenceValue->setToolTip(tr("Value at which the solver will assume that solution has converged."));
     groupLayout->addWidget(lineConvergenceValue,groupLayoutRow++,1);

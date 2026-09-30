@@ -2,7 +2,7 @@
 
 更新时间：2026-10-01。当前任务、依赖、验收条件和研究扩展统一见 [当前开发与验收计划](docs/DEVELOPMENT_PLAN.md)。本文件保留总体架构和阶段目标；历史执行数字不是当前待办。
 
-当前基线：Stage 1–5 在约定范围完成；Stage 6 的 C++/Python/MATLAB TCP 路径已验证；Stage 7–9 为明确物理/规模边界内的交付。Stage 0 仍缺干净 Windows 发布终验。最近完整构建证据为 2026-09-26 Release 91/91；2026-10-01 重跑现有构建 91/91、62.52 s，未重建、未重跑 MATLAB 实机或干净安装。详见 HANDOFF.md。
+当前基线：Stage 1–5 在约定范围完成；Stage 6 的 C++/Python/MATLAB TCP 路径已验证；Stage 7–9 为明确物理/规模边界内的交付。2026-10-01 新增 Stage 10A 模态配置服务、有限 GUI/原生 CLI 接线及 CI 必跑门槛，全目标 Release 构建成功、CTest 94/94（69.62 s）。新 CLI 本机安装树缩减 PATH 冒烟通过；Stage 0 干净 Windows 发布终验、完整 GUI 操作、持久审计与 Stage 10 后续工作仍待完成。本日未重跑 MATLAB 实机控制器测试，远程 CI 尚未运行。详见 HANDOFF.md。
 
 用户已授权按修订计划继续开发、审查、验收和自动提交，覆盖历史“停止在 Stage 9”要求。当前顺序为 P0 计划/CI → Stage 10A 共用服务 → 10B 完整工作流 → 10C GUI → Stage 11 Agent → Stage 12 SDK/受控开发；Stage 13 质量门槛持续执行。权限相关外部验收继续单列，不试探系统权限。
 
