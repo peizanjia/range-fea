@@ -4,7 +4,7 @@
 
 更新时间：2026-09-25
 
-状态：2026-09-24 已完成 Stage 6 的 C++/Python 数值控制链、控制步事件和 InteractionRecord 数据契约，主 Release 53/53 CTest 通过。MATLAB 长驻进程适配器尚未验证；GUI/Agent 操作接线按依赖移至 Stage 10–11。细节以源码、测试与 `HANDOFF.md` 为准。
+状态：2026-09-24 已完成 Stage 6 的 C++/Python 数值控制链、控制步事件和 InteractionRecord 数据契约，主 Release 53/53 CTest 通过。该历史基线时 MATLAB 长驻适配尚未验证；后续 TCP 替代已通过真实 FE 验收。GUI/Agent 操作接线按依赖移至 Stage 10–11。细节以源码、测试与 `HANDOFF.md` 为准。
 
 ## 1. 控制输入在方程中的位置
 
@@ -64,7 +64,7 @@ W_j[n+1] = W_j[n] + dt/2 * (P_j(t_n) + P_j(t_n+dt))
 
 ## 5. 进程外协议与未来 Agent
 
-同机进程外原型使用版本化 NDJSON 控制平面、独立标准错误、请求 ID、目录白名单、单请求超时及失败关闭；主程序直接以可执行文件与独立参数数组启动，不经 shell。外部程序收到接受态时间、`dt`、物理单位传感器值及接受态控制器状态，返回按 actuator ID 标识的候选命令和候选状态。传输层还绑定控制器 ID/版本摘要、本次输入模型快照 SHA-256 及十进制固定种子；摘要回显不是程序来源认证。`SolverTask` 接线和 Python PID 算例已通过主 Release 端到端 CLI 回归。MATLAB 可实现相同协议，但必须经过实际进程启动和握手测试后才可称为验证过的适配器。大规模全状态后续采用带 shape/dtype/revision/lifetime 的二进制数据平面，不能每步无界 JSON 复制。
+同机进程外原型使用版本化 NDJSON 控制平面、独立标准错误、请求 ID、目录白名单、单请求超时及失败关闭；主程序直接以可执行文件与独立参数数组启动，不经 shell。外部程序收到接受态时间、`dt`、物理单位传感器值及接受态控制器状态，返回按 actuator ID 标识的候选命令和候选状态。传输层还绑定控制器 ID/版本摘要、本次输入模型快照 SHA-256 及十进制固定种子；摘要回显不是程序来源认证。`SolverTask` 接线和 Python PID 算例已通过主 Release 端到端 CLI 回归。MATLAB 已通过 Java TCP + Python 桥接完成实际进程、握手和 FE 验证；该替代不表示旧 stdin 路径已修复。大规模全状态后续采用带 shape/dtype/revision/lifetime 的二进制数据平面，不能每步无界 JSON 复制。
 
 控制调理器以固定整数步实现零阶保持、延迟和均匀噪声。噪声由种子、稳定执行器 ID、接受步号决定，不使用进程可变随机状态；`RCCE` 复合 checkpoint 保存控制器原始字节状态及调理器状态，试步失败不提交。命令顺序为原始请求→调理→幅值/速率限制→稀疏物理力映射；逐步审计分别记录请求、调理后和实际施加值。1.3.11 的受控 raw checkpoint 因缺少调理历史明确拒绝跨版本受控续算；这是一条安全的兼容边界，不影响旧被动模型读取。独立求解器 FE/调理器测试及主 Release 全量回归均已通过。
 
@@ -76,9 +76,9 @@ W_j[n+1] = W_j[n] + dt/2 * (P_j(t_n) + P_j(t_n+dt))
 - 已验证：限幅、速率、2 步延迟、2 步保持和固定种子噪声；失败后重启逐步命令/功账与不中断运行一致，命令阶跃在 `t_n` 刷新加速度。
 - 已验证：模型 1.3.12 ASCII/二进制受控 checkpoint、进程内续算、试步失败回滚、外部进程超时失败关闭；Python 端到端已运行。外部 Python **跨进程重启**的独立 QProcess 对照尚未专门加入 CLI 测试，不能把内核重启测试冒充此验证。
 - 已验证：每通道 N/W/J 稀疏力与功账、`requested/conditioned/applied` 逐步事件；事件带 run ID、控制器版本、种子、状态 SHA 和实际写出的结果工件路径。模型文件与事件 journal 尚无跨文件原子提交。
-- 已验证：传输版本/请求号/未知执行器/非法数值/超时拒绝。MATLAB R2022a 的 `-batch` 能启动，但本机标准输入长驻握手试验未得响应，未交付可验证 MATLAB 适配器；语言无关协议允许后续采用可靠进程/IPC 适配器。
+- 已验证：传输版本/请求号/未知执行器/非法数值/超时拒绝。历史 MATLAB R2022a stdin 握手失败；当前已交付并验证 TCP 替代适配器，见 docs/CONTROLLER_ADAPTERS.md。
 - 已验证：固定步长有效算子缓存、线程隔离 CSR 并发/地址复用回归、Release 全目标编译与 **53/53 CTest**，`tst_structural_product_profile.exe` 直接启动成功且已部署 `Qt6Core.dll`。32/384 杆 1/2/4 线程基准结果见 `docs/STAGE6_PERFORMANCE_AUDIT.md`；32 杆多线程变慢、384 杆 4 线程仅本机 1.220×，每步重装配/深复制与大模型内存指标仍是后续优化。
 
 以上为 2026-09-24 结项快照。2026-09-25 增补验证：`pythonPidRestartMatchesUninterrupted` 已实际通过 Python + CLI 完整 20 步对照 8+12 步分段执行，第二段重新启动求解器和控制器。用例含非零 PID 积分增益、2 步延迟、3 步保持、固定种子噪声，逐步比对请求/调理/实际命令及功账，并核对最终 q/v/a、外力、控制功率/累计功、PID sampleCount/积分/前次误差。CLI QTest 为 10 passed、0 failed、0 skipped；因此先前的“外部 Python 跨进程重启缺独立验证”限制已由此限定算例补齐，不能外推成任意控制程序、任意格式或异常终止下的磁盘原子性保证。
 
-结论须分层表述：Stage 6 的已验证 C++/Python 核心范围可移交下一阶段；MATLAB 长驻适配器、完整 GUI/Agent 操作记录、硬实时和大模型性能优化仍未完成。GUI/Agent 与性能后续工作按 Stage 10–11/性能任务处理，不得用本阶段测试代替。
+结论须分层表述：Stage 6 的已验证 C++/Python/MATLAB TCP 路径可移交下一阶段；完整 GUI/Agent 操作记录、硬实时和大模型性能优化仍未完成。GUI/Agent 与性能后续工作按 Stage 10–11/性能任务处理，不得用本阶段测试代替。
