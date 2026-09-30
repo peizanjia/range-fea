@@ -142,7 +142,7 @@ function(set_debug_suffix_if_needed target_name)
     endif()
 endfunction()
 
-set(all_targets range-base-lib range-cloud-lib range-ai-lib range-gui-lib TetGen range-model-lib range-solver-lib fea-solver fea)
+set(all_targets range-base-lib range-cloud-lib range-ai-lib range-gui-lib TetGen range-model-lib range-solver-lib range-application-lib fea-solver fea)
 
 foreach(tgt IN LISTS all_targets)
     add_subdirectory(${tgt})
