@@ -1,0 +1,141 @@
+name: Windows Regression (unsigned)
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Windows MSVC and Qt regression tests
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      OMP_NUM_THREADS: '4'
+
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Locate MSVC LLVM OpenMP runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtimeName = 'libomp140.x86_64.dll'
+          $runtimePath = Join-Path $env:WINDIR "System32/$runtimeName"
+          if (-not (Test-Path -LiteralPath $runtimePath)) {
+            $runtimePath = $null
+            foreach ($root in @($env:VCToolsRedistDir, $env:VCToolsInstallDir)) {
+              if ($root -and (Test-Path -LiteralPath $root)) {
+                $match = Get-ChildItem -LiteralPath $root -Filter $runtimeName -File -Recurse -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+                if ($match) {
+                  $runtimePath = $match.FullName
+                  break
+                }
+              }
+            }
+          }
+          if (-not $runtimePath) {
+            throw "Could not find $runtimeName in System32, VCToolsRedistDir, or VCToolsInstallDir."
+          }
+          $runtimeDirectory = Split-Path -Parent $runtimePath
+          $runtimeDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "RANGE_MSVC_LLVM_OPENMP_RUNTIME=$runtimePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using MSVC LLVM OpenMP runtime: $runtimePath"
+
+      - name: Ensure Ninja is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: src/fea-solver/examples/stage9/stage9-requirements.txt
+
+      - name: Install numeric test dependencies
+        run: python -m pip install -r src/fea-solver/examples/stage9/stage9-requirements.txt
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.1'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+          aqtversion: '==3.3.*'
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@8c3695d4a4e1ceabf6a74dc6c79681656dc6b74b'
+          modules: 'qthttpserver qtwebsockets qtimageformats qtmultimedia'
+
+      - name: Prepare CI logs
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force build/ci-windows/ci-logs | Out-Null
+
+      - name: Test CTest inventory verifier
+        shell: pwsh
+        run: |
+          python -m unittest discover -s scripts/ci -p 'test_*.py' *>&1 |
+            Tee-Object -FilePath build/ci-windows/ci-logs/ci-tool-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Configure numeric tests
+        shell: pwsh
+        run: |
+          $pythonExe = (Get-Command python -ErrorAction Stop).Source
+          cmake -S src -B build/ci-windows -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DRANGE_BUILD_TESTS=ON `
+            -DRANGE_REQUIRE_NUMERIC_TESTS=ON `
+            "-DPython3_EXECUTABLE=$pythonExe" `
+            "-DRANGE_MSVC_LLVM_OPENMP_RUNTIME=$env:RANGE_MSVC_LLVM_OPENMP_RUNTIME" *>&1 |
+            Tee-Object -FilePath build/ci-windows/ci-logs/configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build/ci-windows --config Release --parallel 2 *>&1 |
+            Tee-Object -FilePath build/ci-windows/ci-logs/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify required CTest inventory
+        shell: pwsh
+        run: |
+          python scripts/ci/verify_required_ctest.py `
+            --build-dir build/ci-windows `
+            --configuration Release `
+            --manifest scripts/ci/required-ctest-tests.json `
+            --inventory-out build/ci-windows/ci-logs/ctest-inventory.json *>&1 |
+            Tee-Object -FilePath build/ci-windows/ci-logs/verify-inventory.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run CTest
+        shell: pwsh
+        run: |
+          ctest --test-dir build/ci-windows -C Release `
+            --no-tests=error --output-on-failure -j2 --timeout 180 `
+            --output-log build/ci-windows/ci-logs/ctest-run.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload regression logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-regression-logs
+          path: build/ci-windows/ci-logs/
+          if-no-files-found: warn

@@ -101,6 +101,11 @@ qt_standard_project_setup()
 
 # Unit tests (opt-in). Configure with -DRANGE_BUILD_TESTS=ON and run `ctest`.
 option(RANGE_BUILD_TESTS "Build unit tests" OFF)
+option(RANGE_REQUIRE_NUMERIC_TESTS
+    "Fail configuration unless the Python, NumPy, and SciPy numeric tests are available" OFF)
+if(RANGE_REQUIRE_NUMERIC_TESTS AND NOT RANGE_BUILD_TESTS)
+    message(FATAL_ERROR "RANGE_REQUIRE_NUMERIC_TESTS requires RANGE_BUILD_TESTS=ON")
+endif()
 if(RANGE_BUILD_TESTS)
     # Import Qt6::Test in the top-level directory as well as in individual
     # test directories so the Windows runtime deployment target can copy it.

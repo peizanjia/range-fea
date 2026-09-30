@@ -283,3 +283,5 @@
 - 修正路线图旧近期顺序、MATLAB TCP 状态、单体热机三维共线范围及 ADR 状态。规划不是实现声明；后续逐项记录提交、验证和剩余边界。
 
 - 10A.1：root-owned `range-application-lib` 提供真实 RModel 模态配置、查询、预览、幂等、版本和撤销/重做。候选状态整体复制后交换，失败不改变接受态；上限不驱逐幂等键。Release 构建及聚焦 CTest 1/1 通过；独立审查未发现重大问题，补分支/同键修复/几何保留用例。首轮测试临时 QJsonValueRef 悬空已修复，不是服务版本回退。GUI/CLI 和持久事务尚未交付。
+
+- P0.2：新增不签名/不发布的 Windows 回归工作流，显式 Python/数值依赖和 OpenMP runtime；按名称校验必跑 92 项，拒绝缺测/禁用必跑项。审查发现 disabled 漏洞和工具链目录 runtime 未入 PATH，均修复；工具测试 7/7。严格数值配置、全目标 Release 构建、清单 92 项及完整 CTest 92/92（64.20 s）通过。证据在 `build/audit-20261001/`。远程 workflow 未运行，不宣称托管 runner 已验收。
