@@ -1,17 +1,38 @@
 #include <QFileInfo>
 #include <QFileDialog>
+#include <QThread>
 
 #include <rml_file_utils.h>
 
 #include "model_io.h"
 #include "application.h"
+#include "model_command_host.h"
+
+namespace
+{
+template <typename Function> void onSessionThread(Function function)
+{
+    auto *session = Application::instance()->getSession();
+    if (QThread::currentThread() == session->thread()) function();
+    else QMetaObject::invokeMethod(session, std::move(function), Qt::BlockingQueuedConnection);
+}
+}
 
 ModelIO::ModelIO(ModelIOType type, const QString &fileName, Model *pModel)
 {
     R_LOG_TRACE_IN;
     this->type = type;
     this->fileName = fileName;
-    this->pModel = pModel;
+    if (pModel)
+    {
+        auto *session = Application::instance()->getSession();
+        const uint id = session->findModelByPtr(pModel);
+        if (id != RConstants::eod) this->modelStamp = session->modelCommandStamp(id);
+        if (id != RConstants::eod && type == MODEL_IO_UPDATE && !ModelCommandHost::isBusy())
+            session->getModelCommandHost()->query(id);
+        if (type == MODEL_IO_ADD) this->modelSnapshot.reset(pModel);
+        else this->modelSnapshot = std::make_unique<Model>(*pModel);
+    }
     R_LOG_TRACE_OUT;
 }
 
@@ -294,66 +315,97 @@ int ModelIO::perform()
     {
         if (this->type == MODEL_IO_ADD)
         {
-            Application::instance()->getSession()->addModel(*this->pModel);
-            Application::instance()->getSession()->setModelSelected(Application::instance()->getSession()->getNModels()-1,true);
-            delete this->pModel;
+            onSessionThread([this] {
+                auto *session = Application::instance()->getSession();
+                session->addModel(*this->modelSnapshot);
+                session->setModelSelected(session->getNModels()-1,true);
+            });
         }
         else if (this->type == MODEL_IO_SAVE)
         {
-            ModelIO::save((*this->pModel),this->fileName,true);
+            ModelIO::save(*this->modelSnapshot,this->fileName,true);
+            QString publicationError;
+            onSessionThread([this, &publicationError] {
+                auto *session = Application::instance()->getSession();
+                const uint id = session->findModelByCommandIdentity(this->modelStamp.first);
+                if (id == RConstants::eod || session->modelCommandStamp(id) != this->modelStamp)
+                {
+                    publicationError = tr("The model changed or closed while saving; the saved snapshot was not attached to the current model.");
+                    return;
+                }
+                session->getModel(id).setFileName(this->modelSnapshot->getFileName());
+                session->recordModelSaved(id, this->modelSnapshot->getFileName(), &publicationError);
+            });
+            if (!publicationError.isEmpty())
+            {
+                RLogger::error("Model file was saved but publication did not complete: %s\n", publicationError.toUtf8().constData());
+                R_LOG_TRACE_RETURN(1);
+            }
         }
         else if (this->type == MODEL_IO_OPEN)
         {
             Model model;
             ModelIO::open(model,this->fileName);
-            Application::instance()->getSession()->addModel(model);
+            onSessionThread([&model] { Application::instance()->getSession()->addModel(model); });
         }
         else if (this->type == MODEL_IO_UPDATE)
         {
-            uint updateModelID = Application::instance()->getSession()->findModelByPtr(this->pModel);
-            if (updateModelID != RConstants::eod)
+            ModelIO::update(*this->modelSnapshot,this->fileName);
+            bool applied = false;
+            QString auditError;
+            onSessionThread([this, &applied, &auditError] {
+                auto *session = Application::instance()->getSession();
+                const uint id = session->findModelByCommandIdentity(this->modelStamp.first);
+                if (id == RConstants::eod || session->modelCommandStamp(id) != this->modelStamp) return;
+                session->storeCurentModelVersion(id, tr("Update model from file"));
+                session->setModel(id, *this->modelSnapshot);
+                session->getModelCommandHost()->recordExternalChange(id, "reload", &auditError);
+                applied = true;
+            });
+            if (!applied)
             {
-                Application::instance()->getSession()->storeCurentModelVersion(updateModelID,tr("Update model from file"));
+                RLogger::error("The model changed or closed before the reload completed.\n");
+                R_LOG_TRACE_RETURN(1);
             }
-            ModelIO::update((*this->pModel),this->fileName);
-            if (updateModelID != RConstants::eod)
+            if (!auditError.isEmpty())
             {
-                Application::instance()->getSession()->setModelChanged(updateModelID);
+                RLogger::error("Model was reloaded but its audit could not be saved: %s\n", auditError.toUtf8().constData());
+                R_LOG_TRACE_RETURN(1);
             }
         }
         else if (this->type == MODEL_IO_MSH_EXPORT)
         {
-            ModelIO::exportMsh((*this->pModel),this->fileName);
+            ModelIO::exportMsh(*this->modelSnapshot,this->fileName);
         }
         else if (this->type == MODEL_IO_MSH_IMPORT)
         {
             Model model;
             ModelIO::importMsh(model,this->fileName);
-            Application::instance()->getSession()->addModel(model);
+            onSessionThread([&model] { Application::instance()->getSession()->addModel(model); });
         }
         else if (this->type == MODEL_IO_RAW_EXPORT)
         {
-            ModelIO::exportRaw((*this->pModel),this->fileName);
+            ModelIO::exportRaw(*this->modelSnapshot,this->fileName);
         }
         else if (this->type == MODEL_IO_RAW_IMPORT)
         {
             Model model;
             ModelIO::importRaw(model,this->fileName);
-            Application::instance()->getSession()->addModel(model);
+            onSessionThread([&model] { Application::instance()->getSession()->addModel(model); });
         }
         else if (this->type == MODEL_IO_STL_ASCII_EXPORT)
         {
-            ModelIO::exportStl((*this->pModel),this->fileName,false);
+            ModelIO::exportStl(*this->modelSnapshot,this->fileName,false);
         }
         else if (this->type == MODEL_IO_STL_BINARY_EXPORT)
         {
-            ModelIO::exportStl((*this->pModel),this->fileName);
+            ModelIO::exportStl(*this->modelSnapshot,this->fileName);
         }
         else if (this->type == MODEL_IO_STL_IMPORT)
         {
             Model model;
             ModelIO::importStl(model,this->fileName);
-            Application::instance()->getSession()->addModel(model);
+            onSessionThread([&model] { Application::instance()->getSession()->addModel(model); });
         }
     }
     catch (const RError &error)

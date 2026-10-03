@@ -43,6 +43,7 @@
 #include "mesh_generator_dialog.h"
 #include "model_action.h"
 #include "model_io.h"
+#include "model_command_host.h"
 #include "model_statistics_dialog.h"
 #include "monitoring_points_dialog.h"
 #include "monitoring_point_graph_dialog.h"
@@ -667,14 +668,18 @@ void Action::onModelDropResults()
 void Action::onGeometryUndo()
 {
     R_LOG_TRACE_IN;
+    if (ModelCommandHost::isBusy()) return;
     QList<uint> selectedModelIDs = Application::instance()->getSession()->getSelectedModelIDs();
     for (int i=0;i<selectedModelIDs.size();i++)
     {
         Model &rModel = Application::instance()->getSession()->getModel(selectedModelIDs[i]);
         if (rModel.getUndoStackSize() > 0)
         {
+            auto *host = Application::instance()->getSession()->getModelCommandHost();
+            if (host->query(selectedModelIDs[i]).value("status") == QJsonValue("rejected")) return;
             Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i]);
             rModel.undo(0);
+            host->recordExternalChange(selectedModelIDs[i], "undo");
         }
         Application::instance()->getSession()->setModelChanged(selectedModelIDs[i]);
     }
@@ -684,14 +689,18 @@ void Action::onGeometryUndo()
 void Action::onGeometryRedo()
 {
     R_LOG_TRACE_IN;
+    if (ModelCommandHost::isBusy()) return;
     QList<uint> selectedModelIDs = Application::instance()->getSession()->getSelectedModelIDs();
     for (int i=0;i<selectedModelIDs.size();i++)
     {
         Model &rModel = Application::instance()->getSession()->getModel(selectedModelIDs[i]);
         if (rModel.getRedoStackSize() > 0)
         {
+            auto *host = Application::instance()->getSession()->getModelCommandHost();
+            if (host->query(selectedModelIDs[i]).value("status") == QJsonValue("rejected")) return;
             Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i]);
             rModel.redo(0);
+            host->recordExternalChange(selectedModelIDs[i], "redo");
         }
         Application::instance()->getSession()->setModelChanged(selectedModelIDs[i]);
     }

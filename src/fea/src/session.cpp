@@ -1,5 +1,7 @@
 #include <QDir>
 #include <QDesktopServices>
+#include <QUuid>
+#include <QMutexLocker>
 
 #include <rbl_job_manager.h>
 
@@ -8,6 +10,7 @@
 #include "session.h"
 #include "application.h"
 #include "model_io.h"
+#include "model_command_host.h"
 
 Session::Session(QObject *parent)
     : QObject{parent}
@@ -15,6 +18,23 @@ Session::Session(QObject *parent)
     R_LOG_TRACE_IN;
     this->sessionID = QDateTime::currentDateTimeUtc().toString("yyyyMMddHHmmsszzz");
     this->drawEngine = new DrawEngine(this);
+    this->commandHost = new ModelCommandHost(this);
+
+    // Increment synchronously even when a legacy worker emits the notification.
+    // A queued GUI slot must never leave a window in which an old request is valid.
+    const auto invalidate = [this](uint id) { this->invalidateModelCommands(id); };
+    connect(this, &Session::modelChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::problemChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::problemSelectionChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::resultsChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::modelRenamed, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::boundaryConditionChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::initialConditionChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::environmentConditionChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, &Session::materialChanged, this, invalidate, Qt::DirectConnection);
+    connect(this, qOverload<uint, RVariableType>(&Session::variableDataChanged), this, invalidate, Qt::DirectConnection);
+    connect(this, qOverload<const SessionEntityID &, RVariableType>(&Session::variableDataChanged), this,
+            [this](const SessionEntityID &id, RVariableType) { this->invalidateModelCommands(id.getMid()); }, Qt::DirectConnection);
 
     QObject::connect(&this->pickList,&PickList::pickListChanged,this,&Session::onPickListChanged);
     QObject::connect(this,&Session::modelAdded,this,&Session::onModelAdded);
@@ -24,6 +44,35 @@ Session::Session(QObject *parent)
                      this,
                      &Session::onNHistoryRecordsChanged);
     R_LOG_TRACE_OUT;
+}
+
+ModelCommandHost *Session::getModelCommandHost() const { return this->commandHost; }
+
+QPair<QString, quint64> Session::modelCommandStamp(uint modelID) const
+{
+    QMutexLocker guard(&this->commandStampMutex);
+    return modelID < uint(this->commandStamps.size()) ? this->commandStamps.at(int(modelID)) : QPair<QString, quint64>{};
+}
+
+uint Session::findModelByCommandIdentity(const QString &identity) const
+{
+    QMutexLocker guard(&this->commandStampMutex);
+    for (qsizetype i = 0; i < this->commandStamps.size(); ++i)
+        if (this->commandStamps.at(i).first == identity) return uint(i);
+    return RConstants::eod;
+}
+
+void Session::invalidateModelCommands(uint modelID)
+{
+    QMutexLocker guard(&this->commandStampMutex);
+    if (modelID < uint(this->commandStamps.size())) ++this->commandStamps[int(modelID)].second;
+}
+
+bool Session::recordModelSaved(uint modelID, const QString &path, QString *error)
+{
+    // Saving changes the external artifact binding, including a no-op save.
+    this->invalidateModelCommands(modelID);
+    return this->commandHost->recordArtifactPublished(modelID, path, error);
 }
 
 const QString &Session::getID() const
@@ -92,6 +141,10 @@ void Session::addModel(const Model &model)
     bool locked = this->trylock();
     this->models.push_back(model);
     this->models.last().initializeMeshInput();
+    {
+        QMutexLocker stampGuard(&this->commandStampMutex);
+        this->commandStamps.append({QUuid::createUuid().toString(QUuid::WithoutBraces), 0});
+    }
     if (locked)
     {
         this->unlock();
@@ -118,6 +171,10 @@ void Session::removeModel(uint position)
     R_LOG_TRACE_IN;
     bool locked = this->trylock();
     this->models.removeAt(int(position));
+    {
+        QMutexLocker stampGuard(&this->commandStampMutex);
+        this->commandStamps.removeAt(int(position));
+    }
     this->pickList.removeItems(position);
     if (locked)
     {

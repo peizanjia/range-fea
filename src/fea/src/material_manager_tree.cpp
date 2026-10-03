@@ -58,7 +58,9 @@ MaterialManagerTree::MaterialManagerTree(QWidget *parent)
     QObject::connect(this->deleteButton, &QPushButton::clicked, this, &MaterialManagerTree::onMaterialDelete);
 
     QObject::connect(Application::instance()->getSession(), &Session::modelSelectionChanged, this, &MaterialManagerTree::onModelSelectionChanged);
-    QObject::connect(Application::instance()->getSession(), &Session::modelAdded, this, &MaterialManagerTree::onModelAdded,Qt::BlockingQueuedConnection);
+    // ModelIO attaches completed models on the GUI thread. BlockingQueued
+    // deadlocks when sender and receiver already run on that same thread.
+    QObject::connect(Application::instance()->getSession(), &Session::modelAdded, this, &MaterialManagerTree::onModelAdded);
     QObject::connect(Application::instance()->getSession(), &Session::problemSelectionChanged, this, &MaterialManagerTree::onProblemChanged);
 
     QFileSystemWatcher *fileSystemWatcher = new QFileSystemWatcher(this);

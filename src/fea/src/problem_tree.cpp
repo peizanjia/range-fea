@@ -5,12 +5,9 @@
 #include "modal_setup_widget.h"
 #include "radiation_setup_widget.h"
 #include "time_solver_setup_widget.h"
-#include "solver_manager.h"
-#include <rmodel_command_session.h>
+#include "model_command_host.h"
 #include <QMessageBox>
-#include <QMutexLocker>
 #include <QTimer>
-#include <QUuid>
 
 typedef enum _ProblemTreeColumn
 {
@@ -64,9 +61,20 @@ void ProblemTree::populate()
     }
     else if (modelIDs.size() > 1)
     {
+        bool allModal = true;
+        for (const uint id : modelIDs)
+            allModal = allModal && (Application::instance()->getSession()->getModel(id).getProblemTaskTree().getProblemTypeMask() & R_PROBLEM_STRESS_MODAL);
         QTreeWidgetItem *item = new QTreeWidgetItem(this);
-        item->setText(PROBLEM_TREE_COLUMN_1,tr("Multiple models are selected!"));
-        item->setForeground(PROBLEM_TREE_COLUMN_1,QColor(Qt::red));
+        item->setText(PROBLEM_TREE_COLUMN_1, allModal
+            ? tr("Modal changes apply to all %1 selected models.").arg(modelIDs.size())
+            : tr("Select models that all support modal analysis to edit them together."));
+        if (allModal)
+        {
+            auto *row = new QTreeWidgetItem(this);
+            auto *editor = new ModalSetupWidget(Application::instance()->getSession()->getModel(modelIDs[0]).getProblemSetup().getModalSetup());
+            this->setItemWidget(row, PROBLEM_TREE_COLUMN_1, editor);
+            connect(editor, &ModalSetupWidget::changed, this, &ProblemTree::onModalSetupChanged);
+        }
         return;
     }
 
@@ -146,52 +154,13 @@ void ProblemTree::onModalSetupChanged(const RModalSetup &modalSetup)
 {
     auto *session = Application::instance()->getSession();
     const QList<uint> modelIDs = session->getSelectedModelIDs();
-    // This adapter is a synchronous GUI edit, not an externally retained
-    // revision. Validate all selected models before touching any live setup.
-    if (SolverManager::getInstance().getNRunning() || SolverManager::getInstance().getNWaiting()
-        || RJobManager::getInstance().getNRunning() || RJobManager::getInstance().getNWaiting())
-    {
-        QMessageBox::warning(this, tr("Modal configuration"), tr("Wait for active model tasks to finish before changing modal settings."));
-        QTimer::singleShot(0, this, &ProblemTree::populate);
-        return;
-    }
     QString failure;
-    QVector<RModalSetup> accepted;
-    {
-        QMutexLocker guard(session->getMutex());
-        for (const uint id : modelIDs)
-        {
-            RModelCommandSession editing(session->getModel(id));
-            const auto current = editing.query();
-            const QJsonObject command{{"apiVersion", "range.application/v1"},
-                {"commandId", "analysis.modal.configure"}, {"commandVersion", 1},
-                {"modelId", current["modelId"]}, {"expectedRevision", current["revision"]},
-                {"requestId", QUuid::createUuid().toString()}, {"idempotencyKey", QUuid::createUuid().toString()},
-                {"parameters", RModelCommandSession::modalParameters(modalSetup)}, {"dryRun", false}};
-            const auto result = editing.execute(command);
-            if (result.value("status") != QJsonValue("accepted"))
-            {
-                failure = result.value("message").toString();
-                break;
-            }
-            accepted.append(editing.model().getProblemSetup().getModalSetup());
-        }
-        if (failure.isEmpty())
-        {
-            for (qsizetype i = 0; i < modelIDs.size(); ++i)
-            {
-                session->storeCurentModelVersion(modelIDs[i], tr("Configure modal analysis"));
-                session->getModel(modelIDs[i]).getProblemSetup().setModalSetup(accepted[i]);
-            }
-        }
-    }
-    if (!failure.isEmpty())
+    if (!session->getModelCommandHost()->configureModal(modelIDs, modalSetup, &failure))
     {
         QMessageBox::warning(this, tr("Modal configuration"), failure);
         QTimer::singleShot(0, this, &ProblemTree::populate);
         return;
     }
-    for (const uint id : modelIDs) session->setProblemChanged(id);
 }
 
 void ProblemTree::onAcousticSetupChanged(const RAcousticSetup &acousticSetup)

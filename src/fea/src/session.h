@@ -10,6 +10,8 @@
 #include "session_entity_id.h"
 #include "session_node_id.h"
 
+class ModelCommandHost;
+
 class Session : public QObject
 {
 
@@ -29,11 +31,22 @@ class Session : public QObject
         DrawEngine *drawEngine;
         //! Session mutex.
         QMutex mutex;
+        //! Independent lock: legacy worker notifications may arrive while the model lock is held.
+        mutable QMutex commandStampMutex;
+        QList<QPair<QString, quint64>> commandStamps;
+        ModelCommandHost *commandHost;
 
     public:
 
         //! Constructor.
         Session(QObject *parent = nullptr);
+
+        ModelCommandHost *getModelCommandHost() const;
+        QPair<QString, quint64> modelCommandStamp(uint modelID) const;
+        uint findModelByCommandIdentity(const QString &identity) const;
+        void invalidateModelCommands(uint modelID);
+        //! Called on the GUI thread after a successful native save.
+        bool recordModelSaved(uint modelID, const QString &path, QString *error = nullptr);
 
         //! Return session ID.
         const QString &getID() const;

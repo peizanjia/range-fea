@@ -17,10 +17,6 @@ Application::Application(int &argc, char **argv)
     this->applicationSettings = new ApplicationSettings(this);
     this->applicationSettings->setDirApplicationPath(this->applicationDirPath());
 
-    RJobSettings defaultJobSettings = RJob::getDefaultJobSettings();
-    defaultJobSettings.registerEmitMutex(Application::instance()->getSession()->getMutex());
-    defaultJobSettings.setNOmpThreads(this->getApplicationSettings()->getNThreads());
-    RJob::setDefaultJobSettings(defaultJobSettings);
 }
 
 Application *Application::instance() noexcept
@@ -70,16 +66,26 @@ MainWindow *Application::getMainWindow()
 
 void Application::initialize()
 {
+    this->initialize(true);
+}
+
+void Application::initialize(bool showWindow)
+{
     // Initialize action list
     this->actionList = new ActionList(Action::generateActionDefinitionList(),this);
 
     // Initialize session
     this->session = new Session(this);
 
+    RJobSettings defaultJobSettings = RJob::getDefaultJobSettings();
+    defaultJobSettings.registerEmitMutex(this->session->getMutex());
+    defaultJobSettings.setNOmpThreads(this->getApplicationSettings()->getNThreads());
+    RJob::setDefaultJobSettings(defaultJobSettings);
+
     // Prepare main window
     this->mainWindow = new MainWindow(this->session,this->cloudSessionManager,this->applicationSettings,this->getActionList());
     this->cloudConnectionHandler->setMessageBoxParentWidget(this->mainWindow);
-    this->mainWindow->show();
+    if (showWindow) this->mainWindow->show();
 
     this->userAppInfo.append(QString("Materials directory: \"%1\"").arg(this->getApplicationSettings()->getMaterialsDir()));
 

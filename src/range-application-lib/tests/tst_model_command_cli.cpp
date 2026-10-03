@@ -1,4 +1,6 @@
 #include <QtTest>
+#include <rbl_interaction_record_v1.h>
+#include <rmodel_command_session.h>
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -9,6 +11,7 @@
 #include <QJsonObject>
 #include <QLockFile>
 #include <QProcess>
+#include <QSaveFile>
 #include <QTemporaryDir>
 
 #include <rbl_error.h>
@@ -194,6 +197,11 @@ private slots:
     void rejectsInvalidConfigurations();
     void rejectsAliasedOutputsAndModelLinks();
     void rejectsBusyOutputAndFailedOutputPath();
+    void journalTracksPreviewRejectionAndPublication();
+    void failedJournalPreventsPublication_data();
+    void failedJournalPreventsPublication();
+    void reconcilesInterruptedPublicationInFreshProcess_data();
+    void reconcilesInterruptedPublicationInFreshProcess();
 };
 
 void TestModelCommandCli::queryReturnsHashAndModalSettings()
@@ -467,6 +475,216 @@ void TestModelCommandCli::rejectsBusyOutputAndFailedOutputPath()
     QVERIFY(readBytes(input, inputAfter));
     QCOMPARE(blockerAfter, QByteArrayLiteral("file blocks output directory"));
     QCOMPARE(inputAfter, originalInput);
+}
+
+void TestModelCommandCli::journalTracksPreviewRejectionAndPublication()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString error;
+    const QString input = makeNativeInput(directory.filePath(QStringLiteral("input.ram")), error);
+    QVERIFY2(!input.isEmpty(), qPrintable(error));
+    QByteArray original;
+    QVERIFY(readBytes(input, original));
+    const QString parameters = directory.filePath(QStringLiteral("parameters.json"));
+    const QString output = directory.filePath(QStringLiteral("published.ram"));
+    const QString journal = directory.filePath(QStringLiteral("journal.json"));
+    QVERIFY(writeBytes(parameters, parameterDocument(sourceHash(original), requestedModalParameters())));
+    const QStringList base{QStringLiteral("--input"), input, QStringLiteral("--parameters"), parameters,
+                           QStringLiteral("--journal"), journal};
+    auto result = runCli(base + QStringList{QStringLiteral("--dry-run")});
+    QVERIFY2(exitedWith(result, 0), qPrintable(result.diagnostic()));
+    QVERIFY(!QFileInfo::exists(output));
+    auto invalid = requestedModalParameters();
+    invalid["unit"] = QStringLiteral("Hz");
+    QVERIFY(writeBytes(parameters, parameterDocument(sourceHash(original), invalid)));
+    result = runCli(base + QStringList{QStringLiteral("--output"), output});
+    QVERIFY2(exitedWith(result, 2), qPrintable(result.diagnostic()));
+    QVERIFY(!QFileInfo::exists(output));
+    QVERIFY(writeBytes(parameters, parameterDocument(sourceHash(original), requestedModalParameters())));
+    result = runCli(base + QStringList{QStringLiteral("--output"), output});
+    QVERIFY2(exitedWith(result, 0), qPrintable(result.diagnostic()));
+    QJsonObject response;
+    QVERIFY2(parseOutputObject(result, response, error), qPrintable(error));
+    QCOMPARE(response["status"].toString(), QStringLiteral("published"));
+    QByteArray outputBytes, journalBytes, sourceAfter;
+    QVERIFY(readBytes(output, outputBytes));
+    QVERIFY(readBytes(journal, journalBytes));
+    QVERIFY(readBytes(input, sourceAfter));
+    QCOMPARE(sourceAfter, original);
+    const auto actualHash = QString::fromLatin1(sourceHash(outputBytes));
+    QCOMPARE(response["outputSha256"].toString(), actualHash);
+    const auto envelope = QJsonDocument::fromJson(journalBytes).object();
+    QCOMPARE(envelope["journalVersion"].toInt(), 1);
+    const auto records = envelope["records"].toArray();
+    QCOMPARE(records.size(), 5);
+    const QStringList statuses{QStringLiteral("preview"), QStringLiteral("rejected"),
+                               QStringLiteral("accepted"), QStringLiteral("publication_pending"), QStringLiteral("published")};
+    QUuid parent;
+    RInteractionRecordV1 last;
+    for (qsizetype index = 0; index < records.size(); ++index)
+    {
+        RInteractionRecordV1 record;
+        QVERIFY2(RInteractionRecordV1::fromJson(QJsonDocument(records[index].toObject()).toJson(), record, &error), qPrintable(error));
+        QCOMPARE(record.projectId, QUuid(envelope["projectId"].toString()));
+        QCOMPARE(record.parentRecordId, parent);
+        QCOMPARE(record.resultStatus, statuses[index]);
+        QCOMPARE(record.actorId, QStringLiteral("range-model-command"));
+        QCOMPARE(record.selectionSnapshot["sourceSha256"].toString(), QString::fromLatin1(sourceHash(original)));
+        parent = record.recordId;
+        last = record;
+    }
+    QCOMPARE(last.selectionSnapshot["outputSha256"].toString(), actualHash);
+    QCOMPARE(last.artifactRefs[0].toObject()["sha256"].toString(), actualHash);
+    QCOMPARE(last.selectionSnapshot["outputPath"].toString(), QFileInfo(output).canonicalFilePath());
+    const auto intent = records[3].toObject()["selectionSnapshot"].toObject();
+    QCOMPARE(intent["expectedOutputSha256"].toString(), actualHash);
+    QCOMPARE(last.selectionSnapshot["publicationId"], intent["publicationId"]);
+    const auto reopened = runCli({QStringLiteral("--input"), output, QStringLiteral("--query")});
+    QVERIFY2(exitedWith(reopened, 0), qPrintable(reopened.diagnostic()));
+    QJsonObject reopenedResponse;
+    QVERIFY2(parseOutputObject(reopened, reopenedResponse, error), qPrintable(error));
+    QCOMPARE(reopenedResponse["sourceSha256"].toString(), actualHash);
+    QVERIFY(reopenedResponse["modelId"] != response["modelId"]);
+    QCOMPARE(reopenedResponse["modal"], response["modal"]);
+}
+
+void TestModelCommandCli::failedJournalPreventsPublication_data()
+{
+    QTest::addColumn<bool>("locked");
+    QTest::newRow("locked journal") << true;
+    QTest::newRow("malformed journal") << false;
+}
+
+void TestModelCommandCli::failedJournalPreventsPublication()
+{
+    QFETCH(bool, locked);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString error;
+    const QString input = makeNativeInput(directory.filePath(QStringLiteral("input.ram")), error);
+    QVERIFY2(!input.isEmpty(), qPrintable(error));
+    QByteArray original;
+    QVERIFY(readBytes(input, original));
+    const QString parameters = directory.filePath(QStringLiteral("parameters.json"));
+    const QString output = directory.filePath(QStringLiteral("published.ram"));
+    const QString journal = directory.filePath(QStringLiteral("journal.json"));
+    QVERIFY(writeBytes(parameters, parameterDocument(sourceHash(original), requestedModalParameters())));
+    const QByteArray previousOutput("keep-existing-output");
+    QVERIFY(writeBytes(output, previousOutput));
+    QLockFile lock(journal + QStringLiteral(".lock"));
+    lock.setStaleLockTime(0);
+    if (locked) QVERIFY(lock.tryLock(0));
+    else QVERIFY(writeBytes(journal, QByteArrayLiteral("{truncated")));
+    const auto result = runCli({QStringLiteral("--input"), input, QStringLiteral("--parameters"), parameters,
+                                QStringLiteral("--output"), output, QStringLiteral("--journal"), journal});
+    QVERIFY2(exitedWith(result, 2), qPrintable(result.diagnostic()));
+    QJsonObject response;
+    QVERIFY2(parseOutputObject(result, response, error), qPrintable(error));
+    QCOMPARE(response["code"].toString(), QStringLiteral("journal_failure"));
+    QByteArray outputAfter, sourceAfter, journalAfter;
+    QVERIFY(readBytes(output, outputAfter));
+    QVERIFY(readBytes(input, sourceAfter));
+    QCOMPARE(outputAfter, previousOutput);
+    QCOMPARE(sourceAfter, original);
+    if (!locked)
+    {
+        QVERIFY(readBytes(journal, journalAfter));
+        QCOMPARE(journalAfter, QByteArrayLiteral("{truncated"));
+    }
+}
+
+void TestModelCommandCli::reconcilesInterruptedPublicationInFreshProcess_data()
+{
+    QTest::addColumn<QString>("caseName");
+    QTest::addColumn<QString>("expectedStatus");
+    QTest::addColumn<int>("expectedExitCode");
+    QTest::newRow("interrupted before first commit") << QStringLiteral("absent") << QStringLiteral("not_published") << 0;
+    QTest::newRow("interrupted before replacing old output") << QStringLiteral("unchanged") << QStringLiteral("not_published") << 0;
+    QTest::newRow("interrupted after atomic commit") << QStringLiteral("committed") << QStringLiteral("artifact_present") << 0;
+    QTest::newRow("output differs from intent and old bytes") << QStringLiteral("conflict") << QStringLiteral("conflict") << 3;
+    QTest::newRow("same bytes predate intent") << QStringLiteral("identical") << QStringLiteral("already_present") << 0;
+}
+
+void TestModelCommandCli::reconcilesInterruptedPublicationInFreshProcess()
+{
+    QFETCH(QString, caseName);
+    QFETCH(QString, expectedStatus);
+    QFETCH(int, expectedExitCode);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString output = directory.filePath(QStringLiteral("output.ram"));
+    const QString journalPath = directory.filePath(QStringLiteral("journal.json"));
+    const QString stagedPath = directory.filePath(QStringLiteral("staged.ram"));
+    QByteArray stagedBytes;
+    QString error;
+    {
+        RModel model;
+        model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS_MODAL));
+        RModelCommandSession::JournalOptions options;
+        options.path = journalPath;
+        RModelCommandSession interrupted(model, options);
+        const auto actualStaged = interrupted.model().write(stagedPath, false);
+        QVERIFY(readBytes(actualStaged, stagedBytes));
+        if (caseName == QStringLiteral("identical")) QVERIFY(writeBytes(output, stagedBytes));
+        else if (caseName != QStringLiteral("absent")) QVERIFY(writeBytes(output, QByteArrayLiteral("previous-output")));
+        QVERIFY2(interrupted.recordPublicationIntent(output, actualStaged, &error), qPrintable(error));
+        if (caseName == QStringLiteral("committed"))
+        {
+            QSaveFile published(output);
+            published.setDirectWriteFallback(false);
+            QVERIFY(published.open(QIODevice::WriteOnly));
+            QCOMPARE(published.write(stagedBytes), stagedBytes.size());
+            QVERIFY(published.commit());
+        }
+        else if (caseName == QStringLiteral("conflict")) QVERIFY(writeBytes(output, QByteArrayLiteral("unexpected-writer")));
+        // End the original session without publication acknowledgement. The
+        // persisted states are exactly the two sides of the commit crash window.
+    }
+    QVERIFY(QFile::remove(stagedPath)); // Recovery cannot rely on staging surviving.
+    const bool existedBefore = QFileInfo::exists(output);
+    QByteArray before;
+    if (existedBefore) QVERIFY(readBytes(output, before));
+    const auto result = runCli({QStringLiteral("--reconcile"), QStringLiteral("--journal"), journalPath});
+    QVERIFY2(exitedWith(result, expectedExitCode), qPrintable(result.diagnostic()));
+    QJsonObject response;
+    QVERIFY2(parseOutputObject(result, response, error), qPrintable(error));
+    QCOMPARE(response["status"].toString(), QStringLiteral("reconciled"));
+    QCOMPARE(response["apiVersion"].toString(), QStringLiteral("range.application/v1"));
+    QVERIFY(response["observationOnly"].toBool());
+    const auto outcomes = response["outcomes"].toArray();
+    QCOMPARE(outcomes.size(), 1);
+    QCOMPARE(outcomes[0].toObject()["status"].toString(), expectedStatus);
+    QCOMPARE(outcomes[0].toObject()["expectedOutputSha256"].toString(), QString::fromLatin1(sourceHash(stagedBytes)));
+    QCOMPARE(QFileInfo::exists(output), existedBefore);
+    if (existedBefore)
+    {
+        QByteArray after;
+        QVERIFY(readBytes(output, after));
+        QCOMPARE(after, before);
+    }
+    QByteArray journalBytes;
+    QVERIFY(readBytes(journalPath, journalBytes));
+    const auto records = QJsonDocument::fromJson(journalBytes).object()["records"].toArray();
+    QCOMPARE(records.size(), 2);
+    RInteractionRecordV1 observation;
+    QVERIFY2(RInteractionRecordV1::fromJson(QJsonDocument(records[1].toObject()).toJson(), observation, &error), qPrintable(error));
+    QCOMPARE(observation.commandId, QStringLiteral("model.artifact.reconciled"));
+    QCOMPARE(observation.resultStatus, expectedStatus);
+    QVERIFY(observation.selectionSnapshot["observationOnly"].toBool());
+    const auto again = runCli({QStringLiteral("--reconcile"), QStringLiteral("--journal"), journalPath});
+    QVERIFY2(exitedWith(again, caseName == QStringLiteral("conflict") ? 3 : 0), qPrintable(again.diagnostic()));
+    QVERIFY2(parseOutputObject(again, response, error), qPrintable(error));
+    if (caseName == QStringLiteral("conflict"))
+    {
+        QCOMPARE(response["outcomes"].toArray().size(), 1);
+        QCOMPARE(response["outcomes"].toArray()[0].toObject()["status"].toString(), QStringLiteral("conflict"));
+        QVERIFY(response["outcomes"].toArray()[0].toObject()["alreadyRecorded"].toBool());
+    }
+    else QVERIFY(response["outcomes"].toArray().isEmpty());
+    QByteArray afterRetry;
+    QVERIFY(readBytes(journalPath, afterRetry));
+    QCOMPARE(afterRetry, journalBytes);
 }
 
 QTEST_GUILESS_MAIN(TestModelCommandCli)

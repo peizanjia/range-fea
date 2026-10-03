@@ -70,7 +70,9 @@ int main(int argc, char **argv)
         QCommandLineOption(QStringList{"p", "parameters"}, "JSON object containing sourceSha256 and parameters.", "file"),
         QCommandLineOption(QStringList{"o", "output"}, "Separate native output model; never overwrites the input.", "file"),
         QCommandLineOption("query", "Print the current modal settings and source hash without editing."),
-        QCommandLineOption("dry-run", "Validate a configuration without publishing a model.")});
+        QCommandLineOption("dry-run", "Validate a configuration without publishing a model."),
+        QCommandLineOption("reconcile", "Observe and journal unfinished publication intents; requires --journal only."),
+        QCommandLineOption("journal", "Trusted-host InteractionRecord v1 journal file.", "file")});
     parser.process(app);
     // RLogger writes directly to stdout even when a handler is installed.
     // Keep a dedicated copy for the protocol and route legacy console output
@@ -108,9 +110,31 @@ int main(int argc, char **argv)
         return 2;
     }
     jsonOutput = protocol;
+    bool artifactPublished = false;
+    QJsonObject publicationResponse;
     try
     {
         require(parser.positionalArguments().isEmpty(), "Unexpected positional arguments.");
+        if (parser.isSet("reconcile"))
+        {
+            require(parser.isSet("journal") && !parser.isSet("input") && !parser.isSet("parameters")
+                        && !parser.isSet("output") && !parser.isSet("query") && !parser.isSet("dry-run"),
+                    "Reconcile requires --journal and cannot be combined with model commands.");
+            RModelCommandSession::JournalOptions recovery;
+            recovery.path = resolved(parser.value("journal"), true);
+            recovery.actorId = QStringLiteral("range-model-command-recovery");
+            const auto result = RModelCommandSession::reconcilePublications(recovery);
+            print(result);
+            if (result.value("status").toString() == QStringLiteral("rejected")) return 2;
+            if (result.value("status").toString() != QStringLiteral("reconciled")) return 3;
+            for (const auto &value : result.value("outcomes").toArray())
+            {
+                const QString status = value.toObject().value("status").toString();
+                if (status != QStringLiteral("artifact_present") && status != QStringLiteral("already_present")
+                    && status != QStringLiteral("not_published")) return 3;
+            }
+            return 0;
+        }
         const bool query = parser.isSet("query"), preview = parser.isSet("dry-run");
         require(!query || (!preview && !parser.isSet("parameters") && !parser.isSet("output")),
                 "Query cannot be combined with editing options.");
@@ -118,6 +142,7 @@ int main(int argc, char **argv)
         const QString input = resolved(parser.value("input"), true);
         const QString output = (!query && !preview) ? resolved(parser.value("output"), false) : QString();
         const QString parameterPath = query ? QString() : resolved(parser.value("parameters"), true);
+        const QString journalPath = parser.isSet("journal") ? resolved(parser.value("journal"), false) : QString();
         const QString extension = QFileInfo(input).suffix();
         const bool ascii = extension == RModel::getDefaultFileExtension(false);
         require(ascii || extension == RModel::getDefaultFileExtension(true), "Input must be a .ram/.rbm model.");
@@ -128,6 +153,11 @@ int main(int argc, char **argv)
             require(QFileInfo(output).suffix() == RModel::getDefaultFileExtension(false)
                     || QFileInfo(output).suffix() == RModel::getDefaultFileExtension(true), "Output must be .ram/.rbm.");
         }
+        require(journalPath.isEmpty()
+                    || (journalPath.compare(input, Qt::CaseInsensitive) != 0
+                        && journalPath.compare(parameterPath, Qt::CaseInsensitive) != 0
+                        && journalPath.compare(output, Qt::CaseInsensitive) != 0),
+                "Journal must be distinct from model and parameter files.");
         QStringList paths{input};
         if (!output.isEmpty()) paths.append(output);
         if (!parameterPath.isEmpty()) paths.append(parameterPath);
@@ -153,7 +183,12 @@ int main(int argc, char **argv)
         RModel model;
         model.read(input);
         require(hash(input) == sourceHash, "Source changed while reading.");
-        RModelCommandSession session(model);
+        RModelCommandSession::JournalOptions journalOptions;
+        journalOptions.path = journalPath;
+        journalOptions.actorId = QStringLiteral("range-model-command");
+        journalOptions.sourcePath = input;
+        journalOptions.sourceSha256 = QString::fromLatin1(sourceHash);
+        RModelCommandSession session(model, journalOptions);
         if (query)
         {
             auto result = session.query();
@@ -188,6 +223,7 @@ int main(int argc, char **argv)
         QFile staged(stagedPath);
         require(staged.open(QIODevice::ReadOnly), "Cannot read staged model.");
         QSaveFile published(output);
+        published.setDirectWriteFallback(false);
         require(published.open(QIODevice::WriteOnly), "Cannot stage final output.");
         while (!staged.atEnd())
         {
@@ -199,13 +235,63 @@ int main(int argc, char **argv)
                 && resolved(parser.value("output"), false) == output
                 && QFileInfo::exists(output) == existed && (!existed || hash(output) == outputHash),
                 "Input/output changed before publication; no model published.");
+        publicationResponse = response;
+        publicationResponse["status"] = journalPath.isEmpty() ? "published_unverified" : "published_unlogged";
+        publicationResponse["output"] = output;
+        if (!journalPath.isEmpty())
+        {
+            QString journalError;
+            require(session.recordPublicationIntent(output, stagedPath, &journalError),
+                    "Cannot persist publication intent; no model published.");
+        }
         require(published.commit(), "Atomic model publication failed.");
+        artifactPublished = true;
+        QByteArray outputSha256;
+        if (!journalPath.isEmpty())
+        {
+            QString journaledSha256;
+            QString journalError;
+            if (!session.recordArtifactPublished(output, &journaledSha256, &journalError))
+            {
+                outputSha256 = journaledSha256.toLatin1();
+                response["status"] = "published_unlogged";
+                response["output"] = output;
+                if (!outputSha256.isEmpty()) response["outputSha256"] = QString::fromLatin1(outputSha256);
+                response["code"] = "journal_failure";
+                response["auditError"] = QStringLiteral("The model file was published, but its journal event failed.");
+                print(response);
+                return 3;
+            }
+            outputSha256 = journaledSha256.toLatin1();
+        }
+        else outputSha256 = hash(output);
         response["status"] = "published";
         response["output"] = output;
+        response["outputSha256"] = QString::fromLatin1(outputSha256);
         print(response);
         return 0;
     }
-    catch (const RError &error) { print({{"status", "rejected"}, {"message", error.getMessage()}}); }
-    catch (const std::exception &error) { print({{"status", "rejected"}, {"message", error.what()}}); }
+    catch (const RError &error)
+    {
+        if (artifactPublished)
+        {
+            publicationResponse["message"] = "The model file was published, but post-publication verification failed.";
+            print(publicationResponse);
+            return 3;
+        }
+        print({{"apiVersion", "range.application/v1"}, {"status", "rejected"},
+               {"code", "command_failure"}, {"message", error.getMessage()}});
+    }
+    catch (const std::exception &error)
+    {
+        if (artifactPublished)
+        {
+            publicationResponse["message"] = "The model file was published, but post-publication verification failed.";
+            print(publicationResponse);
+            return 3;
+        }
+        print({{"apiVersion", "range.application/v1"}, {"status", "rejected"},
+               {"code", "command_failure"}, {"message", error.what()}});
+    }
     return 2;
 }

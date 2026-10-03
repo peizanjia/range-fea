@@ -17,7 +17,7 @@ class Application : public RApplication
     protected:
 
         //! Session.
-        Session *session;
+        Session *session = nullptr;
 
     public:
 
@@ -53,6 +53,8 @@ class Application : public RApplication
 
         //! Initialize main window and other user objects.
         void initialize();
+        //! Initialize the same window/session graph without showing a native window.
+        void initialize(bool showWindow);
 
         //! Initialize main window and other user objects.
         void finalize();

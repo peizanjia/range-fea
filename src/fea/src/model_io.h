@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <memory>
 
 #include "application_settings.h"
 #include <rbl_job.h>
@@ -37,8 +38,9 @@ class ModelIO : public RJob
         ModelIOType  type;
         //! File name.
         QString fileName;
-        //! Model ID in case of saving or exporting.
-        Model *pModel;
+        //! Worker-owned input; Session model storage can move while jobs wait.
+        std::unique_ptr<Model> modelSnapshot;
+        QPair<QString, quint64> modelStamp;
 
     public:
 
