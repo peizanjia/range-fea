@@ -1,5 +1,16 @@
 # 续作交接
 
+## 2026-10-03 Stage 10C–12 实现与本地验收
+
+- 用户在 `6675c33` 后重新授权按计划推进直至完整 Stage 12 并检验审查；覆盖下方历史停止条件。仍使用 Luna max 子代理，不修改用户配置、不自动推送。
+- 新增 Workflow、Agent tasks、Extensions 面板及 `range.host/v1` 文档上下文/命令/事件；普通 SolverTask 采用输入快照，后台不再读写活模型，结果只发布到相同文档版本，过期结果保留。新增/关闭文档及结果发布保留每个模型的 Undo/Redo 历史；通用未拆分任务仍保守阻止修改。
+- 用户指定 DeepSeek 并自行保存到 Git 忽略的本机配置。真实 GUI 模态修改/Undo 通过（3 响应、8740 tokens）；真实生成扩展 `acceptance.generated` 后独立验证/激活/运行通过（6 响应、51274 tokens）。早期协议冒烟为 2 请求、505 tokens；失败响应的未知 token 不纳入以上统计。凭据不打印、不入库。实测修复 DeepSeek 可选工具 `index` 字段兼容问题。
+- 扩展 v1 为受信开发者模式的纯 Python 数值序列统计；不可变候选、源码/测试差异、宿主独立基准、哈希绑定、批准激活、旧任务固定版本、回退和声明式表单/带单位结果表已实现。`osSandbox:false`，不是任意代码安全沙箱、任意 FE 插件或 C++ ABI。
+- 私有 CPython 3.13.5 + NumPy 2.2.6 + SciPy 1.15.3 已进入 `build/stage12-install`。仅安装 bin + Windows 系统目录 PATH，安装 SDK 梁 20 步主动/被动实际 FE 对照通过；安装 GUI help 退出 0；Windows 原生 OpenGL 视口及三个新面板已截图检查。
+- 详细复跑、最终测试数字、审查修复及外部边界见 `docs/STAGE12_ACCEPTANCE.md`；操作说明见 `docs/AGENT_OPERATIONS.md`、`docs/WORKFLOW_SDK.md`、`docs/EXTENSION_SDK.md`。下方“停止”“仅规划”均为历史指令，已经被新的持续开发授权覆盖。
+- 最终全目标 Release 成功；必跑清单 105/105，完整 CTest **105/105、0 失败、249.47 s**。新增事件面板验证了 300 事件缺口、缓存到实时状态恢复及草稿/焦点保留；扩展 GUI 刷新、实际版本切换及回退通过。Luna max 复审无新增重大问题。AI 子模块最新提交 `e15b7fe`；根集成提交见 Git 历史。
+- 最终安装树同源 GUI 验收程序使用 Windows 平台、安装 Qt 和私有 Python，通过 OpenGL、梁 20+20 步续算及真实生成扩展的界面使用（QtTest 5/5，58.734 s）；临时测试程序/DLL 已移除。可启动 `build/stage12-install/bin/fea.exe`；在 Agent tasks 从本地文件载入密钥，在 Workflow 打开工作区；`build/audit-20261003/installed-generated-extension` 为已在安装解释器验证的真实生成示例。
+
 ## 2026-10-03 实时 GUI Agent 与自动扩展规划补充（仅文档）
 
 - 后续用户要求：规划读取状态、分析建议、执行操作及GUI实时反映，并规划通用大模型生成新功能、Python运行时和本地知识设计。本次只读核查和完善规划，没有继续功能开发。

@@ -26,6 +26,8 @@ class SolverManager : public RJobManager
 
         //! Last solver log file name.
         QString lastLogFileName;
+        //! Latest successfully produced task result artifact.
+        QString lastResultArtifactFileName;
 
     public:
 
@@ -42,7 +44,10 @@ class SolverManager : public RJobManager
         void submit(SolverTask *solverTask);
 
         //! Check if solver for given model ID is queued.
-        bool isSolverQueued(uint modelID) const;
+        bool isSolverQueued(const QString &sourceDocumentId) const;
+
+        //! Return true when any active solver-manager job still holds live models.
+        bool hasLiveModelTasks() const;
 
         //! Stop current solvers.
         void stopRunningTasks();
@@ -52,6 +57,9 @@ class SolverManager : public RJobManager
 
         //! Return const reference to last log file name.
         const QString & getLastLogFileName() const;
+
+        //! Return const reference to the latest solver result artifact path.
+        const QString & getLastResultArtifactFileName() const;
 
         //! Stop server.
         void stopServer();

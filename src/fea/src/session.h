@@ -47,6 +47,11 @@ class Session : public QObject
         void invalidateModelCommands(uint modelID);
         //! Called on the GUI thread after a successful native save.
         bool recordModelSaved(uint modelID, const QString &path, QString *error = nullptr);
+        //! GUI-thread publication. A stale source is left untouched; its result
+        //! remains available at artifactPath and is announced as detached.
+        bool acceptSolverResult(const QPair<QString, quint64> &sourceStamp,
+                                const Model &result, const QString &artifactPath,
+                                QString *error = nullptr);
 
         //! Return session ID.
         const QString &getID() const;
@@ -264,6 +269,12 @@ class Session : public QObject
         static bool selectedModelsHasEntitySelected(REntityGroupType entityGroupType);
 
     signals:
+
+        //! Accepted/legacy document invalidation, separate from selection and view state.
+        //! May be emitted by a legacy worker; consumers must honor QObject affinity.
+        void documentRevisionChanged(const QString &documentId, quint64 revision);
+        void solverResultAvailable(const QString &documentId, quint64 sourceRevision,
+                                   const QString &artifactPath, bool applied);
 
         //! Emitted when new model has been added to the session.
         void modelAdded(uint modelID);

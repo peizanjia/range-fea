@@ -20,6 +20,17 @@
 #include "modal_setup_widget.h"
 #include "problem_tree.h"
 #include "solver_manager.h"
+#include "workflow_widget.h"
+#include "agent_widget.h"
+#include "extension_widget.h"
+#include <QTableWidget>
+#include <QTabWidget>
+#include <QTreeWidget>
+#include <QPlainTextEdit>
+#include <QComboBox>
+#include <QPushButton>
+#include <QAccessible>
+#include "gl_widget.h"
 
 namespace
 {
@@ -84,11 +95,378 @@ class TestGuiModelLifecycle : public QObject
 {
     Q_OBJECT
 private slots:
+    void visibleViewportRenders()
+    {
+        const auto output = qEnvironmentVariable("RANGE_TEST_GUI_RENDER_OUTPUT");
+        if (output.isEmpty()) QSKIP("Opt-in real Windows/OpenGL rendering acceptance.");
+        QVERIFY(QGuiApplication::platformName() != "offscreen");
+        auto *app = Application::instance();
+        Model model;
+        model.read(WorkflowProcess::defaultConfiguration(QDir::tempPath()).examples + "/stage10_beam.ram");
+        app->getSession()->addModel(model);
+        app->getSession()->setModelSelected(0, true);
+        auto *window = app->getMainWindow();
+        window->resize(1440, 900); window->show();
+        QTRY_VERIFY_WITH_TIMEOUT(window->findChild<GLWidget *>() != nullptr, 10000);
+        auto *viewport = window->findChild<GLWidget *>();
+        QTRY_VERIFY_WITH_TIMEOUT(viewport->isValid(), 10000);
+        const auto frame = viewport->grabFramebuffer();
+        QVERIFY(!frame.isNull()); QVERIFY(frame.width() > 100); QVERIFY(frame.height() > 100);
+        QVERIFY(window->grab().save(output));
+        auto *dock = window->findChild<QWidget *>("solverDock");
+        QVERIFY(dock);
+        auto *tabs = dock->findChild<QTabWidget *>();
+        QVERIFY(tabs);
+        for (int index = 6; index < tabs->count(); ++index)
+        {
+            tabs->setCurrentIndex(index);
+            QTest::qWait(100);
+            QVERIFY(tabs->currentWidget()->isVisible());
+            QVERIFY(window->grab().save(output + QString(".panel-%1.png").arg(index)));
+        }
+        window->hide();
+    }
+
+    void workflowControlsExposeAccessibleNames()
+    {
+        auto *window = Application::instance()->getMainWindow();
+        for (const auto &name : {"workflowWorkspace", "workflowJobs", "workflowResults", "workflowAudit"})
+        {
+            auto *widget = window->findChild<QWidget *>(QString::fromLatin1(name));
+            QVERIFY(widget);
+            auto *accessible = QAccessible::queryAccessibleInterface(widget);
+            QVERIFY(accessible);
+            QVERIFY2(!accessible->text(QAccessible::Name).isEmpty(), name);
+        }
+    }
+
+    void deepSeekAppliesLiveGuiCommand()
+    {
+        const auto credentialsPath = qEnvironmentVariable("RANGE_TEST_DEEPSEEK_CREDENTIALS_FILE");
+        if (credentialsPath.isEmpty()) QSKIP("Opt-in remote-provider acceptance; credentials remain local.");
+        QFile credentials(credentialsPath);
+        QVERIFY(credentials.open(QIODevice::ReadOnly));
+        QVERIFY(credentials.size() < 65536);
+        QString apiKey;
+        for (auto line : QString::fromUtf8(credentials.readAll()).split('\n'))
+        {
+            line = line.trimmed();
+            if (line.startsWith("DEEPSEEK_API_KEY=")) apiKey = line.mid(17).trimmed();
+        }
+        QVERIFY(!apiKey.isEmpty());
+        auto *session = Application::instance()->getSession();
+        session->addModel(fixture("Remote model acceptance"));
+        session->setModelSelected(0, true);
+        auto *widget = Application::instance()->getMainWindow()->findChild<AgentWidget *>();
+        QVERIFY(widget);
+        RAgentSettings settings(RAgentSettings::Type::DeepSeek);
+        settings.setApiKey(apiKey);
+        widget->setProviderSettings(settings);
+        QSignalSpy finished(widget->taskRunner(), &AgentTaskRunner::finished);
+        QSignalSpy applied(widget->taskRunner(), &AgentTaskRunner::actionCompleted);
+        QSignalSpy usage(widget, &AgentWidget::providerUsage);
+        widget->startTask("For the selected open GUI document, use document_propose to set only modal iterations to 53, keeping method, modes, tolerance and unit exactly as in the supplied live context. This task authorizes that edit. After a successful host result, query context once to verify, then finish with a short summary. Do not use workflow tools or propose additional changes.", true);
+        QTRY_VERIFY_WITH_TIMEOUT(!finished.isEmpty(), 180000);
+        QVERIFY2(finished.last().at(0).toString() == "completed", qPrintable(finished.last().at(1).toString()));
+        QCOMPARE(finished.last().at(0).toString(), QString("completed"));
+        QCOMPARE(applied.size(), 1);
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 53u);
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNModesToExtract(), 2u);
+        QVERIFY(session->getModel(0).getUndoStackSize() > 0);
+        QVERIFY(!usage.isEmpty());
+        int tokens = 0;
+        for (const auto &entry : usage) tokens += entry.at(0).toJsonObject().value("totalTokens").toInt();
+        qInfo("DeepSeek live GUI acceptance: requests=%d total_tokens=%d", int(usage.size()), tokens);
+        settings.setApiKey({}); widget->setProviderSettings(settings);
+    }
+
+    void deepSeekGeneratesValidatedExtension()
+    {
+        const auto credentialsPath = qEnvironmentVariable("RANGE_TEST_DEEPSEEK_CREDENTIALS_FILE");
+        if (credentialsPath.isEmpty()) QSKIP("Opt-in remote extension acceptance; credentials remain local.");
+        QFile credentials(credentialsPath);
+        QVERIFY(credentials.open(QIODevice::ReadOnly));
+        QVERIFY(credentials.size() < 65536);
+        QString apiKey;
+        for (auto line : QString::fromUtf8(credentials.readAll()).split('\n'))
+            if (line.trimmed().startsWith("DEEPSEEK_API_KEY=")) apiKey = line.trimmed().mid(17).trimmed();
+        QVERIFY(!apiKey.isEmpty());
+        QTemporaryDir directory(qEnvironmentVariable("RANGE_TEST_EXTENSION_OUTPUT",
+            QDir::tempPath() + "/range-agent-extension-XXXXXX"));
+        QVERIFY(directory.isValid());
+        if (qEnvironmentVariableIsSet("RANGE_TEST_EXTENSION_OUTPUT")) directory.setAutoRemove(false);
+        auto *window = Application::instance()->getMainWindow();
+        auto *workflow = window->findChild<WorkflowWidget *>();
+        auto *widget = window->findChild<AgentWidget *>();
+        QVERIFY(workflow); QVERIFY(widget);
+        auto config = WorkflowProcess::defaultConfiguration(directory.path());
+        config.trustedExtensions = true;
+        workflow->openWorkspace(config);
+        auto *service = workflow->transport();
+        QTRY_VERIFY_WITH_TIMEOUT(service->isReady(), 15000);
+        RAgentSettings settings(RAgentSettings::Type::DeepSeek);
+        settings.setApiKey(apiKey); widget->setProviderSettings(settings);
+        QSignalSpy finished(widget->taskRunner(), &AgentTaskRunner::finished);
+        QSignalSpy usage(widget, &AgentWidget::providerUsage);
+        int approvals = 0;
+        QObject approvalScope;
+        // This opt-in test explicitly authorizes staging in its disposable workspace.
+        // Production proposals still require the user's review button.
+        const auto approvalConnection = connect(widget->taskRunner(), &AgentTaskRunner::proposalReady,
+            &approvalScope, [&, runner = widget->taskRunner()](const QString &origin, const QString &id, const QJsonObject &preview) {
+                const bool allowed = origin == "extension" && preview.value("normalized").toObject().value("command") == "extension.stage";
+                if (allowed) ++approvals;
+                QTimer::singleShot(0, runner, [runner, id, allowed] { runner->authorizePending(id, allowed); });
+            });
+        widget->startTask("Create one new Python numeric-series-statistics extension named acceptance.generated, version 1.0.0, in the connected workspace. First read workflow_capabilities, schema_get for range.extension/v1/manifest, and knowledge_query for extension. Generate your own process(series) source to compute sample RMS, peakAbs and earliest peakTime with explicit unchanged units; use scaled RMS to avoid overflow. Generate at least one numerical test case (tests is an object with cases, each case has id, input and expected). Propose only extension.stage with manifest, source and tests. Wait for the staged job using workflow_wait, then finish. Do not validate, activate, run, rollback or change GUI documents; the acceptance host will do those separately. No third-party imports, file access, network or subprocesses.", false);
+        QTRY_VERIFY_WITH_TIMEOUT(!finished.isEmpty(), 300000);
+        disconnect(approvalConnection);
+        QVERIFY2(finished.last().at(0).toString() == "completed", qPrintable(finished.last().at(1).toString()));
+        QCOMPARE(finished.last().at(0).toString(), QString("completed"));
+        QCOMPARE(approvals, 1);
+        qInfo().noquote() << "Generated extension workspace:" << directory.path();
+        settings.setApiKey({}); widget->setProviderSettings(settings);
+        int tokens = 0;
+        for (const auto &entry : usage) tokens += entry.at(0).toJsonObject().value("totalTokens").toInt();
+        qInfo("DeepSeek generated extension: requests=%d total_tokens=%d", int(usage.size()), tokens);
+
+        QString rpcError;
+        const auto rpc = [&](const QString &operation, const QJsonObject &parameters = QJsonObject{}) {
+            QEventLoop loop;
+            QJsonObject result;
+            QString id;
+            rpcError.clear();
+            const auto success = connect(service, &WorkflowProcess::replyReceived, &loop,
+                [&](const QString &received, const QString &, const QJsonObject &value) {
+                    if (received == id) { result = value; loop.quit(); }
+                });
+            const auto failure = connect(service, &WorkflowProcess::requestFailed, &loop,
+                [&](const QString &received, const QString &, const QString &code, const QString &message) {
+                    if (received == id) { rpcError = code + ": " + message; loop.quit(); }
+                });
+            QTimer timer;
+            timer.setSingleShot(true);
+            connect(&timer, &QTimer::timeout, &loop, [&] { rpcError = "RPC timeout"; loop.quit(); });
+            id = service->request(operation, parameters); timer.start(30000); loop.exec();
+            disconnect(success); disconnect(failure);
+            return result;
+        };
+        const auto listing = rpc("extension.list", {{"extensionId", "acceptance.generated"}});
+        QVERIFY2(rpcError.isEmpty(), qPrintable(rpcError));
+        const auto entries = listing.value("extensions").toArray();
+        QCOMPARE(entries.size(), 1);
+        const auto candidates = entries.first().toObject().value("candidates").toArray();
+        QCOMPARE(candidates.size(), 1);
+        const auto candidate = candidates.first().toObject();
+        const QJsonObject identity{{"candidateId", candidate.value("candidateId")}, {"bundleHash", candidate.value("bundleHash")}};
+        const auto execute = [&](const QString &command, const QJsonObject &parameters) {
+            const auto project = rpc("project.query");
+            if (!rpcError.isEmpty()) return QJsonObject{};
+            const auto preview = rpc("command.preview", {{"command", command}, {"parameters", parameters}, {"expectedRevision", project.value("revision")}});
+            if (!rpcError.isEmpty()) return QJsonObject{};
+            const auto approval = rpc("host.approve", {{"previewId", preview.value("previewId")}, {"previewHash", preview.value("previewHash")}});
+            if (!rpcError.isEmpty()) return QJsonObject{};
+            const auto submitted = rpc("command.execute", {{"previewId", preview.value("previewId")}, {"approvalToken", approval.value("approvalToken")}});
+            if (!rpcError.isEmpty()) return QJsonObject{};
+            QElapsedTimer deadline; deadline.start();
+            QJsonObject job;
+            while (deadline.elapsed() < 30000) {
+                job = rpc("jobs.query", {{"jobId", submitted.value("jobId")}}).value("job").toObject();
+                if (!rpcError.isEmpty()) return QJsonObject{};
+                const auto state = job.value("state").toString();
+                if (state != "queued" && state != "running" && state != "cancelling") return job;
+                QTest::qWait(30);
+            }
+            rpcError = "Job timeout"; return job;
+        };
+        const auto validation = execute("extension.validate", identity);
+        QVERIFY2(rpcError.isEmpty(), qPrintable(rpcError));
+        QVERIFY2(validation.value("state") == "succeeded", QJsonDocument(validation).toJson().constData());
+        const auto activation = execute("extension.activate", identity);
+        QVERIFY2(activation.value("state") == "succeeded", QJsonDocument(activation).toJson().constData());
+        const QJsonObject series{{"times", QJsonArray{0, 1}}, {"values", QJsonArray{3, 4}}, {"timeUnit", "s"}, {"valueUnit", "m"}};
+        const auto run = execute("extension.run", {{"extensionId", "acceptance.generated"}, {"bundleHash", candidate.value("bundleHash")}, {"series", series}});
+        QVERIFY2(run.value("state") == "succeeded", QJsonDocument(run).toJson().constData());
+        const auto metrics = run.value("result").toObject().value("metrics").toObject();
+        QVERIFY(qAbs(metrics.value("rms").toDouble() - 3.5355339059327378) < 1e-12);
+        QCOMPARE(metrics.value("peakAbs").toDouble(), 4.0);
+        QCOMPARE(metrics.value("peakTime").toDouble(), 1.0);
+        QCOMPARE(metrics.value("valueUnit").toString(), QString("m"));
+        qInfo("Generated extension independently validated, activated and executed successfully.");
+        service->stop();
+        QTRY_VERIFY_WITH_TIMEOUT(service->isStopped(), 5000);
+    }
+
+    void generatedExtensionRunsThroughGui()
+    {
+        const auto workspace = qEnvironmentVariable("RANGE_TEST_GENERATED_EXTENSION_WORKSPACE");
+        if (workspace.isEmpty()) QSKIP("Opt-in GUI acceptance of the retained real-model-generated candidate.");
+        auto *window = Application::instance()->getMainWindow();
+        auto *workflow = window->findChild<WorkflowWidget *>();
+        auto *widget = window->findChild<ExtensionWidget *>();
+        QVERIFY(workflow); QVERIFY(widget);
+        auto config = WorkflowProcess::defaultConfiguration(workspace);
+        config.trustedExtensions = true;
+        workflow->openWorkspace(config);
+        QTRY_VERIFY_WITH_TIMEOUT(workflow->transport()->isReady(), 15000);
+        auto *tree = widget->findChild<QTreeWidget *>("extensionList");
+        QVERIFY(tree);
+        const auto activeItem = [&]() -> QTreeWidgetItem * {
+            QTreeWidgetItemIterator it(tree);
+            while (*it) {
+                auto *item = *it;
+                if (item->text(0) == "Version 1.0.0" && item->text(1) == "active") return item;
+                ++it;
+            }
+            return nullptr;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(activeItem(), 15000);
+        tree->setCurrentItem(activeItem());
+        auto *times = widget->findChild<QPlainTextEdit *>("extensionSeriesTimes");
+        auto *values = widget->findChild<QPlainTextEdit *>("extensionSeriesValues");
+        auto *unit = widget->findChild<QComboBox *>("extensionValueUnit");
+        auto *run = widget->findChild<QPushButton *>("extensionRun");
+        auto *approve = widget->findChild<QPushButton *>("extensionApprove");
+        auto *metrics = widget->findChild<QTableWidget *>("extensionMetrics");
+        QVERIFY(times && values && unit && run && approve && metrics);
+        times->setPlainText("0, 1"); values->setPlainText("3, 4"); unit->setCurrentText("m");
+        QTRY_VERIFY_WITH_TIMEOUT(run->isEnabled(), 15000);
+        run->click();
+        QTRY_VERIFY_WITH_TIMEOUT(approve->isEnabled(), 15000);
+        approve->click();
+        QTRY_VERIFY_WITH_TIMEOUT(metrics->rowCount() == 3 && metrics->item(0, 1)
+            && qAbs(metrics->item(0, 1)->text().toDouble() - 3.5355339059327378) < 1e-9, 30000);
+        QCOMPARE(metrics->item(0, 2)->text(), QString("m"));
+        QCOMPARE(metrics->item(1, 1)->text().toDouble(), 4.0);
+        QCOMPARE(metrics->item(2, 1)->text().toDouble(), 1.0);
+        qInfo("Real-model-generated extension ran through the GUI preview, approval and result table.");
+        workflow->transport()->stop();
+        QTRY_VERIFY_WITH_TIMEOUT(workflow->transport()->isStopped(), 5000);
+    }
+
+    void solverPublicationDoesNotOverwriteNewerEdits()
+    {
+        QTemporaryDir directory;
+        auto *session = Application::instance()->getSession();
+        auto source = fixture("publication");
+        source.setFileName(directory.filePath("source.rbm"));
+        session->addModel(source);
+        session->addModel(fixture("Other document with history"));
+        auto *host = session->getModelCommandHost();
+        QCOMPARE(host->execute(0, request(host->query(0), 33)).value("status").toString(), QString("accepted"));
+        QCOMPARE(host->execute(1, request(host->query(1), 44)).value("status").toString(), QString("accepted"));
+        const auto previousHistory = session->getModel(0).getUndoStackSize();
+        const auto otherHistory = session->getModel(1).getUndoStackSize();
+        const auto stamp = session->modelCommandStamp(0);
+        auto result = source;
+        result.getProblemSetup().getModalSetup().setNIterations(58);
+        result.setFileName(directory.filePath("result.rbm"));
+        QSignalSpy events(session, &Session::solverResultAvailable);
+        QString error;
+        QVERIFY(session->acceptSolverResult(stamp, result, result.getFileName(), &error));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 58u);
+        QCOMPARE(session->getModel(0).getFileName(), source.getFileName());
+        QVERIFY(session->getModel(0).getUndoStackSize() > 0);
+        QCOMPARE(session->getModel(0).getUndoStackSize(), previousHistory + 1);
+        QCOMPARE(session->getModel(1).getUndoStackSize(), otherHistory);
+        QCOMPARE(session->getModel(1).getProblemSetup().getModalSetup().getNIterations(), 44u);
+        QVERIFY(!session->acceptSolverResult(stamp, source, source.getFileName(), &error));
+        QVERIFY(error.isEmpty());
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 58u);
+        QCOMPARE(events.count(), 2);
+        QCOMPARE(events.last().at(3).toBool(), false);
+        session->setModelSelected(0, true);
+        auto *actions = Application::instance()->getActionList();
+        actions->processAvailability();
+        actions->getAction(Action::ACTION_GEOMETRY_UNDO)->trigger();
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 33u);
+        actions->processAvailability();
+        actions->getAction(Action::ACTION_GEOMETRY_REDO)->trigger();
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 58u);
+        session->clear();
+        session->addModel(fixture("new incarnation"));
+        QVERIFY(!session->acceptSolverResult(stamp, result, result.getFileName(), &error));
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 12u);
+    }
+
+    void workflowPanelRunsAndResumesRealBeam()
+    {
+        QTemporaryDir directory;
+        auto *widget = Application::instance()->getMainWindow()->findChild<WorkflowWidget *>();
+        QVERIFY(widget);
+        const auto config = WorkflowProcess::defaultConfiguration(directory.path());
+        QSignalSpy errors(widget->transport(), &WorkflowProcess::serviceError);
+        QSignalSpy accepted(widget, &WorkflowWidget::jobAccepted);
+        QSignalSpy results(widget, &WorkflowWidget::resultDisplayed);
+        widget->openWorkspace(config);
+        QTRY_VERIFY_WITH_TIMEOUT(widget->transport()->isReady(), 15000);
+        widget->previewCommand("workflow.configure", {{"model", "cantilever-beam"},
+            {"dt", .005}, {"steps", 20}, {"targetDamping", .1}});
+        QTRY_VERIFY_WITH_TIMEOUT(!widget->currentPreview().isEmpty(), 15000);
+        widget->applyPreview();
+        QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 15000);
+        results.clear();
+        widget->previewCommand("workflow.run", {{"mode", "both"}, {"independentReference", true}});
+        QTRY_VERIFY_WITH_TIMEOUT(!widget->currentPreview().isEmpty(), 15000);
+        widget->applyPreview();
+        QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 60000);
+        auto first = results.last().at(0).toJsonObject();
+        QCOMPARE(first.value("totalSteps").toInt(), 20);
+        QVERIFY(first.contains("active")); QVERIFY(first.contains("passive"));
+        QVERIFY(first.value("active").toObject().value("maxDisplacementErrorM").toDouble() < 1e-8);
+        auto *table = widget->findChild<QTableWidget *>("workflowResults");
+        QVERIFY(table); QCOMPARE(table->rowCount(), 5);
+        results.clear();
+        widget->previewCommand("workflow.resume", {{"jobId", first.value("jobId")}, {"additionalSteps", 20}});
+        QTRY_VERIFY_WITH_TIMEOUT(!widget->currentPreview().isEmpty(), 15000);
+        widget->applyPreview();
+        QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 60000);
+        const auto resumed = results.last().at(0).toJsonObject();
+        QCOMPARE(resumed.value("totalSteps").toInt(), 40);
+        QVERIFY(resumed.value("active").toObject().value("maxRotationErrorRad").toDouble() < 1e-8);
+        QCOMPARE(accepted.count(), 3);
+        QCOMPARE(errors.count(), 0);
+        widget->transport()->stop();
+        QTRY_VERIFY_WITH_TIMEOUT(widget->transport()->isStopped(), 5000);
+    }
+
     void cleanup()
     {
+        auto *window = Application::instance()->getMainWindow();
+        for (auto *agent : window->findChildren<AgentWidget *>()) agent->taskRunner()->cancel();
+        for (auto *workflow : window->findChildren<WorkflowWidget *>())
+        {
+            workflow->transport()->stop();
+            QTRY_VERIFY_WITH_TIMEOUT(workflow->transport()->isStopped(), 5000);
+        }
         QTRY_VERIFY_WITH_TIMEOUT(!ModelCommandHost::isBusy(), 15000);
         Application::instance()->getSession()->clear();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
+    void documentListChangesPreserveEachHistory()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(fixture("First history"));
+        QCOMPARE(host->execute(0, request(host->query(0), 31)).value("status").toString(), QString("accepted"));
+        const auto firstDepth = session->getModel(0).getUndoStackSize();
+        QVERIFY(firstDepth > 0);
+        session->addModel(fixture("Second history"));
+        QCOMPARE(session->getModel(0).getUndoStackSize(), firstDepth);
+        QCOMPARE(host->execute(1, request(host->query(1), 42)).value("status").toString(), QString("accepted"));
+        QCOMPARE(host->execute(1, request(host->query(1), 43)).value("status").toString(), QString("accepted"));
+        const auto secondDepth = session->getModel(1).getUndoStackSize();
+        QVERIFY(secondDepth > firstDepth);
+        session->addModel(fixture("Third document"));
+        QCOMPARE(session->getModel(1).getUndoStackSize(), secondDepth);
+        session->removeModel(0);
+        QCOMPARE(session->getModel(0).getName(), QString("Second history"));
+        QCOMPARE(session->getModel(0).getUndoStackSize(), secondDepth);
+        session->getModel(0).undo(0);
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 42u);
+        QCOMPARE(session->getModel(1).getUndoStackSize(), 0u);
     }
 
     void windowEditHistorySaveReopen()
@@ -319,6 +697,12 @@ private slots:
     }
 };
 
+int runGuiHostContextTests(int argc, char **argv);
+int runAgentTaskRunnerTests(int argc, char **argv);
+int runSolverSnapshotTests(int argc, char **argv);
+int runExtensionWidgetTests(int argc, char **argv);
+int runAgentEventViewTests(int argc, char **argv);
+
 int main(int argc, char **argv)
 {
     QTemporaryDir settingsDirectory;
@@ -338,7 +722,21 @@ int main(int argc, char **argv)
     WindowApplication application(argc, argv);
     if (qEnvironmentVariableIsSet("RANGE_LIFECYCLE_TRACE")) RLogger::getInstance().setLevel(R_LOG_LEVEL_TRACE);
     TestGuiModelLifecycle test;
-    const int result = QTest::qExec(&test, argc, argv);
+    const bool hostContext = argc > 1 && QByteArray(argv[1]) == "--host-context";
+    const bool agentRunner = argc > 1 && QByteArray(argv[1]) == "--agent-runner";
+    const bool solverSnapshot = argc > 1 && QByteArray(argv[1]) == "--solver-snapshot";
+    const bool extensionWidget = argc > 1 && QByteArray(argv[1]) == "--extension-widget";
+    const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
+    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView)
+    {
+        for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
+        --argc; argv[argc] = nullptr;
+    }
+    const int result = hostContext ? runGuiHostContextTests(argc, argv)
+        : agentRunner ? runAgentTaskRunnerTests(argc, argv)
+        : solverSnapshot ? runSolverSnapshotTests(argc, argv)
+        : extensionWidget ? runExtensionWidgetTests(argc, argv)
+        : agentEventView ? runAgentEventViewTests(argc, argv) : QTest::qExec(&test, argc, argv);
     application.getSession()->clear();
     delete application.getMainWindow();
     SolverManager::getInstance().stopServer();

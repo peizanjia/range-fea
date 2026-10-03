@@ -3622,6 +3622,12 @@ void Model::storeCurentVersion(uint maxDepth, const QString &actionDescription)
     }
 }
 
+void Model::copyHistoryFrom(const Model &model)
+{
+    undoStack = model.undoStack;
+    redoStack = model.redoStack;
+}
+
 void Model::updateHistoryStackSize(uint maxDepth)
 {
     if (this->undoStack.size() > int(maxDepth))

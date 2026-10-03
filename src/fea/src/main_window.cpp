@@ -7,6 +7,7 @@
 #include <QSplitter>
 #include <QScrollBar>
 #include <QHBoxLayout>
+#include <QScrollArea>
 
 #include <rbl_error.h>
 #include <rbl_job_manager.h>
@@ -37,6 +38,11 @@
 #include "main_window.h"
 #include "session.h"
 #include "geometry_transform_widget.h"
+#include "workflow_widget.h"
+#include "agent_widget.h"
+#include "extension_widget.h"
+#include "model_io.h"
+#include "model_command_host.h"
 
 MainWindow::MainWindow(Session *session,
                        RCloudSessionManager *cloudSession,
@@ -120,6 +126,19 @@ MainWindow::MainWindow(Session *session,
 
     this->resultsTab = this->createResultsTab();
     solverDockTabWidget->addTab(this->resultsTab,tr("Results"));
+    auto *workflowWidget = new WorkflowWidget(solverDockTabWidget);
+    const auto scrollable = [solverDockTabWidget](QWidget *widget) {
+        auto *scroll = new QScrollArea(solverDockTabWidget);
+        scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame); scroll->setWidget(widget);
+        return scroll;
+    };
+    solverDockTabWidget->addTab(scrollable(workflowWidget), tr("Workflow"));
+    connect(session, &Session::solverResultAvailable, workflowWidget, &WorkflowWidget::showDocumentResult);
+    connect(workflowWidget, &WorkflowWidget::openResultRequested, this, [](const QString &path) {
+        RJobManager::getInstance().submit(new ModelIO(MODEL_IO_OPEN, path));
+    });
+    solverDockTabWidget->addTab(scrollable(new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), solverDockTabWidget)), tr("Agent tasks"));
+    solverDockTabWidget->addTab(scrollable(new ExtensionWidget(workflowWidget->transport(), solverDockTabWidget)), tr("Extensions"));
 
     this->restoreGeometry(this->applicationSettings->value("mainWindow/geometry").toByteArray());
     this->restoreState(this->applicationSettings->value("mainWindow/windowState").toByteArray());
@@ -817,15 +836,35 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     R_LOG_TRACE_IN;
 
+    if (property("shutdownPending").toBool()) { event->ignore(); return; }
+
     QString quitQuestion;
-    if (SolverManager::getInstance().getNRunning() > 0)
+    if (ModelCommandHost::isBusy())
     {
-        quitQuestion = "<b>" + tr("If you quit now solver will continue executing in the background.") + "</b><br/>";
+        quitQuestion = "<b>" + tr("The application will finish queued document jobs before exiting. Assistant steps and reference-workflow connections will stop.") + "</b><br/>";
     }
 
     if (RMessageBox::quit(this,quitQuestion) == RMessageBox::Yes)
     {
         this->writeSettings();
+        for (auto *agent : findChildren<AgentWidget *>()) agent->taskRunner()->cancel();
+        for (auto *workflow : findChildren<WorkflowWidget *>()) workflow->transport()->stop();
+        if (ModelCommandHost::isBusy())
+        {
+            // Worker result publication uses the GUI event loop. Keep it alive
+            // until managers drain; quitting it first can deadlock publication.
+            setProperty("shutdownPending", true);
+            setEnabled(false);
+            statusBar()->showMessage(tr("Waiting for document jobs to finish before exiting…"));
+            auto *drain = new QTimer(this);
+            connect(drain, &QTimer::timeout, this, [this, drain] {
+                if (ModelCommandHost::isBusy()) return;
+                drain->stop(); writeSettings(); QCoreApplication::quit();
+            });
+            drain->start(100);
+            event->ignore();
+            return;
+        }
         // Accept event -> close window.
         event->accept();
     }

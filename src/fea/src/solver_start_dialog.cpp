@@ -128,8 +128,10 @@ int SolverStartDialog::exec()
 
     if (retVal == QDialog::Accepted)
     {
+        Application::instance()->getSession()->storeCurentModelVersion(this->modelID, tr("Configure solver run"));
         Application::instance()->getSession()->getModel(this->modelID).getProblemSetup().setRestart(this->restartSolverCheck->isChecked());
         Application::instance()->getSession()->getModel(this->modelID).getTimeSolver().harmonizeTimesWithInput(this->restartSolverCheck->isChecked());
+        Application::instance()->getSession()->setProblemChanged(this->modelID);
 
         // Start solver task
         SolverManager::getInstance().submit(this->pSolverTask);

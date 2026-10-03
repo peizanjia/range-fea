@@ -21,6 +21,7 @@ API_VERSION = "range.workflow/v1"
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_STATE_BYTES = 64 * 1024 * 1024
 MAX_STEPS = 5000
+MAX_EXTENSION_JOBS = 4
 TERMINAL_STATES = {"succeeded", "failed", "cancelled", "interrupted"}
 
 
@@ -77,7 +78,7 @@ def identifier(value: Any, name: str = "ID") -> str:
     return value
 
 
-def finite_tree(value: Any, depth: int = 0):
+def finite_tree(value: Any, depth: int = 0, max_collection_size: int = 1024):
     if depth > 16:
         raise WorkflowError("INVALID_PARAMETERS", "JSON nesting exceeds 16 levels")
     if value is None or isinstance(value, bool):
@@ -93,14 +94,14 @@ def finite_tree(value: Any, depth: int = 0):
         if len(value) > 65536:
             raise WorkflowError("INVALID_PARAMETERS", "Text exceeds size limit")
     elif isinstance(value, (list, dict)):
-        if len(value) > 1024:
+        if len(value) > max_collection_size:
             raise WorkflowError("INVALID_PARAMETERS", "Collection exceeds size limit")
         if isinstance(value, dict):
             if any(not isinstance(k, str) or len(k) > 256 for k in value):
                 raise WorkflowError("INVALID_PARAMETERS", "Invalid object key")
             value = value.values()
         for item in value:
-            finite_tree(item, depth + 1)
+            finite_tree(item, depth + 1, max_collection_size)
     else:
         raise WorkflowError("INVALID_PARAMETERS", "Value is not JSON")
 
@@ -139,9 +140,13 @@ class WorkspaceLock:
 
 class WorkflowService:
     def __init__(self, workspace: Path, solver: Path, native: Path,
-                 examples: Path, python: Path):
+                 examples: Path, python: Path, *, trusted_extensions: bool = False):
         self.workspace = Path(workspace).resolve()
         self.solver, self.native, self.examples, self.python = map(Path, (solver, native, examples, python))
+        if type(trusted_extensions) is not bool:
+            raise WorkflowError("INVALID_PARAMETERS", "trusted_extensions must be an explicit boolean")
+        self.trusted_extensions = trusted_extensions
+        self.extension_timeout_seconds = 15
         for path in (self.solver, self.native, self.python):
             if not path.is_absolute() or not path.is_file():
                 raise WorkflowError("INVALID_PATH", "Tool paths must be existing absolute files")
@@ -153,11 +158,14 @@ class WorkflowService:
         self._state_path = self.workspace / "workflow-state.json"
         self.runner = ProcessRunner()
         self._workers: dict[str, tuple[threading.Thread, threading.Event]] = {}
+        self._extension_writers: dict[str, str] = {}
         self._commands: dict[str, dict] = {}
         self._closed = False
         self._fault = False
         try:
             self._state = self._load()
+            from .extensions import install as install_extensions
+            install_extensions(self)
             candidate = copy.deepcopy(self._state)
             candidate["sessionId"] = str(uuid.uuid4())
             candidate["revision"] += 1
@@ -192,6 +200,8 @@ class WorkflowService:
             self._normalize_builtin("workflow.configure", value["configuration"], state=value)
             if not all(isinstance(value[k], dict) for k in ("jobs", "previews", "extensions")):
                 raise ValueError("invalid state collections")
+            from .extensions import validate_registry_state
+            validate_registry_state(value["extensions"])
             if not isinstance(value["audit"], list) or value["auditRevision"] != len(value["audit"]):
                 raise ValueError("invalid audit sequence")
             # Strict finite serialization also rejects NaN accepted by json.loads.
@@ -251,10 +261,14 @@ class WorkflowService:
             temporary.unlink(missing_ok=True)
         self._state = candidate
 
-    def register_command(self, name: str, *, descriptor: dict, normalize, execute, bind=None):
+    def register_command(self, name: str, *, descriptor: dict, normalize, execute, bind=None,
+                         lane: str = "project", registry_write: bool = False):
         if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,100}", name) or name.startswith("workflow.") or name in self._commands:
             raise ValueError("Invalid or duplicate extension command")
-        self._commands[name] = dict(descriptor=descriptor, normalize=normalize, execute=execute, bind=bind)
+        if lane not in ("project", "extension") or type(registry_write) is not bool:
+            raise ValueError("Invalid command conflict scope")
+        self._commands[name] = dict(descriptor=descriptor, normalize=normalize, execute=execute,
+                                    bind=bind, lane=lane, registry_write=registry_write)
 
     def state_snapshot(self) -> dict:
         with self._lock:
@@ -264,10 +278,13 @@ class WorkflowService:
         with self._lock:
             return copy.deepcopy(self._state["extensions"])
 
+    def _capability_revision(self) -> int:
+        return sum(entry.get("capabilityRevision", 0) for entry in self._state["extensions"].values())
+
     def project_snapshot(self) -> dict:
         with self._lock:
             return {k: copy.deepcopy(self._state[k]) for k in
-                    ("projectId", "modelId", "sessionId", "revision", "configuration")} | {"busy": self._busy(), "template": self._state["configuration"].get("model", "four-rod")}
+                    ("projectId", "modelId", "sessionId", "revision", "configuration")} | {"busy": self._busy("project"), "template": self._state["configuration"].get("model", "four-rod")}
 
     def result_snapshot(self, job_id: str) -> dict:
         with self._lock:
@@ -276,8 +293,44 @@ class WorkflowService:
                 raise WorkflowError("RESULT_UNAVAILABLE", "Only completed successful jobs have accepted results")
             return copy.deepcopy(job["result"])
 
-    def _busy(self) -> bool:
-        return any(x["state"] not in TERMINAL_STATES for x in self._state["jobs"].values())
+    def _busy(self, lane: str = "all") -> bool:
+        return self._active_jobs(lane) > 0
+
+    def _active_jobs(self, lane: str = "all") -> int:
+        return sum(1 for x in self._state["jobs"].values()
+                   if x["state"] not in TERMINAL_STATES and
+                   (lane == "all" or x.get("lane", "project") == lane))
+
+    def _command_lane(self, command: str) -> str:
+        return self._commands.get(command, {}).get("lane", "project")
+
+    def _command_extension_id(self, command: str, parameters: dict) -> str | None:
+        if not command.startswith("extension."):
+            return None
+        if command == "extension.stage":
+            manifest = parameters.get("manifest")
+            if isinstance(manifest, dict):
+                return manifest.get("extensionId")
+            return parameters.get("extensionId")
+        if command in ("extension.validate", "extension.activate"):
+            candidate_id = parameters.get("candidateId")
+            if isinstance(candidate_id, str):
+                for extension_id, entry in self._state["extensions"].items():
+                    if candidate_id in entry.get("candidates", {}):
+                        return extension_id
+        return parameters.get("extensionId")
+
+    def _compact_stale_extension_previews(self, previews: dict, revision: int, session_id: str):
+        from .extensions import compact_job_parameters
+        for preview in previews.values():
+            normalized = preview.get("normalized", {})
+            command = normalized.get("command")
+            parameters = normalized.get("parameters", {})
+            if (command in ("extension.stage", "extension.run") and "jobId" not in preview and
+                    (preview.get("sessionId") != session_id or preview.get("revision") != revision)):
+                if ((command == "extension.stage" and "manifest" in parameters) or
+                        (command == "extension.run" and "series" in parameters)):
+                    normalized["parameters"] = compact_job_parameters(command, parameters)
 
     def _job(self, job_id: str) -> dict:
         identifier(job_id, "jobId")
@@ -312,6 +365,9 @@ class WorkflowService:
         raise WorkflowError("UNKNOWN_COMMAND", "Command is not in the capability catalog")
 
     def _binding(self, command: str, parameters: dict) -> dict:
+        if command.startswith("extension."):
+            from .extensions import bind_command
+            return bind_command(self, command, parameters)
         configuration = (parameters if command == "workflow.configure" else self._job(parameters["jobId"])["result"]["configuration"]
                          if command == "workflow.resume" else self._state["configuration"])
         template = TEMPLATES[configuration.get("model", "four-rod")]
@@ -348,7 +404,11 @@ class WorkflowService:
                 if self._closed:
                     raise WorkflowError("SERVICE_CLOSED", "Service is closed")
                 exact(request, {"apiVersion", "requestId", "operation", "parameters"})
-                finite_tree(request)
+                parameters = request.get("parameters", {}) if isinstance(request, dict) else {}
+                command = parameters.get("command") if isinstance(parameters, dict) else None
+                is_extension_preview = (request.get("operation") == "command.preview" and
+                                        isinstance(command, str) and command.startswith("extension."))
+                finite_tree(request, max_collection_size=100_000 if is_extension_preview else 1024)
                 if len(canonical(request)) > MAX_REQUEST_BYTES:
                     raise WorkflowError("REQUEST_TOO_LARGE", "Request exceeds byte limit")
                 if request["apiVersion"] != API_VERSION:
@@ -384,6 +444,10 @@ class WorkflowService:
             items = [x for x in self._state["audit"] if x["revision"] > after][:limit]
             return {"records": items, "auditRevision": self._state["auditRevision"],
                     "nextRevision": items[-1]["revision"] if items else after}
+        from .extensions import read_operation
+        extension_result = read_operation(self, operation, p)
+        if extension_result is not None:
+            return extension_result
         if self._fault:
             raise WorkflowError("PERSISTENCE_ERROR", "Service requires reopening after a persistence failure")
         if operation == "command.preview":
@@ -392,10 +456,34 @@ class WorkflowService:
             expected = integer(p["expectedRevision"], "expectedRevision", 0, 2**53 - 1)
             if expected != self._state["revision"]:
                 raise WorkflowError("STALE_REVISION", "Project revision changed")
-            if self._busy():
-                raise WorkflowError("PROJECT_BUSY", "A job already owns this project")
+            if command not in self._commands and not command.startswith("workflow."):
+                raise WorkflowError("UNKNOWN_COMMAND", "Command is not in the capability catalog")
+            lane = self._command_lane(command)
+            if lane == "project" and self._busy("project"):
+                raise WorkflowError("PROJECT_BUSY", "A project job already owns the model workflow lane")
+            if lane == "extension" and self._active_jobs("extension") >= MAX_EXTENSION_JOBS:
+                raise WorkflowError("EXTENSION_BUSY", "Extension job concurrency limit reached")
+            extension_id = self._command_extension_id(command, p["parameters"])
+            if extension_id and extension_id in self._extension_writers:
+                raise WorkflowError("EXTENSION_BUSY", "A registry write for this extension is already running")
             normalized = self._commands[command]["normalize"](self, p["parameters"]) if command in self._commands else self._normalize_builtin(command, p["parameters"])
-            finite_tree(normalized)
+            finite_tree(normalized, max_collection_size=100_000 if lane == "extension" else 1024)
+            candidate = copy.deepcopy(self._state)
+            self._compact_stale_extension_previews(candidate["previews"], self._state["revision"],
+                                                   self._state["sessionId"])
+            if command in ("extension.stage", "extension.run"):
+                from .extensions import MAX_PENDING_PREVIEW_BYTES
+                retained = sum(len(canonical(preview["normalized"])) for preview in candidate["previews"].values()
+                    if preview.get("sessionId") == self._state["sessionId"] and
+                       preview.get("revision") == self._state["revision"] and "jobId" not in preview and
+                       preview.get("normalized", {}).get("command") in ("extension.stage", "extension.run") and
+                       ((preview["normalized"]["command"] == "extension.stage" and
+                         "source" in preview["normalized"]["parameters"]) or
+                        (preview["normalized"]["command"] == "extension.run" and
+                         "series" in preview["normalized"]["parameters"])) )
+                if retained + len(canonical({"command": command, "parameters": normalized})) > MAX_PENDING_PREVIEW_BYTES:
+                    raise WorkflowError("PENDING_PREVIEW_LIMIT",
+                        "Pending extension preview data exceeds 8 MiB; execute an approved preview or reopen the service to expire stale previews")
             value = {"previewId": str(uuid.uuid4()), "projectId": self._state["projectId"],
                      "modelId": self._state["modelId"], "sessionId": self._state["sessionId"],
                      "revision": expected, "normalized": {"command": command, "parameters": normalized},
@@ -403,7 +491,6 @@ class WorkflowService:
             value["effectiveConfiguration"] = (copy.deepcopy(self._job(normalized["jobId"])["result"]["configuration"])
                 if command == "workflow.resume" else normalized if command == "workflow.configure" else copy.deepcopy(self._state["configuration"]))
             value["previewHash"] = digest(value)
-            candidate = copy.deepcopy(self._state)
             if len(candidate["previews"]) >= 1024:
                 raise WorkflowError("PREVIEW_LIMIT", "Workspace preview limit reached")
             candidate["previews"][value["previewId"]] = value
@@ -413,9 +500,11 @@ class WorkflowService:
         if operation == "host.approve":
             exact(p, {"previewId", "previewHash"})
             preview = self._preview(p["previewId"])
-            self._validate_preview(preview)
             if p["previewHash"] != preview["previewHash"]:
                 raise WorkflowError("PREVIEW_MISMATCH", "Approval hash does not match preview")
+            if "jobId" in preview:
+                return {"approvalToken": preview.get("approvalToken", ""), "previewId": preview["previewId"]}
+            self._validate_preview(preview)
             candidate = copy.deepcopy(self._state)
             approved = candidate["previews"][preview["previewId"]]
             token = approved.setdefault("approvalToken", secrets.token_urlsafe(32))
@@ -434,23 +523,45 @@ class WorkflowService:
                 job = self._job(preview["jobId"])
                 return {"jobId": job["jobId"], "state": job["state"], "revision": self._state["revision"]}
             self._validate_preview(preview)
-            if self._busy():
-                raise WorkflowError("PROJECT_BUSY", "A job already owns this project")
+            command = preview["normalized"]["command"]
+            command_entry = self._commands.get(command)
+            lane = command_entry.get("lane", "project") if command_entry else "project"
+            if lane == "project" and self._busy("project"):
+                raise WorkflowError("PROJECT_BUSY", "A project job already owns the model workflow lane")
+            if lane == "extension" and self._active_jobs("extension") >= MAX_EXTENSION_JOBS:
+                raise WorkflowError("EXTENSION_BUSY", "Extension job concurrency limit reached")
+            if command_entry and command_entry["descriptor"].get("trustedRuntimeRequired") and not self.trusted_extensions:
+                raise WorkflowError("TRUSTED_RUNTIME_REQUIRED", "Enable trusted developer extension mode before executing Python")
+            extension_id = self._command_extension_id(command, preview["normalized"]["parameters"])
+            registry_write = bool(command_entry and command_entry.get("registry_write"))
+            if registry_write and extension_id in self._extension_writers:
+                raise WorkflowError("EXTENSION_BUSY", "A registry write for this extension is already running")
             jid = str(uuid.uuid4())
+            execution_parameters = copy.deepcopy(preview["normalized"]["parameters"])
+            stored_parameters = execution_parameters
+            if command.startswith("extension."):
+                from .extensions import compact_job_parameters
+                stored_parameters = compact_job_parameters(command, execution_parameters)
             candidate = copy.deepcopy(self._state)
             candidate["revision"] += 1
             candidate["previews"][preview["previewId"]]["jobId"] = jid
-            job = {"jobId": jid, "state": "queued", **preview["normalized"],
+            candidate["previews"][preview["previewId"]]["normalized"]["parameters"] = copy.deepcopy(stored_parameters)
+            job = {"jobId": jid, "state": "queued", "command": command,
+                   "parameters": copy.deepcopy(stored_parameters),
                    "configuration": copy.deepcopy(preview["effectiveConfiguration"]), "createdAt": utc(),
                    "previewId": preview["previewId"], "previewHash": preview["previewHash"],
-                   "projectId": candidate["projectId"], "modelId": candidate["modelId"],
+                   "projectId": candidate["projectId"], "modelId": candidate["modelId"], "lane": lane,
                    "revision": candidate["revision"]}
             candidate["jobs"][jid] = job
+            self._compact_stale_extension_previews(candidate["previews"], candidate["revision"],
+                                                   candidate["sessionId"])
             self._commit(candidate, "command.execute", "accepted", job_id=jid, approval="approved",
                          parameters={"command": job["command"], "previewHash": job["previewHash"]})
             cancel = threading.Event()
-            worker = threading.Thread(target=self._run_job, args=(jid, cancel), daemon=True)
+            worker = threading.Thread(target=self._run_job, args=(jid, cancel, execution_parameters), daemon=True)
             self._workers[jid] = (worker, cancel)
+            if registry_write and extension_id:
+                self._extension_writers[extension_id] = jid
             worker.start()
             return {"jobId": jid, "state": "queued", "revision": self._state["revision"]}
         if operation == "job.cancel":
@@ -495,7 +606,7 @@ class WorkflowService:
                               "sha256": file_hash(path), "sizeBytes": path.stat().st_size})
         return artifacts
 
-    def _run_job(self, job_id: str, cancel: threading.Event):
+    def _run_job(self, job_id: str, cancel: threading.Event, execution_parameters: dict | None = None):
         try:
             with self._lock:
                 candidate = copy.deepcopy(self._state)
@@ -505,7 +616,11 @@ class WorkflowService:
                 job.update(state="running", startedAt=utc())
                 self._commit(candidate, "job.start", "running", job_id=job_id)
                 job = copy.deepcopy(job)
+                if execution_parameters is not None:
+                    job["parameters"] = copy.deepcopy(execution_parameters)
                 binding = copy.deepcopy(self._state["previews"][job["previewId"]]["binding"])
+                if job.get("lane") == "extension":
+                    job["_extensionBinding"] = binding
             directory = self.workspace / "jobs" / job_id
             directory.mkdir(parents=True, exist_ok=False)
             if job["command"] == "workflow.configure":
@@ -529,9 +644,15 @@ class WorkflowService:
                     candidate["configuration"] = job["parameters"]
                 update = result.pop("extensionUpdate", None)
                 if update is not None:
-                    exact(update, {"extensionId", "entry"})
-                    identifier(update["extensionId"], "extensionId")
-                    candidate["extensions"][update["extensionId"]] = update["entry"]
+                    if job["command"].startswith("extension."):
+                        from .extensions import merge_update
+                        capability_revision = merge_update(candidate["extensions"], update)
+                        if update["operation"] in ("activate", "rollback"):
+                            result["capabilityRevision"] = capability_revision
+                    else:
+                        exact(update, {"extensionId", "entry"})
+                        identifier(update["extensionId"], "extensionId")
+                        candidate["extensions"][update["extensionId"]] = update["entry"]
                 candidate["jobs"][job_id].update(state="succeeded", completedAt=utc(), result=result, artifacts=artifacts)
                 self._commit(candidate, "job.publish", "succeeded", job_id=job_id, artifacts=artifacts,
                              parameters={"command": job["command"], "artifactCount": len(artifacts)})
@@ -552,8 +673,18 @@ class WorkflowService:
                                      parameters={"code": code})
                     except WorkflowError:
                         self._fault = True
+        finally:
+            with self._lock:
+                stored_job = self._state.get("jobs", {}).get(job_id, {})
+                command = stored_job.get("command", "")
+                command_entry = self._commands.get(command)
+                if command_entry and command_entry.get("registry_write"):
+                    extension_id = self._command_extension_id(command, stored_job.get("parameters", {}))
+                    if extension_id and self._extension_writers.get(extension_id) == job_id:
+                        self._extension_writers.pop(extension_id, None)
 
     def capabilities(self) -> dict:
+        from .extensions import MAX_PENDING_PREVIEW_BYTES
         def schema(properties, required=None):
             return {"type": "object", "properties": properties, "required": list(properties) if required is None else required,
                     "additionalProperties": False}
@@ -565,8 +696,19 @@ class WorkflowService:
             "audit.query": schema({"afterRevision": revision_schema, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, []),
             "command.preview": schema({"command": id_schema, "parameters": {"type": "object"}, "expectedRevision": revision_schema}),
             "command.execute": schema({"previewId": id_schema, "approvalToken": {"type": "string", "minLength": 1, "maxLength": 128}}),
-            "job.cancel": schema({"jobId": id_schema})}
-        operations = [{"id": name, "readOnly": name.endswith(".query"), "parameters": parameters}
+            "job.cancel": schema({"jobId": id_schema}),
+            "extension.list": schema({"extensionId": id_schema,
+                                       "candidateOffset": {"type": "integer", "minimum": 0, "maximum": 64},
+                                       "candidateLimit": {"type": "integer", "minimum": 1, "maximum": 32}}, []),
+            "extension.candidate.get": schema({"candidateId": id_schema}),
+            "extension.version.get": schema({"extensionId": id_schema, "bundleHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}),
+            "schema.get": schema({"schemaId": {"type": "string", "enum": [
+                "range.extension/v1/manifest", "range.extension/v1/numeric-series", "range.extension/v1/statistics"]}}),
+            "knowledge.query": schema({"query": {"type": "string", "maxLength": 256},
+                                        "extensionId": id_schema}, ["query"])}
+        read_operations = {"capabilities.query", "project.query", "jobs.query", "results.query", "audit.query",
+                           "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
+        operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]
         commands = [{"id": "workflow.configure", "readOnly": False, "requiresApproval": True,
                      "parameters": schema({"dt": {"type": "number", "exclusiveMinimum": 0, "maximum": .02, "description": "Time step in seconds"},
@@ -582,8 +724,16 @@ class WorkflowService:
                      "parameters": schema({"jobId": id_schema, "additionalSteps": {"type": "integer", "minimum": 1, "maximum": MAX_STEPS}})}]
         commands += [{"id": name, **entry["descriptor"]} for name, entry in self._commands.items()]
         return {"apiVersion": API_VERSION, "operations": operations, "commands": commands,
+                "capabilityRevision": self._capability_revision(),
+                "extensionRuntime": {"trustedExtensions": self.trusted_extensions,
+                    "trustMode": "trusted-developer" if self.trusted_extensions else "disabled",
+                    "osSandbox": False, "protocolVersion": "range.extension/v1",
+                    "maxRuntimeSeconds": 15, "maxOutputBytes": 64 * 1024,
+                    "maxConcurrentJobs": MAX_EXTENSION_JOBS},
                 "models": [{"id": name, "templateFile": data["file"], "supportedCoordinates": [dof for _, dof in data["dofs"]]} for name, data in TEMPLATES.items()],
-                "limits": {"maxRequestBytes": MAX_REQUEST_BYTES, "maxConcurrentJobs": 1,
+                "limits": {"maxRequestBytes": MAX_REQUEST_BYTES, "maxProjectJobs": 1,
+                           "maxExtensionJobs": MAX_EXTENSION_JOBS,
+                           "maxPendingExtensionPreviewBytes": MAX_PENDING_PREVIEW_BYTES,
                            "maxTotalSteps": MAX_STEPS, "processTimeoutSeconds": 180,
                            "maxProcessLogBytes": self.runner.MAX_LOG_BYTES},
                 "approval": "Host approval is separate from the Agent tool catalog"}

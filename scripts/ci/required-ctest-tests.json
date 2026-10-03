@@ -108,11 +108,21 @@
     ],
     "gui-contract": [
       "tst_modal_command_widget",
-      "tst_gui_model_lifecycle"
+      "tst_gui_model_lifecycle",
+      "tst_gui_host_context",
+      "tst_agent_task_runner",
+      "tst_solver_snapshot",
+      "tst_extension_widget",
+      "tst_agent_event_view"
     ],
     "range-workflow": [
       "tst_workflow_native",
-      "tst_workflow_runtime"
+      "tst_workflow_runtime",
+      "tst_workflow_extensions",
+      "tst_private_python_packaging"
+    ],
+    "range-ai-lib": [
+      "tst_agent_tool_turn"
     ]
   }
 }

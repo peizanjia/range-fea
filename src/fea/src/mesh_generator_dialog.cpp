@@ -160,6 +160,7 @@ int MeshGeneratorDialog::exec()
         }
 
         Application::instance()->getSession()->getModel(this->modelID).setMeshInput(this->meshInput);
+        Application::instance()->getSession()->setProblemChanged(this->modelID);
 
         MeshGenerator *meshGenerator = new MeshGenerator(this->modelID);
         RJobManager::getInstance().submit(meshGenerator);

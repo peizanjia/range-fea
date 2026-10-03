@@ -2,6 +2,8 @@
 #include <QDesktopServices>
 #include <QUuid>
 #include <QMutexLocker>
+#include <QThread>
+#include <QScopeGuard>
 
 #include <rbl_job_manager.h>
 
@@ -64,8 +66,17 @@ uint Session::findModelByCommandIdentity(const QString &identity) const
 
 void Session::invalidateModelCommands(uint modelID)
 {
-    QMutexLocker guard(&this->commandStampMutex);
-    if (modelID < uint(this->commandStamps.size())) ++this->commandStamps[int(modelID)].second;
+    QPair<QString, quint64> changed;
+    {
+        QMutexLocker guard(&this->commandStampMutex);
+        if (modelID >= uint(this->commandStamps.size())) return;
+        auto &stamp = this->commandStamps[int(modelID)];
+        ++stamp.second;
+        changed = stamp;
+    }
+    // Never call observers while holding the stamp lock: GUI consumers may
+    // query the new revision while handling the notification.
+    emit documentRevisionChanged(changed.first, changed.second);
 }
 
 bool Session::recordModelSaved(uint modelID, const QString &path, QString *error)
@@ -73,6 +84,74 @@ bool Session::recordModelSaved(uint modelID, const QString &path, QString *error
     // Saving changes the external artifact binding, including a no-op save.
     this->invalidateModelCommands(modelID);
     return this->commandHost->recordArtifactPublished(modelID, path, error);
+}
+
+bool Session::acceptSolverResult(const QPair<QString, quint64> &sourceStamp,
+                                const Model &result, const QString &artifactPath,
+                                QString *error)
+{
+    if (error) error->clear();
+    if (QThread::currentThread() != thread())
+    {
+        if (error) *error = tr("Solver results must be attached on the document thread.");
+        return false;
+    }
+    const uint id = findModelByCommandIdentity(sourceStamp.first);
+    if (id == RConstants::eod || modelCommandStamp(id) != sourceStamp || ModelCommandHost::isMutationBlocked())
+    {
+        emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, false);
+        return false;
+    }
+    // Establish the pre-result audit snapshot even for documents that have not
+    // previously been inspected through the command interface.
+    if (commandHost->query(id).value("modelId").toString().isEmpty())
+    {
+        if (error) *error = tr("Could not prepare the document audit; the solver artifact has been retained.");
+        emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, false);
+        return false;
+    }
+    if (!mutex.tryLock())
+    {
+        emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, false);
+        return false;
+    }
+    if (findModelByCommandIdentity(sourceStamp.first) != id || modelCommandStamp(id) != sourceStamp)
+    {
+        mutex.unlock();
+        emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, false);
+        return false;
+    }
+    // Prepare before changing the live model/history. update() retains display
+    // properties; the task's private path must not replace the user's save path.
+    try
+    {
+        QList<Model> nextModels(models);
+        nextModels.detach();
+        for (qsizetype i = 0; i < nextModels.size(); ++i)
+            nextModels[i].copyHistoryFrom(models.at(i));
+        Model &candidate = nextModels[int(id)];
+        const QString sourcePath = candidate.getFileName();
+        candidate.storeCurentVersion(Application::instance()->getApplicationSettings()->getNHistoryRecords(),
+                                    tr("Accept solver result"));
+        candidate.update(result);
+        candidate.setFileName(sourcePath);
+        models.swap(nextModels);
+    }
+    catch (...)
+    {
+        mutex.unlock();
+        if (error) *error = tr("Could not attach the solver result; its artifact has been retained.");
+        emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, false);
+        return false;
+    }
+    mutex.unlock();
+    QString auditError;
+    const bool recorded = commandHost->recordExternalChange(id, "external_edit", &auditError);
+    setModelChanged(id);
+    emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, true);
+    if (!recorded && error)
+        *error = tr("The solver result was attached, but its audit record failed: %1").arg(auditError);
+    return true;
 }
 
 const QString &Session::getID() const
@@ -139,16 +218,30 @@ void Session::addModel(const Model &model)
 {
     R_LOG_TRACE_IN;
     bool locked = this->trylock();
-    this->models.push_back(model);
-    this->models.last().initializeMeshInput();
+    auto unlockOnFailure = qScopeGuard([this, locked] { if (locked) this->unlock(); });
+    // Model snapshots omit history. QList growth may invoke those copy
+    // constructors, so explicitly preserve each document's history.
+    QList<Model> nextModels;
+    nextModels.reserve(this->models.size() + 1);
+    for (const Model &existing : std::as_const(this->models))
+    {
+        nextModels.append(existing);
+        nextModels.last().copyHistoryFrom(existing);
+    }
+    nextModels.append(model);
+    nextModels.last().initializeMeshInput();
     {
         QMutexLocker stampGuard(&this->commandStampMutex);
-        this->commandStamps.append({QUuid::createUuid().toString(QUuid::WithoutBraces), 0});
+        auto nextStamps = this->commandStamps;
+        nextStamps.append({QUuid::createUuid().toString(QUuid::WithoutBraces), 0});
+        this->models.swap(nextModels);
+        this->commandStamps.swap(nextStamps);
     }
     if (locked)
     {
         this->unlock();
     }
+    unlockOnFailure.dismiss();
     emit this->modelAdded(uint(this->models.size()-1));
     R_LOG_TRACE_OUT;
 }
@@ -170,16 +263,30 @@ void Session::removeModel(uint position)
 {
     R_LOG_TRACE_IN;
     bool locked = this->trylock();
-    this->models.removeAt(int(position));
+    auto unlockOnFailure = qScopeGuard([this, locked] { if (locked) this->unlock(); });
+    // Compaction by Model assignment would keep the removed slot's history.
+    // Prepare survivors with their own histories before publishing the list.
+    QList<Model> nextModels;
+    nextModels.reserve(this->models.size() - 1);
+    for (qsizetype i = 0; i < this->models.size(); ++i)
+    {
+        if (i == qsizetype(position)) continue;
+        nextModels.append(this->models.at(i));
+        nextModels.last().copyHistoryFrom(this->models.at(i));
+    }
     {
         QMutexLocker stampGuard(&this->commandStampMutex);
-        this->commandStamps.removeAt(int(position));
+        auto nextStamps = this->commandStamps;
+        nextStamps.removeAt(int(position));
+        this->models.swap(nextModels);
+        this->commandStamps.swap(nextStamps);
     }
     this->pickList.removeItems(position);
     if (locked)
     {
         this->unlock();
     }
+    unlockOnFailure.dismiss();
     emit this->modelRemoved(position);
     R_LOG_TRACE_OUT;
 }

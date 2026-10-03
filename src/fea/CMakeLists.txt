@@ -359,6 +359,16 @@ qt_add_executable(fea
 add_dependencies(fea range-base-lib range-model-lib range-solver-lib range-cloud-lib range-gui-lib)
 
 target_sources(fea PRIVATE src/model_command_host.cpp src/model_command_host.h)
+target_sources(fea PRIVATE src/workflow_process.cpp src/workflow_process.h
+                           src/workflow_widget.cpp src/workflow_widget.h)
+target_sources(fea PRIVATE src/agent_task_runner.cpp src/agent_task_runner.h
+                           src/agent_widget.cpp src/agent_widget.h)
+target_sources(fea PRIVATE src/extension_widget.cpp src/extension_widget.h)
+find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
+target_compile_definitions(fea PRIVATE RANGE_WORKFLOW_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+if(Python3_EXECUTABLE)
+    target_compile_definitions(fea PRIVATE RANGE_WORKFLOW_DEFAULT_PYTHON="${Python3_EXECUTABLE}")
+endif()
 
 target_link_libraries(fea
     PRIVATE
@@ -650,19 +660,30 @@ if(RANGE_BUILD_TESTS)
     list(FILTER _fea_lifecycle_sources EXCLUDE REGEX "(^|/)main\\.cpp$")
     list(FILTER _fea_lifecycle_sources EXCLUDE REGEX "\\.rc$")
     qt_add_executable(tst_gui_model_lifecycle
-        tests/tst_gui_model_lifecycle.cpp ${_fea_lifecycle_sources})
+        tests/tst_gui_model_lifecycle.cpp tests/tst_gui_host_context.cpp
+        tests/tst_agent_task_runner.cpp tests/tst_solver_snapshot.cpp tests/tst_extension_widget.cpp
+        tests/tst_agent_event_view.cpp ${_fea_lifecycle_sources})
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
+    target_compile_definitions(tst_gui_model_lifecycle PRIVATE RANGE_WORKFLOW_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+    if(Python3_EXECUTABLE)
+        target_compile_definitions(tst_gui_model_lifecycle PRIVATE RANGE_WORKFLOW_DEFAULT_PYTHON="${Python3_EXECUTABLE}")
+    endif()
     target_link_libraries(tst_gui_model_lifecycle PRIVATE
         range-gui-lib range-solver-lib range-application-lib OpenGL::GL
         Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Multimedia Qt6::PrintSupport
         Qt6::Test common_defines)
     set_target_properties(tst_gui_model_lifecycle PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
     add_test(NAME tst_gui_model_lifecycle COMMAND tst_gui_model_lifecycle -o -,txt)
-    set_tests_properties(tst_gui_model_lifecycle PROPERTIES
+    add_test(NAME tst_gui_host_context COMMAND tst_gui_model_lifecycle --host-context -o -,txt)
+    add_test(NAME tst_agent_task_runner COMMAND tst_gui_model_lifecycle --agent-runner -o -,txt)
+    add_test(NAME tst_solver_snapshot COMMAND tst_gui_model_lifecycle --solver-snapshot -o -,txt)
+    add_test(NAME tst_extension_widget COMMAND tst_gui_model_lifecycle --extension-widget -o -,txt)
+    add_test(NAME tst_agent_event_view COMMAND tst_gui_model_lifecycle --agent-event-view -o -,txt)
+    set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1"
         TIMEOUT 120)
     if(WIN32)
-        set_tests_properties(tst_gui_model_lifecycle PROPERTIES
+        set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
     qt_add_executable(tst_modal_command_widget

@@ -488,6 +488,10 @@ class Model : public RModel
         //! Return size of undo stack.
         uint getUndoStackSize() const;
 
+        //! Explicitly retain document history when preparing a transactional replacement.
+        //! Ordinary model snapshots intentionally do not copy history recursively.
+        void copyHistoryFrom(const Model &model);
+
         //! Perform undo.
         void undo(uint revision);
 

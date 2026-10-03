@@ -5,7 +5,23 @@ install(TARGETS range-workflow-native RUNTIME DESTINATION bin COMPONENT Applicat
 install(DIRECTORY python/ DESTINATION share/range-workflow COMPONENT Application
     FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "__pycache__" EXCLUDE)
 install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
-    ${CMAKE_SOURCE_DIR}/../docs/CONTROL_WORKFLOW.md DESTINATION doc COMPONENT Application)
+    ${CMAKE_SOURCE_DIR}/../docs/CONTROL_WORKFLOW.md
+    ${CMAKE_SOURCE_DIR}/../docs/AGENT_OPERATIONS.md
+    ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_SDK.md
+    ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
+    ${CMAKE_SOURCE_DIR}/../docs/STAGE12_ACCEPTANCE.md DESTINATION doc COMPONENT Application)
+install(DIRECTORY examples/ DESTINATION share/range-workflow/examples COMPONENT Application FILES_MATCHING PATTERN "*.py")
+
+set(RANGE_PRIVATE_PYTHON_DIRECTORY "" CACHE PATH "Verified private Python runtime assembled by scripts/packaging/build_private_python.py")
+if(RANGE_PRIVATE_PYTHON_DIRECTORY)
+    foreach(_runtime_file python.exe python313._pth runtime-lock.json runtime-files.json)
+        if(NOT EXISTS "${RANGE_PRIVATE_PYTHON_DIRECTORY}/${_runtime_file}")
+            message(FATAL_ERROR "Incomplete private Python runtime: ${_runtime_file}")
+        endif()
+    endforeach()
+    install(DIRECTORY "${RANGE_PRIVATE_PYTHON_DIRECTORY}/" DESTINATION runtime/python COMPONENT Application
+        PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
+endif()
 
 if(RANGE_BUILD_TESTS)
     find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
@@ -22,6 +38,11 @@ if(RANGE_BUILD_TESTS)
         --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
         --python "${Python3_EXECUTABLE}" -v)
     set_tests_properties(tst_workflow_runtime PROPERTIES TIMEOUT 180)
+    add_test(NAME tst_workflow_extensions COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extensions.py" -v)
+    set_tests_properties(tst_workflow_extensions PROPERTIES TIMEOUT 120)
+    add_test(NAME tst_private_python_packaging COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/../scripts/packaging/test_private_python.py" -v)
     if(WIN32)
         set_tests_properties(tst_workflow_native tst_workflow_runtime PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

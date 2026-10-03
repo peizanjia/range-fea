@@ -19,15 +19,22 @@ public:
     ~ModelCommandHost() override;
     QJsonObject query(uint modelID);
     QJsonObject execute(uint modelID, const QJsonObject &request);
+    //! Versioned GUI facade for read queries and approved modal/history commands.
+    //! Requests and callbacks are currently confined to the GUI thread.
+    QJsonObject handle(const QJsonObject &request);
+    //! Trusted GUI approval boundary. This is deliberately not a handle operation.
+    bool approvePreview(const QString &previewId);
     bool configureModal(const QList<uint> &modelIDs, const RModalSetup &setup, QString *error = nullptr);
     bool recordArtifactPublished(uint modelID, const QString &path, QString *error = nullptr);
     //! Audit a completed legacy GUI mutation and retire its old command identity.
     bool recordExternalChange(uint modelID, const QString &reason, QString *error = nullptr);
     QString journalPath() const;
     static bool isBusy();
+    static bool isMutationBlocked();
 
 signals:
     void commandRejected(const QString &message);
+    void eventPublished(const QJsonObject &event);
 
 private:
     struct State;

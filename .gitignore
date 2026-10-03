@@ -1,4 +1,5 @@
 build*
+!scripts/packaging/build_private_python.py
 .vs/
 *.txt.user
 *~
@@ -7,3 +8,5 @@ build*
 CLAUDE.md
 __pycache__/
 *.py[cod]
+/.env.local
+.range-runs/

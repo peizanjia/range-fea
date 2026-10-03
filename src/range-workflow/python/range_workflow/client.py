@@ -15,17 +15,24 @@ from .service import API_VERSION, MAX_REQUEST_BYTES, WorkflowError, canonical
 
 
 class WorkflowClient:
-    def __init__(self, workspace, solver, native, examples, python=sys.executable, *, timeout=30):
+    def __init__(self, workspace, solver, native, examples, python=sys.executable, *, timeout=30,
+                 trusted_extensions=False):
         self.timeout = timeout
         self._mutex = threading.Lock()
         self._responses = queue.Queue()
         self._closed = False
-        environment = os.environ.copy()
+        allowed_environment = {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "COMSPEC",
+                               "PATHEXT", "NUMBER_OF_PROCESSORS", "OMP_NUM_THREADS", "QT_PLUGIN_PATH"}
+        environment = {key: value for key, value in os.environ.items() if key.upper() in allowed_environment}
         package_root = str(Path(__file__).resolve().parent.parent)
-        environment["PYTHONPATH"] = package_root + os.pathsep + environment.get("PYTHONPATH", "")
-        self.process = subprocess.Popen([str(python), "-m", "range_workflow", "--stdio",
+        environment["PYTHONPATH"] = package_root
+        environment["PYTHONNOUSERSITE"] = "1"
+        arguments = [str(python), "-m", "range_workflow", "--stdio",
                     "--workspace", str(Path(workspace).absolute()), "--solver", str(solver),
-                    "--native", str(native), "--examples", str(examples), "--python", str(python)],
+                    "--native", str(native), "--examples", str(examples), "--python", str(python)]
+        if trusted_extensions:
+            arguments.append("--trusted-extensions")
+        self.process = subprocess.Popen(arguments,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     env=environment, creationflags=0x08000000 if os.name == "nt" else 0)
         self._stderr = bytearray()
@@ -37,6 +44,10 @@ class WorkflowClient:
                         break
                     if len(line) > 16 * 1024 * 1024:
                         self._responses.put(WorkflowError("RESPONSE_TOO_LARGE", "Runtime response exceeds SDK limit"))
+                        try:
+                            self.process.kill()
+                        except OSError:
+                            pass
                         break
                     self._responses.put(line)
             finally:
@@ -81,7 +92,8 @@ class WorkflowClient:
                 envelope = json.loads(response)
                 if (set(envelope) != {"apiVersion", "requestId", "status", "code", "result"} or
                         envelope["apiVersion"] != API_VERSION or envelope["requestId"] != request_id or
-                        envelope["status"] not in ("ok", "error") or not isinstance(envelope["result"], dict)):
+                        envelope["status"] not in ("ok", "error") or not isinstance(envelope["code"], str)
+                        or not isinstance(envelope["result"], dict)):
                     raise ValueError("invalid response envelope")
                 canonical(envelope)
             except (ValueError, TypeError):

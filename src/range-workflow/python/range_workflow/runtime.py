@@ -35,6 +35,8 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--native", required=True, help="absolute range-workflow-native executable")
     parser.add_argument("--examples", required=True, help="absolute installed/source examples directory")
     parser.add_argument("--python", required=True, help="absolute Python interpreter executable")
+    parser.add_argument("--trusted-extensions", action="store_true",
+                        help="allow host-approved extension Python in trusted developer mode; not an OS sandbox")
     result = parser.parse_args(argv)
     result.workspace = Path(result.workspace)
     if not result.workspace.is_absolute() or len(str(result.workspace)) > 32768:
@@ -117,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with WorkflowService(arguments.workspace, arguments.solver,
                              arguments.native, arguments.examples,
-                             arguments.python) as service:
+                             arguments.python,
+                             trusted_extensions=arguments.trusted_extensions) as service:
             return serve(service)
     except WorkflowError as error:
         print(f"range-workflow: {error.code}: {error.message}", file=sys.stderr)
