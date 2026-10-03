@@ -113,11 +113,13 @@
       "tst_agent_task_runner",
       "tst_solver_snapshot",
       "tst_extension_widget",
-      "tst_agent_event_view"
+      "tst_agent_event_view",
+      "tst_agent_conversation_widget"
     ],
     "range-workflow": [
       "tst_workflow_native",
       "tst_workflow_runtime",
+      "tst_workflow_telemetry",
       "tst_workflow_extensions",
       "tst_private_python_packaging"
     ],

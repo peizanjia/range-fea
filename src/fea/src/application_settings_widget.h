@@ -34,6 +34,9 @@ class ApplicationSettingsWidget : public RApplicationSettingsWidget
         //! Constructor.
         explicit ApplicationSettingsWidget(ApplicationSettings *applicationSettings, QWidget *parent = nullptr);
 
+        //! Select a tab by its translated visible title.
+        void selectTab(const QString &title);
+
     private:
 
         //! Create tab containing general settings.

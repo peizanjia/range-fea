@@ -5,82 +5,173 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QMap>
 #include <QNetworkReply>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QShortcut>
+#include <QScrollArea>
+#include <QSettings>
+#include <QSignalBlocker>
 #include <QThread>
 #include <QTextBrowser>
+#include <QTextCursor>
+#include <QTextDocumentFragment>
+#include <QTextList>
 #include <QToolButton>
 #include <QUuid>
 #include <QVBoxLayout>
+#include <QUrl>
+
+#include "application.h"
+#include "application_settings_dialog.h"
+#include "application_settings.h"
+#include "main_window.h"
 #include "model_command_host.h"
 #include <rai_agent.h>
 
-AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent)
-    : QWidget(parent), runner(host, workflow, this), network(this), commandHost(host)
+namespace
 {
-    setObjectName("agentTaskWidget");
-    auto *layout = new QVBoxLayout(this);
-    auto *intro = new QLabel(tr("Describe a task. The assistant reads current state, proposes supported changes, and shows the results here. Calculations continue independently when you stop the assistant."));
-    intro->setWordWrap(true); layout->addWidget(intro);
-    auto *form = new QFormLayout;
-    provider = new QComboBox;
-    provider->addItem("DeepSeek", int(RAgentSettings::Type::DeepSeek));
-    provider->addItem(tr("OpenAI-compatible Chat Completions"), int(RAgentSettings::Type::OpenAILegacy));
-    endpoint = new QLineEdit("https://api.deepseek.com/chat/completions");
-    model = new QLineEdit("deepseek-flash");
-    key = new QLineEdit; key->setEchoMode(QLineEdit::Password);
-    key->setPlaceholderText(tr("API key (this session only)"));
-    key->setObjectName("agentApiKey");
-    connect(provider, &QComboBox::currentIndexChanged, this, [this] {
-        const RAgentSettings defaults(static_cast<RAgentSettings::Type>(provider->currentData().toInt()));
-        endpoint->setText(defaults.getApiUrl()); model->setText(defaults.getModel()); key->clear();
-    });
-    form->addRow(tr("Provider"), provider); form->addRow(tr("Endpoint"), endpoint);
-    form->addRow(tr("Model"), model); form->addRow(tr("API key"), key);
-    layout->addLayout(form);
-    auto *loadKey = new QPushButton(tr("Load key from local file…"));
-    layout->addWidget(loadKey);
-    connect(&runner, &AgentTaskRunner::stateChanged, loadKey, [this, loadKey] {
-        loadKey->setEnabled(!runner.isActive());
-    });
-    connect(loadKey, &QPushButton::clicked, this, [this] {
-        const auto path = QFileDialog::getOpenFileName(this, tr("Select local credentials file"));
-        if (path.isEmpty()) return;
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly) || file.size() > 65536)
-        { state->setText(tr("Cannot read the credentials file.")); return; }
-        const auto name = provider->currentIndex() == 0 ? "DEEPSEEK_API_KEY=" : "OPENAI_API_KEY=";
-        for (auto line : QString::fromUtf8(file.readAll()).split('\n'))
+// Model-authored Markdown must never cause local-file or network resource reads.
+class ConversationDocument final : public QTextDocument
+{
+public:
+    using QTextDocument::QTextDocument;
+protected:
+    QVariant loadResource(int, const QUrl &) override { return {}; }
+};
+
+const QString providerTypeKey = QStringLiteral("aiAgent/providerType");
+const QString endpointKey = QStringLiteral("aiAgent/endpoint");
+const QString modelKey = QStringLiteral("aiAgent/model");
+const QString effortKey = QStringLiteral("aiAgent/effort");
+const QString automaticChangesKey = QStringLiteral("aiAgent/automaticChanges");
+
+AgentWidget *activeAgentWidget()
+{
+    Application *application = Application::instance();
+    MainWindow *window = application ? application->getMainWindow() : nullptr;
+    return window ? window->findChild<AgentWidget *>(QStringLiteral("agentTaskWidget")) : nullptr;
+}
+
+QSettings *agentPreferences()
+{
+    Application *application = Application::instance();
+    return application ? application->getApplicationSettings() : nullptr;
+}
+
+bool isValidAgentEndpoint(const QString &endpoint)
+{
+    const QUrl url(endpoint.trimmed(), QUrl::StrictMode);
+    return url.isValid() && url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0
+        && !url.host().isEmpty() && !url.authority().contains(QLatin1Char('@'))
+        && !url.hasQuery() && !url.hasFragment();
+}
+
+QString invalidEndpointMessage()
+{
+    return QObject::tr("Use an HTTPS endpoint without credentials, a query, or a fragment.");
+}
+
+QString optionLabel(const QJsonValue &option)
+{
+    if (option.isString()) return option.toString();
+    const QJsonObject object = option.toObject();
+    for (const QString &key : {QStringLiteral("label"), QStringLiteral("title"), QStringLiteral("text"), QStringLiteral("value")})
+    {
+        const QString value = object.value(key).toVariant().toString();
+        if (!value.isEmpty()) return value;
+    }
+    return QString();
+}
+
+QString optionValue(const QJsonValue &option)
+{
+    if (option.isString()) return option.toString();
+    const QJsonObject object = option.toObject();
+    for (const QString &key : {QStringLiteral("value"), QStringLiteral("id"), QStringLiteral("label"), QStringLiteral("text")})
+    {
+        const QString value = object.value(key).toVariant().toString();
+        if (!value.isEmpty()) return value;
+    }
+    return optionLabel(option);
+}
+}
+
+AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent)
+    : QWidget(parent), runner(host, workflow, this), network(this), commandHost(host),
+      providerSettings(RAgentSettings::Type::DeepSeek)
+{
+    setObjectName(QStringLiteral("agentTaskWidget"));
+    if (QSettings *preferences = agentPreferences())
+    {
+        const auto requestedType = static_cast<RAgentSettings::Type>(preferences->value(providerTypeKey, int(RAgentSettings::Type::DeepSeek)).toInt());
+        if (requestedType == RAgentSettings::Type::DeepSeek || requestedType == RAgentSettings::Type::OpenAILegacy)
+            providerSettings.setType(requestedType);
+        const RAgentSettings defaults(providerSettings.getType());
+        const QString endpoint = preferences->value(endpointKey, defaults.getApiUrl()).toString();
+        if (isValidAgentEndpoint(endpoint)) providerSettings.setApiUrl(endpoint.trimmed());
+        else
         {
-            line = line.trimmed();
-            if (!line.startsWith(name)) continue;
-            auto value = line.mid(int(QString(name).size())).trimmed();
-            if (value.size() >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith('\'') && value.endsWith('\''))))
-                value = value.mid(1, value.size() - 2);
-            key->setText(value); state->setText(tr("Credential loaded for this session.")); return;
+            providerSettings.setApiUrl(defaults.getApiUrl());
+            preferences->setValue(endpointKey, defaults.getApiUrl());
         }
-        state->setText(tr("The file has no key for the selected provider."));
-    });
-    goal = new QPlainTextEdit;
-    goal->setPlaceholderText(tr("For example: inspect the selected model and suggest modal settings, or run and compare the beam control experiment."));
-    goal->setMaximumHeight(120); goal->setObjectName("agentGoal"); layout->addWidget(goal);
-    authorize = new QCheckBox(tr("Apply authorized task changes automatically"));
-    authorize->setToolTip(tr("Limited to documents selected at task start and the connected reference workspace. Extension proposals still require review."));
-    authorize->setChecked(false); layout->addWidget(authorize);
-    auto *scope = new QLabel(tr("Automatic changes are limited to the initially selected documents and connected reference workspace. Extension proposals require separate review."));
-    scope->setWordWrap(true); layout->addWidget(scope);
-    auto *buttons = new QHBoxLayout;
-    start = new QPushButton(tr("Start task")); stop = new QPushButton(tr("Stop assistant"));
-    buttons->addWidget(start); buttons->addWidget(stop); layout->addLayout(buttons);
-    state = new QLabel(tr("Ready")); state->setWordWrap(true); layout->addWidget(state);
+        providerSettings.setModel(preferences->value(modelKey, defaults.getModel()).toString());
+        selectedEffort = preferences->value(effortKey, QStringLiteral("off")).toString();
+    }
+    providerSettings.setApiKey(QString());
+    if (providerSettings.getType() != RAgentSettings::Type::DeepSeek)
+        selectedEffort = QStringLiteral("default");
+
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(6);
+
+    auto *header = new QHBoxLayout;
+    auto *title = new QLabel(tr("Assistant"));
+    QFont titleFont = title->font();
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    title->setAccessibleName(tr("Assistant conversation"));
+    header->addWidget(title);
+    header->addStretch(1);
+    newChat = new QToolButton;
+    newChat->setObjectName(QStringLiteral("agentNewChat"));
+    newChat->setText(tr("New chat"));
+    newChat->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    newChat->setAccessibleName(tr("Start a new conversation"));
+    header->addWidget(newChat);
+    settingsButton = new QToolButton;
+    settingsButton->setObjectName(QStringLiteral("agentSettings"));
+    settingsButton->setText(tr("Settings"));
+    settingsButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    settingsButton->setAccessibleName(tr("Open assistant settings"));
+    header->addWidget(settingsButton);
+    layout->addLayout(header);
+
+    auto *hint = new QLabel(tr("Ask about the selected model or supported analysis tasks."));
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    state = new QLabel(tr("Ready"));
+    state->setObjectName(QStringLiteral("agentConversationStatus"));
+    state->setWordWrap(false);
+    state->setMinimumHeight(state->fontMetrics().height() + 4);
+    state->setMinimumWidth(0);
+    state->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    state->setToolTip(tr("Conversation status"));
+    layout->addWidget(state);
+
     auto *eventToggle = new QToolButton;
-    eventToggle->setObjectName("agentEventHistoryToggle");
+    eventToggle->setObjectName(QStringLiteral("agentEventHistoryToggle"));
     eventToggle->setText(tr("Recent GUI document events"));
     eventToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     eventToggle->setArrowType(Qt::RightArrow);
@@ -88,50 +179,258 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     eventToggle->setChecked(false);
     layout->addWidget(eventToggle);
     auto *eventBody = new QWidget;
-    eventBody->setObjectName("agentEventHistoryBody");
+    eventBody->setObjectName(QStringLiteral("agentEventHistoryBody"));
     auto *eventLayout = new QVBoxLayout(eventBody);
     eventLayout->setContentsMargins(0, 0, 0, 0);
     auto *eventNotice = new QLabel(tr("In-memory session event history (up to 256 records); this is not a durable audit log."));
-    eventNotice->setObjectName("agentEventHistoryNotice");
+    eventNotice->setObjectName(QStringLiteral("agentEventHistoryNotice"));
     eventNotice->setWordWrap(true);
     eventLayout->addWidget(eventNotice);
     eventContextSummary = new QLabel(tr("Current document context has not been queried yet."));
-    eventContextSummary->setObjectName("agentEventContextSummary");
+    eventContextSummary->setObjectName(QStringLiteral("agentEventContextSummary"));
     eventContextSummary->setWordWrap(true);
     eventLayout->addWidget(eventContextSummary);
     eventStatus = new QLabel(tr("Waiting for host events."));
-    eventStatus->setObjectName("agentEventStatus");
+    eventStatus->setObjectName(QStringLiteral("agentEventStatus"));
     eventStatus->setWordWrap(true);
     eventLayout->addWidget(eventStatus);
     eventHistory = new QPlainTextEdit;
-    eventHistory->setObjectName("agentEventHistory");
+    eventHistory->setObjectName(QStringLiteral("agentEventHistory"));
     eventHistory->setReadOnly(true);
-    eventHistory->setMaximumHeight(180);
+    eventHistory->setMaximumHeight(150);
     eventHistory->setMaximumBlockCount(256);
     eventLayout->addWidget(eventHistory);
     eventBody->hide();
+    eventBody->setMaximumHeight(280);
     layout->addWidget(eventBody);
     connect(eventToggle, &QToolButton::toggled, this, [eventToggle, eventBody](bool expanded) {
         eventBody->setVisible(expanded);
         eventToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
     });
-    transcript = new QTextBrowser; transcript->setObjectName("agentTranscript"); layout->addWidget(transcript, 1);
-    preview = new QTextBrowser; preview->setMaximumHeight(170); layout->addWidget(preview);
-    auto *approval = new QHBoxLayout;
-    apply = new QPushButton(tr("Apply proposal")); decline = new QPushButton(tr("Decline"));
-    approval->addWidget(apply); approval->addWidget(decline); layout->addLayout(approval);
-    connect(start, &QPushButton::clicked, this, [this] { startTask(goal->toPlainText(), authorize->isChecked()); });
+
+    transcript = new QTextBrowser;
+    transcript->setDocument(new ConversationDocument(transcript));
+    transcript->setObjectName(QStringLiteral("agentTranscript"));
+    transcript->setReadOnly(true);
+    transcript->setOpenExternalLinks(false);
+    transcript->setOpenLinks(false);
+    transcript->setAccessibleName(tr("Conversation transcript"));
+    transcript->setMinimumWidth(0);
+    layout->addWidget(transcript, 1);
+
+    approvalCard = new QFrame;
+    approvalCard->setObjectName(QStringLiteral("agentApprovalCard"));
+    approvalCard->setFrameShape(QFrame::StyledPanel);
+    auto *approvalLayout = new QVBoxLayout(approvalCard);
+    approvalLayout->setContentsMargins(8, 6, 8, 6);
+    auto *approvalTitle = new QLabel(tr("Review proposed change"));
+    QFont cardFont = approvalTitle->font();
+    cardFont.setBold(true);
+    approvalTitle->setFont(cardFont);
+    approvalLayout->addWidget(approvalTitle);
+    preview = new QTextBrowser;
+    preview->setObjectName(QStringLiteral("agentPreview"));
+    preview->setReadOnly(true);
+    preview->setMaximumHeight(110);
+    approvalLayout->addWidget(preview);
+    auto *approvalButtons = new QHBoxLayout;
+    apply = new QPushButton(tr("Apply"));
+    apply->setObjectName(QStringLiteral("agentApproveProposal"));
+    apply->setAccessibleName(tr("Apply the displayed proposal"));
+    decline = new QPushButton(tr("Reject"));
+    decline->setObjectName(QStringLiteral("agentRejectProposal"));
+    decline->setAccessibleName(tr("Reject the displayed proposal"));
+    approvalButtons->addWidget(apply);
+    approvalButtons->addWidget(decline);
+    approvalLayout->addLayout(approvalButtons);
+    approvalCard->hide();
+    layout->addWidget(approvalCard);
+
+    questionCard = new QFrame;
+    questionCard->setObjectName(QStringLiteral("agentQuestionCard"));
+    questionCard->setFrameShape(QFrame::StyledPanel);
+    auto *questionLayout = new QVBoxLayout(questionCard);
+    questionLayout->setContentsMargins(8, 6, 8, 6);
+    auto *questionTitle = new QLabel(tr("A question needs your answer"));
+    questionTitle->setFont(cardFont);
+    questionLayout->addWidget(questionTitle);
+    questionText = new QLabel;
+    questionText->setObjectName(QStringLiteral("agentQuestionText"));
+    questionText->setWordWrap(true);
+    questionText->setTextFormat(Qt::PlainText);
+    questionScroll = new QScrollArea(questionCard);
+    questionScroll->setWidgetResizable(true);
+    questionScroll->setMaximumHeight(100);
+    questionScroll->setFrameShape(QFrame::NoFrame);
+    questionScroll->setWidget(questionText);
+    questionLayout->addWidget(questionScroll);
+    questionOptions = new QWidget(questionCard);
+    questionOptionsLayout = new QGridLayout(questionOptions);
+    questionOptionsLayout->setContentsMargins(0, 0, 0, 0);
+    questionOptionsLayout->setHorizontalSpacing(6);
+    questionOptionsLayout->setVerticalSpacing(4);
+    questionLayout->addWidget(questionOptions);
+    questionCard->hide();
+    layout->addWidget(questionCard);
+
+    auto *modelRow = new QHBoxLayout;
+    auto *modelLabel = new QLabel(tr("Model"));
+    model = new QComboBox;
+    model->setObjectName(QStringLiteral("agentModel"));
+    model->setEditable(true);
+    model->setInsertPolicy(QComboBox::NoInsert);
+    model->setAccessibleName(tr("Assistant model"));
+    model->lineEdit()->setObjectName(QStringLiteral("agentModelInput"));
+    model->lineEdit()->setClearButtonEnabled(false);
+    model->setMinimumWidth(80);
+    model->setMaximumWidth(180);
+    model->setEditText(providerSettings.getModel());
+    modelRow->addWidget(modelLabel);
+    modelRow->addWidget(model, 2);
+    auto *effortLabel = new QLabel(tr("Thinking"));
+    effort = new QComboBox;
+    effort->setObjectName(QStringLiteral("agentThinkingEffort"));
+    effort->setAccessibleName(tr("DeepSeek thinking effort"));
+    effort->setMaximumWidth(100);
+    updateEffortChoices();
+    modelRow->addWidget(effortLabel);
+    modelRow->addWidget(effort, 1);
+    authorize = new QCheckBox(tr("Auto"));
+    authorize->setObjectName(QStringLiteral("agentAutomaticChanges"));
+    authorize->setAccessibleName(tr("Allow supported changes to run automatically"));
+    authorize->setToolTip(tr("Limits automatic changes to documents selected when the task starts and the connected reference workspace. Extension proposals still require review."));
+    if (QSettings *preferences = agentPreferences())
+        authorize->setChecked(preferences->value(automaticChangesKey, false).toBool());
+    modelRow->addWidget(authorize);
+
+    goal = new QPlainTextEdit;
+    goal->setObjectName(QStringLiteral("agentGoal"));
+    goal->setAccessibleName(tr("Message to the assistant"));
+    goal->setPlaceholderText(tr("Message the assistant…"));
+    goal->setMinimumHeight(64);
+    goal->setMaximumHeight(92);
+    layout->addWidget(goal);
+
+    // Preserve the historic widget lookup while keeping the credential out of
+    // the conversation sidebar and all QSettings values.
+    key = new QLineEdit(this);
+    key->setObjectName(QStringLiteral("agentApiKey"));
+    key->setEchoMode(QLineEdit::Password);
+    key->setAccessibleName(tr("Assistant API key"));
+    key->hide();
+
+    auto *composerButtons = new QHBoxLayout;
+    send = new QPushButton(tr("Send"));
+    send->setObjectName(QStringLiteral("agentSend"));
+    send->setAccessibleName(tr("Send message to the assistant"));
+    send->setDefault(true);
+    stop = new QPushButton(tr("Stop"));
+    stop->setObjectName(QStringLiteral("agentStop"));
+    stop->setAccessibleName(tr("Stop assistant work"));
+    composerButtons->addWidget(send, 1);
+    composerButtons->addWidget(stop);
+    layout->addLayout(composerButtons);
+    layout->addLayout(modelRow);
+
+    connect(newChat, &QToolButton::clicked, this, [this] {
+        if (runner.isActive()) return;
+        runner.clearConversation();
+        transcript->clear();
+        goal->clear();
+        preview->clear();
+        presentedProposalId.clear();
+        presentedQuestionId.clear();
+        questionText->clear();
+        state->setText(tr("Ready"));
+        updateAvailability();
+        goal->setFocus(Qt::OtherFocusReason);
+    });
+    connect(settingsButton, &QToolButton::clicked, this, &AgentWidget::openSettings);
+    connect(send, &QPushButton::clicked, this, &AgentWidget::submitDraft);
+    connect(goal, &QPlainTextEdit::textChanged, this, [this] { updateAvailability(); });
+    auto *sendShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), goal);
+    connect(sendShortcut, &QShortcut::activated, this, &AgentWidget::submitDraft);
+    auto *sendShortcutEnter = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Enter), goal);
+    connect(sendShortcutEnter, &QShortcut::activated, this, &AgentWidget::submitDraft);
     connect(stop, &QPushButton::clicked, &runner, &AgentTaskRunner::cancel);
-    connect(apply, &QPushButton::clicked, this, [this] { runner.authorizePending(presentedProposalId, true); updateAvailability(); });
-    connect(decline, &QPushButton::clicked, this, [this] { runner.authorizePending(presentedProposalId, false); updateAvailability(); });
+    connect(apply, &QPushButton::clicked, this, [this] {
+        if (presentedProposalId.isEmpty()) return;
+        runner.authorizePending(presentedProposalId, true);
+        updateAvailability();
+    });
+    connect(decline, &QPushButton::clicked, this, [this] {
+        if (presentedProposalId.isEmpty()) return;
+        runner.authorizePending(presentedProposalId, false);
+        updateAvailability();
+    });
+    connect(model, &QComboBox::currentTextChanged, this, [this](const QString &value) {
+        providerSettings.setModel(value.trimmed());
+        persistConversationPreferences();
+    });
+    connect(model->lineEdit(), &QLineEdit::editingFinished, this, [this] {
+        providerSettings.setModel(model->currentText().trimmed());
+        persistConversationPreferences();
+    });
+    connect(effort, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index < 0) return;
+        selectedEffort = effort->currentData().toString();
+        persistConversationPreferences();
+    });
+    connect(authorize, &QCheckBox::toggled, this, [this] { persistConversationPreferences(); });
+
     connect(&runner, &AgentTaskRunner::turnRequested, this, &AgentWidget::requestTurn);
     connect(&runner, &AgentTaskRunner::providerCancellationRequested, this, [this](const QString &id) {
         if (reply && reply->property("agentRequestId").toString() == id) reply->abort();
     });
-    connect(&runner, &AgentTaskRunner::stateChanged, this, [this](const QString &, const QString &message) {
-        state->setText(message); updateAvailability();
+    connect(&runner, &AgentTaskRunner::stateChanged, this, [this](const QString &status, const QString &message) {
+        const QMap<QString, QString> labels{{QStringLiteral("analyzing"), tr("Thinking")},
+            {QStringLiteral("awaiting_input"), tr("Waiting for your answer")},
+            {QStringLiteral("awaiting_authorization"), tr("Needs approval")},
+            {QStringLiteral("executing"), tr("Working")}, {QStringLiteral("waiting"), tr("Waiting for calculation")},
+            {QStringLiteral("completed"), tr("Completed")}, {QStringLiteral("failed"), tr("Request failed")},
+            {QStringLiteral("budget_exhausted"), tr("Task limit reached")},
+            {QStringLiteral("cancelled"), tr("Stopped")}, {QStringLiteral("superseded"), tr("Continuing")}};
+        state->setText(labels.value(status, message.left(100)));
+        state->setToolTip(message);
+        updateAvailability();
     });
-    connect(&runner, &AgentTaskRunner::proposalReady, this, [this](const QString &origin, const QString &id, const QJsonObject &value) {
+    connect(&runner, &AgentTaskRunner::assistantMessage, this, [this](const QString &message) {
+        if (!message.isEmpty()) appendText(tr("Assistant"), message, true);
+    });
+    connect(&runner, &AgentTaskRunner::userInputRequested, this,
+            [this](const QString &id, const QString &question, const QJsonArray &options) {
+        presentedQuestionId = id;
+        questionText->setText(question);
+        appendText(tr("Assistant"), question);
+        while (QLayoutItem *item = questionOptionsLayout->takeAt(0))
+        {
+            if (QWidget *widget = item->widget()) widget->deleteLater();
+            delete item;
+        }
+        int index = 0;
+        for (const QJsonValue &option : options)
+        {
+            const QString label = optionLabel(option);
+            const QString value = optionValue(option);
+            if (label.isEmpty() || value.isEmpty()) continue;
+            auto *button = new QPushButton(label, questionOptions);
+            button->setText(button->fontMetrics().elidedText(label, Qt::ElideRight, 170));
+            button->setToolTip(label);
+            button->setAccessibleName(tr("Answer: %1").arg(label));
+            button->setMinimumWidth(0);
+            button->setMaximumWidth(180);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            const QString questionId = id;
+            connect(button, &QPushButton::clicked, this, [this, questionId, value] {
+                answerQuestion(questionId, value, false);
+            });
+            questionOptionsLayout->addWidget(button, index / 2, index % 2);
+            ++index;
+        }
+        updateAvailability();
+    });
+    connect(&runner, &AgentTaskRunner::proposalReady, this,
+            [this](const QString &origin, const QString &id, const QJsonObject &value) {
         presentedProposalId = id;
         const auto normalized = value.value("normalized").toObject();
         const auto command = origin == "document" ? value.value("command").toString() : normalized.value("command").toString();
@@ -173,11 +472,19 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         appendText(origin == "document" ? tr("Document updated") : tr("Task submitted"),
                    origin == "document" ? tr("The host accepted the change. The document views now reflect its current state.")
                                         : tr("Calculation task: %1. Progress and results are available in the workflow panel.").arg(value.value("jobId").toString()));
-        presentedProposalId.clear(); preview->clear(); updateAvailability();
+        presentedProposalId.clear();
+        preview->clear();
+        updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::finished, this, [this](const QString &status, const QString &message) {
-        appendText(status, message); presentedProposalId.clear(); preview->clear(); updateAvailability();
+        if (status != QStringLiteral("completed") && !message.isEmpty()) appendText(status, message);
+        if (status == QStringLiteral("completed")) state->setText(tr("Completed"));
+        presentedProposalId.clear();
+        presentedQuestionId.clear();
+        preview->clear();
+        updateAvailability();
     });
+
     eventPollTimer.setInterval(750);
     connect(&eventPollTimer, &QTimer::timeout, this, &AgentWidget::refreshHostEvents);
     eventPollTimer.start();
@@ -185,40 +492,355 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     updateAvailability();
 }
 
+RAgentSettings AgentWidget::getProviderSettings() const
+{
+    RAgentSettings settings(providerSettings);
+    settings.setModel(model ? model->currentText().trimmed() : providerSettings.getModel());
+    settings.setApiKey(key ? key->text() : providerSettings.getApiKey());
+    return settings;
+}
+
 void AgentWidget::setProviderSettings(const RAgentSettings &settings)
 {
-    if (runner.isActive()) return;
-    const int index = provider->findData(int(settings.getType()));
-    if (index < 0) return;
-    provider->setCurrentIndex(index); endpoint->setText(settings.getApiUrl());
-    model->setText(settings.getModel()); key->setText(settings.getApiKey());
+    if (settings.getType() != RAgentSettings::Type::DeepSeek
+        && settings.getType() != RAgentSettings::Type::OpenAILegacy) return;
+    if (!isValidAgentEndpoint(settings.getApiUrl()))
+    {
+        if (state)
+        {
+            state->setText(tr("Invalid endpoint"));
+            state->setToolTip(invalidEndpointMessage());
+        }
+        return;
+    }
+    providerSettings = settings;
+    if (key) key->setText(settings.getApiKey());
+    if (model && model->currentText() != settings.getModel()) model->setEditText(settings.getModel());
+    updateEffortChoices();
+    persistConversationPreferences();
+}
+
+void AgentWidget::updateEffortChoices()
+{
+    if (!effort) return;
+    const QSignalBlocker blocker(effort);
+    effort->clear();
+    if (providerSettings.getType() == RAgentSettings::Type::DeepSeek)
+    {
+        if (selectedEffort == QStringLiteral("default")) selectedEffort = QStringLiteral("off");
+        effort->addItem(tr("Off"), QStringLiteral("off"));
+        effort->addItem(tr("Low"), QStringLiteral("low"));
+        effort->addItem(tr("High"), QStringLiteral("high"));
+        effort->addItem(tr("Max"), QStringLiteral("max"));
+        if (effort->findData(selectedEffort) < 0) selectedEffort = QStringLiteral("off");
+        effort->setEnabled(true);
+    }
+    else
+    {
+        selectedEffort = QStringLiteral("default");
+        effort->addItem(tr("Default"), QStringLiteral("default"));
+        effort->setEnabled(false);
+    }
+    effort->setCurrentIndex(qMax(0, effort->findData(selectedEffort)));
 }
 
 void AgentWidget::startTask(const QString &text, bool authorized)
 {
     if (runner.isActive()) return;
-    if (text.trimmed().isEmpty() || key->text().trimmed().isEmpty())
-    { state->setText(tr("Enter a task and configure the API key.")); return; }
-    appendText(tr("Task"), text);
+    const QString message = text.trimmed();
+    if (message.isEmpty() || key->text().trimmed().isEmpty())
+    {
+        state->setText(message.isEmpty() ? tr("Enter a message first.") : tr("Add an API key in assistant settings."));
+        return;
+    }
+    requestSettingsSnapshot = getProviderSettings();
+    requestEffortSnapshot = selectedEffort;
+    appendText(tr("You"), text);
     runner.startTask(text, authorized);
 }
 
-void AgentWidget::appendText(const QString &title, const QString &text)
+void AgentWidget::submitDraft()
 {
-    transcript->append("<b>" + title.toHtmlEscaped() + "</b><pre style='white-space:pre-wrap'>" + text.toHtmlEscaped() + "</pre>");
+    const QString message = goal->toPlainText().trimmed();
+    if (message.isEmpty()) return;
+    if (runner.isAwaitingInput())
+    {
+        answerQuestion(runner.pendingQuestionId(), message, true);
+        return;
+    }
+    if (key->text().trimmed().isEmpty())
+    {
+        state->setText(tr("Add an API key in assistant settings."));
+        openSettings();
+        return;
+    }
+    requestSettingsSnapshot = getProviderSettings();
+    requestEffortSnapshot = selectedEffort;
+    appendText(tr("You"), message);
+    goal->clear();
+    runner.submitMessage(message, authorize->isChecked());
+    updateAvailability();
+}
+
+void AgentWidget::answerQuestion(const QString &questionId, const QString &answer, bool clearDraft)
+{
+    if (questionId.isEmpty() || questionId != runner.pendingQuestionId() || answer.trimmed().isEmpty()) return;
+    if (clearDraft && goal->toPlainText().trimmed() != answer.trimmed()) return;
+    appendText(tr("You"), answer);
+    if (clearDraft) goal->clear();
+    runner.answerQuestion(questionId, answer);
+    updateAvailability();
+}
+
+void AgentWidget::appendText(const QString &title, const QString &text, bool markdown)
+{
+    if (markdown)
+    {
+        ConversationDocument message;
+        message.setMarkdown(text, QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub)
+                                  | QTextDocument::MarkdownNoHTML);
+        QTextCursor cursor(transcript->document());
+        cursor.movePosition(QTextCursor::End);
+        const auto newParagraph = [&cursor] {
+            cursor.insertBlock(QTextBlockFormat{}, QTextCharFormat{});
+            if (auto *list = cursor.currentList()) list->remove(cursor.block());
+        };
+        if (!transcript->document()->isEmpty()) newParagraph();
+        cursor.insertHtml(QStringLiteral("<p><b>%1</b></p>").arg(title.toHtmlEscaped()));
+        newParagraph();
+        cursor.insertFragment(QTextDocumentFragment(&message));
+        newParagraph();
+        transcript->setTextCursor(cursor);
+        transcript->ensureCursorVisible();
+        return;
+    }
+    QString escapedText = text.toHtmlEscaped();
+    escapedText.replace(QStringLiteral("\r\n"), QStringLiteral("<br/>"));
+    escapedText.replace(QLatin1Char('\r'), QLatin1String("<br/>"));
+    escapedText.replace(QLatin1Char('\n'), QLatin1String("<br/>"));
+    const QString roleColor = title == tr("You")
+        ? transcript->palette().color(QPalette::Link).name()
+        : transcript->palette().color(QPalette::Text).name();
+    transcript->append(QStringLiteral("<p style='margin:9px 0 3px;color:%1'><b>%2</b></p>"
+                                      "<p style='margin:0 0 7px;white-space:pre-wrap'>%3</p>")
+                           .arg(roleColor, title.toHtmlEscaped(), escapedText));
+}
+
+void AgentWidget::openSettings()
+{
+    Application *application = Application::instance();
+    if (!application || !application->getApplicationSettings())
+    {
+        state->setText(tr("Assistant settings are unavailable."));
+        return;
+    }
+    ApplicationSettingsDialog dialog(application->getApplicationSettings(), this, QStringLiteral("Agent"));
+    dialog.exec();
+}
+
+void AgentWidget::persistConversationPreferences()
+{
+    QSettings *preferences = agentPreferences();
+    if (!preferences) return;
+    if (model) providerSettings.setModel(model->currentText().trimmed());
+    if (!isValidAgentEndpoint(providerSettings.getApiUrl()))
+    {
+        if (state)
+        {
+            state->setText(tr("Invalid endpoint"));
+            state->setToolTip(invalidEndpointMessage());
+        }
+        return;
+    }
+    preferences->setValue(providerTypeKey, int(providerSettings.getType()));
+    preferences->setValue(endpointKey, providerSettings.getApiUrl());
+    preferences->setValue(modelKey, providerSettings.getModel());
+    preferences->setValue(effortKey, selectedEffort);
+    preferences->setValue(automaticChangesKey, authorize && authorize->isChecked());
+    // API keys are deliberately excluded from persistent settings.
+}
+
+QWidget *AgentWidget::createSettingsPage(QWidget *parent)
+{
+    QWidget *page = new QWidget(parent);
+    page->setObjectName(QStringLiteral("agentSettingsPage"));
+    auto *layout = new QVBoxLayout(page);
+    auto *form = new QFormLayout;
+    auto *provider = new QComboBox(page);
+    provider->setObjectName(QStringLiteral("agentSettingsProvider"));
+    provider->addItem(tr("DeepSeek"), int(RAgentSettings::Type::DeepSeek));
+    provider->addItem(tr("OpenAI-compatible Chat Completions"), int(RAgentSettings::Type::OpenAILegacy));
+    auto *endpoint = new QLineEdit(page);
+    endpoint->setObjectName(QStringLiteral("agentSettingsEndpoint"));
+    endpoint->setAccessibleName(tr("Assistant provider HTTPS endpoint"));
+    auto *apiKey = new QLineEdit(page);
+    apiKey->setObjectName(QStringLiteral("agentSettingsApiKey"));
+    apiKey->setEchoMode(QLineEdit::Password);
+    apiKey->setPlaceholderText(tr("API key (kept in memory for this session)"));
+    apiKey->setAccessibleName(tr("Assistant API key"));
+    auto *loadKey = new QPushButton(tr("Load key file…"), page);
+    loadKey->setObjectName(QStringLiteral("agentLoadKeyFile"));
+    loadKey->setAccessibleName(tr("Load an API key from a local file"));
+    auto *keyRow = new QWidget(page);
+    auto *keyRowLayout = new QHBoxLayout(keyRow);
+    keyRowLayout->setContentsMargins(0, 0, 0, 0);
+    keyRowLayout->addWidget(apiKey, 1);
+    keyRowLayout->addWidget(loadKey);
+    form->addRow(tr("Provider"), provider);
+    form->addRow(tr("Endpoint"), endpoint);
+    auto *endpointError = new QLabel(page);
+    endpointError->setObjectName(QStringLiteral("agentEndpointValidation"));
+    endpointError->setWordWrap(true);
+    form->addRow(QString(), endpointError);
+    form->addRow(tr("API key"), keyRow);
+    layout->addLayout(form);
+    auto *note = new QLabel(tr("The API key stays in memory for this session and is never written to application settings."), page);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+    layout->addStretch(1);
+
+    QPointer<AgentWidget> agent = activeAgentWidget();
+    RAgentSettings settings = agent ? agent->getProviderSettings() : RAgentSettings(RAgentSettings::Type::DeepSeek);
+    QSettings *preferences = agentPreferences();
+    if (!agent && preferences)
+    {
+        const auto type = static_cast<RAgentSettings::Type>(preferences->value(providerTypeKey, int(RAgentSettings::Type::DeepSeek)).toInt());
+        if (type == RAgentSettings::Type::DeepSeek || type == RAgentSettings::Type::OpenAILegacy)
+            settings.setType(type);
+        const RAgentSettings defaults(settings.getType());
+        const QString savedEndpoint = preferences->value(endpointKey, defaults.getApiUrl()).toString();
+        if (isValidAgentEndpoint(savedEndpoint)) settings.setApiUrl(savedEndpoint.trimmed());
+        else
+        {
+            settings.setApiUrl(defaults.getApiUrl());
+            preferences->setValue(endpointKey, defaults.getApiUrl());
+        }
+        settings.setModel(preferences->value(modelKey, defaults.getModel()).toString());
+    }
+    const int providerIndex = provider->findData(int(settings.getType()));
+    provider->setCurrentIndex(providerIndex >= 0 ? providerIndex : 0);
+    endpoint->setText(settings.getApiUrl());
+    endpoint->setProperty("acceptedAgentEndpoint", endpoint->text());
+    apiKey->setText(settings.getApiKey());
+
+    auto applySettings = [agent, preferences, endpoint, endpointError](const RAgentSettings &updated) {
+        const QString endpointValue = updated.getApiUrl().trimmed();
+        if (!isValidAgentEndpoint(endpointValue))
+        {
+            endpointError->setText(invalidEndpointMessage());
+            endpoint->setText(endpoint->property("acceptedAgentEndpoint").toString());
+            return;
+        }
+        if (agent) agent->setProviderSettings(updated);
+        if (preferences)
+        {
+            preferences->setValue(providerTypeKey, int(updated.getType()));
+            preferences->setValue(endpointKey, endpointValue);
+            preferences->setValue(modelKey, updated.getModel());
+        }
+        endpoint->setProperty("acceptedAgentEndpoint", endpointValue);
+        endpoint->setText(endpointValue);
+        endpointError->clear();
+    };
+    connect(provider, &QComboBox::currentIndexChanged, page, [provider, endpoint, apiKey, applySettings](int index) {
+        if (index < 0) return;
+        RAgentSettings updated(static_cast<RAgentSettings::Type>(provider->itemData(index).toInt()));
+        apiKey->clear();
+        endpoint->setText(updated.getApiUrl());
+        applySettings(updated);
+    });
+    connect(endpoint, &QLineEdit::editingFinished, page, [agent, endpoint, apiKey, provider, endpointError, applySettings] {
+        const QString endpointValue = endpoint->text().trimmed();
+        if (!isValidAgentEndpoint(endpointValue))
+        {
+            endpointError->setText(invalidEndpointMessage());
+            endpoint->setText(endpoint->property("acceptedAgentEndpoint").toString());
+            return;
+        }
+        RAgentSettings updated(static_cast<RAgentSettings::Type>(provider->currentData().toInt()));
+        updated.setApiUrl(endpointValue);
+        updated.setModel(agent && agent->model ? agent->model->currentText().trimmed() : QString());
+        updated.setApiKey(apiKey->text());
+        applySettings(updated);
+    });
+    connect(apiKey, &QLineEdit::textChanged, page, [agent, endpoint, apiKey, provider, applySettings](const QString &value) {
+        RAgentSettings updated(static_cast<RAgentSettings::Type>(provider->currentData().toInt()));
+        updated.setApiUrl(endpoint->text().trimmed());
+        updated.setModel(agent && agent->model ? agent->model->currentText().trimmed() : QString());
+        updated.setApiKey(value);
+        applySettings(updated);
+    });
+    connect(loadKey, &QPushButton::clicked, page, [page, loadKey, apiKey, provider] {
+        const QString path = QFileDialog::getOpenFileName(page, tr("Select local API key file"), QString(),
+                                                          tr("Key files (*.key *.txt *.env*);;All files (*)"));
+        if (path.isEmpty()) return;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly) || file.size() > 65536)
+        {
+            loadKey->setToolTip(tr("Cannot read this key file."));
+            return;
+        }
+        const QString contents = QString::fromUtf8(file.readAll());
+        const QString variable = provider->currentData().toInt() == int(RAgentSettings::Type::DeepSeek)
+            ? QStringLiteral("DEEPSEEK_API_KEY=") : QStringLiteral("OPENAI_API_KEY=");
+        QString value;
+        for (QString line : contents.split(QLatin1Char('\n')))
+        {
+            line = line.trimmed();
+            if (!line.startsWith(variable)) continue;
+            value = line.mid(variable.size()).trimmed();
+            if (value.size() >= 2 && ((value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"')))
+                                      || (value.startsWith(QLatin1Char('\'')) && value.endsWith(QLatin1Char('\'')))))
+                value = value.mid(1, value.size() - 2);
+            break;
+        }
+        const QString rawLine = contents.trimmed();
+        if (value.isEmpty() && !rawLine.contains(QLatin1Char('\n')) && !rawLine.contains(QLatin1Char('\r'))
+            && !rawLine.contains(QLatin1Char('=')))
+            value = rawLine;
+        if (value.isEmpty() || value.size() > 4096
+            || value.contains(QLatin1Char('\n')) || value.contains(QLatin1Char('\r')))
+        {
+            loadKey->setToolTip(tr("No single-line key for the selected provider was found."));
+            return;
+        }
+        apiKey->setText(value);
+        loadKey->setToolTip(tr("API key loaded for this session."));
+    });
+    return page;
 }
 
 void AgentWidget::updateAvailability()
 {
     const bool busy = runner.isActive();
-    start->setEnabled(!busy); stop->setEnabled(busy);
-    provider->setEnabled(!busy); endpoint->setEnabled(!busy); model->setEnabled(!busy); key->setEnabled(!busy);
-    authorize->setEnabled(!busy);
-    const bool pending = busy && !runner.pendingProposal().isEmpty();
-    apply->setEnabled(pending); decline->setEnabled(pending);
-}
+    newChat->setEnabled(!busy);
+    send->setText(runner.isAwaitingInput() ? tr("Answer") : (busy ? tr("Send now") : tr("Send")));
+    send->setEnabled(!goal->toPlainText().trimmed().isEmpty());
+    stop->setEnabled(busy);
+    stop->setVisible(busy);
+    goal->setEnabled(true);
+    model->setEnabled(true);
+    effort->setEnabled(providerSettings.getType() == RAgentSettings::Type::DeepSeek);
+    authorize->setEnabled(true);
 
-QJsonObject AgentWidget::hostRequest(const QString &operation, const QJsonObject &parameters) const
+    const bool pendingProposal = busy && !runner.pendingProposal().isEmpty() && !presentedProposalId.isEmpty();
+    approvalCard->setVisible(pendingProposal);
+    apply->setEnabled(pendingProposal);
+    decline->setEnabled(pendingProposal);
+    if (!pendingProposal)
+    {
+        presentedProposalId.clear();
+        preview->clear();
+    }
+    const bool pendingQuestion = busy && runner.isAwaitingInput() && !runner.pendingQuestionId().isEmpty();
+    questionCard->setVisible(pendingQuestion);
+    if (!pendingQuestion) presentedQuestionId.clear();
+    if (pendingQuestion && runner.pendingQuestionId() != presentedQuestionId)
+    {
+        questionCard->setVisible(false);
+        send->setText(busy ? tr("Send now") : tr("Send"));
+    }
+}QJsonObject AgentWidget::hostRequest(const QString &operation, const QJsonObject &parameters) const
 {
     if (!commandHost) return {};
     return commandHost->handle({{QStringLiteral("apiVersion"), QStringLiteral("range.host/v1")},
@@ -414,16 +1036,25 @@ void AgentWidget::refreshHostEvents()
 void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messages, const QJsonArray &tools)
 {
     if (reply) reply->abort();
-    const QUrl url(endpoint->text().trimmed());
-    if (!url.isValid() || url.scheme() != "https" || url.host().isEmpty() || !url.userInfo().isEmpty() || url.hasFragment())
-    { runner.providerFailed(requestId, tr("Use an HTTPS provider endpoint without embedded credentials.")); return; }
+    const RAgentSettings settings(requestSettingsSnapshot);
+    const QString providerKeyValue = settings.getApiKey().trimmed();
+    const QString endpointValue = settings.getApiUrl().trimmed();
+    const QUrl url(endpointValue);
+    if (!isValidAgentEndpoint(endpointValue))
+    { runner.providerFailed(requestId, invalidEndpointMessage()); return; }
+    if (providerKeyValue.isEmpty())
+    { runner.providerFailed(requestId, tr("Add an API key in assistant settings.")); return; }
+    const bool deepSeek = settings.getType() == RAgentSettings::Type::DeepSeek;
+    const bool thinkingDisabled = deepSeek && requestEffortSnapshot == QStringLiteral("off");
+    const QString deepSeekEffort = deepSeek && !thinkingDisabled ? requestEffortSnapshot : QString();
+    const int maxTokens = deepSeek && !thinkingDisabled ? 8192 : 2048;
     QByteArray body; QString error;
-    if (!RAgent::buildToolRequest(model->text().trimmed(), 2048, 1.0, messages, tools,
-                                 provider->currentIndex() == 0, &body, &error))
+    if (!RAgent::buildToolRequest(settings.getModel().trimmed(), maxTokens, 1.0, messages, tools,
+                                 thinkingDisabled, &body, &error, deepSeekEffort))
     { runner.providerFailed(requestId, error); return; }
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", "Bearer " + key->text().trimmed().toUtf8());
+    request.setRawHeader("Authorization", "Bearer " + providerKeyValue.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(60000);
     auto *pending = network.post(request, body); reply = pending;

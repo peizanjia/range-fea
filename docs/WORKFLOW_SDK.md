@@ -38,6 +38,19 @@ with WorkflowClient(workspace, solver, native, examples) as client:
 
 在把 SDK 用作模型工具时，只暴露经过白名单筛选的查询和提案入口；不要暴露通用 `request`、`approve` 或批准凭据。工具参数必须由本地服务再次验证。现有 GUI Agent 已将模型请求与宿主批准分开。
 
+## 运行中的原生控制样本
+
+不用等待 `client.wait()` 才能观察控制信号：
+
+```python
+page = client.telemetry(accepted["jobId"], after_seq=0, limit=256)
+for sample in page["samples"]:
+    print(sample["timeS"], sample["sensors"], sample["actuators"])
+cursor = page["nextSeq"]  # 下一次传入 after_seq；hasMore=True 时继续读取
+```
+
+底层为只读 `telemetry.query`，固定任务/模式，不接受任意文件路径。空页不等于计算完成；查看 `state`、`availability` 和 `hasMore`。样本来自 `ControlStepAccepted` 日志，传感器值对应接受状态时间，实际施加力/功率/累计功携带原生执行记录语义。被动计算没有该控制通道时明确返回不可用，不填造零曲线。GUI 暂停显示只冻结图像，不停止数据收集或求解器。完整交互约定见 `GUI_INTERACTION_DESIGN.md`。
+
 ## 私有运行环境构建
 
 构建器使用 CPython 官方嵌入包和固定哈希的 NumPy/SciPy wheel，保留包内许可文件。首次准备缓存需要网络，缓存完整后可离线组装。最终产品不包含运行时 pip 安装流程，也不读取用户 site-packages。

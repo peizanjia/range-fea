@@ -126,22 +126,44 @@ MainWindow::MainWindow(Session *session,
 
     this->resultsTab = this->createResultsTab();
     solverDockTabWidget->addTab(this->resultsTab,tr("Results"));
-    auto *workflowWidget = new WorkflowWidget(solverDockTabWidget);
+    auto *controlDock = new QDockWidget(tr("Dynamics & control"), this);
+    controlDock->setObjectName("controlDock");
+    auto *workflowWidget = new WorkflowWidget(controlDock);
+    controlDock->setWidget(workflowWidget);
+    addDockWidget(Qt::BottomDockWidgetArea, controlDock);
     const auto scrollable = [solverDockTabWidget](QWidget *widget) {
         auto *scroll = new QScrollArea(solverDockTabWidget);
         scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame); scroll->setWidget(widget);
         return scroll;
     };
-    solverDockTabWidget->addTab(scrollable(workflowWidget), tr("Workflow"));
     connect(session, &Session::solverResultAvailable, workflowWidget, &WorkflowWidget::showDocumentResult);
     connect(workflowWidget, &WorkflowWidget::openResultRequested, this, [](const QString &path) {
         RJobManager::getInstance().submit(new ModelIO(MODEL_IO_OPEN, path));
     });
-    solverDockTabWidget->addTab(scrollable(new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), solverDockTabWidget)), tr("Agent tasks"));
+    auto *agentDock = new QDockWidget(tr("Assistant"), this);
+    agentDock->setObjectName("agentDock");
+    agentDock->setMinimumWidth(340);
+    agentDock->setWidget(new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), agentDock));
+    addDockWidget(Qt::RightDockWidgetArea, agentDock);
+    tabifyDockWidget(solverDock, agentDock);
+    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+    setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
     solverDockTabWidget->addTab(scrollable(new ExtensionWidget(workflowWidget->transport(), solverDockTabWidget)), tr("Extensions"));
 
     this->restoreGeometry(this->applicationSettings->value("mainWindow/geometry").toByteArray());
     this->restoreState(this->applicationSettings->value("mainWindow/windowState").toByteArray());
+    // Feature panels have their own dock surfaces: the conversation composer
+    // stays visible and the control monitor can use the full viewport width.
+    auto *panelsMenu = menuBar()->addMenu(tr("Panels"));
+    for (auto *dock : {modelDock, solverDock, agentDock, controlDock})
+        panelsMenu->addAction(dock->toggleViewAction());
+    if (this->applicationSettings->value("mainWindow/featureLayoutVersion", 0).toInt() < 1)
+    {
+        resizeDocks({agentDock}, {400}, Qt::Horizontal);
+        resizeDocks({controlDock}, {300}, Qt::Vertical);
+        agentDock->raise();
+        this->applicationSettings->setValue("mainWindow/featureLayoutVersion", 1);
+    }
 
     // Toolbar icon size changed signal
     QObject::connect(this->applicationSettings,&RApplicationSettings::toolbarIconSizeChanged,this,&MainWindow::onToolbarIconSizeChanged);

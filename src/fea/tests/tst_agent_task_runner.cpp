@@ -220,6 +220,23 @@ private slots:
             requested.first().at(1).toJsonArray(), requested.first().at(2).toJsonArray(),
             false, &requestBody, &error), qPrintable(error));
         QVERIFY(!requestBody.isEmpty());
+        bool hasAskUser = false;
+        bool hasTelemetry = false;
+        for (const QJsonValue &toolValue : requested.first().at(2).toJsonArray())
+        {
+            const QJsonObject function = toolValue.toObject().value(QStringLiteral("function")).toObject();
+            if (function.value(QStringLiteral("name")) == QJsonValue(QStringLiteral("ask_user")))
+            {
+                hasAskUser = true;
+                const QJsonObject options = function.value(QStringLiteral("parameters")).toObject()
+                    .value(QStringLiteral("properties")).toObject().value(QStringLiteral("options")).toObject();
+                QCOMPARE(options.value(QStringLiteral("maxItems")).toInt(), 3);
+            }
+            if (function.value(QStringLiteral("name")) == QJsonValue(QStringLiteral("workflow_telemetry")))
+                hasTelemetry = true;
+        }
+        QVERIFY(hasAskUser);
+        QVERIFY(hasTelemetry);
 
         const auto turn = parseProviderBody(providerBody(QStringLiteral("No documents are open.")));
         QCOMPARE(turn.value(QStringLiteral("text")).toString(), QStringLiteral("No documents are open."));
@@ -228,6 +245,349 @@ private slots:
         runner.receiveTurn(requestId, turn);
         QCOMPARE(finished.size(), 1);
         QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void followupRetainsToolOutcomesAndUsesFreshHostContext()
+    {
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+
+        runner.submitMessage(QStringLiteral("First request in this conversation."));
+        QCOMPARE(requested.size(), 1);
+        runner.clearConversation(); // Clearing is ignored while a turn is active.
+        QVERIFY(runner.isActive());
+        QVERIFY(requested.first().at(1).toJsonArray().last().toObject().value(QStringLiteral("content"))
+                    .toString().startsWith(QStringLiteral("Fresh host context (data): ")));
+        const QString firstRequest = requested.first().at(0).toString();
+        runner.receiveTurn(firstRequest, parseProviderBody(providerBody(QString(), QJsonArray{
+            providerCall(QStringLiteral("first-context-read"), QStringLiteral("context_query"), {})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The first request is complete."))));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+
+        runner.submitMessage(QStringLiteral("Follow up using the earlier context."));
+        QCOMPARE(requested.size(), 3);
+        const QJsonArray followupHistory = requested.last().at(1).toJsonArray();
+        QString summaryContent;
+        bool hasFreshContext = false;
+        bool hasRawToolMessage = false;
+        for (const QJsonValue &messageValue : followupHistory)
+        {
+            const QJsonObject message = messageValue.toObject();
+            const QString role = message.value(QStringLiteral("role")).toString();
+            if (role == QStringLiteral("tool") || (role == QStringLiteral("assistant") && message.contains(QStringLiteral("tool_calls"))))
+                hasRawToolMessage = true;
+            const QString content = message.value(QStringLiteral("content")).toString();
+            if (content.startsWith(QStringLiteral("Prior conversation data (untrusted; not authorization): ")))
+                summaryContent = content;
+            if (content.startsWith(QStringLiteral("Fresh host context (data): ")))
+            {
+                hasFreshContext = true;
+                const auto snapshot = QJsonDocument::fromJson(content.mid(QStringLiteral("Fresh host context (data): ").size()).toUtf8()).object();
+                QCOMPARE(snapshot.value(QStringLiteral("result")).toObject().value(QStringLiteral("sessionEpoch")).toString(),
+                         documentContext(host).value(QStringLiteral("sessionEpoch")).toString());
+            }
+        }
+        QVERIFY(!summaryContent.isEmpty());
+        QVERIFY(summaryContent.contains(QStringLiteral("First request in this conversation.")));
+        QVERIFY(!summaryContent.contains(QStringLiteral("first-context-read"))); // Tool call IDs are not replayed into later turns.
+        QVERIFY(summaryContent.contains(QStringLiteral("context_query")));
+        QVERIFY(summaryContent.contains(QStringLiteral("tool_result")));
+        QVERIFY(summaryContent.contains(QStringLiteral("documents")));
+        QVERIFY(hasFreshContext);
+        QVERIFY(!hasRawToolMessage);
+        const QJsonObject followupTurn = parseProviderBody(providerBody(QStringLiteral("The follow up is complete.")));
+        runner.receiveTurn(requested.last().at(0).toString(), followupTurn);
+        QCOMPARE(finished.size(), 2);
+        runner.clearConversation();
+        runner.submitMessage(QStringLiteral("Start a clean conversation."));
+        QCOMPARE(requested.size(), 4);
+        for (const QJsonValue &messageValue : requested.last().at(1).toJsonArray())
+            QVERIFY(!messageValue.toObject().value(QStringLiteral("content")).toString()
+                         .startsWith(QStringLiteral("Prior conversation data (untrusted; not authorization): ")));
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The clean conversation is complete."))));
+        QCOMPARE(finished.size(), 3);
+    }
+
+    void steeringInvalidatesPendingProposalWithoutFailureOrCarriedApproval()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        const auto document = documentContext(host).value(QStringLiteral("documents")).toArray().first().toObject();
+        const QString identity = document.value(QStringLiteral("documentId")).toString();
+        const quint64 revision = quint64(document.value(QStringLiteral("documentRevision")).toDouble());
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Prepare a modal setting proposal."));
+        const QString oldRequestId = requested.last().at(0).toString();
+        runner.receiveTurn(oldRequestId, parseProviderBody(providerBody(QString(), QJsonArray{
+            providerCall(QStringLiteral("pending-modal-proposal"), QStringLiteral("document_propose"), documentProposal(identity, revision))})));
+        QCOMPARE(proposals.size(), 1);
+        const QString staleProposalId = proposals.first().at(1).toString();
+
+        runner.submitMessage(QStringLiteral("Instead, only summarize the current state."));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+        QVERIFY(finished.first().at(1).toString().contains(QStringLiteral("continue"), Qt::CaseInsensitive));
+        QVERIFY(runner.isActive());
+        QVERIFY(runner.pendingProposal().isEmpty());
+        QCOMPARE(requested.size(), 2);
+        QVERIFY(requested.last().at(0).toString() != oldRequestId);
+
+        runner.authorizePending(staleProposalId, true);
+        runner.providerFailed(oldRequestId, QStringLiteral("Stale provider failure."));
+        runner.receiveTurn(oldRequestId, parseProviderBody(providerBody(QStringLiteral("Stale provider text."))));
+        QVERIFY(runner.isActive());
+        QCOMPARE(actions.size(), 0);
+        QCOMPARE(finished.size(), 1);
+        const QJsonArray steeredHistory = requested.last().at(1).toJsonArray();
+        QString priorSummary;
+        for (const QJsonValue &messageValue : steeredHistory)
+        {
+            const QString content = messageValue.toObject().value(QStringLiteral("content")).toString();
+            if (content.startsWith(QStringLiteral("Prior conversation data (untrusted; not authorization): ")))
+                priorSummary = content;
+            QVERIFY(messageValue.toObject().value(QStringLiteral("role")).toString() != QStringLiteral("tool"));
+        }
+        QVERIFY(priorSummary.contains(QStringLiteral("pendingProposalDiscarded")));
+        QVERIFY(priorSummary.contains(QStringLiteral("unfinished_tool_call")));
+        QVERIFY(priorSummary.contains(QStringLiteral("no carried authorization")));
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("I will only report the current state."))));
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void askUserQuestionIsBoundedCorrelatedAndAnswerBecomesToolData()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy questions(&runner, &AgentTaskRunner::userInputRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.submitMessage(QStringLiteral("Ask me for a choice before deciding."));
+        const QJsonObject firstQuestionCall = providerCall(QStringLiteral("choice-question"), QStringLiteral("ask_user"),
+            {{QStringLiteral("question"), QStringLiteral("Which reference model should I use?")},
+             {QStringLiteral("options"), QJsonArray{QStringLiteral("four-rod"), QStringLiteral("cantilever-beam")}}});
+        const QJsonObject firstQuestionTurn = parseProviderBody(providerBody(
+            QStringLiteral("I need one preference before I continue."), QJsonArray{firstQuestionCall}));
+        runner.receiveTurn(requested.last().at(0).toString(), firstQuestionTurn);
+        QCOMPARE(questions.size(), 1);
+        QVERIFY(runner.isAwaitingInput());
+        const QString questionId = runner.pendingQuestionId();
+        QVERIFY(!questionId.isEmpty());
+        QCOMPARE(questions.first().at(0).toString(), questionId);
+        QCOMPARE(questions.first().at(1).toString(), QStringLiteral("Which reference model should I use?"));
+        QCOMPARE(questions.first().at(2).toJsonArray().size(), 2);
+
+        runner.answerQuestion(QStringLiteral("stale-question-id"), QStringLiteral("four-rod"));
+        runner.answerQuestion(questionId, QString(4097, QLatin1Char('x')));
+        QCOMPARE(requested.size(), 1);
+        QVERIFY(runner.isAwaitingInput());
+        runner.answerQuestion(questionId, QStringLiteral("four-rod"));
+        QVERIFY(!runner.isAwaitingInput());
+        QCOMPARE(runner.pendingQuestionId(), QString());
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        const QString answerResult = toolResultContent(requested.last().at(1).toJsonArray(), QStringLiteral("choice-question"));
+        QVERIFY(answerResult.contains(QStringLiteral("four-rod")));
+        QVERIFY(answerResult.contains(QStringLiteral("answered")));
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("I will use the four-rod reference model."))));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+
+        runner.submitMessage(QStringLiteral("Ask one more choice."));
+        const QJsonObject secondQuestionCall = providerCall(QStringLiteral("stale-choice-question"), QStringLiteral("ask_user"),
+            {{QStringLiteral("question"), QStringLiteral("Should I continue waiting?")},
+             {QStringLiteral("options"), QJsonArray{QStringLiteral("yes"), QStringLiteral("no")}}});
+        const QJsonObject secondQuestionTurn = parseProviderBody(providerBody(QString(), QJsonArray{secondQuestionCall}));
+        runner.receiveTurn(requested.last().at(0).toString(), secondQuestionTurn);
+        QCOMPARE(questions.size(), 2);
+        const QString staleQuestionId = runner.pendingQuestionId();
+        QVERIFY(!staleQuestionId.isEmpty());
+        runner.submitMessage(QStringLiteral("Stop waiting and summarize now."));
+        QVERIFY(!runner.isAwaitingInput());
+        QCOMPARE(requested.size(), 4);
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("superseded"));
+        runner.answerQuestion(staleQuestionId, QStringLiteral("yes"));
+        QCOMPARE(requested.size(), 4);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The new direction is complete."))));
+        QCOMPARE(finished.size(), 3);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void assistantMessageMaySynchronouslySteerWithoutAdvancingOldTurn()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy assistantMessages(&runner, &AgentTaskRunner::assistantMessage);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        bool steered = false;
+        connect(&runner, &AgentTaskRunner::assistantMessage, &runner,
+            [&runner, &steered](const QString &text) {
+                if (!steered && text == QStringLiteral("The old task is still speaking."))
+                {
+                    steered = true;
+                    runner.submitMessage(QStringLiteral("Follow the replacement request."));
+                }
+            });
+
+        runner.submitMessage(QStringLiteral("Initial user message."));
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The old task is still speaking."))));
+        QVERIFY(steered);
+        QCOMPARE(assistantMessages.size(), 1);
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+        QCOMPARE(requested.size(), 2);
+        QVERIFY(runner.isActive());
+        QVERIFY(requested.last().at(1).toJsonArray().at(1).toObject().value(QStringLiteral("content"))
+                    .toString().contains(QStringLiteral("The old task is still speaking.")));
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The replacement request is complete."))));
+        QCOMPARE(assistantMessages.size(), 2);
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void analyzingStateChangeSteeringDoesNotLaunchRetiredProviderTurn()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        bool steered = false;
+        connect(&runner, &AgentTaskRunner::stateChanged, &runner,
+            [&runner, &steered](const QString &state, const QString &) {
+                if (!steered && state == QStringLiteral("analyzing"))
+                {
+                    steered = true;
+                    runner.submitMessage(QStringLiteral("The replacement message."));
+                }
+            });
+
+        runner.submitMessage(QStringLiteral("The request that should be retired."));
+        QVERIFY(steered);
+        QCOMPARE(requested.size(), 1); // Only the replacement request reaches the provider.
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+        const QJsonArray messages = requested.first().at(1).toJsonArray();
+        QVERIFY(messages.last().toObject().value(QStringLiteral("content")).toString()
+                    .contains(QStringLiteral("Fresh host context (data): ")));
+        bool hasReplacement = false;
+        for (const QJsonValue &messageValue : messages)
+            if (messageValue.toObject().value(QStringLiteral("content")).toString()
+                    == QStringLiteral("The replacement message.")) hasReplacement = true;
+        QVERIFY(hasReplacement);
+        runner.receiveTurn(requested.first().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("Replacement complete."))));
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void executingStateChangeSteeringDoesNotApplyRetiredAutomaticProposal()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        const auto document = documentContext(host).value(QStringLiteral("documents")).toArray().first().toObject();
+        const QString documentId = document.value(QStringLiteral("documentId")).toString();
+        const quint64 beforeRevision = quint64(document.value(QStringLiteral("documentRevision")).toDouble());
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        bool steered = false;
+        connect(&runner, &AgentTaskRunner::stateChanged, &runner,
+            [&runner, &steered](const QString &state, const QString &) {
+                if (!steered && state == QStringLiteral("executing"))
+                {
+                    steered = true;
+                    runner.submitMessage(QStringLiteral("Only report the current state."));
+                }
+            });
+
+        runner.startTask(QStringLiteral("Automatically apply the old proposal."), true);
+        const QString oldRequestId = requested.last().at(0).toString();
+        const QJsonObject oldProposal = providerCall(QStringLiteral("retired-auto-proposal"),
+            QStringLiteral("document_propose"), documentProposal(documentId, beforeRevision));
+        runner.receiveTurn(oldRequestId, parseProviderBody(providerBody(QString(), QJsonArray{oldProposal})));
+        QVERIFY(steered);
+        QCOMPARE(requested.size(), 2);
+        QCOMPARE(actions.size(), 0);
+        QCOMPARE(proposals.size(), 0);
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+        const auto afterDocument = documentContext(host).value(QStringLiteral("documents")).toArray().first().toObject();
+        QCOMPARE(quint64(afterDocument.value(QStringLiteral("documentRevision")).toDouble()), beforeRevision);
+        QVERIFY(runner.isActive());
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("No action was taken."))));
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void reasoningContentIsRetainedPrivatelyAndBoundedTelemetryToolIsValidated()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.submitMessage(QStringLiteral("Read bounded live telemetry."));
+        QJsonObject telemetryTurn = parseProviderBody(providerBody(QString(), QJsonArray{
+            providerCall(QStringLiteral("telemetry-read"), QStringLiteral("workflow_telemetry"),
+                {{QStringLiteral("jobId"), QStringLiteral("job-1")},
+                 {QStringLiteral("afterSeq"), 3}, {QStringLiteral("limit"), 16},
+                 {QStringLiteral("mode"), QStringLiteral("passive")}})}));
+        QJsonObject assistant = telemetryTurn.value(QStringLiteral("assistantMessage")).toObject();
+        assistant.insert(QStringLiteral("reasoning_content"), QStringLiteral("provider-private reasoning"));
+        telemetryTurn.insert(QStringLiteral("assistantMessage"), assistant);
+        runner.receiveTurn(requested.last().at(0).toString(), telemetryTurn);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        bool retainedReasoning = false;
+        for (const QJsonValue &messageValue : requested.last().at(1).toJsonArray())
+        {
+            const QJsonObject message = messageValue.toObject();
+            if (message.value(QStringLiteral("role")) == QJsonValue(QStringLiteral("assistant"))
+                && message.value(QStringLiteral("reasoning_content")).toString() == QStringLiteral("provider-private reasoning"))
+                retainedReasoning = true;
+        }
+        QVERIFY(retainedReasoning);
+        QVERIFY(toolResultContent(requested.last().at(1).toJsonArray(), QStringLiteral("telemetry-read"))
+                    .contains(QStringLiteral("WORKSPACE_CLOSED")));
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("Telemetry is available only in a connected workflow."))));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+
+        runner.submitMessage(QStringLiteral("Reject overlarge provider reasoning."));
+        QJsonObject oversized = parseProviderBody(providerBody(QStringLiteral("A normal response.")));
+        assistant = oversized.value(QStringLiteral("assistantMessage")).toObject();
+        assistant.insert(QStringLiteral("reasoning_content"), QString(128 * 1024 + 1, QLatin1Char('r')));
+        oversized.insert(QStringLiteral("assistantMessage"), assistant);
+        runner.receiveTurn(requested.last().at(0).toString(), oversized);
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("failed"));
     }
 
     void oldProviderReplyCannotCompleteNewTask()
@@ -805,6 +1165,115 @@ private slots:
         QCOMPARE(finished.last().at(0).toString(), QStringLiteral("failed"));
         runner.authorizePending(pendingProposalId, true);
         QCOMPARE(actions.size(), 0);
+    }
+
+    void steeringPreservesApprovedAndWaitingWorkflowJobOutcomes()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        WorkflowProcess workflow;
+        const auto config = WorkflowProcess::defaultConfiguration(directory.path());
+        QSignalSpy serviceErrors(&workflow, &WorkflowProcess::serviceError);
+        workflow.start(config);
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isReady(), 15000);
+        QCOMPARE(serviceErrors.size(), 0);
+
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        QString submittedJobId;
+        bool armedRunSteering = false;
+        connect(&runner, &AgentTaskRunner::actionCompleted, &runner,
+            [&runner, &submittedJobId, &armedRunSteering](const QString &, const QJsonObject &result) {
+                const QString jobId = result.value(QStringLiteral("jobId")).toString();
+                if (armedRunSteering && !jobId.isEmpty() && submittedJobId.isEmpty())
+                {
+                    submittedJobId = jobId;
+                    // Steering synchronously from the accepted execution outcome
+                    // must retain that outcome before the old turn is retired.
+                    runner.submitMessage(QStringLiteral("Check the calculation that was just submitted."));
+                }
+            });
+
+        runner.startTask(QStringLiteral("Configure and submit a reference calculation."));
+        const QJsonObject configureCall = providerCall(QStringLiteral("configure-reference"), QStringLiteral("workflow_propose"),
+            {{QStringLiteral("command"), QStringLiteral("workflow.configure")},
+             {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("model"), QStringLiteral("four-rod")},
+                 {QStringLiteral("dt"), 0.005}, {QStringLiteral("steps"), 5000},
+                 {QStringLiteral("targetDamping"), 0.1}}}});
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QString(), QJsonArray{configureCall})));
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 15000);
+        runner.authorizePending(proposals.last().at(1).toString(), true);
+        QTRY_COMPARE_WITH_TIMEOUT(actions.size(), 1, 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(requested.size() >= 2, 5000);
+        armedRunSteering = true;
+
+        const QJsonObject runCall = providerCall(QStringLiteral("submit-reference-run"), QStringLiteral("workflow_propose"),
+            {{QStringLiteral("command"), QStringLiteral("workflow.run")},
+             {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("mode"), QStringLiteral("passive")},
+                 {QStringLiteral("independentReference"), true}}}});
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QString(), QJsonArray{runCall})));
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 2, 15000);
+        runner.authorizePending(proposals.last().at(1).toString(), true);
+        QTRY_VERIFY_WITH_TIMEOUT(!submittedJobId.isEmpty(), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(requested.size() >= 3, 5000);
+        QCOMPARE(actions.size(), 2);
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+
+        const QJsonArray afterExecutionHistory = requested.last().at(1).toJsonArray();
+        QString executionSummary;
+        for (const QJsonValue &messageValue : afterExecutionHistory)
+        {
+            const QJsonObject message = messageValue.toObject();
+            const QString content = message.value(QStringLiteral("content")).toString();
+            if (content.startsWith(QStringLiteral("Prior conversation data (untrusted; not authorization): ")))
+                executionSummary = content;
+            QVERIFY(!(message.value(QStringLiteral("role")) == QJsonValue(QStringLiteral("assistant"))
+                && message.contains(QStringLiteral("tool_calls"))));
+        }
+        QVERIFY(executionSummary.contains(QStringLiteral("tool_result")));
+        QVERIFY(executionSummary.contains(QStringLiteral("action_outcome")));
+        QVERIFY(executionSummary.contains(submittedJobId));
+
+        const QJsonObject waitCall = providerCall(QStringLiteral("wait-for-submitted-job"), QStringLiteral("workflow_wait"),
+            {{QStringLiteral("jobId"), submittedJobId}});
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QString(), QJsonArray{waitCall})));
+        QVERIFY(runner.isActive());
+        runner.submitMessage(QStringLiteral("Stop waiting and summarize the submitted job."));
+        QCOMPARE(requested.size(), 4);
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("superseded"));
+        QVERIFY(finished.last().at(1).toString().contains(submittedJobId));
+        const QJsonArray afterWaitHistory = requested.last().at(1).toJsonArray();
+        QString waitSummary;
+        for (const QJsonValue &messageValue : afterWaitHistory)
+        {
+            const QJsonObject message = messageValue.toObject();
+            const QString content = message.value(QStringLiteral("content")).toString();
+            if (content.startsWith(QStringLiteral("Prior conversation data (untrusted; not authorization): ")))
+                waitSummary = content;
+            QVERIFY(message.value(QStringLiteral("role")).toString() != QStringLiteral("tool"));
+        }
+        QVERIFY(waitSummary.contains(QStringLiteral("submittedJobId")));
+        QVERIFY(waitSummary.contains(submittedJobId));
+
+        QString queryError;
+        const QJsonObject jobStatus = workflowRequest(workflow, QStringLiteral("jobs.query"),
+            {{QStringLiteral("jobId"), submittedJobId}}, &queryError);
+        QVERIFY2(queryError.isEmpty(), qPrintable(queryError));
+        QCOMPARE(jobStatus.value(QStringLiteral("job")).toObject().value(QStringLiteral("jobId")).toString(), submittedJobId);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The submitted job remains available in the workflow panel."))));
+        QCOMPARE(finished.size(), 3);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+        QCOMPARE(serviceErrors.size(), 0);
+        workflow.stop();
     }
 };
 

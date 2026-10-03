@@ -1,6 +1,7 @@
 #include <QVBoxLayout>
 
 #include "application_settings_widget.h"
+#include "agent_widget.h"
 
 ApplicationSettingsWidget::ApplicationSettingsWidget(ApplicationSettings *applicationSettings, QWidget *parent)
     : RApplicationSettingsWidget{applicationSettings,parent}
@@ -8,6 +9,19 @@ ApplicationSettingsWidget::ApplicationSettingsWidget(ApplicationSettings *applic
 {
     QWidget *generalWidget = this->createGeneralTab();
     this->tabWidget->addTab(generalWidget,tr("General"));
+    this->tabWidget->addTab(AgentWidget::createSettingsPage(this),tr("Agent"));
+}
+
+void ApplicationSettingsWidget::selectTab(const QString &title)
+{
+    for (int index = 0; index < this->tabWidget->count(); ++index)
+    {
+        if (this->tabWidget->tabText(index) == title)
+        {
+            this->tabWidget->setCurrentIndex(index);
+            return;
+        }
+    }
 }
 
 QWidget *ApplicationSettingsWidget::createGeneralTab()

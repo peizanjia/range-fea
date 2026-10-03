@@ -19,11 +19,28 @@
 #include <QTextBrowser>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QScrollArea>
+#include <QSplitter>
+#include <QTabWidget>
+#include "control_monitor_widget.h"
 
 WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
 {
     setObjectName("workflowWidget");
-    auto *layout = new QVBoxLayout(this);
+    auto *rootLayout = new QVBoxLayout(this);
+    rootLayout->setContentsMargins(4, 2, 4, 2);
+    pages = new QTabWidget; pages->setObjectName("workflowPages"); rootLayout->addWidget(pages, 1);
+    auto *monitorPage = new QWidget;
+    auto *monitorLayout = new QVBoxLayout(monitorPage); monitorLayout->setContentsMargins(0, 0, 0, 0);
+    pages->addTab(monitorPage, tr("Live monitor"));
+    auto *experiment = new QWidget;
+    auto *experimentScroll = new QScrollArea; experimentScroll->setWidgetResizable(true);
+    experimentScroll->setFrameShape(QFrame::NoFrame); experimentScroll->setWidget(experiment);
+    pages->addTab(experimentScroll, tr("Experiment"));
+    auto *resultsPage = new QWidget;
+    auto *resultsLayout = new QVBoxLayout(resultsPage);
+    pages->addTab(resultsPage, tr("Results & history"));
+    auto *layout = new QVBoxLayout(experiment);
     auto *intro = new QLabel(tr("Rod / beam control experiments. These reference workflows have their own workspace and do not replace the model you are editing."));
     intro->setWordWrap(true);
     layout->addWidget(intro);
@@ -107,12 +124,23 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     connect(applyButton, &QPushButton::clicked, this, &WorkflowWidget::applyPreview);
     status = new QLabel(tr("Open a workspace to begin."));
     status->setObjectName("workflowStatus"); status->setWordWrap(true);
-    layout->addWidget(status);
+    rootLayout->addWidget(status);
+    auto *monitorSplit = new QSplitter(Qt::Horizontal);
+    monitorLayout->addWidget(monitorSplit);
+    auto *jobsPanel = new QWidget;
+    layout = new QVBoxLayout(jobsPanel); layout->setContentsMargins(0, 0, 0, 0);
+    monitorSplit->addWidget(jobsPanel);
+    monitor = new ControlMonitorWidget(&service);
+    monitorSplit->addWidget(monitor);
+    monitorSplit->setStretchFactor(0, 0); monitorSplit->setStretchFactor(1, 1);
+    monitorSplit->setSizes({210, 700});
     jobTree = new QTreeWidget;
     jobTree->setObjectName("workflowJobs");
     jobTree->setHeaderLabels({tr("Task"), tr("State"), tr("Created")});
     jobTree->setRootIsDecorated(false); jobTree->setAccessibleName(tr("Workflow tasks"));
-    layout->addWidget(jobTree);
+    jobTree->setMinimumWidth(130); jobTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    jobTree->hideColumn(2);
+    layout->addWidget(jobTree, 1);
     cancelButton = new QPushButton(tr("Cancel selected task"));
     cancelButton->setObjectName("workflowCancel");
     layout->addWidget(cancelButton);
@@ -123,12 +151,17 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     connect(jobTree, &QTreeWidget::itemSelectionChanged, this, [this] {
         setActionAvailability();
         const auto *item = jobTree->currentItem();
+        const QString command = item ? item->data(0, Qt::UserRole + 1).toString() : QString();
+        const bool calculation = command == "workflow.run" || command == "workflow.resume";
+        monitor->setJob(calculation ? item->data(0, Qt::UserRole).toString() : QString(),
+                        item ? item->data(1, Qt::UserRole).toString() : QString());
         if (item && item->data(1, Qt::UserRole).toString() == "succeeded")
         {
             const auto id = item->data(0, Qt::UserRole).toString();
             if (displayedResult != id) request("results.query", {{"jobId", id}});
         }
     });
+    layout = resultsLayout;
     results = new QTableWidget(0, 3);
     results->setObjectName("workflowResults");
     results->setHorizontalHeaderLabels({tr("Quantity"), tr("Active"), tr("Passive")});
@@ -200,6 +233,7 @@ void WorkflowWidget::openWorkspace(const WorkflowProcess::Configuration &configu
     preview = {}; pendingCommand.clear(); pendingArguments = {}; continuations.clear();
     commandInFlight = false; displayedResult.clear(); jobsRequest.clear();
     ownedRequests.clear();
+    monitor->setJob({}, {});
     jobRows.clear(); jobTree->clear(); results->setRowCount(0); previewText->clear(); audit->clear();
     service.start(configuration);
 }
@@ -261,6 +295,7 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
         previewText->setPlainText(tr("The approved task has been submitted. Its progress appears below."));
         status->setText(tr("Task accepted."));
         foregroundJob = result.value("jobId").toString();
+        pages->setCurrentIndex(0);
         emit jobAccepted(result.value("jobId").toString());
         refreshJobs(); request("audit.query", {{"limit", 100}});
     }
@@ -280,8 +315,16 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
             }
             const auto oldState = item->data(1, Qt::UserRole).toString();
             const auto state = job.value("state").toString();
-            item->setText(0, job.value("command").toString()); item->setText(1, state);
+            const QString command = job.value("command").toString();
+            item->setData(0, Qt::UserRole + 1, command);
+            const QMap<QString, QString> labels{{"workflow.configure", tr("Settings")},
+                {"workflow.run", tr("Control run")}, {"workflow.resume", tr("Continuation")}};
+            item->setText(0, labels.value(command, tr("Extension task")) + " · " + jobId.left(6));
+            item->setToolTip(0, tr("Created: %1\nTask: %2").arg(job.value("createdAt").toString(), jobId));
+            item->setText(1, state == "succeeded" ? tr("Completed") : state);
             item->setText(2, job.value("createdAt").toString()); item->setData(1, Qt::UserRole, state);
+            if (jobTree->currentItem() == item)
+                monitor->setJob(command == "workflow.run" || command == "workflow.resume" ? jobId : QString(), state);
             if (oldState != state && state == "succeeded")
             {
                 if (jobTree->currentItem() == item && displayedResult != jobId)
@@ -364,7 +407,7 @@ void WorkflowWidget::setActionAvailability()
     const auto *item = jobTree->currentItem();
     const auto state = item ? item->data(1, Qt::UserRole).toString() : QString();
     resumeButton->setEnabled(available && state == "succeeded" && item &&
-        (item->text(0) == "workflow.run" || item->text(0) == "workflow.resume"));
+        (item->data(0, Qt::UserRole + 1).toString() == "workflow.run" || item->data(0, Qt::UserRole + 1).toString() == "workflow.resume"));
     cancelButton->setEnabled(service.isReady() && (state == "queued" || state == "running"));
 }
 

@@ -8,6 +8,8 @@ install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
     ${CMAKE_SOURCE_DIR}/../docs/CONTROL_WORKFLOW.md
     ${CMAKE_SOURCE_DIR}/../docs/AGENT_OPERATIONS.md
     ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_SDK.md
+    ${CMAKE_SOURCE_DIR}/../docs/GUI_INTERACTION_DESIGN.md
+    ${CMAKE_SOURCE_DIR}/../docs/GUI_UX_ACCEPTANCE.md
     ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
     ${CMAKE_SOURCE_DIR}/../docs/STAGE12_ACCEPTANCE.md DESTINATION doc COMPONENT Application)
 install(DIRECTORY examples/ DESTINATION share/range-workflow/examples COMPONENT Application FILES_MATCHING PATTERN "*.py")
@@ -41,6 +43,9 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_workflow_extensions COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extensions.py" -v)
     set_tests_properties(tst_workflow_extensions PROPERTIES TIMEOUT 120)
+    add_test(NAME tst_workflow_telemetry COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_telemetry.py" -v)
+    set_tests_properties(tst_workflow_telemetry PROPERTIES TIMEOUT 60)
     add_test(NAME tst_private_python_packaging COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/../scripts/packaging/test_private_python.py" -v)
     if(WIN32)

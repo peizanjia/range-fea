@@ -19,6 +19,8 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QTableWidget;
 class QCheckBox;
+class QTabWidget;
+class ControlMonitorWidget;
 
 //! A user-facing host of the actual persisted rod/beam workflow service.
 class WorkflowWidget : public QWidget
@@ -46,6 +48,8 @@ signals:
 private:
     WorkflowProcess service;
     QTimer refreshTimer;
+    QTabWidget *pages;
+    ControlMonitorWidget *monitor;
     QLineEdit *workspaceEdit;
     QCheckBox *trustedExtensions;
     QComboBox *modelChoice;

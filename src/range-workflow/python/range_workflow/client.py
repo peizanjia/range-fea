@@ -126,6 +126,16 @@ class WorkflowClient:
                 raise WorkflowError("SDK_TIMEOUT", "Job did not finish within the host wait budget")
             time.sleep(0.05)
 
+    def telemetry(self, job_id, *, after_seq=0, limit=256, mode="active"):
+        """Read accepted native control samples; never blocks until job completion.
+
+        Advance with response['nextSeq']; request again immediately when hasMore
+        is true. An empty page may mean the running solver has not accepted a new
+        step yet. Availability distinguishes that from missing control channels.
+        """
+        return self.request("telemetry.query", {"jobId": job_id, "afterSeq": after_seq,
+                                               "limit": limit, "mode": mode})
+
     def close(self):
         if self._closed:
             return

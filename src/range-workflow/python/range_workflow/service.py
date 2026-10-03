@@ -160,6 +160,8 @@ class WorkflowService:
         self._workers: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._extension_writers: dict[str, str] = {}
         self._commands: dict[str, dict] = {}
+        from .telemetry import TelemetryReader
+        self._telemetry = TelemetryReader(self.workspace)
         self._closed = False
         self._fault = False
         try:
@@ -437,6 +439,24 @@ class WorkflowService:
                 return {"job": self._job(p["jobId"])} if operation == "jobs.query" else {"result": self.result_snapshot(p["jobId"])}
             jobs = list(self._state["jobs"].values())
             return {"jobs": jobs} if operation == "jobs.query" else {"results": [x["result"] for x in jobs if x["state"] == "succeeded" and "result" in x]}
+        if operation == "telemetry.query":
+            exact(p, {"jobId"}, {"afterSeq", "limit", "mode"})
+            job_id = identifier(p["jobId"], "jobId")
+            after_seq = integer(p.get("afterSeq", 0), "afterSeq", 0, 2**53 - 1)
+            limit = integer(p.get("limit", 256), "limit", 1, 512)
+            mode = p.get("mode", "active")
+            if mode not in ("active", "passive"):
+                raise WorkflowError("INVALID_PARAMETERS", "mode must be active or passive")
+            job = self._job(job_id)
+            scheduled_mode = None
+            if job.get("command") == "workflow.run":
+                scheduled_mode = job.get("parameters", {}).get("mode")
+            elif job.get("command") == "workflow.resume":
+                source_id = job.get("parameters", {}).get("jobId")
+                source = self._state["jobs"].get(source_id, {})
+                source_result = source.get("result", {})
+                scheduled_mode = source_result.get("mode") or source.get("parameters", {}).get("mode")
+            return self._telemetry.query(job_id, job, mode, after_seq, limit, scheduled_mode)
         if operation == "audit.query":
             exact(p, set(), {"afterRevision", "limit"})
             after = integer(p.get("afterRevision", 0), "afterRevision", 0, 2**53 - 1)
@@ -693,6 +713,10 @@ class WorkflowService:
         operation_parameters = {
             "capabilities.query": schema({}), "project.query": schema({}),
             "jobs.query": schema({"jobId": id_schema}, []), "results.query": schema({"jobId": id_schema}, []),
+            "telemetry.query": schema({"jobId": id_schema,
+                                        "afterSeq": {"type": "integer", "minimum": 0, "maximum": 2**53 - 1},
+                                        "limit": {"type": "integer", "minimum": 1, "maximum": 512},
+                                        "mode": {"type": "string", "enum": ["active", "passive"]}}, ["jobId"]),
             "audit.query": schema({"afterRevision": revision_schema, "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, []),
             "command.preview": schema({"command": id_schema, "parameters": {"type": "object"}, "expectedRevision": revision_schema}),
             "command.execute": schema({"previewId": id_schema, "approvalToken": {"type": "string", "minLength": 1, "maxLength": 128}}),
@@ -706,7 +730,7 @@ class WorkflowService:
                 "range.extension/v1/manifest", "range.extension/v1/numeric-series", "range.extension/v1/statistics"]}}),
             "knowledge.query": schema({"query": {"type": "string", "maxLength": 256},
                                         "extensionId": id_schema}, ["query"])}
-        read_operations = {"capabilities.query", "project.query", "jobs.query", "results.query", "audit.query",
+        read_operations = {"capabilities.query", "project.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
                            "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
         operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]

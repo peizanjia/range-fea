@@ -21,6 +21,8 @@
 #include "problem_tree.h"
 #include "solver_manager.h"
 #include "workflow_widget.h"
+#include "control_monitor_widget.h"
+#include <QDockWidget>
 #include "agent_widget.h"
 #include "extension_widget.h"
 #include <QTableWidget>
@@ -113,8 +115,16 @@ private slots:
         const auto frame = viewport->grabFramebuffer();
         QVERIFY(!frame.isNull()); QVERIFY(frame.width() > 100); QVERIFY(frame.height() > 100);
         QVERIFY(window->grab().save(output));
+        for (const auto &name : {"agentDock", "controlDock"})
+        {
+            auto *featureDock = window->findChild<QDockWidget *>(name);
+            QVERIFY(featureDock); featureDock->show(); featureDock->raise();
+            QTest::qWait(100);
+            QVERIFY(window->grab().save(output + QString(".%1.png").arg(name)));
+        }
         auto *dock = window->findChild<QWidget *>("solverDock");
         QVERIFY(dock);
+        qobject_cast<QDockWidget *>(dock)->raise();
         auto *tabs = dock->findChild<QTabWidget *>();
         QVERIFY(tabs);
         for (int index = 6; index < tabs->count(); ++index)
@@ -162,6 +172,11 @@ private slots:
         RAgentSettings settings(RAgentSettings::Type::DeepSeek);
         settings.setApiKey(apiKey);
         widget->setProviderSettings(settings);
+        auto *effort = widget->findChild<QComboBox *>("agentThinkingEffort");
+        QVERIFY(effort);
+        const auto effortName = qEnvironmentVariable("RANGE_TEST_DEEPSEEK_EFFORT", "off");
+        const int effortIndex = effort->findData(effortName);
+        QVERIFY(effortIndex >= 0); effort->setCurrentIndex(effortIndex);
         QSignalSpy finished(widget->taskRunner(), &AgentTaskRunner::finished);
         QSignalSpy applied(widget->taskRunner(), &AgentTaskRunner::actionCompleted);
         QSignalSpy usage(widget, &AgentWidget::providerUsage);
@@ -173,6 +188,19 @@ private slots:
         QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 53u);
         QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNModesToExtract(), 2u);
         QVERIFY(session->getModel(0).getUndoStackSize() > 0);
+        if (qEnvironmentVariableIsSet("RANGE_TEST_DEEPSEEK_FOLLOWUP"))
+        {
+            finished.clear();
+            auto *composer = widget->findChild<QPlainTextEdit *>("agentGoal");
+            auto *send = widget->findChild<QPushButton *>("agentSend");
+            QVERIFY(composer); QVERIFY(send);
+            composer->setPlainText("Using our preceding conversation only, what modal iteration count did you just set? Reply with that decimal integer only. Do not call any tools or make changes.");
+            send->click();
+            QTRY_VERIFY_WITH_TIMEOUT(!finished.isEmpty(), 180000);
+            QCOMPARE(finished.last().at(0).toString(), QString("completed"));
+            QCOMPARE(finished.last().at(1).toString().trimmed(), QString("53"));
+            QCOMPARE(applied.size(), 1);
+        }
         QVERIFY(!usage.isEmpty());
         int tokens = 0;
         for (const auto &entry : usage) tokens += entry.at(0).toJsonObject().value("totalTokens").toInt();
@@ -393,16 +421,21 @@ private slots:
     void workflowPanelRunsAndResumesRealBeam()
     {
         QTemporaryDir directory;
+        const int testSteps = qEnvironmentVariableIntValue("RANGE_TEST_CONTROL_STEPS") > 0
+            ? qBound(20, qEnvironmentVariableIntValue("RANGE_TEST_CONTROL_STEPS"), 100) : 20;
         auto *widget = Application::instance()->getMainWindow()->findChild<WorkflowWidget *>();
         QVERIFY(widget);
         const auto config = WorkflowProcess::defaultConfiguration(directory.path());
         QSignalSpy errors(widget->transport(), &WorkflowProcess::serviceError);
         QSignalSpy accepted(widget, &WorkflowWidget::jobAccepted);
         QSignalSpy results(widget, &WorkflowWidget::resultDisplayed);
+        auto *monitor = widget->findChild<ControlMonitorWidget *>();
+        QVERIFY(monitor);
+        QSignalSpy samples(monitor, &ControlMonitorWidget::samplesUpdated);
         widget->openWorkspace(config);
         QTRY_VERIFY_WITH_TIMEOUT(widget->transport()->isReady(), 15000);
         widget->previewCommand("workflow.configure", {{"model", "cantilever-beam"},
-            {"dt", .005}, {"steps", 20}, {"targetDamping", .1}});
+            {"dt", .005}, {"steps", testSteps}, {"targetDamping", .1}});
         QTRY_VERIFY_WITH_TIMEOUT(!widget->currentPreview().isEmpty(), 15000);
         widget->applyPreview();
         QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 15000);
@@ -412,19 +445,48 @@ private slots:
         widget->applyPreview();
         QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 60000);
         auto first = results.last().at(0).toJsonObject();
-        QCOMPARE(first.value("totalSteps").toInt(), 20);
+        QCOMPARE(first.value("totalSteps").toInt(), testSteps);
         QVERIFY(first.contains("active")); QVERIFY(first.contains("passive"));
         QVERIFY(first.value("active").toObject().value("maxDisplacementErrorM").toDouble() < 1e-8);
+        QTRY_VERIFY_WITH_TIMEOUT(monitor->sampleCount() >= testSteps, 5000);
+        QCOMPARE(monitor->currentJob(), first.value("jobId").toString());
+        bool sawRunningSamples = false;
+        for (const auto &event : samples)
+            sawRunningSamples |= event.at(1).toInt() > 0 && event.at(2).toString() == "running";
+        QVERIFY2(sawRunningSamples, "Native samples must arrive before the job finishes");
         auto *table = widget->findChild<QTableWidget *>("workflowResults");
         QVERIFY(table); QCOMPARE(table->rowCount(), 5);
         results.clear();
-        widget->previewCommand("workflow.resume", {{"jobId", first.value("jobId")}, {"additionalSteps", 20}});
+        widget->previewCommand("workflow.resume", {{"jobId", first.value("jobId")}, {"additionalSteps", testSteps}});
         QTRY_VERIFY_WITH_TIMEOUT(!widget->currentPreview().isEmpty(), 15000);
         widget->applyPreview();
         QTRY_VERIFY_WITH_TIMEOUT(!results.isEmpty(), 60000);
         const auto resumed = results.last().at(0).toJsonObject();
-        QCOMPARE(resumed.value("totalSteps").toInt(), 40);
+        QCOMPARE(resumed.value("totalSteps").toInt(), 2 * testSteps);
         QVERIFY(resumed.value("active").toObject().value("maxRotationErrorRad").toDouble() < 1e-8);
+        QTRY_VERIFY_WITH_TIMEOUT(monitor->sampleCount() >= testSteps, 5000);
+        QCOMPARE(monitor->currentJob(), resumed.value("jobId").toString());
+        auto *holdDisplay = monitor->findChild<QPushButton *>("controlHold");
+        QVERIFY(holdDisplay); holdDisplay->setChecked(true);
+        QVERIFY(holdDisplay->text().contains("Resume")); holdDisplay->setChecked(false);
+        const auto render = qEnvironmentVariable("RANGE_TEST_CONTROL_RENDER_OUTPUT");
+        if (!render.isEmpty())
+        {
+            auto *window = Application::instance()->getMainWindow();
+            auto *session = Application::instance()->getSession();
+            if (session->getNModels() == 0)
+            {
+                Model model; model.read(config.examples + "/stage10_beam.ram");
+                session->addModel(model); session->setModelSelected(0, true);
+            }
+            window->resize(1600, 1000); window->show();
+            window->findChild<QDockWidget *>("agentDock")->raise();
+            window->findChild<QDockWidget *>("controlDock")->show();
+            widget->findChild<QTabWidget *>("workflowPages")->setCurrentIndex(0);
+            QTest::qWait(200);
+            QVERIFY(window->grab().save(render));
+            window->hide();
+        }
         QCOMPARE(accepted.count(), 3);
         QCOMPARE(errors.count(), 0);
         widget->transport()->stop();
@@ -702,6 +764,7 @@ int runAgentTaskRunnerTests(int argc, char **argv);
 int runSolverSnapshotTests(int argc, char **argv);
 int runExtensionWidgetTests(int argc, char **argv);
 int runAgentEventViewTests(int argc, char **argv);
+int runAgentConversationWidgetTests(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
@@ -727,7 +790,8 @@ int main(int argc, char **argv)
     const bool solverSnapshot = argc > 1 && QByteArray(argv[1]) == "--solver-snapshot";
     const bool extensionWidget = argc > 1 && QByteArray(argv[1]) == "--extension-widget";
     const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
-    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView)
+    const bool agentConversation = argc > 1 && QByteArray(argv[1]) == "--agent-conversation";
+    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
@@ -736,7 +800,8 @@ int main(int argc, char **argv)
         : agentRunner ? runAgentTaskRunnerTests(argc, argv)
         : solverSnapshot ? runSolverSnapshotTests(argc, argv)
         : extensionWidget ? runExtensionWidgetTests(argc, argv)
-        : agentEventView ? runAgentEventViewTests(argc, argv) : QTest::qExec(&test, argc, argv);
+        : agentEventView ? runAgentEventViewTests(argc, argv)
+        : agentConversation ? runAgentConversationWidgetTests(argc, argv) : QTest::qExec(&test, argc, argv);
     application.getSession()->clear();
     delete application.getMainWindow();
     SolverManager::getInstance().stopServer();
