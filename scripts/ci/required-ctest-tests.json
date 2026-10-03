@@ -107,7 +107,12 @@
       "tst_control_typed_ndjson_transport"
     ],
     "gui-contract": [
-      "tst_modal_command_widget"
+      "tst_modal_command_widget",
+      "tst_gui_model_lifecycle"
+    ],
+    "range-workflow": [
+      "tst_workflow_native",
+      "tst_workflow_runtime"
     ]
   }
 }

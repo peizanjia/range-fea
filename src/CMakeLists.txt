@@ -171,6 +171,8 @@ foreach(tgt IN LISTS all_targets)
     endif()
 endforeach()
 
+add_subdirectory(range-workflow)
+
 if(WIN32 AND RANGE_GMSH_RUNTIME)
     add_custom_target(deploy-gmsh-runtime ALL
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

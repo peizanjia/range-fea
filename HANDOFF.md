@@ -1,6 +1,19 @@
 # 续作交接
 
-## 2026-10-01 计划修订与持续开发（当前）
+## 2026-10-03 额度中断后的限定收尾（已完成并退出）
+
+- 最新用户要求：只完成断点附近工作，核查、整理后退出，不再持续推进到 Stage 12；子代理改为 Luna max。覆盖之前持续推进和 Astra ultra 的要求，不修改用户配置。
+- 起点根 `a182665`；完整 Release 94/94 是 10 月 1 日证据，本次此前状态检查仅重跑服务/CLI/控件 3/3 与 94 项必跑清单。现有未跟踪用户配置保留。
+- 已交付：原生配置会话生命周期/InteractionRecord、CLI 发布意图与新进程核对、实际 GUI Session/Undo/Redo/保存重开、重载及忙状态校验；工作流服务支持固定四杆和平面 BEAM1 悬臂梁的配置、实际主动/被动 FE、独立 NumPy 回放、结果查询、续算、取消和崩溃恢复。版本化进程接口、宿主批准及工件哈希贯通；不是任意选中 GUI 模型的工作流入口。
+- 核查修复：GUI 创建 Session 前访问其互斥量；模型加入 GUI 线程后材料树 BlockingQueuedConnection 同线程死锁；关闭审计失败被丢弃；重载审计失败仍返回成功；native-link 应关联完整模型字节；原生适配器响应缺版本校验；局部 DOF 标签误当全局物理轴。Qt 弹窗反馈后补齐单独诊断命令的插件路径，并重验标准 GUI 测试与安装启动入口。
+- 最终证据：全目标 Release 构建退出 0；必跑清单 **97/97**；完整 CTest **97/97、0 失败、102.08 s**。实际窗口对象图有 4 个业务场景（QtTest 加初始化/清理共 6 项）；工作流套件 **8/8**，包含杆/梁主动被动、续算、篡改、取消及实际服务进程强制退出。Luna max 独立审查和针对发现的复审完成，已确认问题均修复；没有远程模型调用。
+- 安装验收：`build/audit-20261003/closeout-install` 使用缩减 PATH，GUI、模态 CLI、工作流适配器 `--help` 均退出 0；从安装 Python 包和安装算例实际运行梁主动/被动 100 步，再续算 100 步成功。dt=.005 s，200 步受控/被动末能量比 **0.0829440**；受控 q/v/转角/角速度对参考的最大误差分别 **1.75e-16 m / 1.47e-15 m/s / 1.68e-16 rad / 2.84e-16 rad/s**。
+- 提交：GUI 子模块 `a5be2bc`（测试目录隔离）、根 `9a2afe1`（模态生命周期/审计/完整窗口），工作流与本交接提交见 `git log -1`。只本地提交，未 push；用户 `.agents/`、`.codex/`、`AGENTS.md` 保持未跟踪且不混入提交。
+- Stage 12 未接入的 `extensions.py`、`extension_child.py` 已原样移至忽略目录 `build/audit-20261003/deferred-stage12/`，不安装、不提交为产品功能。未来恢复时重新审查和测试，不直接启用。Stage 10C 工作流面板、Stage 11 Agent 和 Stage 12 扩展本轮不启动。
+- 边界及下一步：Stage 10A/10B 的上述受限软件路径已本地验收，Stage 10 整体仍缺 10C。下次按计划做工作流 GUI 面板和 Stage 11；Stage 12 需重新授权继续。GUI 多文件保存不具备原子性、没有 CLI 那样的预写意图恢复；退出时仍失败的关闭审计只有明确错误，没有持久重试队列。没有验证 OpenGL 视口、可访问性、干净 Windows、远程 CI、本日 MATLAB 实机或实物控制器，不宣称 Stage 0–12 全部完成。
+- 说明：`docs/WORKFLOW_CONTRACT.md`、`docs/CONTROL_WORKFLOW.md`、`docs/APPLICATION_SERVICE.md`。证据统一在 `build/audit-20261003/`：`closeout-full-build.log`、`closeout-inventory.json`、`closeout-full-ctest.log`、`closeout-install.log`、`closeout-installed-smoke.log`、`installed-beam-run/installed-acceptance.json`。初次 GUI 超时及定位保留为 `closeout-focused.log`、`gui-trace.log`，不覆盖失败历史。
+
+## 2026-10-01 计划修订与持续开发（历史已验收基线）
 
 - 用户已授权按修订计划开发、审查、验收并自动 commit；覆盖下方历史停止要求。执行清单为 `docs/DEVELOPMENT_PLAN.md`：P0 状态/CI → Stage 10A 共用服务 → 10B/10C 工作流/GUI → Stage 11/12；质量线同步推进。
 - 起点根 `46e7318`，模型 `baec0fe`，求解器 `535a6fb`。本日复跑现有 Release CTest 91/91、0 失败、62.52 s；未重新构建、未重跑 MATLAB 实机或干净安装。旧 124.46 s 是此前完整构建后的回归。
