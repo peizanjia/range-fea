@@ -30,10 +30,31 @@
 #include "execution_event_journal.h"
 #include "control_ndjson_transport.h"
 #include "native_progress_journal.h"
+#include "native_result_journal.h"
 #include "solver_task.h"
 
 namespace
 {
+class ResultFrameObserverScope final
+{
+public:
+    explicit ResultFrameObserverScope(RSolver &solver)
+        : solver(solver)
+    {
+    }
+
+    ~ResultFrameObserverScope()
+    {
+        this->solver.setResultFrameObserver({});
+    }
+
+    ResultFrameObserverScope(const ResultFrameObserverScope &) = delete;
+    ResultFrameObserverScope &operator=(const ResultFrameObserverScope &) = delete;
+
+private:
+    RSolver &solver;
+};
+
 QString sha256File(const QString &path)
 {
     QFile file(path);
@@ -715,6 +736,51 @@ void SolverTask::run(void)
         RLogger::indent();
         loggerIndented = true;
         RSolver solver(model,this->modelFileName,this->convergenceFileName);
+        const bool resultJournalRequested =
+            !qEnvironmentVariable(NativeResultJournal::jobIdEnvironmentVariable).isEmpty() ||
+            !qEnvironmentVariable(NativeResultJournal::pathEnvironmentVariable).isEmpty() ||
+            !qEnvironmentVariable(NativeResultJournal::resultDirectoryEnvironmentVariable).isEmpty();
+        QString resultJournalError;
+        std::unique_ptr<NativeResultJournal> resultJournal =
+            NativeResultJournal::createFromEnvironment(&resultJournalError);
+        ResultFrameObserverScope resultFrameObserverScope(solver);
+        bool resultJournalUnavailableReported = false;
+        auto reportResultJournalUnavailable = [&]()
+        {
+            if (!resultJournalRequested || resultJournalUnavailableReported)
+            {
+                return;
+            }
+            QString reason = resultJournalError;
+            if (reason.isEmpty() && resultJournal)
+            {
+                reason = resultJournal->unavailableReason();
+            }
+            if (reason.isEmpty() && resultJournal && resultJournal->isAvailable())
+            {
+                return;
+            }
+            if (reason.isEmpty())
+            {
+                reason = QStringLiteral("Native result-frame journal was not initialized");
+            }
+            RLogger::warning("NativeResultFrameUnavailable: %s\n",qPrintable(reason));
+            resultJournalUnavailableReported = true;
+        };
+        if (resultJournalRequested && !resultJournal)
+        {
+            reportResultJournalUnavailable();
+        }
+        if (resultJournal && resultJournal->isAvailable())
+        {
+            solver.setResultFrameObserver([&](const RSolverResultFrame &frame)
+            {
+                if (!resultJournal->appendFrame(frame))
+                {
+                    reportResultJournalUnavailable();
+                }
+            });
+        }
         if (controlTransport)
         {
             solver.setStructuralControlCallback(controlSetup.controllerId,controlRevision,
@@ -811,6 +877,7 @@ void SolverTask::run(void)
             });
         solverEntered = true;
         solver.run();
+        reportResultJournalUnavailable();
         reportProgressUnavailable();
         RLogger::unindent();
         loggerIndented = false;

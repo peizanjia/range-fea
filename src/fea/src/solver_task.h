@@ -63,6 +63,10 @@ class SolverTask : public RJob
         QByteArray inputSnapshotSha256;
         //! SHA-256 of the immutable input package, including staged references and history.
         QByteArray inputPackageSha256;
+        //! Immutable provenance and executable digest captured before queueing.
+        QJsonObject nativeResultProvenance;
+        QByteArray frozenSolverExecutableSha256;
+        bool nativeResultProvenanceFrozen = false;
         //! Provenance assigned by the validated manager before queueing.
         QString inputDerivedFrom;
         QString frozenSnapshotPath;
@@ -118,6 +122,14 @@ class SolverTask : public RJob
 
         //! Return the SHA-256 of the complete immutable input package.
         const QByteArray &getInputPackageSha256() const;
+
+        //! Freeze the source and declared-runtime provenance before queueing.
+        bool freezeNativeResultProvenance(const QJsonObject &sourceRuntimeStamp,
+                                          const QJsonObject &sourceSnapshotRef);
+
+        //! Return the immutable native-result provenance frozen before queueing.
+        const QJsonObject &getNativeResultProvenance() const;
+        bool expectsNativeResultCatalog() const;
 
         //! Return the retained result artifact path.
         const QString &getResultArtifactFileName() const;
@@ -178,6 +190,12 @@ class SolverTask : public RJob
 
         //! A complete task result artifact was read back successfully.
         void resultArtifactCreated(QString fileName, QString sha256, QJsonObject sourceBinding);
+
+        //! A verified immutable manifest descriptor copied to the manager thread.
+        void nativeResultManifestPublished(QString jobId, QJsonObject descriptor);
+
+        //! The result broker explicitly classified a completed result as unsupported.
+        void nativeResultCatalogUnavailable(QString jobId, QString code, QString message);
 
         //! Worker-reported terminal evidence copied for the manager thread.
         void terminalReported(QString jobId, QString state, bool processStarted,

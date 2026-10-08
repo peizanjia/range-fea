@@ -583,7 +583,8 @@ def _energy(model: dict[str, Any], q: np.ndarray, v: np.ndarray) -> float:
 
 
 def replay(model_path: str | os.PathLike[str], gains_path: str | os.PathLike[str], *,
-           dt: float, steps: int, initial_q: list[float] | np.ndarray) -> dict[str, Any]:
+           dt: float, steps: int, initial_q: list[float] | np.ndarray,
+           initial_v: list[float] | np.ndarray | None = None) -> dict[str, Any]:
     """Compare sampled/held full-order Newmark feedback with a single-mode ROM."""
     dt = _finite_number(dt, "dt")
     if dt <= 0.0:
@@ -622,7 +623,17 @@ def replay(model_path: str | os.PathLike[str], gains_path: str | os.PathLike[str
         raise ControllerError("initial_q must be a finite vector") from error
     if q0.shape != (n,) or not np.isfinite(q0).all():
         raise ControllerError(f"initial_q must contain {n} finite entries")
-    v0 = np.zeros(n, dtype=np.float64)
+    if initial_v is None:
+        v0 = np.zeros(n, dtype=np.float64)
+    else:
+        if not _numeric_tree(initial_v):
+            raise ControllerError("initial_v must contain only finite JSON numbers")
+        try:
+            v0 = np.asarray(initial_v, dtype=np.float64)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ControllerError("initial_v must be a finite vector") from error
+        if v0.shape != (n,) or not np.isfinite(v0).all():
+            raise ControllerError(f"initial_v must contain {n} finite entries")
     phi_values, phi_vectors = linalg.eigh(k_matrix, m_matrix, check_finite=False)
     if isinstance(mode_index, bool) or not isinstance(mode_index, int) or not 0 <= mode_index < n:
         raise ControllerError("gain artifact contains an invalid mode index")
@@ -1009,6 +1020,21 @@ def _initial_q_json(value: str) -> list[float]:
     return vector.tolist()
 
 
+def _initial_v_json(value: str) -> list[float]:
+    if len(value.encode("utf-8")) > 65536:
+        raise argparse.ArgumentTypeError("initial v JSON exceeds 64 KiB")
+    try:
+        decoded = json.loads(value, parse_constant=_reject_constant)
+        if not _numeric_tree(decoded):
+            raise ControllerError("vector entries must be finite JSON numbers")
+        vector = np.asarray(decoded, dtype=np.float64)
+    except (json.JSONDecodeError, ControllerError, TypeError, ValueError, OverflowError) as error:
+        raise argparse.ArgumentTypeError(f"must be a finite JSON vector: {error}") from error
+    if vector.ndim != 1 or not np.isfinite(vector).all():
+        raise argparse.ArgumentTypeError("must be a finite JSON vector")
+    return vector.tolist()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", help="offline Stage 9 linear FE model JSON")
@@ -1022,12 +1048,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--steps", type=_nonnegative_int, help="Newmark replay interval count")
     parser.add_argument("--initial-q-json", type=_initial_q_json,
                         help='initial perturbation displacement JSON vector, e.g. "[0.001,0,0]"')
+    parser.add_argument("--initial-v-json", type=_initial_v_json,
+                        help='initial perturbation velocity JSON vector; defaults to zero')
     parser.add_argument("--output", help="atomic output path for the gain artifact")
     args = parser.parse_args(argv)
     try:
         if args.model:
             if (args.replay_model is not None or args.gains is not None or args.dt is not None or
-                    args.steps is not None or args.initial_q_json is not None):
+                    args.steps is not None or args.initial_q_json is not None or args.initial_v_json is not None):
                 parser.error("--model design mode cannot be combined with replay/runtime options")
             if (args.target_damping is None or args.sensor_id is None or
                     args.actuator_id is None or args.output is None):
@@ -1045,14 +1073,14 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("design options cannot be combined with replay")
             _ensure_distinct_output(args.output, [args.replay_model, args.gains])
             report = replay(args.replay_model, args.gains, dt=args.dt, steps=args.steps,
-                            initial_q=args.initial_q_json)
+                            initial_q=args.initial_q_json, initial_v=args.initial_v_json)
             write_json_atomic(args.output, report, maximum=MAX_REPLAY_BYTES)
             return 0
         if args.gains is None:
             parser.error("select --model, --replay-model, or --gains")
         if any(value is not None for value in
                (args.target_damping, args.sensor_id, args.actuator_id, args.output,
-                args.dt, args.steps, args.initial_q_json)) or args.mode != 0:
+                args.dt, args.steps, args.initial_q_json, args.initial_v_json)) or args.mode != 0:
             parser.error("design/replay options are only valid with --model or --replay-model")
         return _serve(args.gains)
     except ControllerError as error:

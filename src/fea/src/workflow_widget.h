@@ -21,6 +21,7 @@ class QTableWidget;
 class QCheckBox;
 class QTabWidget;
 class ControlMonitorWidget;
+class Session;
 
 //! A user-facing host of the actual persisted rod/beam workflow service.
 class WorkflowWidget : public QWidget
@@ -29,6 +30,7 @@ class WorkflowWidget : public QWidget
 public:
     explicit WorkflowWidget(QWidget *parent = nullptr);
     WorkflowProcess *transport() { return &service; }
+    void setSession(Session *session);
     void openWorkspace(const WorkflowProcess::Configuration &configuration);
     QJsonObject currentPreview() const { return preview; }
 
@@ -57,6 +59,7 @@ private:
     QDoubleSpinBox *damping;
     QSpinBox *steps;
     QPushButton *connectButton;
+    QPushButton *sourceButton;
     QPushButton *configureButton;
     QPushButton *runButton;
     QPushButton *resumeButton;
@@ -71,9 +74,32 @@ private:
     QMap<QString, QTreeWidgetItem *> jobRows;
     QMap<QString, QString> continuations;
     QSet<QString> ownedRequests;
+    struct DocumentSourceChoice
+    {
+        QJsonObject registration;
+        QJsonObject snapshotRef;
+        QString runtimeDocumentId;
+        QString sessionEpoch;
+        QString catalogRoot;
+        quint64 runtimeRevision = 0;
+    };
+    Session *session = nullptr;
+    QMap<QString, DocumentSourceChoice> documentSources;
+    DocumentSourceChoice pendingDocumentSource;
+    QString sourceRegisterRequest;
     QJsonObject preview, pendingArguments;
     QString pendingCommand, displayedResult, jobsRequest, foregroundJob;
     bool commandInFlight = false;
+    bool sourceRegistrationInFlight = false;
+    void useCurrentDocumentSnapshot();
+    QString selectedSourceId() const;
+    bool sourceRuntimeStampMatches(const DocumentSourceChoice &source, QString *reason = nullptr) const;
+    bool sourceRuntimeIsCurrent(const DocumentSourceChoice &source, QString *reason = nullptr) const;
+    QString sourceDescription(const DocumentSourceChoice &source, bool includePorts) const;
+    QString modelBindingSummary(const QJsonObject &binding) const;
+    void updateSourceChoiceLabel(const QString &sourceId);
+    void updateSelectedSourceStatus();
+    bool previewSourceIsCurrent() const;
     void onReply(const QString &id, const QString &operation, const QJsonObject &result);
     void showResult(const QJsonObject &result);
     void showFailure(const QString &message);

@@ -16,6 +16,7 @@
 #include <rml_model.h>
 #include <rml_file_io.h>
 #include <rml_file_utils.h>
+#include "import_model.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -95,11 +96,13 @@ int main(int argc,char **argv) {
     QCoreApplication::setApplicationName("range-workflow-native");
     QCommandLineParser parser; parser.addHelpOption();
     parser.setApplicationDescription("Versioned native model adapter for Range workflow services.");
-    parser.addPositionalArgument("operation", "prepare or inspect");
+    parser.addPositionalArgument("operation", "prepare, inspect, describe, or prepare-source");
     parser.addOptions({QCommandLineOption("input","Native model or accepted result.","path"),
         QCommandLineOption("output","Distinct model output path.","path"),
         QCommandLineOption("steps","Number of new or additional steps, 1..5000.","count"),
+        QCommandLineOption("output-frequency","Frequency of native result records, 1..steps.","count"),
         QCommandLineOption("dt","Step interval in seconds.","seconds"),
+        QCommandLineOption("expected-sha","Expected SHA-256 for a raw model preflight operation.","sha256"),
         QCommandLineOption("passive","Disable force control for a new passive baseline."),
         QCommandLineOption("resume","Preserve the accepted checkpoint; steps are additional.")});
     parser.process(application);
@@ -119,7 +122,41 @@ int main(int argc,char **argv) {
     try {
         require(parser.positionalArguments().size()==1,"Expected one operation.");
         const auto operation=parser.positionalArguments().first();
-        require(operation=="prepare" || operation=="inspect","Unknown native operation.");
+        require(operation=="prepare" || operation=="inspect" || operation=="describe" || operation=="prepare-source",
+                "Unknown native operation.");
+        if (operation=="describe") {
+            require(parser.isSet("input") && parser.isSet("expected-sha"),
+                    "describe requires --input FILE and --expected-sha SHA256.");
+            require(!parser.isSet("output") && !parser.isSet("steps") && !parser.isSet("output-frequency") && !parser.isSet("dt")
+                    && !parser.isSet("passive") && !parser.isSet("resume"),
+                    "describe accepts only --input and --expected-sha.");
+            const auto response=RangeNativeImport::describe(parser.value("input"),parser.value("expected-sha"));
+            const bool supported=response.value("status").toString()==QStringLiteral("supported");
+            print(response);
+            return supported?0:2;
+        }
+        if (operation=="prepare-source") {
+            require(parser.isSet("input") && parser.isSet("expected-sha") && parser.isSet("output")
+                    && parser.isSet("steps") && parser.isSet("dt"),
+                    "prepare-source requires --input FILE --expected-sha SHA256 --output FILE --steps N --dt S.");
+            require(!parser.isSet("resume"),"prepare-source creates a fresh input and cannot resume.");
+            bool valid=false;
+            const uint steps=parser.value("steps").toUInt(&valid);
+            require(valid && steps>=1 && steps<=5000,"steps must be an integer in 1..5000.");
+            uint outputFrequency=1;
+            if (parser.isSet("output-frequency")) {
+                outputFrequency=parser.value("output-frequency").toUInt(&valid);
+                require(valid && outputFrequency>=1 && outputFrequency<=steps,
+                        "output-frequency must be an integer in 1..steps.");
+            }
+            const double dt=parser.value("dt").toDouble(&valid);
+            require(valid && std::isfinite(dt) && dt>0.0 && dt<=1.0,"dt must be in (0,1] seconds.");
+            const auto response=RangeNativeImport::prepareSource(parser.value("input"),
+                parser.value("expected-sha"),parser.value("output"),steps,outputFrequency,dt,parser.isSet("passive"));
+            print(response);
+            return response.value("status").toString()==QStringLiteral("published")?0:2;
+        }
+        require(!parser.isSet("expected-sha"),"--expected-sha is supported only by describe.");
         QFileInfo info(parser.value("input"));
         require(info.isFile() && !info.isSymLink(),"Expected regular native input.");
         const QString input=info.canonicalFilePath();
@@ -129,8 +166,9 @@ int main(int argc,char **argv) {
         source.verify();
         auto &restart=model.getProblemSetup().getStructuralDynamicsRestartData();
         if (operation=="inspect") {
-            require(!parser.isSet("output") && !parser.isSet("steps") && !parser.isSet("dt")
-                    && !parser.isSet("passive") && !parser.isSet("resume"),"Unexpected inspect option.");
+            require(!parser.isSet("output") && !parser.isSet("steps") && !parser.isSet("output-frequency") && !parser.isSet("dt")
+                    && !parser.isSet("passive") && !parser.isSet("resume") && !parser.isSet("expected-sha"),
+                    "Unexpected inspect option.");
             require(model.getNNodes()<=100000,"Nodal query exceeds supported response size.");
             QJsonArray nodes;
             for(uint i=0;i<model.getNNodes();++i) nodes.append(QJsonObject{{"id",int(i)},
@@ -155,6 +193,12 @@ int main(int argc,char **argv) {
         }
         bool valid=false; const auto steps=parser.value("steps").toUInt(&valid);
         require(valid && steps>=1 && steps<=5000,"steps must be an integer in 1..5000.");
+        uint outputFrequency=steps;
+        if (parser.isSet("output-frequency")) {
+            outputFrequency=parser.value("output-frequency").toUInt(&valid);
+            require(valid && outputFrequency>=1 && outputFrequency<=steps,
+                    "output-frequency must be an integer in 1..steps.");
+        }
         const double dt=parser.value("dt").toDouble(&valid);
         require(valid && std::isfinite(dt) && dt>0.0 && dt<=1.0,"dt must be in (0,1] seconds.");
         const bool resume=parser.isSet("resume");
@@ -162,7 +206,7 @@ int main(int argc,char **argv) {
                 "Resume requires a compatible checkpoint and unchanged control mode/time step.");
         require(resume || !restart.available,"Use an original model for a new run, or --resume for accepted results.");
         auto &settings=model.getProblemSetup().getStructuralDynamicsSetup();
-        settings.setEnabled(true); settings.setTimeStep(dt); settings.setNSteps(steps); settings.setOutputFrequency(steps);
+        settings.setEnabled(true); settings.setTimeStep(dt); settings.setNSteps(steps); settings.setOutputFrequency(outputFrequency);
         settings.validate();
         if(parser.isSet("passive")) model.getProblemSetup().getStructuralControlSetup()=RStructuralControlSetup();
         QFileInfo target(parser.value("output"));
@@ -186,7 +230,7 @@ int main(int argc,char **argv) {
         print({{"apiVersion","range.workflow.native/v1"},{"status","published"},{"output",output},
             {"sourceSha256",QString::fromLatin1(before)},{"sourcePath",source.model},{"sourceFiles",source.references()},
             {"sha256",QString::fromLatin1(outputHash)},
-            {"steps",int(steps)},{"dt",dt},{"resume",resume}});
+            {"steps",int(steps)},{"outputFrequency",int(outputFrequency)},{"dt",dt},{"resume",resume}});
         return 0;
     } catch(const RError &error) {print({{"apiVersion","range.workflow.native/v1"},
         {"status","error"},{"code","NATIVE_ERROR"},{"message",error.getMessage()}});}

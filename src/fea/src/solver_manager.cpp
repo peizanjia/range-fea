@@ -117,6 +117,100 @@ bool validResultSourceBinding(const QJsonObject &binding, const QString &rawResu
     return samePathText(firstPath, logicalPath) && firstHash == rawResultSha256 &&
             samePathText(lastPath, resolvedPath) && lastHash == savedArtifactHash;
 }
+
+bool validNativeResultManifestDescriptor(const QJsonObject &descriptor,
+                                         const QJsonObject &jobRecord,
+                                         const QString &jobId,
+                                         QString *error)
+{
+    const auto reject = [error](const QString &message)
+    {
+        if (error) *error = message;
+        return false;
+    };
+    if (error) error->clear();
+
+    const QJsonObject provenance = jobRecord.value(QStringLiteral("nativeResultProvenance")).toObject();
+    const QJsonObject manifest = descriptor.value(QStringLiteral("resultManifest")).toObject();
+    const QString manifestPath = descriptor.value(QStringLiteral("resultManifestRef")).toString();
+    const QString manifestSha256 = descriptor.value(QStringLiteral("resultManifestSha256")).toString();
+    const QString artifactId = descriptor.value(QStringLiteral("resultArtifactId")).toString();
+    const QString resultPath = jobRecord.value(QStringLiteral("resultArtifactRef")).toString();
+    const QString resultSha256 = jobRecord.value(QStringLiteral("resultArtifactSha256")).toString();
+    if (descriptor.value(QStringLiteral("jobId")).toString() != jobId ||
+        descriptor.value(QStringLiteral("provenanceFrozen")).toBool() !=
+            jobRecord.value(QStringLiteral("provenanceFrozen")).toBool() ||
+        !jobRecord.value(QStringLiteral("provenanceFrozen")).toBool() ||
+        descriptor.value(QStringLiteral("nativeResultCatalogAvailable")).toBool() != true ||
+        descriptor.value(QStringLiteral("resultProvenance")).toObject() != provenance ||
+        manifest.isEmpty() || resultPath.isEmpty() || artifactId.isEmpty())
+        return reject(QStringLiteral("The published result descriptor does not match the queued job provenance."));
+
+    static const QRegularExpression sha256Pattern(QStringLiteral("^[0-9a-f]{64}$"));
+    static const QRegularExpression artifactPattern(QStringLiteral("^artifact-[0-9a-f]{32}$"));
+    if (!sha256Pattern.match(manifestSha256).hasMatch() ||
+        !artifactPattern.match(artifactId).hasMatch())
+        return reject(QStringLiteral("The published result descriptor has an invalid hash or artifact ID."));
+
+    const QString resultDirectory = QFileInfo(resultPath).absoluteDir().canonicalPath();
+    if (resultDirectory.isEmpty())
+        return reject(QStringLiteral("The registered native result directory is no longer available."));
+    const QString expectedManifestPath = QDir(resultDirectory).filePath(QStringLiteral("native-result.manifest.json"));
+    const QFileInfo manifestInfo(manifestPath);
+    if (manifestInfo.isSymLink() || QFileInfo(manifestInfo.absolutePath()).isSymLink() ||
+        !manifestInfo.exists() || !manifestInfo.isFile() ||
+        !samePathText(manifestInfo.absoluteFilePath(), expectedManifestPath) ||
+        !samePathText(manifestInfo.absoluteDir().canonicalPath(), resultDirectory) ||
+        manifestInfo.size() < 0 || manifestInfo.size() > 16 * 1024 * 1024)
+        return reject(QStringLiteral("The published result manifest is outside the job's private result directory or exceeds its size limit."));
+
+    QFile manifestFile(manifestInfo.absoluteFilePath());
+    if (!manifestFile.open(QIODevice::ReadOnly))
+        return reject(QStringLiteral("The published result manifest could not be read back."));
+    const QByteArray manifestBytes = manifestFile.readAll();
+    if (manifestFile.error() != QFileDevice::NoError ||
+        QString::fromLatin1(QCryptographicHash::hash(manifestBytes, QCryptographicHash::Sha256).toHex()) != manifestSha256)
+        return reject(QStringLiteral("The published result manifest bytes do not match their SHA-256."));
+
+    QJsonParseError parseError;
+    const QJsonDocument parsedManifest = QJsonDocument::fromJson(manifestBytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !parsedManifest.isObject() ||
+        parsedManifest.object() != manifest)
+        return reject(QStringLiteral("The copied result manifest descriptor does not match the immutable manifest file."));
+
+    const QJsonObject latest = manifest.value(QStringLiteral("logicalLatest")).toObject();
+    const QJsonObject analysis = manifest.value(QStringLiteral("analysis")).toObject();
+    const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
+    const QString analysisType = analysis.value(QStringLiteral("type")).toString();
+    if (manifest.value(QStringLiteral("apiVersion")).toString() != QStringLiteral("range.native-results/v1") ||
+        manifest.value(QStringLiteral("jobId")).toString() != jobId ||
+        manifest.value(QStringLiteral("artifactId")).toString() != artifactId ||
+        manifest.value(QStringLiteral("sourceRuntimeStamp")).toObject() !=
+            provenance.value(QStringLiteral("sourceRuntimeStamp")).toObject() ||
+        manifest.value(QStringLiteral("sourceSnapshotRef")).toObject() !=
+            provenance.value(QStringLiteral("sourceSnapshotRef")).toObject() ||
+        manifest.value(QStringLiteral("inputSnapshotSha256")).toString() !=
+            provenance.value(QStringLiteral("inputSnapshotSha256")).toString() ||
+        manifest.value(QStringLiteral("inputPackageSha256")).toString() !=
+            provenance.value(QStringLiteral("inputPackageSha256")).toString() ||
+        manifest.value(QStringLiteral("runtime")).toObject() != provenance.value(QStringLiteral("runtime")).toObject() ||
+        manifest.value(QStringLiteral("control")).toObject() != provenance.value(QStringLiteral("control")).toObject() ||
+        manifest.value(QStringLiteral("proofScope")).toString() !=
+            provenance.value(QStringLiteral("proofScope")).toString() ||
+        descriptor.value(QStringLiteral("resultArtifactId")).toString() != manifest.value(QStringLiteral("artifactId")).toString() ||
+        latest.value(QStringLiteral("relativePath")).toString() != QFileInfo(resultPath).fileName() ||
+        latest.value(QStringLiteral("sha256")).toString() != resultSha256 ||
+        (analysisType != QStringLiteral("structural-dynamics") &&
+         analysisType != QStringLiteral("static") && analysisType != QStringLiteral("modal")) ||
+        (analysisType == QStringLiteral("structural-dynamics") && frames.isEmpty()) ||
+        (analysisType != QStringLiteral("structural-dynamics") && !frames.isEmpty()))
+        return reject(QStringLiteral("The published result manifest does not describe the registered job and latest artifact."));
+
+    const QByteArray currentResultSha256 = sha256File(resultPath);
+    if (currentResultSha256.isEmpty() || QString::fromLatin1(currentResultSha256.toHex()) != resultSha256)
+        return reject(QStringLiteral("The logical latest artifact changed after manifest publication."));
+    return true;
+}
 }
 
 SolverManager::SolverManager(QObject *parent)
@@ -702,6 +796,15 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
     QJsonObject sourceRuntimeStamp{{QStringLiteral("documentId"), sourceStamp.first},
                                    {QStringLiteral("revision"), QString::number(sourceStamp.second)},
                                    {QStringLiteral("sessionEpoch"), sessionEpoch}};
+    const QJsonObject sourceSnapshotRef = projectSnapshotRef.isEmpty()
+            ? QJsonObject{{QStringLiteral("kind"), QStringLiteral("gui-native-input-snapshot/v1")},
+                          {QStringLiteral("sourceRuntimeStamp"), sourceRuntimeStamp},
+                          {QStringLiteral("inputDerivedFrom"), solverTask->getInputDerivedFrom()},
+                          {QStringLiteral("inputSnapshotSha256"), QString::fromLatin1(solverTask->getInputSnapshotSha256().toHex())},
+                          {QStringLiteral("inputPackageSha256"), QString::fromLatin1(solverTask->getInputPackageSha256().toHex())}}
+            : projectSnapshotRef;
+    const bool provenanceFrozen = solverTask->freezeNativeResultProvenance(sourceRuntimeStamp, sourceSnapshotRef);
+    const bool nativeResultCatalogExpected = solverTask->expectsNativeResultCatalog();
     const bool linkedSnapshot = projectLink == QStringLiteral("linked") && frozenSnapshotVerified;
     QJsonObject record{{QStringLiteral("jobId"), jobId},
                        {QStringLiteral("jobManagerId"), int(solverTask->getID())},
@@ -710,6 +813,10 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                        {QStringLiteral("createdAt"), now},
                        {QStringLiteral("updatedAt"), now},
                        {QStringLiteral("sourceRuntimeStamp"), sourceRuntimeStamp},
+                       {QStringLiteral("sourceSnapshotRef"), sourceSnapshotRef},
+                       {QStringLiteral("nativeResultProvenance"), solverTask->getNativeResultProvenance()},
+                       {QStringLiteral("provenanceFrozen"), provenanceFrozen},
+                       {QStringLiteral("nativeResultCatalogExpected"), nativeResultCatalogExpected},
                        {QStringLiteral("projectLink"), projectLink},
                        {QStringLiteral("projectSnapshotRef"), projectSnapshotRef},
                        {QStringLiteral("inputDerivedFrom"), linkedSnapshot
@@ -729,6 +836,14 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                        {QStringLiteral("resultArtifactVerified"), false},
                        {QStringLiteral("resultSourceBinding"), QJsonObject{}},
                        {QStringLiteral("resultSourceBindingVerified"), false},
+                       {QStringLiteral("resultArtifactId"), QJsonValue(QJsonValue::Null)},
+                       {QStringLiteral("resultManifestRef"), QJsonValue(QJsonValue::Null)},
+                       {QStringLiteral("resultManifestSha256"), QJsonValue(QJsonValue::Null)},
+                       {QStringLiteral("resultManifestVerified"), false},
+                       {QStringLiteral("resultManifestDescriptorReported"), false},
+                       {QStringLiteral("nativeResultCatalogCode"), QString()},
+                       {QStringLiteral("nativeResultCatalogAvailable"), false},
+                       {QStringLiteral("nativeResultCatalogMessage"), QString()},
                        {QStringLiteral("logArtifactRefs"), logArtifactRefs},
                        {QStringLiteral("progress"), QJsonValue::Null},
                        {QStringLiteral("progressAvailable"), false},
@@ -840,6 +955,43 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         }
         this->updateNativeJob(jobId, fields);
     }, Qt::QueuedConnection);
+    QObject::connect(solverTask, &SolverTask::nativeResultManifestPublished, this,
+                     [this, jobId](const QString &reportedJobId, const QJsonObject &descriptor)
+    {
+        if (reportedJobId != jobId) return;
+        const QJsonObject currentRecord = this->nativeJobs.value(jobId);
+        QString validationError;
+        const bool verified = validNativeResultManifestDescriptor(descriptor, currentRecord,
+                                                                  jobId, &validationError);
+        QJsonObject fields{{QStringLiteral("resultManifestDescriptorReported"), true},
+                           {QStringLiteral("resultManifestVerified"), verified},
+                           {QStringLiteral("nativeResultCatalogAvailable"), verified},
+                           {QStringLiteral("nativeResultCatalogMessage"), verified
+                                ? QStringLiteral("The immutable native result manifest was verified.")
+                                : validationError},
+                           {QStringLiteral("updatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+        if (verified)
+        {
+            fields.insert(QStringLiteral("resultArtifactId"), descriptor.value(QStringLiteral("resultArtifactId")));
+            fields.insert(QStringLiteral("resultManifestRef"), QFileInfo(
+                descriptor.value(QStringLiteral("resultManifestRef")).toString()).absoluteFilePath());
+            fields.insert(QStringLiteral("resultManifestSha256"), descriptor.value(QStringLiteral("resultManifestSha256")));
+        }
+        else
+        {
+            fields.insert(QStringLiteral("resultManifestValidationError"), validationError);
+        }
+        this->updateNativeJob(jobId, fields);
+    }, Qt::QueuedConnection);
+    QObject::connect(solverTask, &SolverTask::nativeResultCatalogUnavailable, this,
+                     [this, jobId](const QString &reportedJobId, const QString &code, const QString &message)
+    {
+        if (reportedJobId != jobId || code != QStringLiteral("UNSUPPORTED_ANALYSIS_MODE")) return;
+        this->updateNativeJob(jobId, {{QStringLiteral("nativeResultCatalogCode"), code},
+                                      {QStringLiteral("nativeResultCatalogAvailable"), false},
+                                      {QStringLiteral("nativeResultCatalogMessage"), message},
+                                      {QStringLiteral("updatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
+    }, Qt::QueuedConnection);
     QObject::connect(solverTask, &SolverTask::terminalReported, this,
                      [this, jobId](const QString &reportedJobId, const QString &reportedState,
                                    bool processStarted, bool processExited, int exitCode,
@@ -861,13 +1013,20 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         const bool registeredSourceBinding = currentRecord.value(QStringLiteral("resultSourceBindingVerified")).toBool() &&
                 validResultSourceBinding(currentRecord.value(QStringLiteral("resultSourceBinding")).toObject(),
                                          resultArtifactSha256, actualCanonicalPath, registeredCanonicalPath);
-        const bool verifiedResult = resultReadbackComplete && resultArtifactVerified &&
+        const bool verifiedArtifact = resultReadbackComplete && resultArtifactVerified &&
                 !actualResultPath.isEmpty() && actualResultPath == QFileInfo(registeredResultPath).absoluteFilePath() &&
                 validResultHash && currentRecord.value(QStringLiteral("resultReadbackComplete")).toBool() &&
                 currentRecord.value(QStringLiteral("resultArtifactVerified")).toBool() &&
                 currentRecord.value(QStringLiteral("resultArtifactSha256")).toString() == resultArtifactSha256 &&
                 registeredSourceBinding;
-        const bool completeEvidence = processStarted && processExited && exitCode == 0 && verifiedResult;
+        const bool verifiedManifest = currentRecord.value(QStringLiteral("resultManifestDescriptorReported")).toBool() &&
+                currentRecord.value(QStringLiteral("resultManifestVerified")).toBool() &&
+                currentRecord.value(QStringLiteral("nativeResultCatalogAvailable")).toBool();
+        const bool explicitlyUnsupported = currentRecord.value(QStringLiteral("nativeResultCatalogCode")).toString() ==
+                QStringLiteral("UNSUPPORTED_ANALYSIS_MODE");
+        const bool catalogEvidenceComplete = verifiedManifest || explicitlyUnsupported;
+        const bool completeEvidence = processStarted && processExited && exitCode == 0 &&
+                verifiedArtifact && catalogEvidenceComplete;
         QString state = reportedState;
         if (state == QStringLiteral("succeeded") && !completeEvidence)
             state = QStringLiteral("failed");
@@ -876,20 +1035,27 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         if (state != QStringLiteral("succeeded") && state != QStringLiteral("failed") && state != QStringLiteral("cancelled"))
             state = QStringLiteral("failed");
         const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+        QString terminalMessage = message;
+        if (state == QStringLiteral("failed") && message.isEmpty() && !catalogEvidenceComplete)
+        {
+            terminalMessage = currentRecord.value(QStringLiteral("nativeResultCatalogMessage")).toString();
+            if (terminalMessage.isEmpty())
+                terminalMessage = QStringLiteral("Native result publication did not provide a verified manifest descriptor.");
+        }
         QJsonObject fields{{QStringLiteral("state"), state},
                            {QStringLiteral("finishedAt"), now},
                            {QStringLiteral("updatedAt"), now},
                            {QStringLiteral("processStarted"), processStarted},
                            {QStringLiteral("processExited"), processExited},
                            {QStringLiteral("processExitCode"), exitCode},
-                           {QStringLiteral("resultReadbackComplete"), verifiedResult},
-                           {QStringLiteral("resultArtifactSha256"), verifiedResult
+                           {QStringLiteral("resultReadbackComplete"), verifiedArtifact},
+                           {QStringLiteral("resultArtifactSha256"), verifiedArtifact
                                                                         ? QJsonValue(resultArtifactSha256)
                                                                         : QJsonValue(QJsonValue::Null)},
-                           {QStringLiteral("resultArtifactVerified"), verifiedResult},
-                           {QStringLiteral("resultSourceBindingVerified"), verifiedResult},
-                           {QStringLiteral("message"), message}};
-        if (verifiedResult)
+                           {QStringLiteral("resultArtifactVerified"), verifiedArtifact},
+                           {QStringLiteral("resultSourceBindingVerified"), verifiedArtifact},
+                           {QStringLiteral("message"), terminalMessage}};
+        if (verifiedArtifact)
             fields.insert(QStringLiteral("resultArtifactRef"), actualResultPath);
         else if (!actualResultPath.isEmpty())
             fields.insert(QStringLiteral("resultArtifactReportedPath"), actualResultPath);

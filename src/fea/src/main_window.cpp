@@ -131,6 +131,7 @@ MainWindow::MainWindow(Session *session,
     auto *controlDock = new QDockWidget(tr("Dynamics & control"), this);
     controlDock->setObjectName("controlDock");
     auto *workflowWidget = new WorkflowWidget(controlDock);
+    workflowWidget->setSession(session);
     controlDock->setWidget(workflowWidget);
     addDockWidget(Qt::BottomDockWidgetArea, controlDock);
     const auto scrollable = [solverDockTabWidget](QWidget *widget) {

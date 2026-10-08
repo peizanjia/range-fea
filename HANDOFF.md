@@ -1,8 +1,20 @@
 # 续作交接
 
-## 2026-10-08 WF-01 → WF-02 → WF-04 → WF-05 实施中
+## 2026-10-08 用户要求退出：WF03/WF04 WIP 交接（当前入口）
 
-- WF-02 验收提交 `6145f34` 后，已按用户追加授权启动 WF-03 与 WF-04：各一名 Luna max explorer 核对真实快照导入/独立物理参考和原生结果/实时状态数据面。当前为契约/导入矩阵冻结阶段，尚未实现或验收这两项；JSON 为 in_progress。根保留 shared `service.py/workflow_widget.cpp` 的唯一写入权，独立模块的实现分工在接口冻结后下达。
+- 最新指令是“新建 session 继续，整理所有交接并退出”；本 session 已停止功能推进，所有子代理完成，无根代理遗留构建/测试任务。下面旧记录只用于追溯，不覆盖本节。
+- 先读 [WF03/WF04 完整断点](docs/agent_playbooks/wf03_wf04_checkpoint.md)，再读 [当前模型接口与支持矩阵](docs/CURRENT_MODEL_WORKFLOW.md)、[任务状态](docs/workflow_delivery_plan.json) 和 [开发执行指南](docs/agent_playbooks/workflow_delivery.md)。详细断点记录文件/接口、已验证版本、未完成接线、故障和续作命令。
+- 已接受基线：WF01 验收 `58a5405`；WF02 最终实现 `1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d`、验收 `6145f34`，MODEL 子模块 `9d6a60ed42bab535ad5b8bda193092d3c38deed4`。WF03/04 启动记录 `8a2ffb0`。WF02 完整 115/115、原生 Windows 14/14、安装私有 SDK/CLI/知识查询通过；安装树 `build/stage12-install` 仍对应 WF02。
+- 当前代码已写入 WF03 快照登记/受限原生导入/独立参考/GUI 来源选择，以及 WF04 原生结果 broker/GUI 终态 manifest/接受帧 observer/journal；这是未验收 WIP，JSON 保留 `in_progress`，WF05 未开始。
+- 独立 Sol high 审查还有 **9 项未闭合**：W3-01–04、W4-01–05。优先 W4-01 **P1**（readback 与 manifest 间终态 MODEL 替换未绑定），随后节点位置/保存初态/限幅/零能量、全部帧哈希/续算来源/混合节点角 DOF/成功门槛。完整修复与回归要求见断点表，不得按部分绿色结果宣布完成。
+- 未完成：GUI live journal 启用/轮询、Host/Agent 查询、原生曲线/表格/CSV、结果 SDK、控制工作流与扩展来源桥接；GUI 来源选择尚未编译和窗口验证。下一 session 先修审查问题，再整合并完成逐条验收；不能直接跳到 Stage12。
+- 收尾验证：Python compilation、计划校验、diff 检查通过；必跑 **122/122 已注册，不是 122 项通过**。部分 preflight/broker 测试仅覆盖当时版本，后续代码仍改变；没有当前 WIP 的全目标/完整回归/窗口/安装验收。日志在 `build/audit-20261008/`，具体文件见完整断点。
+- 分支 `feature/structural-profile`；保存为明确 WIP 的本地提交，不 push。用户 `.agents/`、`.codex/`、`AGENTS.md`、凭据保持原样，不混入提交。常规子代理 Luna max、reviewer GPT-6.1 Sol high；共享 `build/vs2026` 构建/CTest/安装由根串行，文件所有权先划定。
+- 重置卡仅在用户授权的实时 1%/0% 使用。本轮真实 1% 时消费一张并成功 reset；收尾读取 91%/2 张，未再消费。下次重新读取，不将缓存值当当前额度；幂等兑换脚本在忽略目录 `build/audit-20261008/WF-02/codex_usage_probe.py`。没有后台监控。
+
+## 2026-10-08 WF-01 → WF-02 → WF-04 → WF-05 实施历史
+
+- WF-02 验收提交 `6145f34` 后按用户追加授权启动 WF-03 与 WF-04，先由 Luna max explorer 核对真实快照导入/独立物理参考和原生结果数据面；后来进入实现并保存 WIP，最新状态以顶部交接为准。这两项尚未验收。
 
 - 当前断点：WF-01 已验收，根实现 `9ecad58`、验收 `58a5405`。WF-02 已完成八项受限验收并在 JSON 标为 done；基础实现 `dcd11ef`、最终实现冻结 `1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d`，模型子模块 `9d6a60ed42bab535ad5b8bda193092d3c38deed4`。原生 MODEL 1.3.18 持久群组ID已交付，真实旧 1.3.17 ASCII/binary fixtures 未改字节。
 - 最终证据：`docs/acceptance/WF-02.md`；忽略目录 `build/audit-20261008/WF-02/acceptance-build.log` 全目标通过、`acceptance-full-ctest.log` 115/115（282.41s）、`acceptance-native-window.txt` Windows14/14无跳过（13.469s）、安装私有SDK/CLI与知识查询通过；必跑115注册、CI工具14/14。首次 full-ctest.log 和各种 focused/focus 失败保留作追踪，不作为最终通过证据。

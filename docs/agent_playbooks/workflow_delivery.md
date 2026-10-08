@@ -8,6 +8,7 @@
 
 1. 当前用户要求和适用的 `AGENTS.md`/技能；用户指令优先，个人配置保持原样。
 2. `HANDOFF.md` 顶部：当前分支/断点、最近工作、证据、下一步和环境限制。
+   当前 WF03/04 续作还需读取 [完整断点](wf03_wf04_checkpoint.md) 与 [当前模型契约](../CURRENT_MODEL_WORKFLOW.md)；先处理未闭合审查问题，WIP 提交不等于验收。
 3. `docs/DEVELOPMENT_PLAN.md` 与 `docs/workflow_delivery_plan.json`：阶段基线、状态和依赖。
 4. `docs/WORKFLOW_DELIVERY_PLAN.md` 的所选 WF 节、共同契约/门槛及有关验收 ID。
 5. 当前源码、测试和当前产品操作手册：`AGENT_OPERATIONS.md`、`WORKFLOW_SDK.md`、`EXTENSION_SDK.md`。主题 playbook 是导览，不替代能力查询或代码事实。

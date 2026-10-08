@@ -12,18 +12,21 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QSysInfo>
 #include <QThread>
 #include <QUuid>
 
 #include <algorithm>
 
 #include <rml_file_utils.h>
+#include <rml_structural_control_setup.h>
 #include <rml_view_factor_matrix.h>
 
 #include "model_io.h"
 #include "solver_manager.h"
 #include "solver_task.h"
 #include "application.h"
+#include <rnative_result_broker.h>
 
 namespace
 {
@@ -157,6 +160,76 @@ QString absoluteModelPath(const QString &fileName)
 {
     if (fileName.isEmpty()) return {};
     return QFileInfo(RFileUtils::getFileNameWithOutTimeStep(fileName)).absoluteFilePath();
+}
+
+QString sha256Hex(const QByteArray &bytes)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+
+QJsonArray normalizedSolverArguments(const QStringList &arguments)
+{
+    QJsonArray normalized;
+    for (const QString &argument : arguments)
+    {
+        if (argument.startsWith(QStringLiteral("--file=")))
+            normalized.append(QStringLiteral("--file=<result-artifact>"));
+        else if (argument.startsWith(QStringLiteral("--log-file=")))
+            normalized.append(QStringLiteral("--log-file=<solver-log>"));
+        else if (argument.startsWith(QStringLiteral("--convergence-file=")))
+            normalized.append(QStringLiteral("--convergence-file=<convergence-log>"));
+        else if (argument.startsWith(QStringLiteral("--monitoring-file=")))
+            normalized.append(QStringLiteral("--monitoring-file=<monitoring-log>"));
+        else if (argument.startsWith(QStringLiteral("--task-id=")))
+            normalized.append(QStringLiteral("--task-id=<native-job-id>"));
+        else if (argument.startsWith(QStringLiteral("--task-server=")))
+            normalized.append(QStringLiteral("--task-server=<local-task-server>"));
+        else
+            normalized.append(argument);
+    }
+    return normalized;
+}
+
+QJsonObject nativeControlProvenance(const RStructuralControlSetup &setup,
+                                    const QByteArray &inputSnapshotSha256,
+                                    const QJsonArray &normalizedArguments)
+{
+    QString controllerVersionSha256;
+    if (setup.enabled)
+    {
+        QJsonArray channelConditioning;
+        for (const RStructuralControlChannelConditioning &channel : setup.channelConditioning)
+        {
+            channelConditioning.append(QJsonObject{
+                {QStringLiteral("actuatorId"), channel.actuatorId},
+                {QStringLiteral("delaySteps"), double(channel.delaySteps)},
+                {QStringLiteral("holdSteps"), double(channel.holdSteps)},
+                {QStringLiteral("noiseAmplitude"), channel.noiseAmplitude}});
+        }
+        const QJsonObject declaredController{
+            {QStringLiteral("scope"), QStringLiteral("controller-declaration-and-input-snapshot/v1")},
+            {QStringLiteral("controllerId"), setup.controllerId},
+            {QStringLiteral("controlProtocolVersion"), double(setup.controlProtocolVersion)},
+            {QStringLiteral("deterministicSeed"), QString::number(setup.deterministicSeed)},
+            {QStringLiteral("channelConditioning"), channelConditioning},
+            {QStringLiteral("inputSnapshotSha256"), QString::fromLatin1(inputSnapshotSha256.toHex())},
+            {QStringLiteral("normalizedArguments"), normalizedArguments}};
+        controllerVersionSha256 = sha256Hex(QJsonDocument(declaredController).toJson(QJsonDocument::Compact));
+    }
+    return {{QStringLiteral("enabled"), setup.enabled},
+            {QStringLiteral("controllerId"), setup.enabled ? setup.controllerId : QString()},
+            {QStringLiteral("controllerVersionSha256"), controllerVersionSha256}};
+}
+
+bool supportsNativeResultCatalog(const Model &model)
+{
+    const RProblemTypeMask problemTypes = model.getProblemTaskTree().getProblemTypeMask();
+    const bool dynamics = model.getProblemSetup().getStructuralDynamicsSetup().getEnabled();
+    const bool timeSolver = model.getTimeSolver().getEnabled();
+    if (problemTypes == R_PROBLEM_STRESS_MODAL) return !dynamics;
+    if (problemTypes != R_PROBLEM_STRESS) return false;
+    if (dynamics) return timeSolver;
+    return !timeSolver;
 }
 
 void setRecordNumber(RModel &model, uint recordNumber)
@@ -552,6 +625,77 @@ const QByteArray &SolverTask::getInputSnapshotSha256() const
 const QByteArray &SolverTask::getInputPackageSha256() const
 {
     return this->inputPackageSha256;
+}
+
+bool SolverTask::freezeNativeResultProvenance(const QJsonObject &sourceRuntimeStamp,
+                                             const QJsonObject &sourceSnapshotRef)
+{
+    if (QThread::currentThread() != this->thread() || this->performStarted.load(std::memory_order_acquire) ||
+        this->nativeResultProvenanceFrozen || !this->inputSnapshot || sourceRuntimeStamp.isEmpty() ||
+        sourceSnapshotRef.isEmpty() || this->inputSnapshotSha256.size() != 32 ||
+        this->inputPackageSha256.size() != 32)
+    {
+        return false;
+    }
+
+    const QByteArray executableSha256 = sha256File(this->solverExecutable);
+    if (executableSha256.size() != 32) return false;
+
+    QJsonObject control;
+    QJsonObject runtimeDescriptor;
+    try
+    {
+        const QJsonArray normalizedArguments = normalizedSolverArguments(this->solverArguments);
+        control = nativeControlProvenance(this->inputSnapshot->getProblemSetup().getStructuralControlSetup(),
+                                          this->inputSnapshotSha256,
+                                          normalizedArguments);
+        runtimeDescriptor = QJsonObject{
+            {QStringLiteral("solverExecutableSha256"), QString::fromLatin1(executableSha256.toHex())},
+            {QStringLiteral("applicationVersion"), QString::fromLatin1(VERSION)},
+            {QStringLiteral("nativeModelFormatVersion"), RModel::version.toString()},
+            {QStringLiteral("qtCompileVersion"), QString::fromLatin1(QT_VERSION_STR)},
+            {QStringLiteral("qtRuntimeVersion"), QString::fromLatin1(qVersion())},
+            {QStringLiteral("platform"), QJsonObject{
+                {QStringLiteral("productType"), QSysInfo::productType()},
+                {QStringLiteral("kernelType"), QSysInfo::kernelType()},
+                {QStringLiteral("buildAbi"), QSysInfo::buildAbi()},
+                {QStringLiteral("currentCpuArchitecture"), QSysInfo::currentCpuArchitecture()}}},
+            {QStringLiteral("normalizedArguments"), normalizedArguments},
+            {QStringLiteral("control"), control}};
+    }
+    catch (...)
+    {
+        return false;
+    }
+
+    const QString runtimeFingerprint = sha256Hex(QJsonDocument(runtimeDescriptor).toJson(QJsonDocument::Compact));
+    const QString proofScope = QStringLiteral("solver-and-declared-controller-runtime/v1");
+    const QJsonObject provenance{
+        {QStringLiteral("jobId"), this->taskID.toString()},
+        {QStringLiteral("sourceRuntimeStamp"), sourceRuntimeStamp},
+        {QStringLiteral("sourceSnapshotRef"), sourceSnapshotRef},
+        {QStringLiteral("inputSnapshotSha256"), QString::fromLatin1(this->inputSnapshotSha256.toHex())},
+        {QStringLiteral("inputPackageSha256"), QString::fromLatin1(this->inputPackageSha256.toHex())},
+        {QStringLiteral("runtime"), QJsonObject{
+            {QStringLiteral("fingerprintSha256"), runtimeFingerprint},
+            {QStringLiteral("scope"), proofScope}}},
+        {QStringLiteral("control"), control},
+        {QStringLiteral("proofScope"), proofScope}};
+
+    this->nativeResultProvenance = provenance;
+    this->frozenSolverExecutableSha256 = executableSha256;
+    this->nativeResultProvenanceFrozen = true;
+    return true;
+}
+
+const QJsonObject &SolverTask::getNativeResultProvenance() const
+{
+    return this->nativeResultProvenance;
+}
+
+bool SolverTask::expectsNativeResultCatalog() const
+{
+    return this->inputSnapshot && supportsNativeResultCatalog(*this->inputSnapshot);
 }
 
 const QString &SolverTask::getResultArtifactFileName() const
@@ -958,6 +1102,12 @@ int SolverTask::perform()
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver task was cancelled before process start.");
         }
+        if (this->nativeResultProvenanceFrozen &&
+            sha256File(this->solverExecutable) != this->frozenSolverExecutableSha256)
+        {
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "The solver executable changed after native-result provenance was frozen.");
+        }
 
         // Execute solver
         QString cmdLine = this->getCommandLine();
@@ -1102,6 +1252,41 @@ int SolverTask::perform()
         {
             throw RError(RError::Type::Application, R_ERROR_REF,
                          "Solver result was retained as an artifact after cancellation and was not published.");
+        }
+
+        const QString resultDirectory = QFileInfo(this->resultArtifactFileName).absolutePath();
+        const RNativeResultBroker::PublishResult manifestPublication =
+                RNativeResultBroker::publishResult(resultDirectory,
+                                                   this->resultArtifactFileName,
+                                                   this->nativeResultProvenance);
+        if (!manifestPublication.valid)
+        {
+            if (manifestPublication.code == QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"))
+            {
+                emit this->nativeResultCatalogUnavailable(this->taskID.toString(),
+                                                          manifestPublication.code,
+                                                          manifestPublication.message);
+            }
+            else
+            {
+                throw RError(RError::Type::Application, R_ERROR_REF,
+                             "Native result manifest publication failed (%s): %s",
+                             manifestPublication.code.toUtf8().constData(),
+                             manifestPublication.message.toUtf8().constData());
+            }
+        }
+        else
+        {
+            const QJsonObject descriptor{
+                {QStringLiteral("jobId"), this->taskID.toString()},
+                {QStringLiteral("resultArtifactId"), manifestPublication.artifactId},
+                {QStringLiteral("resultManifestRef"), QFileInfo(manifestPublication.manifestPath).absoluteFilePath()},
+                {QStringLiteral("resultManifestSha256"), manifestPublication.manifestSha256},
+                {QStringLiteral("resultManifest"), manifestPublication.manifest},
+                {QStringLiteral("resultProvenance"), this->nativeResultProvenance},
+                {QStringLiteral("provenanceFrozen"), this->nativeResultProvenanceFrozen},
+                {QStringLiteral("nativeResultCatalogAvailable"), true}};
+            emit this->nativeResultManifestPublished(this->taskID.toString(), descriptor);
         }
 
         Session *session = Application::instance()->getSession();

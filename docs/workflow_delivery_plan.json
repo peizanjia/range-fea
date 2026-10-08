@@ -188,7 +188,7 @@
       "id": "WF-03",
       "title": "Open-model bounded control bridge",
       "status": "in_progress",
-      "statusReason": "WF-02已验收；正在冻结当前快照受限导入矩阵、物理映射及独立参考再生成契约，先核对真实原生字段与来源桥接。",
+      "statusReason": "用户要求新session继续，本session停止推进并保存WIP；快照登记/原生导入/独立参考/GUI来源已部分实现，W3-01至04未闭合，最新完整回归与实际FE/GUI验收未完成。续作见docs/agent_playbooks/wf03_wf04_checkpoint.md。",
       "priority": "P0",
       "effort": "L",
       "dependsOn": [
@@ -218,7 +218,7 @@
       "id": "WF-04",
       "title": "Native result broker",
       "status": "in_progress",
-      "statusReason": "WF-02已验收；正在冻结实际FE原生结果/通道/时程的来源、工件哈希及有界查询契约，与WF03明确单文件所有权后实施。",
+      "statusReason": "用户要求新session继续，本session停止推进并保存WIP；原生broker/终态manifest/接受帧observer-journal已部分实现，W4-01至05未闭合（含P1），live/Host/Agent/SDK接线与完整验收未完成。续作见docs/agent_playbooks/wf03_wf04_checkpoint.md。",
       "priority": "P0",
       "effort": "M",
       "dependsOn": [

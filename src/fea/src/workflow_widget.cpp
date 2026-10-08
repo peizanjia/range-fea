@@ -10,6 +10,7 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -20,9 +21,12 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
 #include "control_monitor_widget.h"
+#include "model_command_host.h"
+#include "session.h"
 
 WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
 {
@@ -82,6 +86,11 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     modelChoice->addItem(tr("Cantilever beam"), "cantilever-beam");
     modelChoice->setObjectName("workflowModel");
     form->addRow(tr("Reference model"), modelChoice);
+    sourceButton = new QPushButton(tr("Use current document snapshot"));
+    sourceButton->setObjectName("workflowUseDocumentSnapshot");
+    sourceButton->setToolTip(tr("Select exactly one supported document, freeze its accepted snapshot, and register it as a workflow source."));
+    form->addRow(tr("Current document"), sourceButton);
+    connect(sourceButton, &QPushButton::clicked, this, &WorkflowWidget::useCurrentDocumentSnapshot);
     dt = new QDoubleSpinBox;
     dt->setDecimals(6); dt->setRange(0.000001, 0.02); dt->setValue(0.005); dt->setSingleStep(0.001);
     dt->setObjectName("workflowTimeStep");
@@ -104,8 +113,27 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     buttons->addWidget(configureButton); buttons->addWidget(runButton); buttons->addWidget(resumeButton);
     layout->addLayout(buttons);
     connect(configureButton, &QPushButton::clicked, this, [this] {
-        previewCommand("workflow.configure", {{"model", modelChoice->currentData().toString()},
-            {"dt", dt->value()}, {"steps", steps->value()}, {"targetDamping", damping->value()}});
+        const QString model = modelChoice->currentData().toString();
+        QJsonObject parameters{{"model", model}, {"dt", dt->value()},
+            {"steps", steps->value()}, {"targetDamping", damping->value()}};
+        const QString sourceId = selectedSourceId();
+        if (!sourceId.isEmpty())
+        {
+            const auto source = documentSources.constFind(sourceId);
+            QString reason;
+            if (source == documentSources.cend() || !sourceRuntimeIsCurrent(source.value(), &reason))
+            {
+                status->setText(tr("The current document source is stale. Select it again after reopening or editing the document and capture a new snapshot. %1")
+                                    .arg(reason));
+                updateSourceChoiceLabel(sourceId);
+                setActionAvailability();
+                return;
+            }
+            parameters.insert("sourceId", sourceId);
+        }
+        // A template item always sends its explicit family and omits sourceId,
+        // which intentionally resets a previously configured document source.
+        previewCommand("workflow.configure", parameters);
     });
     connect(runButton, &QPushButton::clicked, this, [this] {
         previewCommand("workflow.run", {{"mode", "both"}, {"independentReference", true}});
@@ -203,8 +231,18 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     });
     connect(&service, &WorkflowProcess::replyReceived, this, &WorkflowWidget::onReply);
     connect(&service, &WorkflowProcess::requestFailed, this,
-            [this](const QString &id, const QString &, const QString &, const QString &message) {
+            [this](const QString &id, const QString &, const QString &code, const QString &message) {
         if (!ownedRequests.remove(id)) return;
+        if (id == sourceRegisterRequest)
+        {
+            sourceRegisterRequest.clear();
+            sourceRegistrationInFlight = false;
+            pendingDocumentSource = {};
+            status->setText(tr("Document source registration failed (%1). The captured snapshot remains in the project catalog.")
+                                .arg(code));
+            setActionAvailability();
+            return;
+        }
         continuations.remove(id);
         if (id == jobsRequest) jobsRequest.clear();
         commandInFlight = false;
@@ -219,10 +257,348 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
         previewText->setPlainText(tr("Configuration changed. Create a new preview before applying."));
         setActionAvailability();
     };
-    connect(modelChoice, &QComboBox::currentIndexChanged, this, invalidatePreview);
+    connect(modelChoice, &QComboBox::currentIndexChanged, this, [this, invalidatePreview] {
+        invalidatePreview();
+        updateSelectedSourceStatus();
+    });
     connect(dt, &QDoubleSpinBox::valueChanged, this, invalidatePreview);
     connect(steps, &QSpinBox::valueChanged, this, invalidatePreview);
     connect(damping, &QDoubleSpinBox::valueChanged, this, invalidatePreview);
+    setActionAvailability();
+}
+
+void WorkflowWidget::setSession(Session *value)
+{
+    if (session == value) return;
+    if (session) disconnect(session, nullptr, this, nullptr);
+    session = value;
+    if (!session) return;
+
+    connect(session, &Session::documentRevisionChanged, this,
+            [this](const QString &documentId, quint64 revision) {
+        for (auto it = documentSources.cbegin(); it != documentSources.cend(); ++it)
+        {
+            if (it.value().runtimeDocumentId == documentId && it.value().runtimeRevision != revision)
+            {
+                updateSourceChoiceLabel(it.key());
+                if (selectedSourceId() == it.key())
+                {
+                    QString reason;
+                    sourceRuntimeIsCurrent(it.value(), &reason);
+                    status->setText(tr("The captured document source is stale: %1").arg(reason));
+                }
+            }
+        }
+        setActionAvailability();
+    });
+    connect(session, &Session::runtimeDocumentRemoved, this,
+            [this](const QString &documentId) {
+        for (auto it = documentSources.cbegin(); it != documentSources.cend(); ++it)
+        {
+            if (it.value().runtimeDocumentId == documentId)
+            {
+                updateSourceChoiceLabel(it.key());
+                if (selectedSourceId() == it.key())
+                    status->setText(tr("The captured document source is stale because its document was closed."));
+            }
+        }
+        setActionAvailability();
+    });
+    setActionAvailability();
+}
+
+QString WorkflowWidget::selectedSourceId() const
+{
+    return modelChoice->currentData(Qt::UserRole + 1).toString();
+}
+
+bool WorkflowWidget::sourceRuntimeStampMatches(const DocumentSourceChoice &source, QString *reason) const
+{
+    const auto fail = [reason](const QString &message) {
+        if (reason) *reason = message;
+        return false;
+    };
+    if (reason) reason->clear();
+    if (!session) return fail(tr("No document session is attached."));
+    auto *host = session->getModelCommandHost();
+    if (!host || host->sessionEpoch() != source.sessionEpoch)
+        return fail(tr("The document session has changed."));
+    const uint modelId = session->findModelByCommandIdentity(source.runtimeDocumentId);
+    if (modelId >= session->getNModels())
+        return fail(tr("The source document was closed."));
+    const auto runtimeStamp = session->modelCommandStamp(modelId);
+    if (runtimeStamp.first != source.runtimeDocumentId || runtimeStamp.second != source.runtimeRevision)
+        return fail(tr("The source document was edited after its snapshot was captured."));
+    if (session->hasDocumentDraft(modelId))
+        return fail(tr("The source document has an unresolved editor draft."));
+    if (session->projectWorkspace() != source.catalogRoot)
+        return fail(tr("The active project workspace changed."));
+
+    const auto &snapshotRef = source.snapshotRef;
+    const auto instanceRef = snapshotRef.value(QStringLiteral("instanceRef")).toObject();
+    if (instanceRef.value(QStringLiteral("documentId")).toString() != source.runtimeDocumentId ||
+        instanceRef.value(QStringLiteral("sessionEpoch")).toString() != source.sessionEpoch ||
+        instanceRef.value(QStringLiteral("documentRevision")).toDouble(-1.0) != double(source.runtimeRevision))
+        return fail(tr("The captured runtime document stamp is invalid."));
+    if (reason) *reason = tr("The runtime document stamp still matches the captured source.");
+    return true;
+}
+
+bool WorkflowWidget::sourceRuntimeIsCurrent(const DocumentSourceChoice &source, QString *reason) const
+{
+    if (!sourceRuntimeStampMatches(source, reason)) return false;
+    const auto fail = [reason](const QString &message) {
+        if (reason) *reason = message;
+        return false;
+    };
+    if (!session) return fail(tr("No document session is attached."));
+    const uint modelId = session->findModelByCommandIdentity(source.runtimeDocumentId);
+    if (modelId >= session->getNModels()) return fail(tr("The source document was closed."));
+    if (session->hasDocumentDraft(modelId)) return fail(tr("The source document has an unresolved editor draft."));
+    const auto &snapshotRef = source.snapshotRef;
+    const auto context = session->documentProjectContext(modelId);
+    if (context.value(QStringLiteral("availability")).toString() != QStringLiteral("available"))
+        return fail(tr("The source document is no longer synchronized with its project catalog."));
+    if (context.value(QStringLiteral("projectId")) != snapshotRef.value(QStringLiteral("projectId")) ||
+        context.value(QStringLiteral("persistentDocumentId")) != snapshotRef.value(QStringLiteral("persistentDocumentId")) ||
+        context.value(QStringLiteral("sourceRevision")) != snapshotRef.value(QStringLiteral("sourceRevision")) ||
+        context.value(QStringLiteral("modelSha256")) != snapshotRef.value(QStringLiteral("modelSha256")))
+        return fail(tr("The project source version or model hash changed after capture."));
+    const auto draft = context.value(QStringLiteral("draft")).toObject();
+    if (draft.value(QStringLiteral("status")).toString() == QStringLiteral("pending"))
+        return fail(tr("The source document has an unresolved editor draft."));
+    if (reason) *reason = tr("The source document still matches the captured version.");
+    return true;
+}
+
+QString WorkflowWidget::sourceDescription(const DocumentSourceChoice &source, bool includePorts) const
+{
+    const auto record = source.registration;
+    const auto descriptor = record.value(QStringLiteral("descriptor")).toObject();
+    const auto origin = record.value(QStringLiteral("originRef")).toObject();
+    const QString modelKind = descriptor.value(QStringLiteral("modelKind")).toString();
+    const QString modelName = modelKind == QStringLiteral("four-rod") ? tr("Four-rod chain")
+                              : modelKind == QStringLiteral("cantilever-beam") ? tr("Cantilever beam")
+                              : modelKind;
+    QString result = tr("Model: %1\nSource version: %2\nModel SHA-256: %3\nSource manifest SHA-256: %4")
+        .arg(modelName,
+             origin.value(QStringLiteral("sourceRevision")).toString(),
+             record.value(QStringLiteral("registeredModelSha256")).toString(),
+             record.value(QStringLiteral("manifestSha256")).toString());
+    if (!includePorts) return result;
+
+    const auto ports = descriptor.value(QStringLiteral("ports")).toObject();
+    const auto formatPort = [this](const QString &name, const QJsonValue &value) {
+        const auto port = value.toObject();
+        const auto direction = port.value(QStringLiteral("globalDirection")).toArray();
+        const QString directionText = QString::fromUtf8(QJsonDocument(direction).toJson(QJsonDocument::Compact));
+        return tr("%1: node %2, global direction %3, unit %4")
+            .arg(name, QString::number(port.value(QStringLiteral("nodePhysicalId")).toInteger()),
+                 directionText, port.value(QStringLiteral("unit")).toString());
+    };
+    result += tr("\nGlobal port map from source preflight:\n%1\n%2")
+        .arg(formatPort(tr("Force"), ports.value(QStringLiteral("force"))),
+             formatPort(tr("Velocity"), ports.value(QStringLiteral("velocity"))));
+    return result;
+}
+
+QString WorkflowWidget::modelBindingSummary(const QJsonObject &binding) const
+{
+    if (binding.isEmpty()) return {};
+    if (binding.value(QStringLiteral("kind")).toString() != QStringLiteral("native-snapshot"))
+        return tr("Model binding: %1").arg(binding.value(QStringLiteral("kind")).toString());
+
+    const QString sourceId = binding.value(QStringLiteral("sourceId")).toString();
+    const auto origin = binding.value(QStringLiteral("originRef")).toObject();
+    QString modelName = tr("Native document snapshot");
+    QString currentStatus = tr("origin document status unavailable; result remains bound to its frozen snapshot");
+    const auto source = documentSources.constFind(sourceId);
+    if (source != documentSources.cend())
+    {
+        const QString kind = source->registration.value(QStringLiteral("descriptor")).toObject()
+                                 .value(QStringLiteral("modelKind")).toString();
+        if (kind == QStringLiteral("four-rod")) modelName = tr("Four-rod chain");
+        else if (kind == QStringLiteral("cantilever-beam")) modelName = tr("Cantilever beam");
+        QString reason;
+        currentStatus = sourceRuntimeIsCurrent(source.value(), &reason)
+            ? tr("origin document unchanged; result remains bound to its frozen snapshot")
+            : tr("origin document stale (%1); result remains bound to its frozen snapshot").arg(reason);
+    }
+    return tr("Model/source: %1 · source version %2 · model SHA-256 %3 · %4")
+        .arg(modelName,
+             origin.value(QStringLiteral("sourceRevision")).toString(),
+             binding.value(QStringLiteral("registeredModelSha256")).toString(),
+             currentStatus);
+}
+
+void WorkflowWidget::updateSourceChoiceLabel(const QString &sourceId)
+{
+    const auto source = documentSources.constFind(sourceId);
+    if (source == documentSources.cend()) return;
+    const int index = modelChoice->findData(sourceId, Qt::UserRole + 1);
+    if (index < 0) return;
+    const auto record = source->registration;
+    const auto descriptor = record.value(QStringLiteral("descriptor")).toObject();
+    const auto origin = record.value(QStringLiteral("originRef")).toObject();
+    const QString kind = descriptor.value(QStringLiteral("modelKind")).toString();
+    const QString modelName = kind == QStringLiteral("four-rod") ? tr("Four-rod chain")
+                              : kind == QStringLiteral("cantilever-beam") ? tr("Cantilever beam") : kind;
+    QString text = tr("Current document · %1 · %2 · %3")
+        .arg(modelName, origin.value(QStringLiteral("sourceRevision")).toString(),
+             record.value(QStringLiteral("registeredModelSha256")).toString().left(12));
+    QString reason;
+    if (!sourceRuntimeStampMatches(source.value(), &reason)) text += tr(" · stale");
+    modelChoice->setItemText(index, text);
+    modelChoice->setItemData(index, kind, Qt::UserRole);
+}
+
+void WorkflowWidget::updateSelectedSourceStatus()
+{
+    const QString sourceId = selectedSourceId();
+    if (sourceId.isEmpty())
+    {
+        status->setText(tr("An explicit reference template is selected. Applying its configuration clears the current document source."));
+        return;
+    }
+    const auto source = documentSources.constFind(sourceId);
+    if (source == documentSources.cend())
+    {
+        status->setText(tr("The selected document source is unavailable. Capture it again from the open document."));
+        return;
+    }
+    QString reason;
+    const bool current = sourceRuntimeIsCurrent(source.value(), &reason);
+    status->setText(sourceDescription(source.value(), true) + QStringLiteral("\n") +
+                    (current ? tr("Current document status: unchanged.")
+                             : tr("Current document status: stale — %1").arg(reason)));
+    updateSourceChoiceLabel(sourceId);
+}
+
+bool WorkflowWidget::previewSourceIsCurrent() const
+{
+    const auto normalized = preview.value(QStringLiteral("normalized")).toObject();
+    if (normalized.value(QStringLiteral("command")).toString() != QStringLiteral("workflow.configure")) return true;
+    const auto parameters = normalized.value(QStringLiteral("parameters")).toObject();
+    const QString sourceId = parameters.value(QStringLiteral("sourceId")).toString();
+    if (sourceId.isEmpty()) return true;
+    const auto source = documentSources.constFind(sourceId);
+    return source != documentSources.cend() && sourceRuntimeIsCurrent(source.value());
+}
+
+void WorkflowWidget::useCurrentDocumentSnapshot()
+{
+    if (!service.isReady())
+    {
+        status->setText(tr("Open the workflow workspace before registering a document source."));
+        return;
+    }
+    if (!session)
+    {
+        status->setText(tr("The document session is unavailable."));
+        return;
+    }
+    if (sourceRegistrationInFlight)
+    {
+        status->setText(tr("A document source registration is already in progress."));
+        return;
+    }
+    const auto selected = session->getSelectedModelIDs();
+    if (selected.size() != 1)
+    {
+        status->setText(tr("Select exactly one document before capturing a workflow source."));
+        return;
+    }
+    const uint modelId = selected.first();
+    if (modelId >= session->getNModels())
+    {
+        status->setText(tr("The selected document is no longer available."));
+        return;
+    }
+    if (!session->trylock(0))
+    {
+        status->setText(tr("The selected document is busy. Try again when its current operation finishes."));
+        return;
+    }
+    const Model &model = session->getModel(modelId);
+    const bool rod = model.getNNodes() == 5 && model.getNElements() == 10 &&
+                     model.getNElements(R_ELEMENT_TRUSS1) == 4 &&
+                     model.getNElements(R_ELEMENT_POINT) == 6 &&
+                     model.getNElements(R_ELEMENT_BEAM1) == 0;
+    const bool beam = model.getNNodes() == 2 && model.getNElements() == 3 &&
+                      model.getNElements(R_ELEMENT_BEAM1) == 1 &&
+                      model.getNElements(R_ELEMENT_POINT) == 2 &&
+                      model.getNElements(R_ELEMENT_TRUSS1) == 0;
+    session->unlock();
+    if (!rod && !beam)
+    {
+        status->setText(tr("The selected document does not match the bounded WF-03 topology (five nodes, four TRUSS1 plus six POINT; or two nodes, one BEAM1 plus two POINT). No snapshot was created."));
+        return;
+    }
+
+    const auto runtimeStamp = session->modelCommandStamp(modelId);
+    auto *host = session->getModelCommandHost();
+    const QString catalogRoot = session->projectWorkspace();
+    if (runtimeStamp.first.isEmpty() || !host || catalogRoot.isEmpty())
+    {
+        status->setText(tr("The selected document has no trusted project identity or workspace."));
+        return;
+    }
+    const QString sessionEpoch = host->sessionEpoch();
+    const auto contextBefore = session->documentProjectContext(modelId);
+    const auto beforeDraft = contextBefore.value(QStringLiteral("draft")).toObject();
+    if (contextBefore.value(QStringLiteral("availability")).toString() != QStringLiteral("available") ||
+        session->hasDocumentDraft(modelId) ||
+        beforeDraft.value(QStringLiteral("status")).toString() == QStringLiteral("pending"))
+    {
+        status->setText(tr("The selected document must have synchronized accepted state and no unresolved drafts before capture."));
+        return;
+    }
+    if (session->modelCommandStamp(modelId) != runtimeStamp)
+    {
+        status->setText(tr("The selected document changed during the topology check. Retry the capture."));
+        return;
+    }
+
+    QString error;
+    const QJsonObject captured = session->createDocumentSnapshot(modelId, &error);
+    if (captured.isEmpty())
+    {
+        status->setText(tr("Could not capture the accepted document snapshot: %1").arg(error));
+        return;
+    }
+    const auto instanceRef = captured.value(QStringLiteral("instanceRef")).toObject();
+    const auto contextAfter = session->documentProjectContext(modelId);
+    if (session->modelCommandStamp(modelId) != runtimeStamp || host->sessionEpoch() != sessionEpoch ||
+        session->projectWorkspace() != catalogRoot ||
+        captured.value(QStringLiteral("projectId")) != contextAfter.value(QStringLiteral("projectId")) ||
+        captured.value(QStringLiteral("persistentDocumentId")) != contextAfter.value(QStringLiteral("persistentDocumentId")) ||
+        captured.value(QStringLiteral("sourceRevision")) != contextAfter.value(QStringLiteral("sourceRevision")) ||
+        captured.value(QStringLiteral("modelSha256")) != contextAfter.value(QStringLiteral("modelSha256")) ||
+        instanceRef.value(QStringLiteral("documentId")).toString() != runtimeStamp.first ||
+        instanceRef.value(QStringLiteral("sessionEpoch")).toString() != sessionEpoch ||
+        instanceRef.value(QStringLiteral("documentRevision")).toDouble(-1.0) != double(runtimeStamp.second))
+    {
+        status->setText(tr("The document or project changed during snapshot publication. The source was not registered."));
+        return;
+    }
+
+    const QJsonObject snapshotRef{
+        {QStringLiteral("projectId"), captured.value(QStringLiteral("projectId"))},
+        {QStringLiteral("persistentDocumentId"), captured.value(QStringLiteral("persistentDocumentId"))},
+        {QStringLiteral("sourceRevision"), captured.value(QStringLiteral("sourceRevision"))},
+        {QStringLiteral("modelSha256"), captured.value(QStringLiteral("modelSha256"))},
+        {QStringLiteral("instanceRef"), instanceRef}};
+    pendingDocumentSource = {};
+    pendingDocumentSource.snapshotRef = snapshotRef;
+    pendingDocumentSource.runtimeDocumentId = runtimeStamp.first;
+    pendingDocumentSource.runtimeRevision = runtimeStamp.second;
+    pendingDocumentSource.sessionEpoch = sessionEpoch;
+    pendingDocumentSource.catalogRoot = catalogRoot;
+    sourceRegistrationInFlight = true;
+    sourceRegisterRequest = request(QStringLiteral("model.source.register"),
+                                   {{QStringLiteral("catalogRoot"), catalogRoot},
+                                    {QStringLiteral("snapshotRef"), snapshotRef}});
+    status->setText(tr("The accepted snapshot is frozen. Registering the source asynchronously…"));
     setActionAvailability();
 }
 
@@ -230,6 +606,15 @@ void WorkflowWidget::openWorkspace(const WorkflowProcess::Configuration &configu
 {
     workspaceEdit->setText(configuration.workspace);
     trustedExtensions->setChecked(configuration.trustedExtensions);
+    {
+        const QSignalBlocker blocker(modelChoice);
+        while (modelChoice->count() > 2) modelChoice->removeItem(modelChoice->count() - 1);
+        modelChoice->setCurrentIndex(0);
+    }
+    documentSources.clear();
+    pendingDocumentSource = {};
+    sourceRegisterRequest.clear();
+    sourceRegistrationInFlight = false;
     preview = {}; pendingCommand.clear(); pendingArguments = {}; continuations.clear();
     commandInFlight = false; displayedResult.clear(); jobsRequest.clear();
     ownedRequests.clear();
@@ -250,6 +635,14 @@ void WorkflowWidget::previewCommand(const QString &command, const QJsonObject &a
 void WorkflowWidget::applyPreview()
 {
     if (!service.isReady() || commandInFlight || preview.isEmpty()) return;
+    if (!previewSourceIsCurrent())
+    {
+        preview = {};
+        previewText->setPlainText(tr("The captured document source is stale. Capture and select a fresh snapshot before approval."));
+        status->setText(tr("The document source changed or closed before approval; no approval request was sent."));
+        setActionAvailability();
+        return;
+    }
     commandInFlight = true;
     continuations.insert(request("host.approve", {{"previewId", preview.value("previewId")},
                                                           {"previewHash", preview.value("previewHash")}}), "execute");
@@ -264,6 +657,43 @@ void WorkflowWidget::refreshJobs()
 void WorkflowWidget::onReply(const QString &id, const QString &operation, const QJsonObject &result)
 {
     if (!ownedRequests.remove(id)) return;
+    if (operation == QStringLiteral("model.source.register") && id == sourceRegisterRequest)
+    {
+        sourceRegisterRequest.clear();
+        sourceRegistrationInFlight = false;
+        const QString sourceId = result.value(QStringLiteral("sourceId")).toString();
+        const auto origin = result.value(QStringLiteral("originRef")).toObject();
+        const auto descriptor = result.value(QStringLiteral("descriptor")).toObject();
+        const QString modelKind = descriptor.value(QStringLiteral("modelKind")).toString();
+        if (sourceId.isEmpty() ||
+            (modelKind != QStringLiteral("four-rod") && modelKind != QStringLiteral("cantilever-beam")) ||
+            result.value(QStringLiteral("registeredModelSha256")).toString().size() != 64 ||
+            result.value(QStringLiteral("manifestSha256")).toString().size() != 64 || origin.isEmpty())
+        {
+            pendingDocumentSource = {};
+            status->setText(tr("Source registration returned incomplete identity or hash metadata."));
+            setActionAvailability();
+            return;
+        }
+        pendingDocumentSource.registration = result;
+        pendingDocumentSource.registration.remove(QStringLiteral("path"));
+        pendingDocumentSource.registration.remove(QStringLiteral("manifestPath"));
+        documentSources.insert(sourceId, pendingDocumentSource);
+        pendingDocumentSource = {};
+        const QString modelName = modelKind == QStringLiteral("four-rod") ? tr("Four-rod chain") : tr("Cantilever beam");
+        const QString itemText = tr("Current document · %1 · %2 · %3")
+            .arg(modelName, origin.value(QStringLiteral("sourceRevision")).toString(),
+                 result.value(QStringLiteral("registeredModelSha256")).toString().left(12));
+        modelChoice->addItem(itemText, modelKind);
+        const int index = modelChoice->count() - 1;
+        modelChoice->setItemData(index, sourceId, Qt::UserRole + 1);
+        modelChoice->setItemData(index, true, Qt::UserRole + 2);
+        modelChoice->setCurrentIndex(index);
+        updateSourceChoiceLabel(sourceId);
+        updateSelectedSourceStatus();
+        setActionAvailability();
+        return;
+    }
     const auto continuation = continuations.take(id);
     if (operation == "project.query" && continuation == "preview")
     {
@@ -278,17 +708,39 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
         const QString command = normalized.value("command").toString();
         const QString title = command == "workflow.configure" ? tr("Save configuration")
                               : command == "workflow.resume" ? tr("Continue selected calculation") : tr("Run control comparison");
-        previewText->setPlainText(tr("%1\nModel: %2\nTime step: %3 s\nConfigured steps: %4\nTarget damping ratio: %5\n%6")
+        QString summary = tr("%1\nModel: %2\nTime step: %3 s\nConfigured steps: %4\nTarget damping ratio: %5\n%6")
             .arg(title, configuration.value("model").toString())
             .arg(configuration.value("dt").toDouble()).arg(configuration.value("steps").toInt())
             .arg(configuration.value("targetDamping").toDouble())
             .arg(command == "workflow.resume" ? tr("Additional steps: %1").arg(normalized.value("parameters").toObject().value("additionalSteps").toInt())
-                                              : tr("FE results will be checked against an independent reference.")));
+                                              : tr("FE results will be checked against an independent reference."));
+        const QString sourceId = normalized.value(QStringLiteral("parameters")).toObject()
+                                     .value(QStringLiteral("sourceId")).toString();
+        const auto source = documentSources.constFind(sourceId);
+        if (!sourceId.isEmpty() && source != documentSources.cend())
+        {
+            QString reason;
+            const bool current = sourceRuntimeIsCurrent(source.value(), &reason);
+            summary += QStringLiteral("\n\n") + sourceDescription(source.value(), true) + QStringLiteral("\n") +
+                       (current ? tr("Origin document status: unchanged at preview.")
+                                : tr("Origin document status: stale — %1").arg(reason));
+        }
+        previewText->setPlainText(summary);
         status->setText(tr("Review the values, then apply this preview."));
         emit previewAvailable(preview);
     }
     else if (operation == "host.approve" && continuation == "execute")
-        request("command.execute", {{"previewId", preview.value("previewId")}, {"approvalToken", result.value("approvalToken")}});
+    {
+        if (!previewSourceIsCurrent())
+        {
+            commandInFlight = false;
+            preview = {};
+            previewText->setPlainText(tr("The captured document source changed while approval was being prepared. Capture a fresh snapshot before submitting."));
+            status->setText(tr("The source became stale before task submission; the approval token was discarded."));
+        }
+        else
+            request("command.execute", {{"previewId", preview.value("previewId")}, {"approvalToken", result.value("approvalToken")}});
+    }
     else if (operation == "command.execute")
     {
         commandInFlight = false; preview = {};
@@ -320,7 +772,10 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
             const QMap<QString, QString> labels{{"workflow.configure", tr("Settings")},
                 {"workflow.run", tr("Control run")}, {"workflow.resume", tr("Continuation")}};
             item->setText(0, labels.value(command, tr("Extension task")) + " · " + jobId.left(6));
-            item->setToolTip(0, tr("Created: %1\nTask: %2").arg(job.value("createdAt").toString(), jobId));
+            QString jobTooltip = tr("Created: %1\nTask: %2").arg(job.value("createdAt").toString(), jobId);
+            const auto jobBinding = job.value(QStringLiteral("modelBinding")).toObject();
+            if (!jobBinding.isEmpty()) jobTooltip += QStringLiteral("\n") + modelBindingSummary(jobBinding);
+            item->setToolTip(0, jobTooltip);
             item->setText(1, state == "succeeded" ? tr("Completed") : state);
             item->setText(2, job.value("createdAt").toString()); item->setData(1, Qt::UserRole, state);
             if (jobTree->currentItem() == item)
@@ -360,9 +815,11 @@ void WorkflowWidget::showResult(const QJsonObject &result)
 {
     displayedResult = result.value("jobId").toString();
     results->setRowCount(0);
+    const QString bindingSummary = modelBindingSummary(result.value(QStringLiteral("modelBinding")).toObject());
     if (!result.contains("active") && !result.contains("passive"))
     {
-        status->setText(tr("Configuration saved. You can now preview a calculation."));
+        status->setText(tr("Configuration saved. You can now preview a calculation.%1")
+                            .arg(bindingSummary.isEmpty() ? QString() : QStringLiteral("\n") + bindingSummary));
         emit resultDisplayed(result);
         return;
     }
@@ -383,8 +840,9 @@ void WorkflowWidget::showResult(const QJsonObject &result)
                 ? QString::number(data.value(row.first).toDouble(), 'g', 8) : tr("Not calculated")));
         }
     }
-    status->setText(tr("Verified %1 steps at %2 s. Results remain tied to this task's input snapshot.")
-        .arg(result.value("totalSteps").toInt()).arg(result.value("dtSeconds").toDouble()));
+    status->setText(tr("Verified %1 steps at %2 s. Results remain tied to this task's input snapshot.%3")
+        .arg(result.value("totalSteps").toInt()).arg(result.value("dtSeconds").toDouble())
+        .arg(bindingSummary.isEmpty() ? QString() : QStringLiteral("\n") + bindingSummary));
     emit resultDisplayed(result);
 }
 
@@ -400,10 +858,22 @@ void WorkflowWidget::setActionAvailability()
     connectButton->setEnabled(service.isReady() || service.isStopped());
     workspaceEdit->setEnabled(service.isStopped());
     trustedExtensions->setEnabled(service.isStopped());
-    configureButton->setEnabled(available); runButton->setEnabled(available);
+    QString sourceReason;
+    const QString sourceId = selectedSourceId();
+    const auto source = documentSources.constFind(sourceId);
+    const bool selectedSourceCurrent = sourceId.isEmpty() ||
+        (source != documentSources.cend() && sourceRuntimeStampMatches(source.value(), &sourceReason));
+    const auto normalized = preview.value(QStringLiteral("normalized")).toObject();
+    const auto previewParameters = normalized.value(QStringLiteral("parameters")).toObject();
+    const QString previewSourceId = previewParameters.value(QStringLiteral("sourceId")).toString();
+    const auto previewSource = documentSources.constFind(previewSourceId);
+    const bool previewRuntimeCurrent = previewSourceId.isEmpty() ||
+        (previewSource != documentSources.cend() && sourceRuntimeStampMatches(previewSource.value()));
+    sourceButton->setEnabled(service.isReady() && session && !sourceRegistrationInFlight);
+    configureButton->setEnabled(available && selectedSourceCurrent); runButton->setEnabled(available);
     modelChoice->setEnabled(!commandInFlight); dt->setEnabled(!commandInFlight);
     steps->setEnabled(!commandInFlight); damping->setEnabled(!commandInFlight);
-    applyButton->setEnabled(available && !preview.isEmpty());
+    applyButton->setEnabled(available && !preview.isEmpty() && previewRuntimeCurrent);
     const auto *item = jobTree->currentItem();
     const auto state = item ? item->data(1, Qt::UserRole).toString() : QString();
     resumeButton->setEnabled(available && state == "succeeded" && item &&

@@ -8,11 +8,15 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QSemaphore>
 #include <QTemporaryDir>
 #include <memory>
 
 #include <algorithm>
+#include <cmath>
+
+#include <rml_time_solver.h>
 
 #include <rbl_job.h>
 
@@ -109,6 +113,28 @@ bool loadTinyTruss(QTemporaryDir &directory, const QString &stem, Model &model, 
     ModelIO::save(model, target, false);
     if (sourceFileName) *sourceFileName = target;
     return model.getNNodes() > 0 && model.getNElements() > 0;
+}
+
+void configureSingleOutputDynamics(Model &model)
+{
+    constexpr uint steps = 400;
+    constexpr double timeStep = 0.001;
+    RStructuralDynamicsSetup &dynamics = model.getProblemSetup().getStructuralDynamicsSetup();
+    dynamics.setEnabled(true);
+    dynamics.setMethod(RStructuralTimeIntegrationMethod::Newmark);
+    dynamics.setTimeStep(timeStep);
+    dynamics.setNSteps(steps);
+    dynamics.setOutputFrequency(steps);
+
+    RTimeSolver &time = model.getTimeSolver();
+    time.setEnabled(true);
+    time.setInputStartTime(0.0);
+    time.setInputNTimeSteps(steps);
+    time.setInputTimeStepSize(timeStep);
+    time.setOutputFrequency(steps);
+    time.setComputedTime(0.0);
+    time.setTimes(RTimeSolver::findTimesVector(steps, 0.0, timeStep));
+    time.setCurrentTimeStep(0);
 }
 
 QTemporaryDir &linkedProjectWorkspace()
@@ -218,6 +244,7 @@ private slots:
         Model sourceA;
         QString sourcePathA;
         QVERIFY(loadTinyTruss(directory, QStringLiteral("source-a"), sourceA, &sourcePathA));
+        configureSingleOutputDynamics(sourceA);
         sourceA.setDescription(QStringLiteral("source A before submit"));
         const uint modelA = models.add(sourceA);
         const QString identityA = models.identity(modelA);
@@ -237,6 +264,13 @@ private slots:
         QVERIFY2(!jobId.isEmpty(), qPrintable(error));
         const QJsonObject queued = manager.jobQuery(jobId);
         QVERIFY(queued.value(QStringLiteral("found")).toBool());
+        QVERIFY(queued.value(QStringLiteral("provenanceFrozen")).toBool());
+        const QJsonObject queuedProvenance = queued.value(QStringLiteral("nativeResultProvenance")).toObject();
+        QCOMPARE(queuedProvenance.value(QStringLiteral("jobId")).toString(), jobId);
+        QCOMPARE(queuedProvenance.value(QStringLiteral("inputSnapshotSha256")).toString(),
+                 queued.value(QStringLiteral("inputSnapshotSha256")).toString());
+        QCOMPARE(queuedProvenance.value(QStringLiteral("inputPackageSha256")).toString(),
+                 queued.value(QStringLiteral("inputPackageSha256")).toString());
         QCOMPARE(queued.value(QStringLiteral("sourceRuntimeStamp")).toObject()
                      .value(QStringLiteral("documentId")).toString(), identityA);
         QCOMPARE(queued.value(QStringLiteral("sourceRuntimeStamp")).toObject()
@@ -320,6 +354,103 @@ private slots:
                  resultSourceBinding.value(QStringLiteral("resolvedSourcePath")).toString());
         QCOMPARE(resultSourceArtifacts.last().toObject().value(QStringLiteral("sha256")).toString(),
                  resultSourceBinding.value(QStringLiteral("savedArtifactHash")).toString());
+
+        QVERIFY(finished.value(QStringLiteral("nativeResultCatalogExpected")).toBool());
+        QVERIFY(finished.value(QStringLiteral("provenanceFrozen")).toBool());
+        QVERIFY(finished.value(QStringLiteral("resultManifestDescriptorReported")).toBool());
+        QVERIFY(finished.value(QStringLiteral("resultManifestVerified")).toBool());
+        QVERIFY(finished.value(QStringLiteral("nativeResultCatalogAvailable")).toBool());
+        const QJsonObject provenance = finished.value(QStringLiteral("nativeResultProvenance")).toObject();
+        QCOMPARE(provenance, queuedProvenance);
+        QCOMPARE(provenance.value(QStringLiteral("jobId")).toString(), jobId);
+        QCOMPARE(provenance.value(QStringLiteral("sourceRuntimeStamp")).toObject(),
+                 finished.value(QStringLiteral("sourceRuntimeStamp")).toObject());
+        QCOMPARE(provenance.value(QStringLiteral("sourceSnapshotRef")).toObject(),
+                 finished.value(QStringLiteral("sourceSnapshotRef")).toObject());
+        QCOMPARE(provenance.value(QStringLiteral("inputSnapshotSha256")).toString(),
+                 finished.value(QStringLiteral("inputSnapshotSha256")).toString());
+        QCOMPARE(provenance.value(QStringLiteral("inputPackageSha256")).toString(),
+                 finished.value(QStringLiteral("inputPackageSha256")).toString());
+        QCOMPARE(provenance.value(QStringLiteral("inputSnapshotSha256")).toString(), fileSha256(inputPath));
+        QCOMPARE(provenance.value(QStringLiteral("inputPackageSha256")).toString(),
+                 directorySha256(QFileInfo(inputPath).absolutePath()));
+        const QJsonObject runtime = provenance.value(QStringLiteral("runtime")).toObject();
+        QCOMPARE(runtime.value(QStringLiteral("scope")).toString(),
+                 QStringLiteral("solver-and-declared-controller-runtime/v1"));
+        QCOMPARE(runtime.value(QStringLiteral("fingerprintSha256")).toString().size(), 64);
+        QCOMPARE(provenance.value(QStringLiteral("proofScope")).toString(),
+                 QStringLiteral("solver-and-declared-controller-runtime/v1"));
+        const QJsonObject control = provenance.value(QStringLiteral("control")).toObject();
+        QVERIFY(!control.value(QStringLiteral("enabled")).toBool());
+        QVERIFY(control.value(QStringLiteral("controllerId")).toString().isEmpty());
+        QVERIFY(control.value(QStringLiteral("controllerVersionSha256")).toString().isEmpty());
+
+        const QString manifestPath = finished.value(QStringLiteral("resultManifestRef")).toString();
+        const QString resultDirectory = QFileInfo(resultPath).absolutePath();
+        QCOMPARE(QFileInfo(manifestPath).fileName(), QStringLiteral("native-result.manifest.json"));
+        QCOMPARE(QFileInfo(manifestPath).absolutePath(), resultDirectory);
+        QVERIFY(QFileInfo::exists(manifestPath));
+        QVERIFY(!QFileInfo(manifestPath).isSymLink());
+        QDir privateRunDirectory(resultDirectory);
+        QCOMPARE(privateRunDirectory.dirName(), QStringLiteral("result"));
+        QVERIFY(privateRunDirectory.cdUp());
+        QVERIFY(privateRunDirectory.dirName().startsWith(jobId + QLatin1Char('-')));
+        QVERIFY(privateRunDirectory.absolutePath().contains(QStringLiteral(".range-runs")));
+        QCOMPARE(finished.value(QStringLiteral("resultManifestSha256")).toString(), fileSha256(manifestPath));
+
+        QFile manifestFile(manifestPath);
+        QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+        const QJsonDocument manifestDocument = QJsonDocument::fromJson(manifestFile.readAll());
+        QVERIFY(manifestDocument.isObject());
+        const QJsonObject manifest = manifestDocument.object();
+        QCOMPARE(manifest.value(QStringLiteral("apiVersion")).toString(), QStringLiteral("range.native-results/v1"));
+        QCOMPARE(manifest.value(QStringLiteral("jobId")).toString(), jobId);
+        QCOMPARE(manifest.value(QStringLiteral("artifactId")).toString(),
+                 finished.value(QStringLiteral("resultArtifactId")).toString());
+        QCOMPARE(manifest.value(QStringLiteral("sourceRuntimeStamp")).toObject(),
+                 provenance.value(QStringLiteral("sourceRuntimeStamp")).toObject());
+        QCOMPARE(manifest.value(QStringLiteral("sourceSnapshotRef")).toObject(),
+                 provenance.value(QStringLiteral("sourceSnapshotRef")).toObject());
+        QCOMPARE(manifest.value(QStringLiteral("inputSnapshotSha256")).toString(),
+                 provenance.value(QStringLiteral("inputSnapshotSha256")).toString());
+        QCOMPARE(manifest.value(QStringLiteral("inputPackageSha256")).toString(),
+                 provenance.value(QStringLiteral("inputPackageSha256")).toString());
+        QCOMPARE(manifest.value(QStringLiteral("runtime")).toObject(), runtime);
+        QCOMPARE(manifest.value(QStringLiteral("control")).toObject(), control);
+        QCOMPARE(manifest.value(QStringLiteral("proofScope")).toString(),
+                 provenance.value(QStringLiteral("proofScope")).toString());
+        QCOMPARE(manifest.value(QStringLiteral("analysis")).toObject()
+                     .value(QStringLiteral("type")).toString(), QStringLiteral("structural-dynamics"));
+        QCOMPARE(manifest.value(QStringLiteral("logicalLatest")).toObject()
+                     .value(QStringLiteral("sha256")).toString(), fileSha256(resultPath));
+        QCOMPARE(manifest.value(QStringLiteral("logicalLatest")).toObject()
+                     .value(QStringLiteral("type")).toString(), QStringLiteral("LINK"));
+        QCOMPARE(manifest.value(QStringLiteral("sampleScope")).toString(),
+                 QStringLiteral("all-persisted-numbered-model-records"));
+        const QJsonArray availableVariables = manifest.value(QStringLiteral("availableVariables")).toArray();
+        QVERIFY(std::any_of(availableVariables.cbegin(), availableVariables.cend(), [](const QJsonValue &value)
+        {
+            return value.toString() == QStringLiteral("var-displacement");
+        }));
+
+        const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
+        QCOMPARE(frames.size(), 1);
+        const QJsonObject frame = frames.first().toObject();
+        QCOMPARE(frame.value(QStringLiteral("recordNo")).toInt(), 400);
+        QVERIFY(std::fabs(frame.value(QStringLiteral("timeS")).toDouble() - 0.4) < 1e-12);
+        const QString frameRelativePath = frame.value(QStringLiteral("relativePath")).toString();
+        QCOMPARE(QFileInfo(frameRelativePath).fileName(), frameRelativePath);
+        const QString framePath = QDir(resultDirectory).filePath(frameRelativePath);
+        QCOMPARE(QFileInfo(framePath).absolutePath(), resultDirectory);
+        QVERIFY(QFileInfo::exists(framePath));
+        QVERIFY(!QFileInfo(framePath).isSymLink());
+        QCOMPARE(frame.value(QStringLiteral("sha256")).toString(), fileSha256(framePath));
+        QCOMPARE(frame.value(QStringLiteral("nodePhysicalIdMapSha256")).toString(),
+                 manifest.value(QStringLiteral("nodePhysicalIdMapSha256")).toString());
+        QCOMPARE(manifest.value(QStringLiteral("terminalModel")).toObject()
+                     .value(QStringLiteral("relativePath")).toString(), frameRelativePath);
+        QCOMPARE(manifest.value(QStringLiteral("terminalModel")).toObject()
+                     .value(QStringLiteral("sha256")).toString(), frame.value(QStringLiteral("sha256")).toString());
 
         Model capturedInput;
         ModelIO::open(capturedInput, inputPath);
@@ -538,8 +669,16 @@ private slots:
         const QJsonObject finishedA = manager.jobQuery(jobA);
         QVERIFY(finishedA.value(QStringLiteral("resultReadbackComplete")).toBool());
         QVERIFY(finishedA.value(QStringLiteral("resultArtifactVerified")).toBool());
+        QVERIFY(finishedA.value(QStringLiteral("resultManifestVerified")).toBool());
+        QVERIFY(finishedA.value(QStringLiteral("nativeResultCatalogAvailable")).toBool());
         const QString resultPathA = finishedA.value(QStringLiteral("resultArtifactRef")).toString();
         QCOMPARE(finishedA.value(QStringLiteral("resultArtifactSha256")).toString(), fileSha256(resultPathA));
+        QFile staticManifestFile(finishedA.value(QStringLiteral("resultManifestRef")).toString());
+        QVERIFY(staticManifestFile.open(QIODevice::ReadOnly));
+        const QJsonObject staticManifest = QJsonDocument::fromJson(staticManifestFile.readAll()).object();
+        QCOMPARE(staticManifest.value(QStringLiteral("analysis")).toObject()
+                     .value(QStringLiteral("type")).toString(), QStringLiteral("static"));
+        QVERIFY(staticManifest.value(QStringLiteral("frames")).toArray().isEmpty());
     }
 };
 

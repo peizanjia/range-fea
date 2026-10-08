@@ -1,5 +1,14 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+qt_add_executable(tst_native_result_journal tst_native_result_journal.cpp ../src/native_result_journal.cpp)
+target_include_directories(tst_native_result_journal PRIVATE ../src)
+target_link_libraries(tst_native_result_journal PRIVATE range-solver-lib Qt6::Test)
+add_test(NAME tst_native_result_journal COMMAND tst_native_result_journal)
+if(WIN32)
+    set_tests_properties(tst_native_result_journal PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 qt_add_executable(tst_native_progress_journal
     tst_native_progress_journal.cpp ../src/native_progress_journal.cpp)
 target_include_directories(tst_native_progress_journal PRIVATE ../src)

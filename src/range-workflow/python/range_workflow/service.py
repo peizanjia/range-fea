@@ -295,8 +295,19 @@ class WorkflowService:
                 raise WorkflowError("PROJECT_ID_CONFLICT", "Host catalog and workflow state belong to different projects")
             return {k: copy.deepcopy(self._state[k]) for k in
                     ("projectId", "modelId", "sessionId", "revision", "configuration")} | {
-                    "busy": self._busy("project"), "template": self._state["configuration"].get("model", "four-rod"),
-                    "catalog": catalog, "modelBinding": {"kind": "template", "usesOpenDocument": False}}
+                    "busy": self._busy("project"), "template": (None if "sourceId" in self._state["configuration"]
+                        else self._state["configuration"].get("model", "four-rod")),
+                    "catalog": catalog, "modelBinding": self._model_binding(self._state["configuration"])}
+
+    def _model_binding(self, configuration: dict) -> dict:
+        if "sourceId" not in configuration:
+            return {"kind": "template", "usesOpenDocument": False}
+        from .model_sources import read_model_source
+        source = read_model_source(self.workspace, configuration["sourceId"])
+        return {"kind": "native-snapshot", "usesOpenDocument": True,
+                "sourceId": source["sourceId"], "originRef": source["originRef"],
+                "registeredModelSha256": source["registeredModelSha256"],
+                "sourceManifestSha256": source["manifestSha256"]}
 
     def result_snapshot(self, job_id: str) -> dict:
         with self._lock:
@@ -353,13 +364,26 @@ class WorkflowService:
     def _normalize_builtin(self, command: str, parameters: dict, state=None) -> dict:
         state = state if state is not None else self._state
         if command == "workflow.configure":
-            exact(parameters, {"dt", "steps", "targetDamping"}, {"model"})
+            exact(parameters, {"dt", "steps", "targetDamping"}, {"model", "sourceId"})
+            source_id = identifier(parameters["sourceId"], "sourceId") if "sourceId" in parameters else None
+            if "sourceId" not in parameters and "model" not in parameters:
+                source_id = state["configuration"].get("sourceId")
             model = parameters.get("model", state["configuration"].get("model", "four-rod"))
+            if source_id is not None:
+                from .model_sources import read_model_source
+                source = read_model_source(self.workspace, identifier(source_id, "sourceId"))
+                source_kind = source["descriptor"]["modelKind"]
+                if "model" in parameters and model != source_kind:
+                    raise WorkflowError("SOURCE_MODEL_MISMATCH", "The requested family differs from the registered source")
+                model = source_kind
             if not isinstance(model, str) or model not in TEMPLATES:
                 raise WorkflowError("INVALID_PARAMETERS", "model must be four-rod or cantilever-beam")
-            return {"dt": number(parameters["dt"], "dt", 0, 0.02),
-                    "steps": integer(parameters["steps"], "steps", 1, MAX_STEPS),
-                    "targetDamping": number(parameters["targetDamping"], "targetDamping", 0, 0.5), "model": model}
+            normalized = {"dt": number(parameters["dt"], "dt", 0, 0.02),
+                          "steps": integer(parameters["steps"], "steps", 1, MAX_STEPS),
+                          "targetDamping": number(parameters["targetDamping"], "targetDamping", 0, 0.5), "model": model}
+            if source_id is not None:
+                normalized["sourceId"] = source_id
+            return normalized
         if command == "workflow.run":
             exact(parameters, {"mode", "independentReference"})
             if parameters["mode"] not in ("active", "passive", "both") or parameters["independentReference"] is not True:
@@ -388,6 +412,12 @@ class WorkflowService:
                  "analysis": self.examples / "stage9_analysis.py",
                  "controller": self.examples / "stage9_velocity_controller.py",
                  "controllerHost": Path(__file__).with_name("controller_host.py")}
+        if "sourceId" in configuration:
+            from .model_sources import read_model_source
+            source = read_model_source(self.workspace, configuration["sourceId"])
+            paths.pop("template")
+            paths["modelInput"] = Path(source["path"])
+            paths["sourceManifest"] = Path(source["manifestPath"])
         if command == "workflow.resume":
             for artifact in self._job(parameters["jobId"])["artifacts"]:
                 # Bind every original accepted artifact, including original script/gain paths.
@@ -452,6 +482,27 @@ class WorkflowService:
             exact(p, {"persistentDocumentId"})
             from .project_catalog import resolve_project_snapshot
             return resolve_project_snapshot(self.workspace, p["persistentDocumentId"])
+        if operation == "model.source.register":
+            exact(p, {"catalogRoot", "snapshotRef"})
+            if not isinstance(p["catalogRoot"], str) or not isinstance(p["snapshotRef"], dict):
+                raise WorkflowError("INVALID_PARAMETERS", "A trusted catalog root and snapshot reference are required")
+            from .model_sources import register_snapshot_source
+            source = register_snapshot_source(self.workspace, Path(p["catalogRoot"]), p["snapshotRef"], self.native)
+            self._commit(copy.deepcopy(self._state), "model.source.register", "registered",
+                         parameters={"sourceId": source["sourceId"], "originRef": source["originRef"]})
+            return {key: value for key, value in source.items() if key not in {"path", "manifestPath"}}
+        if operation == "model.sources.query":
+            exact(p, set(), {"offset", "limit"})
+            from .model_sources import list_model_sources
+            result = list_model_sources(self.workspace, p.get("offset", 0), p.get("limit", 50))
+            result["sources"] = [{key: value for key, value in source.items()
+                                  if key not in {"path", "manifestPath"}} for source in result["sources"]]
+            return result
+        if operation == "model.source.query":
+            exact(p, {"sourceId"})
+            from .model_sources import read_model_source
+            source = read_model_source(self.workspace, identifier(p["sourceId"], "sourceId"))
+            return {key: value for key, value in source.items() if key not in {"path", "manifestPath"}}
         if operation in ("jobs.query", "results.query"):
             exact(p, set(), {"jobId"})
             if "jobId" in p:
@@ -751,15 +802,25 @@ class WorkflowService:
                 "range.extension/v1/manifest", "range.extension/v1/numeric-series", "range.extension/v1/statistics"]}}),
             "knowledge.query": schema({"query": {"type": "string", "maxLength": 256},
                                         "extensionId": id_schema}, ["query"])}
+        operation_parameters["model.source.register"] = schema({"catalogRoot": {"type": "string"},
+                                                               "snapshotRef": {"type": "object"}})
+        operation_parameters["model.sources.query"] = schema({"offset": {"type": "integer", "minimum": 0},
+                                                             "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])
+        operation_parameters["model.source.query"] = schema({"sourceId": id_schema})
         read_operations = {"capabilities.query", "project.query", "project.catalog.query", "project.snapshot.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
+                           "model.sources.query", "model.source.query",
                            "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
         operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]
+        for item in operations:
+            if item["id"] == "model.source.register":
+                item["trustedOwnerOnly"] = True
         commands = [{"id": "workflow.configure", "readOnly": False, "requiresApproval": True,
                      "parameters": schema({"dt": {"type": "number", "exclusiveMinimum": 0, "maximum": .02, "description": "Time step in seconds"},
                                            "steps": {"type": "integer", "minimum": 1, "maximum": MAX_STEPS},
                                            "targetDamping": {"type": "number", "exclusiveMinimum": 0, "maximum": .5, "description": "Dimensionless modal damping ratio"},
-                                           "model": {"type": "string", "enum": list(TEMPLATES), "description": "Omission preserves the selected template"}},
+                                           "model": {"type": "string", "enum": list(TEMPLATES), "description": "Explicit family chooses its legacy template unless sourceId is provided; omission preserves the current source"},
+                                           "sourceId": id_schema},
                                           ["dt", "steps", "targetDamping"])},
                     {"id": "workflow.run", "readOnly": False, "requiresApproval": True,
                      "parameters": schema({"mode": {"type": "string", "enum": ["active", "passive", "both"]},

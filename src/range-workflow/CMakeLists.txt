@@ -1,4 +1,4 @@
-qt_add_executable(range-workflow-native native/main.cpp)
+qt_add_executable(range-workflow-native native/main.cpp native/import_model.cpp native/import_model.h)
 target_link_libraries(range-workflow-native PRIVATE range-model-lib Qt6::Core)
 set_target_properties(range-workflow-native PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
 install(TARGETS range-workflow-native RUNTIME DESTINATION bin COMPONENT Application)
@@ -31,6 +31,30 @@ if(RANGE_BUILD_TESTS)
     add_executable(range-workflow-fixture EXCLUDE_FROM_ALL tests/generate_beam.cpp)
     target_include_directories(range-workflow-fixture PRIVATE "${CMAKE_SOURCE_DIR}/range-solver-lib/tests")
     target_link_libraries(range-workflow-fixture PRIVATE range-model-lib Qt6::Core)
+    add_executable(range-workflow-native-import-fixture tests/generate_native_import.cpp)
+    target_link_libraries(range-workflow-native-import-fixture PRIVATE range-model-lib Qt6::Core)
+    add_test(NAME tst_workflow_native_import COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_import.py"
+        "$<TARGET_FILE:range-workflow-native>" "$<TARGET_FILE:range-workflow-native-import-fixture>" -v)
+    add_test(NAME tst_workflow_model_sources COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_model_sources.py" -v)
+    set_tests_properties(tst_workflow_native_import tst_workflow_model_sources PROPERTIES TIMEOUT 120)
+    add_test(NAME tst_workflow_source_reference COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_reference.py" -v)
+    add_test(NAME tst_workflow_imported_runtime COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_imported_workflow.py"
+        --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+        --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+        --python "${Python3_EXECUTABLE}" -v)
+    set_tests_properties(tst_workflow_imported_runtime PROPERTIES TIMEOUT 300)
+    if(WIN32)
+        set_tests_properties(tst_workflow_imported_runtime PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    if(WIN32)
+        set_tests_properties(tst_workflow_native_import PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME tst_workflow_native COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native.py"
         "$<TARGET_FILE:range-workflow-native>"

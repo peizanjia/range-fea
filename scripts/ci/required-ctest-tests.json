@@ -42,7 +42,8 @@
       "tst_model_command_session",
       "tst_model_command_cli",
       "tst_project_catalog",
-      "tst_model_command_service"
+      "tst_model_command_service",
+      "tst_native_result_broker"
     ],
     "range-solver-lib": [
       "tst_scales",
@@ -92,7 +93,8 @@
       "tst_structural_thermo_coupled_1d",
       "tst_structural_thermo_coupled_fe_adapter",
       "tst_structural_thermo_monolithic_1d",
-      "tst_structural_thermo_monolithic_1d_fe_adapter"
+      "tst_structural_thermo_monolithic_1d_fe_adapter",
+      "tst_native_result_frame_observer"
     ],
     "fea-solver": [
       "tst_control_tcp_bridge",
@@ -107,7 +109,8 @@
       "tst_control_ndjson_transport",
       "tst_solver_audit_cli",
       "tst_control_typed_ndjson_transport",
-      "tst_native_progress_journal"
+      "tst_native_progress_journal",
+      "tst_native_result_journal"
     ],
     "gui-contract": [
       "tst_modal_command_widget",
@@ -124,12 +127,16 @@
     ],
     "range-workflow": [
       "tst_workflow_native",
+      "tst_workflow_native_import",
+      "tst_workflow_model_sources",
       "tst_workflow_runtime",
       "tst_workflow_telemetry",
       "tst_workflow_project_catalog",
       "tst_workflow_extensions",
       "tst_private_python_packaging",
-      "tst_native_document_sdk"
+      "tst_native_document_sdk",
+      "tst_workflow_source_reference",
+      "tst_workflow_imported_runtime"
     ],
     "range-ai-lib": [
       "tst_agent_tool_turn"
