@@ -94,8 +94,8 @@
     {
       "id": "WF-02",
       "title": "Native context, commands, and solve",
-      "status": "in_progress",
-      "statusReason": "实施共享模型操作/群组持久physicalId与原生文档逐作业求解；GUI/CLI/SDK/Agent共用验证，WF03等待本任务验收后启动。",
+      "status": "done",
+      "statusReason": "WF-02 八项受限验收完成：共享模型命令/控制上下文、持久群组ID、冻结原生作业/进度/取消/独立结果、焦点和审计保护；115/115、Windows14/14、安装SDK及知识查询通过，Sol high实质问题闭合。",
       "priority": "P0",
       "effort": "L",
       "dependsOn": [
@@ -125,7 +125,64 @@
         "src/fea/src/time_solver_setup_widget.cpp",
         "src/range-application-lib/src/rmodel_command_session.cpp"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A01",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A02",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A03",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A04",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A05",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A06",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A07",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A08",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        }
+      ]
     },
     {
       "id": "WF-03",

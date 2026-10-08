@@ -2,14 +2,20 @@
 
 ## 2026-10-08 WF-01 → WF-02 → WF-04 → WF-05 实施中
 
+- 当前断点：WF-01 已验收，根实现 `9ecad58`、验收 `58a5405`。WF-02 已完成八项受限验收并在 JSON 标为 done；基础实现 `dcd11ef`、最终实现冻结 `1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d`，模型子模块 `9d6a60ed42bab535ad5b8bda193092d3c38deed4`。原生 MODEL 1.3.18 持久群组ID已交付，真实旧 1.3.17 ASCII/binary fixtures 未改字节。
+- 最终证据：`docs/acceptance/WF-02.md`；忽略目录 `build/audit-20261008/WF-02/acceptance-build.log` 全目标通过、`acceptance-full-ctest.log` 115/115（282.41s）、`acceptance-native-window.txt` Windows14/14无跳过（13.469s）、安装私有SDK/CLI与知识查询通过；必跑115注册、CI工具14/14。首次 full-ctest.log 和各种 focused/focus 失败保留作追踪，不作为最终通过证据。
+- 修复已由 Sol high 独立复审及实际回归闭合：sourceStamp三字段/锁重入、frozen body实际读入、manual来源关闭后取消、编辑结果不复用、V1 nullable轴无损日志/Undo审计失败幂等、真实progress结束消息、完整MODEL/LINK resultSourceBinding/terminal单独篡改、duplicate结果副本身份捕获；另补接受控制配置只读分页（uint64 seed字符串）及同一UUID编辑器焦点/光标/反向选区保持。真实窗口用鼠标选文档并以键盘输入草稿；只读查询/另一文档刷新/重建均保留焦点和接受版本。测试当前itemWidget避免退休控件，GUI/Session选择通过实际鼠标同步。
+- 所有权：native-model worker 只改群组 IDs/IO；application-lib worker 只改 shared service/session；nativeJobs worker 只改 GUI solver manager/task/startdialog/新registry测试；GUIhost worker 只改 host/新operations测试；CLI/SDK worker 与 Agent runner worker 各自文件；native progress writer worker 只改 fea-solver 侧。根拥有 CMake/必跑清单/测试 dispatcher/旧 snapshot 测试集成，禁止并行写同一文件。新测试名：tst_model_command_service、tst_native_progress_journal、tst_native_job_registry、tst_gui_model_operations、tst_native_document_sdk。
+- 用户授权仅在额度剩余 1% 或 0% 时使用重置卡，并已在设置开启授权。2026-10-08 已按官方 app-server 协议找到本地 `codex app-server --stdio` 入口，`account/rateLimits/read` 实测 codex 剩余 4%、重置卡 3 张，因此未使用。直接 proxy 入口连接失败，CLI stdio 成功；不读/打印凭据、不重新登录、不启动模型线程。忽略目录 `build/audit-20261008/WF-02/codex_usage_probe.py --stdio --redeem` 每次先读实时值，仅在有效 codex 窗口剩余 0–1% 且有卡时调用官方 `account/rateLimitResetCredit/consume`，持久保存同次兑换的幂等键，事后重新读取额度；未达到阈值不消费。官方说明 `https://learn.chatgpt.com/docs/app-server#8-earned-rate-limit-resets-chatgpt`。
+- 本轮兑换记录：后续实时读取降到 1% 时执行一张，官方返回 outcome=reset，事后额度 100%；再次独立读取确认可用卡从 3 张变为 2 张。没有提前消费，没有使用其它应用账户的 quota 接口；后续仍须每次重新读取，再按 1%/0% 阈值执行。
 - 当前用户已授权依次完整实现上述任务，随后补充 WF-02 验收后可以启动 WF-03；WF-03/04 可按文件所有权并行。不是继续停留在规划，也不能直接从扩展或恢复跳过基础。
-- 配置/技能已重新读取：常规子代理 Luna max，独立 reviewer 为 GPT-6.1 Sol high；根模型/用户配置不改。当前根基线 `a417852`，WF-01 为 in_progress，其他 WF 尚未启动实施；WF-02/04/05 只读准备中。
-- WF-01 已有未提交的共享 `RProjectCatalog`、JSON CLI、GUI Session/草稿/快照接线与 Python 只读目录接口。根负责主窗口/host/CMake/协议集成；子代理分别拥有 application-lib 目录模块和 GUI Session/ModelIO/editor 文件，构建串行由根执行。
+- 配置/技能已重新读取：常规子代理 Luna max，独立 reviewer 为 GPT-6.1 Sol high；根模型/用户配置不改。规划起点为 `a417852`，实际状态见顶部断点及 JSON。
+- WF-01 共享 `RProjectCatalog`、JSON CLI、GUI Session/草稿/快照接线与 Python 只读目录接口已进入实现冻结提交；构建/测试/安装由根串行执行。
 - 已关闭 Sol high 的身份/租约/保存来源/草稿/线程等审查问题；真实测试另修复了条件列表选择误标修改、Session.clear 串用全局实例、读取规范化与重载保留时间输入误报已保存。恢复草稿有可见 Keep accepted value 操作，清除描述与输入缓存但不产生数值修改/Undo。原生格式仍是 1.3.17。
 - 最终全目标 Release 构建成功；110/110 完整 CTest 通过（270.43s），必跑清单 110/110 注册；CI 工具 14/14、项目 Session 27/27、真实 Windows 两故事 4/4 均通过。Windows 截图已人工查看，包含实际可见 Solver/Problem 页与草稿按钮的鼠标点击。首次失败的日志是故障追踪，不作为最终通过证据。原始日志位于 `build/audit-20261008/WF-01/`。
 - 更新 `build/stage12-install` 后，安装目录 range-project 与私有 Python 3.13.5/NumPy 2.2.6/SciPy 1.15.3 的真实 WorkflowClient 子进程完成目录→冻结模型→版本/哈希/单位一致性验证；未借用系统 SDK，也未用模板结果冒充当前文档求解。
-- 模型子模块由根新增 `RModel::nativeWritePaths()` 并让 `write()` 共用其路径规则；不改变模型格式。之后必须先验证/提交子模块，再提交根集成与 WF-01 逐条证据。
-- 下一步：提交实现冻结与 WF-01-A01..A07 证据/状态，再实施 WF-02。WF-02 验收后按用户追加指令启动 WF-03，并允许与 WF-04 在明确文件所有权下并行，之后完成 WF-05。WF-02 的只读准备已核对群组持久 physicalId、新原生格式 1.3.18 的兼容分支、共享模型操作核心与逐作业求解/取消接口；这些接口尚未实施或发布。
+- 模型子模块新增 `RModel::nativeWritePaths()` 已先提交 `eb3cb99`；根 `9ecad58` 集成并由 `58a5405` 记录 WF-01 七项验收证据。其验收冻结模型格式为 1.3.17，后续 WF-02 格式变化另验收。
+- 下一步：按用户追加指令启动 WF-03，并与 WF-04 在明确文件所有权下并行，之后完成 WF-05。只读准备已确认 WorkflowWidget/Service 仍是模板路径，Session项目目录与控制工作区分开；WF03先冻结可机检的受限导入矩阵，再显式桥接哈希绑定的当前文档快照。WF04新增原生结果/通道broker，不能把reference.json或progress当实际FE时程。两者共用service.py/workflow_widget.cpp的集成文件由根统一拥有，禁止同时写；标准接口从已验收WF02出发。
 
 ## 2026-10-08 全工作流规划与开发 Agent 执行入口
 
