@@ -23,7 +23,8 @@ def valid_descriptor(source_sha: str) -> dict:
               "initialRotationRad": [0.0, 0.0, 0.0], "initialAngularVelocityRadS": [0.0, 0.0, 0.0]}
              for index, physical_id in enumerate(node_ids)]
     material = {"youngModulusPa": 2.0e5, "densityKgM3": 1000.0, "poissonRatio": 0.3}
-    section = {"areaM2": 0.01, "iyM4": 0.0, "izM4": 0.0, "torsionM4": 0.0}
+    section = {"areaM2": 0.01, "iyM4": 0.0, "izM4": 0.0, "torsionM4": 0.0,
+               "wyM3": None, "wzM3": None, "wtM3": None}
     elements = [{"type": "truss1", "physicalId": 8000 + index,
                  "nodePhysicalIds": [node_ids[index], node_ids[index + 1]],
                  "material": material, "section": section}
@@ -49,7 +50,8 @@ def valid_descriptor(source_sha: str) -> dict:
             "pointElements": point_elements,
             "freeDofs": free_dofs, "supports": supports,
             "ports": {"force": {"id": "source-tip-force", "nodePhysicalId": node_ids[-1],
-                                 "globalDirection": [1.0, 0.0, 0.0], "unit": "N", "kind": "nodal_force"},
+                                 "globalDirection": [1.0, 0.0, 0.0], "unit": "N", "kind": "nodal_force",
+                                 "minimum": -1e6, "maximum": 1e6},
                       "velocity": {"id": "source-tip-velocity", "nodePhysicalId": node_ids[-1],
                                     "globalDirection": [1.0, 0.0, 0.0], "unit": "m/s", "kind": "velocity"}},
             "dynamics": {"enabled": True, "method": "newmark", "massMatrix": "consistent",
@@ -62,7 +64,57 @@ def valid_descriptor(source_sha: str) -> dict:
             "diagnostics": []}
 
 
+def valid_beam_descriptor(source_sha):
+    value = valid_descriptor(source_sha)
+    value["modelKind"] = "cantilever-beam"
+    value["nodes"] = [value["nodes"][0], value["nodes"][-1]]
+    value["nodes"][1]["position"] = 1
+    root, tip = (node["physicalId"] for node in value["nodes"])
+    element = copy.deepcopy(value["elements"][0])
+    element.update(type="beam1", nodePhysicalIds=[root, tip])
+    element["section"] = {"areaM2": 0.01, "iyM4": 0.001, "izM4": 0.001, "torsionM4": 0.002,
+                           "wyM3": 0.01, "wzM3": 0.01, "wtM3": 0.02}
+    value["elements"] = [element]
+    value["pointElements"] = [{"physicalId": 9000, "nodePhysicalId": root},
+                              {"physicalId": 9001, "nodePhysicalId": tip}]
+    axes = {"X": [1.0, 0.0, 0.0], "Y": [0.0, 1.0, 0.0], "Z": [0.0, 0.0, 1.0]}
+    def dof(node_id, name):
+        return {"nodePhysicalId": node_id, "physicalDof": name, "globalDirection": axes[name[1]],
+                "unit": "m" if name.startswith("U") else "rad"}
+    value["freeDofs"] = [dof(tip, "UY"), dof(tip, "RZ")]
+    value["supports"] = [{**dof(node_id, name), "value": 0.0}
+                         for node_id, names in ((root, ("UX", "UY", "UZ", "RX", "RY", "RZ")),
+                                               (tip, ("UX", "UZ", "RX", "RY"))) for name in names]
+    for port in value["ports"].values():
+        port.update(nodePhysicalId=tip, globalDirection=axes["Y"])
+    return value
+
+
 class ModelSourcesTest(unittest.TestCase):
+    def test_beam_requires_actual_positive_recovery_moduli(self):
+        descriptor = valid_beam_descriptor("b" * 64)
+        model_sources._validate_descriptor(descriptor, "b" * 64)
+        for field in ("wyM3", "wzM3", "wtM3"):
+            for bad_value in (None, 0.0, -1.0):
+                broken = copy.deepcopy(descriptor)
+                broken["elements"][0]["section"][field] = bad_value
+                with self.subTest(field=field, value=bad_value), self.assertRaises(WorkflowError):
+                    model_sources._validate_descriptor(broken, "b" * 64)
+
+    def test_descriptor_accepts_internal_position_permutation_and_rejects_bad_bounds(self):
+        descriptor = valid_descriptor("a" * 64)
+        for node, position in zip(descriptor["nodes"], (2, 4, 1, 3, 0)):
+            node["position"] = position
+        self.assertEqual(model_sources._validate_descriptor(descriptor, "a" * 64), descriptor)
+        for element in descriptor["elements"]:
+            element["section"].update(iyM4=None, izM4=None, torsionM4=None)
+        self.assertEqual(model_sources._validate_descriptor(descriptor, "a" * 64), descriptor)
+        for limits in ((0, 1e6), (-1e6, -1), (-1e6, True)):
+            broken = copy.deepcopy(descriptor)
+            broken["ports"]["force"].update(minimum=limits[0], maximum=limits[1])
+            with self.assertRaises(WorkflowError):
+                model_sources._validate_descriptor(broken, "a" * 64)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="range-model-sources-")
         self.root = Path(self.temporary.name).resolve()
@@ -226,6 +278,26 @@ class ModelSourcesTest(unittest.TestCase):
                 model_sources._invoke_native_describe(self.native, self.snapshot_path, self.model_sha)
         self.assertEqual(failed.exception.code, "NATIVE_PREFLIGHT_OUTPUT_LIMIT")
         self.assertTrue(process.killed)
+
+    def test_rejected_native_source_keeps_bounded_field_diagnostics(self):
+        rejected = {"apiVersion": model_sources.PROTOCOL_VERSION, "status": "rejected",
+            "diagnostics": [{"code": "INVALID_SECTION_MODULUS", "severity": "error",
+                "path": "lines[0].section.wyM3", "message": "Wy must be positive\n" + "x" * 1000}] * 20}
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = io.BytesIO(json.dumps(rejected).encode("utf-8"))
+                self.stderr = io.BytesIO()
+                self.returncode = 3
+            def wait(self, timeout=None): return self.returncode
+            def kill(self): self.returncode = -9
+        with mock.patch.object(model_sources.subprocess, "Popen", return_value=FakeProcess()):
+            with self.assertRaises(WorkflowError) as failed:
+                model_sources._invoke_native_describe(self.native, self.snapshot_path, self.model_sha)
+        self.assertEqual(failed.exception.code, "NATIVE_PREFLIGHT_REJECTED")
+        self.assertIn("lines[0].section.wyM3", str(failed.exception))
+        self.assertIn("INVALID_SECTION_MODULUS", str(failed.exception))
+        self.assertNotIn("\n", str(failed.exception))
+        self.assertLess(len(str(failed.exception)), 1700)
 
 
 if __name__ == "__main__":

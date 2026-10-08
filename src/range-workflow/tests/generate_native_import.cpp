@@ -3,6 +3,7 @@
 #include <QFileInfo>
 
 #include <stdexcept>
+#include <cmath>
 
 #include <rml_boundary_condition.h>
 #include <rml_initial_condition.h>
@@ -54,22 +55,24 @@ void enableDynamics(RModel &model)
     model.getProblemSetup().setMassMatrixType(RMassMatrixType::Consistent);
 }
 
-RModel makeRod(bool rotated, bool nonzeroSupport, bool force, bool freeAxisGravity)
+RModel makeRod(bool rotated, bool nonzeroSupport, bool force, bool freeAxisGravity, bool permuted = false)
 {
     RModel model;
     model.setNNodes(5);
     const double x[5] = {0.0, 0.4, 1.15, 2.35, 4.7};
     const uint nodeIds[5] = {4001, 87, 625, 1009, 51000};
+    const uint storage[5] = {2, 4, 1, 3, 0};
+    const auto nodePosition = [&](uint rank) { return permuted ? storage[rank] : rank; };
     for (uint i = 0; i < 5; ++i)
     {
-        model.getNode(i).set(rotated ? 0.0 : x[i], rotated ? x[i] : 2.5, -0.75);
-        model.setNodePhysicalId(i, nodeIds[i]);
+        model.getNode(nodePosition(i)).set(rotated ? 0.0 : x[i], rotated ? x[i] : 2.5, -0.75);
+        model.setNodePhysicalId(nodePosition(i), nodeIds[i]);
     }
     for (uint i = 0; i < 4; ++i)
     {
         RElement truss(R_ELEMENT_TRUSS1);
-        truss.setNodeId(0, i);
-        truss.setNodeId(1, i + 1);
+        truss.setNodeId(0, nodePosition(i));
+        truss.setNodeId(1, nodePosition(i + 1));
         model.addElement(truss, true, 0);
         model.setElementPhysicalId(i, 8101 + 53 * i);
     }
@@ -91,7 +94,7 @@ RModel makeRod(bool rotated, bool nonzeroSupport, bool force, bool freeAxisGravi
     for (uint i = 0; i < 6; ++i)
     {
         RElement point(R_ELEMENT_POINT);
-        point.setNodeId(0, pointNodes[i]);
+        point.setNodeId(0, nodePosition(pointNodes[i]));
         model.addElement(point, true, i);
         model.setElementPhysicalId(4 + i, 9101 + 47 * i);
     }
@@ -124,25 +127,40 @@ RModel makeRod(bool rotated, bool nonzeroSupport, bool force, bool freeAxisGravi
     return model;
 }
 
-RModel makeBeam(bool badSupport, bool freeAxisGravity = false)
+RModel makeBeam(bool badSupport, bool freeAxisGravity = false, bool permuted = false,
+                bool recoveryModuli = true)
 {
     RModel model;
     model.setNNodes(2);
-    model.getNode(0).set(0.0, 1.25, -0.5);
-    model.getNode(1).set(3.3, 1.25, -0.5);
-    model.setNodePhysicalId(0, 4093);
-    model.setNodePhysicalId(1, 117);
+    const uint rootPosition = permuted ? 1 : 0;
+    const uint tipPosition = permuted ? 0 : 1;
+    model.getNode(rootPosition).set(0.0, 1.25, -0.5);
+    model.getNode(tipPosition).set(3.3, 1.25, -0.5);
+    model.setNodePhysicalId(rootPosition, 4093);
+    model.setNodePhysicalId(tipPosition, 117);
     RElement beam(R_ELEMENT_BEAM1);
-    beam.setNodeId(0, 0);
-    beam.setNodeId(1, 1);
+    beam.setNodeId(0, rootPosition);
+    beam.setNodeId(1, tipPosition);
     model.addElement(beam, true, 0);
     model.setElementPhysicalId(0, 7007);
     RLine &line = model.getLine(0);
     line.setMaterial(material(5.1e9, 3210.0, 0.23));
-    line.setCrossArea(0.007);
-    line.setSecondMomentY(0.0011);
-    line.setSecondMomentZ(0.0015);
-    line.setTorsionalConstant(0.0009);
+    // Circular tube: A = pi*(Ro^2-Ri^2), I = A*(Ro^2+Ri^2)/4,
+    // J = 2I; bending and Saint-Venant recovery moduli are I/Ro and J/Ro.
+    const double area = 0.007;
+    const double outerRadius = 0.08;
+    const double innerRadiusSquared = outerRadius * outerRadius - area / std::acos(-1.0);
+    const double secondMoment = area * (outerRadius * outerRadius + innerRadiusSquared) / 4.0;
+    line.setCrossArea(area);
+    line.setSecondMomentY(secondMoment);
+    line.setSecondMomentZ(secondMoment);
+    line.setTorsionalConstant(2.0 * secondMoment);
+    if (recoveryModuli)
+    {
+        line.setSectionModulusY(secondMoment / outerRadius);
+        line.setSectionModulusZ(secondMoment / outerRadius);
+        line.setTorsionalSectionModulus(2.0 * secondMoment / outerRadius);
+    }
     line.setLocalYDirection(RR3Vector(0.0, 1.0, 0.0));
     if (freeAxisGravity)
     {
@@ -153,7 +171,7 @@ RModel makeBeam(bool badSupport, bool freeAxisGravity = false)
     for (uint i = 0; i < 2; ++i)
     {
         RElement point(R_ELEMENT_POINT);
-        point.setNodeId(0, i);
+        point.setNodeId(0, i == 0 ? rootPosition : tipPosition);
         model.addElement(point, true, i);
         model.setElementPhysicalId(1 + i, 7011 + 2 * i);
     }
@@ -257,6 +275,22 @@ int main(int argc, char **argv)
     if (QFileInfo::exists(output)) return 2;
     RModel model;
     if (kind == QStringLiteral("rod")) model = makeRod(false, false, false, false);
+    else if (kind == QStringLiteral("rod-permuted")) model = makeRod(false, false, false, false, true);
+    else if (kind == QStringLiteral("rod-zero") || kind == QStringLiteral("rod-saturated") ||
+             kind == QStringLiteral("beam-zero") || kind == QStringLiteral("beam-saturated"))
+    {
+        const bool rod = kind.startsWith(QStringLiteral("rod-"));
+        model = rod ? makeRod(false, false, false, false) : makeBeam(false);
+        for (uint point = 0; point < model.getNPoints(); ++point) model.getPoint(point).removeAllInitialConditions();
+        if (kind.endsWith(QStringLiteral("-saturated")))
+        {
+            RInitialCondition velocity(R_INITIAL_CONDITION_VELOCITY);
+            setComponent(velocity, R_VARIABLE_VELOCITY_X, rod, rod ? 1.0e5 : 0.0);
+            setComponent(velocity, R_VARIABLE_VELOCITY_Y, !rod, rod ? 0.0 : 1.0e5);
+            setComponent(velocity, R_VARIABLE_VELOCITY_Z, false);
+            model.getPoint(rod ? 5 : 1).addInitialCondition(velocity);
+        }
+    }
     else if (kind == QStringLiteral("rod-rotated")) model = makeRod(true, false, false, false);
     else if (kind == QStringLiteral("rod-support-conflict")) model = makeRod(false, true, false, false);
     else if (kind == QStringLiteral("rod-force")) model = makeRod(false, false, true, false);
@@ -267,6 +301,34 @@ int main(int argc, char **argv)
         addSourceControlMapping(model, 4);
     }
     else if (kind == QStringLiteral("beam")) model = makeBeam(false);
+    else if (kind == QStringLiteral("beam-permuted")) model = makeBeam(false, false, true);
+    else if (kind == QStringLiteral("beam-modulus-missing")) model = makeBeam(false, false, false, false);
+    else if (kind == QStringLiteral("beam-modulus-wy-zero") || kind == QStringLiteral("beam-modulus-wz-zero") ||
+             kind == QStringLiteral("beam-modulus-wt-zero"))
+    {
+        model = makeBeam(false);
+        if (kind == QStringLiteral("beam-modulus-wy-zero")) model.getLine(0).setSectionModulusY(0.0);
+        if (kind == QStringLiteral("beam-modulus-wz-zero")) model.getLine(0).setSectionModulusZ(0.0);
+        if (kind == QStringLiteral("beam-modulus-wt-zero")) model.getLine(0).setTorsionalSectionModulus(0.0);
+    }
+    else if (kind.startsWith(QStringLiteral("beam-saved-")))
+    {
+        model = makeBeam(false);
+        RVariableType type;
+        if (kind == QStringLiteral("beam-saved-displacement")) type = R_VARIABLE_DISPLACEMENT;
+        else if (kind == QStringLiteral("beam-saved-rotation")) type = R_VARIABLE_ROTATION;
+        else if (kind == QStringLiteral("beam-saved-velocity")) type = R_VARIABLE_VELOCITY;
+        else if (kind == QStringLiteral("beam-saved-angular-velocity")) type = R_VARIABLE_ANGULAR_VELOCITY;
+        else return 2;
+        // Remove ICs so the saved tip state would be recovered unopposed.
+        model.getPoint(1).removeAllInitialConditions();
+        const uint variablePosition = model.addVariable(RVariable(type));
+        auto &variable = model.getVariable(variablePosition);
+        variable.setApplyType(R_VARIABLE_APPLY_NODE);
+        variable.resize(3, model.getNNodes());
+        variable.setValue(type == R_VARIABLE_ROTATION || type == R_VARIABLE_ANGULAR_VELOCITY ? 2 : 1,
+                          1, 0.037);
+    }
     else if (kind == QStringLiteral("beam-support-conflict")) model = makeBeam(true);
     else if (kind == QStringLiteral("beam-gravity-y")) model = makeBeam(false, true);
     else return 2;

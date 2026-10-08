@@ -362,6 +362,7 @@ target_sources(fea PRIVATE src/model_command_host.cpp src/model_command_host.h)
 target_sources(fea PRIVATE src/workflow_process.cpp src/workflow_process.h
                            src/workflow_widget.cpp src/workflow_widget.h
                            src/control_monitor_widget.cpp src/control_monitor_widget.h)
+target_sources(fea PRIVATE src/native_results_widget.cpp src/native_results_widget.h)
 target_sources(fea PRIVATE src/agent_task_runner.cpp src/agent_task_runner.h
                            src/agent_widget.cpp src/agent_widget.h)
 target_sources(fea PRIVATE src/extension_widget.cpp src/extension_widget.h)
@@ -664,11 +665,14 @@ if(RANGE_BUILD_TESTS)
         tests/tst_gui_model_lifecycle.cpp tests/tst_gui_host_context.cpp
         tests/tst_agent_task_runner.cpp tests/tst_solver_snapshot.cpp tests/tst_extension_widget.cpp
         tests/tst_agent_event_view.cpp tests/tst_agent_conversation_widget.cpp tests/tst_project_session.cpp
-        tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp ${_fea_lifecycle_sources})
+        tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp tests/tst_native_results_widget.cpp
+        tests/tst_current_model_workflow.cpp ${_fea_lifecycle_sources})
+    set_source_files_properties(tests/tst_current_model_workflow.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_CURRENT_MODEL_TEST_FIXTURE=\"$<TARGET_FILE:range-workflow-native-import-fixture>\"")
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
     set_source_files_properties(tests/tst_project_session.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_PROJECT_TEST_CLI=\"$<TARGET_FILE:range-project>\";RANGE_PROJECT_TEST_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_PROJECT_TEST_NATIVE=\"$<TARGET_FILE:range-workflow-native>\"")
-    add_dependencies(tst_gui_model_lifecycle range-project fea-solver range-workflow-native)
+    add_dependencies(tst_gui_model_lifecycle range-project fea-solver range-workflow-native range-native-results range-workflow-native-import-fixture)
     target_compile_definitions(tst_gui_model_lifecycle PRIVATE RANGE_WORKFLOW_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
     if(Python3_EXECUTABLE)
         target_compile_definitions(tst_gui_model_lifecycle PRIVATE RANGE_WORKFLOW_DEFAULT_PYTHON="${Python3_EXECUTABLE}")
@@ -688,6 +692,20 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_project_session COMMAND tst_gui_model_lifecycle --project-session -o -,txt)
     add_test(NAME tst_native_job_registry COMMAND tst_gui_model_lifecycle --native-jobs -o -,txt)
     add_test(NAME tst_gui_model_operations COMMAND tst_gui_model_lifecycle --model-operations -o -,txt)
+    add_test(NAME tst_native_results_widget COMMAND tst_gui_model_lifecycle --native-results-widget -o -,txt)
+    add_test(NAME tst_current_model_workflow COMMAND tst_gui_model_lifecycle --current-model-workflow -o -,txt)
+    set_tests_properties(tst_current_model_workflow PROPERTIES TIMEOUT 300)
+    if(WIN32)
+        set_tests_properties(tst_current_model_workflow PROPERTIES ENVIRONMENT
+            "QT_QPA_PLATFORM=windows;QT_FORCE_STDERR_LOGGING=1;RANGE_NATIVE_GUI_EVIDENCE_DIRECTORY=${CMAKE_SOURCE_DIR}/../build/audit-20261009/WF-03/window"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_native_results_widget PROPERTIES TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(tst_native_results_widget PROPERTIES ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session tst_native_job_registry tst_gui_model_operations PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1"
         TIMEOUT 120)

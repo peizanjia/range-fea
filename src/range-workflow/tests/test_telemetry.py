@@ -79,6 +79,32 @@ class TelemetryTest(unittest.TestCase):
         self.assertEqual(result["availability"], "waiting")
         self.assertEqual(result["samples"], [])
 
+    def test_variant_directory_journal_is_available_and_legacy_duplicate_is_refused(self):
+        legacy_path = self.journal
+        variant = self.directory / "active"
+        variant.mkdir()
+        self.journal = variant / f"active.rbm.{self.run_id}.events.jsonl"
+        self.write_events([event(self.run_id, 1, "SolverRunStarted"),
+                           event(self.run_id, 2, "ControlStepAccepted", accepted())])
+        result = self.query()
+        self.assertEqual(result["availability"], "available")
+        self.assertEqual(result["samples"][0]["sensors"][0]["value"], 0.25)
+        legacy_path.write_bytes(self.journal.read_bytes())
+        self.assertCode("TELEMETRY_AMBIGUOUS", self.query)
+
+    def test_variant_directory_reparse_point_is_refused(self):
+        variant = self.directory / "active"
+        variant.mkdir()
+        original_lstat = Path.lstat
+        def replaced_lstat(path):
+            info = original_lstat(path)
+            if path != variant:
+                return info
+            from types import SimpleNamespace
+            return SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400)
+        with mock.patch.object(Path, "lstat", replaced_lstat):
+            self.assertCode("TELEMETRY_PATH", self.query)
+
     def test_partial_tail_is_retained_and_completed_on_next_query(self):
         metadata = json.dumps(event(self.run_id, 1, "SolverRunStarted"), separators=(",", ":")).encode() + b"\n"
         encoded = json.dumps(event(self.run_id, 2, "ControlStepAccepted", accepted()),

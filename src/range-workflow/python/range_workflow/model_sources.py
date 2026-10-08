@@ -309,12 +309,20 @@ def _direction(value, name: str):
 
 
 def _validate_port(value: object, *, kind: str, unit: str):
-    _require_object(value, {"id", "nodePhysicalId", "globalDirection", "unit", "kind"}, f"{kind} port")
+    fields = {"id", "nodePhysicalId", "globalDirection", "unit", "kind"}
+    if kind == "nodal_force":
+        fields.update(("minimum", "maximum"))
+    _require_object(value, fields, f"{kind} port")
     if (not isinstance(value["id"], str) or not value["id"] or len(value["id"].encode("utf-8")) > 128
             or value["kind"] != kind or value["unit"] != unit):
         _fail("NATIVE_PREFLIGHT_INVALID", f"Native descriptor {kind} port is invalid")
     _positive_id(value["nodePhysicalId"], f"{kind} port nodePhysicalId")
     _direction(value["globalDirection"], f"{kind} port globalDirection")
+    if kind == "nodal_force":
+        minimum = _finite_number(value["minimum"], "force minimum")
+        maximum = _finite_number(value["maximum"], "force maximum")
+        if not minimum < 0.0 < maximum:
+            _fail("NATIVE_PREFLIGHT_INVALID", "Native force limits must straddle zero")
 
 
 def _validate_dof(value: object, *, supported: bool, name: str):
@@ -335,6 +343,24 @@ def _validate_dof(value: object, *, supported: bool, name: str):
     return node_id, physical_dof, value["unit"], tuple(value["globalDirection"])
 
 
+def _rejection_message(value: dict) -> str:
+    message = "The source model is outside the supported import matrix"
+    diagnostics = value.get("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        return message
+    details = []
+    for diagnostic in diagnostics[:4]:
+        if not isinstance(diagnostic, dict) or diagnostic.get("severity") != "error":
+            continue
+        fields = [diagnostic.get("path", ""), diagnostic.get("code", ""), diagnostic.get("message", "")]
+        if any(not isinstance(field, str) for field in fields):
+            continue
+        path, code, reason = (field.replace("\r", " ").replace("\n", " ")[:limit]
+                              for field, limit in zip(fields, (96, 64, 240)))
+        details.append(f"{path}: {code}: {reason}")
+    return message + ("; " + "; ".join(details) if details else "")
+
+
 def _validate_descriptor(value: object, expected_sha: str) -> dict:
     fields = {"apiVersion", "status", "sourceSha256", "modelKind", "nodes", "elements",
               "pointElements", "freeDofs", "supports", "ports", "dynamics", "originalControl", "diagnostics"}
@@ -342,7 +368,7 @@ def _validate_descriptor(value: object, expected_sha: str) -> dict:
     if value["apiVersion"] != PROTOCOL_VERSION:
         _fail("NATIVE_PREFLIGHT_INVALID", "Native descriptor protocol version is unsupported")
     if value["status"] != "supported":
-        _fail("NATIVE_PREFLIGHT_REJECTED", "The source model is outside the supported import matrix")
+        _fail("NATIVE_PREFLIGHT_REJECTED", _rejection_message(value))
     if _sha256(value["sourceSha256"], "Native source hash") != expected_sha:
         _fail("SOURCE_CHANGED", "Native preflight described bytes different from the registered model copy")
     model_kind = value["modelKind"]
@@ -395,9 +421,11 @@ def _validate_descriptor(value: object, expected_sha: str) -> dict:
         poisson = _finite_number(element["material"]["poissonRatio"], "material poissonRatio")
         if not -1.0 < poisson < 0.5:
             _fail("NATIVE_PREFLIGHT_INVALID", "Native descriptor Poisson ratio is outside its stable range")
-        section_fields = {"areaM2", "iyM4", "izM4", "torsionM4"}
+        section_fields = {"areaM2", "iyM4", "izM4", "torsionM4", "wyM3", "wzM3", "wtM3"}
         _require_object(element["section"], section_fields, "section")
         for field in section_fields:
+            if model_kind == "four-rod" and field != "areaM2" and element["section"][field] is None:
+                continue  # Native descriptor marks unused truss bending/torsion quantities explicitly.
             _finite_number(element["section"][field], f"section {field}", minimum=0.0)
         required_sections = ("areaM2",) if model_kind == "four-rod" else tuple(section_fields)
         if any(element["section"][field] <= 0 for field in required_sections):
@@ -571,7 +599,7 @@ def _invoke_native_describe(native_path: Path, snapshot_path: Path, expected_sha
         _fail("NATIVE_PREFLIGHT_INVALID", "Native preflight response must be a JSON object")
     if process.returncode != 0:
         if response.get("apiVersion") == PROTOCOL_VERSION and response.get("status") == "rejected":
-            _fail("NATIVE_PREFLIGHT_REJECTED", "The source model is outside the supported import matrix")
+            _fail("NATIVE_PREFLIGHT_REJECTED", _rejection_message(response))
         _fail("NATIVE_PREFLIGHT_FAILED", "Native import preflight failed")
     return response
 

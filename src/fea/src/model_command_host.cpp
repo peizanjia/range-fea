@@ -843,6 +843,41 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         return ok(result);
     }
 
+    if (operation == QStringLiteral("document.source.validate"))
+    {
+        if (!exactKeys(parameters, {QStringLiteral("snapshotRef")}) || !parameters.value("snapshotRef").isObject())
+            return invalid("INVALID_PARAMETERS", tr("An immutable source reference is required."));
+        const auto origin = parameters.value("snapshotRef").toObject();
+        if (!exactKeys(origin, {"projectId", "persistentDocumentId", "sourceRevision", "modelSha256", "instanceRef"})
+            || !origin.value("instanceRef").isObject())
+            return invalid("INVALID_PARAMETERS", tr("The source reference has unsupported fields."));
+        const auto instance = origin.value("instanceRef").toObject();
+        quint64 revision = 0;
+        if (!exactKeys(instance, {"documentId", "sessionEpoch", "documentRevision"})
+            || !validToken(instance.value("documentId")) || !validToken(instance.value("sessionEpoch"))
+            || !unsignedInteger(instance.value("documentRevision"), &revision))
+            return invalid("INVALID_PARAMETERS", tr("A valid source runtime stamp is required."));
+        if (instance.value("sessionEpoch").toString() != state->sessionEpoch)
+            return invalid("STALE_SESSION", tr("The source document belongs to an earlier session."));
+        const uint modelID = session->findModelByCommandIdentity(instance.value("documentId").toString());
+        if (modelID >= session->getNModels()) return invalid("DOCUMENT_CLOSED", tr("The source document closed."));
+        if (!session->trylock(0)) return invalid("MODEL_BUSY", tr("The source document state is busy."));
+        const auto stamp = session->modelCommandStamp(modelID);
+        const auto context = session->documentProjectContext(modelID);
+        const bool draft = session->hasDocumentDraft(modelID);
+        session->unlock();
+        if (context.value("availability") != QJsonValue("available")
+            || context.value("persistence").toObject().value("status") != QJsonValue("available"))
+            return invalid("SOURCE_UNAVAILABLE", tr("The source project has a conflict or unavailable persistence state."));
+        if (stamp.second != revision || draft)
+            return invalid("STALE_SOURCE", tr("The source document was edited or has an unresolved draft."));
+        for (const QString &field : {QStringLiteral("projectId"), QStringLiteral("persistentDocumentId"),
+                                    QStringLiteral("sourceRevision"), QStringLiteral("modelSha256")})
+            if (!origin.value(field).isString() || origin.value(field).toString().isEmpty() || context.value(field) != origin.value(field))
+                return invalid("STALE_SOURCE", tr("The persistent source version or hash changed."));
+        return ok({{"valid", true}, {"snapshotRef", origin}});
+    }
+
     if (operation == QStringLiteral("native.jobs.query"))
     {
         if (!exactKeys(parameters, {QStringLiteral("offset"), QStringLiteral("limit")}))
@@ -878,6 +913,150 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             return invalid(QStringLiteral("JOB_NOT_FOUND"), tr("No native job with this ID is registered."));
         addHostJobSource(&job, jobId);
         return ok({{QStringLiteral("job"), job}});
+    }
+
+    if (operation == QStringLiteral("native.result.catalog.query")
+        || operation == QStringLiteral("native.result.channels.query")
+        || operation == QStringLiteral("native.result.series.query")
+        || operation == QStringLiteral("native.result.summary.query"))
+    {
+        if (!validToken(parameters.value(QStringLiteral("jobId"))))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("A registered native jobId is required."));
+        QJsonObject arguments = parameters;
+        const QString jobId = arguments.take(QStringLiteral("jobId")).toString();
+        const QString queryOperation = operation.section(QLatin1Char('.'), 2, 2);
+        const QJsonObject result = SolverManager::getInstance().nativeResultQuery(jobId, queryOperation, arguments);
+        if (!result.value(QStringLiteral("valid")).toBool())
+            return invalid(result.value(QStringLiteral("code")).toString(), result.value(QStringLiteral("message")).toString());
+        return ok(result);
+    }
+
+    if (operation == QStringLiteral("native.result.display"))
+    {
+        if (!exactKeys(parameters, {"jobId", "artifactId", "channelId"})
+            || !validToken(parameters.value("jobId")) || !validToken(parameters.value("artifactId"))
+            || !validToken(parameters.value("channelId")))
+            return invalid("INVALID_PARAMETERS", tr("native.result.display requires jobId, artifactId and channelId only."));
+        if (activeModalInteraction())
+            return invalid("INTERACTION_BLOCKED", tr("Close the active modal interaction before displaying a solver result."));
+        if (isMutationBlocked()) return invalid("MODEL_BUSY", tr("Wait for live model tasks before displaying a solver result."));
+        const QString jobId = parameters.value("jobId").toString();
+        const QString artifactId = parameters.value("artifactId").toString();
+        const QJsonObject job = nativeJob(jobId);
+        if (!job.value("found").toBool()) return invalid("JOB_NOT_FOUND", tr("No native job with this ID is registered."));
+        if (job.value("state").toString() != "succeeded" || !job.value("resultReadbackComplete").toBool()
+            || !job.value("resultArtifactVerified").toBool())
+            return invalid("RESULT_UNAVAILABLE", tr("Display requires a verified completed native job."));
+        SolverManager &manager = SolverManager::getInstance();
+        const QJsonObject catalog = manager.nativeResultQuery(jobId, "catalog", {{"artifactId", artifactId}, {"offset", 0}, {"limit", 1}});
+        if (!catalog.value("valid").toBool()) return invalid(catalog.value("code").toString(), catalog.value("message").toString());
+        if (catalog.value("artifactId").toString() != artifactId || catalog.value("jobId").toString() != jobId)
+            return invalid("ARTIFACT_IDENTITY_MISMATCH", tr("The catalog does not match the requested job and artifact."));
+        if (job.value("resultArtifactId").toString() != artifactId)
+            return invalid("ARTIFACT_IDENTITY_MISMATCH", tr("Field display requires the registered terminal artifact, not an earlier live snapshot."));
+        const QJsonObject summary = manager.nativeResultQuery(jobId, "summary",
+            {{"artifactId", artifactId}, {"channelId", parameters.value("channelId")}});
+        if (!summary.value("valid").toBool()) return invalid(summary.value("code").toString(), summary.value("message").toString());
+        if (summary.value("artifactId").toString() != artifactId || summary.value("channelId") != parameters.value("channelId"))
+            return invalid("ARTIFACT_IDENTITY_MISMATCH", tr("The physical channel does not match the requested artifact."));
+        const QMap<QString, RVariableType> supported{
+            {"var-displacement", R_VARIABLE_DISPLACEMENT}, {"var-velocity", R_VARIABLE_VELOCITY},
+            {"var-acceleration", R_VARIABLE_ACCELERATION}, {"var-rotation", R_VARIABLE_ROTATION},
+            {"var-angular_velocity", R_VARIABLE_ANGULAR_VELOCITY}, {"var-angular_acceleration", R_VARIABLE_ANGULAR_ACCELERATION}};
+        const RVariableType variableType = supported.value(summary.value("variableId").toString(), R_VARIABLE_NONE);
+        if (variableType == R_VARIABLE_NONE) return invalid("UNSUPPORTED_CHANNEL", tr("This physical channel has no supported native field display."));
+        QJsonObject openRequest = request;
+        openRequest.insert("operation", "native.result.open");
+        openRequest.insert("parameters", QJsonObject{{"jobId", jobId}, {"expectedSHA", job.value("resultArtifactSha256")}});
+        const QJsonObject opened = handle(openRequest);
+        if (opened.value("status").toString() != "accepted") return opened;
+        QJsonObject result = opened.value("result").toObject();
+        const QString documentId = result.value("documentId").toString();
+        const uint openedModelID = session->findModelByCommandIdentity(documentId);
+        if (openedModelID == RConstants::eod) return invalid("RESULT_DOCUMENT_CLOSED", tr("The result document closed during opening."));
+        const quint64 revision = session->modelCommandStamp(openedModelID).second;
+        auto currentModel = [&]() -> uint {
+            if (isMutationBlocked() || activeModalInteraction()) return RConstants::eod;
+            const uint id = session->findModelByCommandIdentity(documentId);
+            if (id == RConstants::eod || session->modelCommandStamp(id).second != revision) return RConstants::eod;
+            return id;
+        };
+        // Selection emits synchronous GUI signals: never retain a Model reference
+        // or an index across them, and reject a closed or edited result document.
+        QStringList selectedDocuments;
+        for (uint id : session->getSelectedModelIDs()) selectedDocuments.append(session->modelCommandStamp(id).first);
+        for (const QString &selected : selectedDocuments)
+        {
+            if (currentModel() == RConstants::eod) return invalid("RESULT_DOCUMENT_CHANGED", tr("The result document changed during selection."));
+            const uint id = session->findModelByCommandIdentity(selected);
+            if (id != RConstants::eod && selected != documentId) session->setModelSelected(id, false);
+        }
+        uint modelID = currentModel();
+        if (modelID == RConstants::eod) return invalid("RESULT_DOCUMENT_CHANGED", tr("The result document changed during selection."));
+        session->setModelSelected(modelID, true);
+        modelID = currentModel();
+        if (modelID == RConstants::eod) return invalid("RESULT_DOCUMENT_CHANGED", tr("The result document changed during selection."));
+        uint nodeID = RConstants::eod;
+        uint groupID = RConstants::eod;
+        PickItem picked;
+        {
+            Model &model = session->getModel(modelID);
+            const uint physicalId = uint(summary.value("nodePhysicalId").toDouble());
+            for (uint i = 0; i < model.getNNodes(); ++i)
+                if (model.getNodePhysicalId(i) == physicalId) { nodeID = i; break; }
+            if (nodeID == RConstants::eod) return invalid("NODE_NOT_FOUND", tr("The physical node is absent from the verified result document."));
+            if (model.findVariable(variableType) == RConstants::eod)
+                return invalid("FIELD_UNAVAILABLE", tr("The terminal result document has no requested field."));
+            for (uint i = 0; i < model.getNEntityGroups(true) && groupID == RConstants::eod; ++i)
+            {
+                const auto *group = static_cast<const RElementGroup *>(model.getEntityGroupPtr(i, true));
+                for (uint j = 0; j < group->size() && groupID == RConstants::eod; ++j)
+                {
+                    const uint elementID = group->get(j);
+                    const RElement &element = model.getElement(elementID);
+                    for (uint k = 0; k < element.size(); ++k)
+                        if (element.getNodeId(k) == nodeID)
+                        {
+                            groupID = i;
+                            picked = PickItem(SessionEntityID(modelID, model.getEntityGroupType(i, true),
+                                model.getEntityGroupPosition(i, true)), elementID, j, nodeID, k);
+                            break;
+                        }
+                }
+            }
+            if (groupID == RConstants::eod) return invalid("NODE_NOT_DISPLAYABLE", tr("The physical node has no incident native entity group."));
+            auto &data = model.getEntityGroupPtr(groupID, true)->getData();
+            data.setVisible(true);
+            data.clearVariableDisplayType(R_ENTITY_GROUP_VARIABLE_DISPLAY_SCALAR);
+            data.clearVariableDisplayType(R_ENTITY_GROUP_VARIABLE_DISPLAY_DISPLACEMENT);
+            data.getVariableData()[variableType] |= R_ENTITY_GROUP_VARIABLE_DISPLAY_SCALAR;
+            if (variableType == R_VARIABLE_DISPLACEMENT)
+                data.getVariableData()[variableType] |= R_ENTITY_GROUP_VARIABLE_DISPLAY_DISPLACEMENT;
+        }
+        session->getPickList().clear();
+        modelID = currentModel();
+        if (modelID == RConstants::eod) return invalid("RESULT_DOCUMENT_CHANGED", tr("The result document changed during highlighting."));
+        // PickList signals can also reorder Session storage.
+        const SessionEntityID entityID(modelID, picked.getEntityID().getType(), picked.getEntityID().getEid());
+        session->getPickList().addItem(PickItem(entityID, picked.getElementID(), picked.getElementPosition(), nodeID, picked.getNodePosition()));
+        modelID = currentModel();
+        if (modelID == RConstants::eod) return invalid("RESULT_DOCUMENT_CHANGED", tr("The result document changed during highlighting."));
+        // Only display masks changed. variableDataChanged invalidates the
+        // accepted document revision and is reserved for variable edits.
+        session->setDisplayPropertiesChanged(modelID, entityID.getType(), entityID.getEid());
+        if (currentModel() == RConstants::eod) return invalid("RESULT_DOCUMENT_CHANGED", tr("The result document changed during field display."));
+        result.insert("artifactId", artifactId);
+        result.insert("channelId", parameters.value("channelId"));
+        result.insert("nodePhysicalId", summary.value("nodePhysicalId"));
+        result.insert("variableId", summary.value("variableId"));
+        result.insert("unit", summary.value("unit"));
+        result.insert("coordinateSystem", "global");
+        result.insert("selectedChannelAxis", summary.value("axis"));
+        result.insert("fieldDisplayScope", "full-variable-magnitude");
+        result.insert("fieldDisplayEntityScope", "incident-entity-group");
+        result.insert("displacementGeometry", variableType == R_VARIABLE_DISPLACEMENT);
+        result.insert("message", tr("Displayed the full native field magnitude and highlighted the physical node; the selected channel component remains a separate series."));
+        return ok(result, "accepted");
     }
 
     if (operation == QStringLiteral("native.result.open"))
@@ -1133,7 +1312,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
     if (operation == QStringLiteral("capabilities.query"))
     {
         if (!parameters.isEmpty()) return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("capabilities.query takes an empty parameters object."));
-        const QJsonArray operations{
+        QJsonArray operations{
             QJsonObject{{QStringLiteral("id"), QStringLiteral("project.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.project.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("context.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
@@ -1146,11 +1325,20 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.inputs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.jobs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.job.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("document.source.validate")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.result.open")}, {QStringLiteral("version"), 1},
                 {QStringLiteral("readOnly"), true}, {QStringLiteral("createsIndependentResultDocument"), true},
                 {QStringLiteral("requiresRegisteredArtifactSHA"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("native.result.display")}, {QStringLiteral("version"), 1},
+                {QStringLiteral("readOnly"), true}, {QStringLiteral("createsIndependentResultDocument"), true},
+                {QStringLiteral("identity"), QStringLiteral("registered-job-artifact-and-channel")}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.undo")}, {QStringLiteral("version"), 1}, {QStringLiteral("requiresHostApproval"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.redo")}, {QStringLiteral("version"), 1}, {QStringLiteral("requiresHostApproval"), true}}};
+        for (const QString &quantity : {QStringLiteral("catalog"), QStringLiteral("channels"),
+                                       QStringLiteral("series"), QStringLiteral("summary")})
+            operations.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("native.result.") + quantity + QStringLiteral(".query")},
+                {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true},
+                {QStringLiteral("identity"), QStringLiteral("registered-job-and-artifact")}});
         return ok({{QStringLiteral("sessionEpoch"), state->sessionEpoch},
                    {QStringLiteral("identityPersistence"), QStringLiteral("host-session")},
                    {QStringLiteral("capabilityCatalogVersion"), 1},

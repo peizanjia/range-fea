@@ -507,7 +507,8 @@ def _ensure_distinct_output(output: str | os.PathLike[str],
 
 def _trajectory(model: dict[str, Any], q_initial: np.ndarray, v_initial: np.ndarray,
                 *, force_column: np.ndarray, velocity_row: np.ndarray, gain: float,
-                dt: float, steps: int, feedback: bool) -> dict[str, Any]:
+                dt: float, steps: int, feedback: bool,
+                force_minimum: float | None = None, force_maximum: float | None = None) -> dict[str, Any]:
     """Average-acceleration Newmark with accepted-state sampled, held force."""
     n = len(q_initial)
     m_matrix = np.asarray(model["M"], dtype=np.float64)
@@ -535,6 +536,10 @@ def _trajectory(model: dict[str, Any], q_initial: np.ndarray, v_initial: np.ndar
         u = -gain * float(velocity_row @ v) if feedback else 0.0
         if not math.isfinite(u):
             raise ControllerError("Newmark controller produced a non-finite force")
+        if force_minimum is not None:
+            u = max(force_minimum, u)
+        if force_maximum is not None:
+            u = min(force_maximum, u)
         force = force_column * u
         acceleration = linalg.cho_solve(
             mass_factor, force - c_matrix @ v - k_matrix @ q, check_finite=False)
@@ -561,6 +566,10 @@ def _trajectory(model: dict[str, Any], q_initial: np.ndarray, v_initial: np.ndar
     # The t=0 acceleration is evaluated with the same force sample used on
     # the first interval, matching the accepted-state refresh contract.
     initial_u = -gain * float(velocity_row @ v_initial) if feedback else 0.0
+    if force_minimum is not None:
+        initial_u = max(force_minimum, initial_u)
+    if force_maximum is not None:
+        initial_u = min(force_maximum, initial_u)
     a_initial = linalg.cho_solve(
         mass_factor, force_column * initial_u - c_matrix @ v_initial - k_matrix @ q_initial,
         check_finite=False)
@@ -584,13 +593,21 @@ def _energy(model: dict[str, Any], q: np.ndarray, v: np.ndarray) -> float:
 
 def replay(model_path: str | os.PathLike[str], gains_path: str | os.PathLike[str], *,
            dt: float, steps: int, initial_q: list[float] | np.ndarray,
-           initial_v: list[float] | np.ndarray | None = None) -> dict[str, Any]:
+           initial_v: list[float] | np.ndarray | None = None,
+           force_minimum: float | None = None, force_maximum: float | None = None) -> dict[str, Any]:
     """Compare sampled/held full-order Newmark feedback with a single-mode ROM."""
     dt = _finite_number(dt, "dt")
     if dt <= 0.0:
         raise ControllerError("dt must be positive")
     if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= MAX_REPLAY_STEPS:
         raise ControllerError(f"steps must be between 1 and {MAX_REPLAY_STEPS}")
+    if (force_minimum is None) != (force_maximum is None):
+        raise ControllerError("force limits must be supplied together")
+    if force_minimum is not None:
+        force_minimum = _finite_number(force_minimum, "force minimum")
+        force_maximum = _finite_number(force_maximum, "force maximum")
+        if not force_minimum < 0.0 < force_maximum:
+            raise ControllerError("force limits must straddle zero")
     model, raw = _load_json_bytes(model_path, MAX_MODEL_BYTES)
     gains, _ = _load_json_bytes(gains_path, MAX_GAIN_BYTES)
     runtime = VelocityControllerRuntime(gains)
@@ -646,7 +663,8 @@ def replay(model_path: str | os.PathLike[str], gains_path: str | os.PathLike[str
     velocity_row = sv[sensor_index, :]
     full_controlled = _trajectory(model, q0, v0, force_column=force_column,
                                   velocity_row=velocity_row, gain=runtime.gain,
-                                  dt=dt, steps=steps, feedback=True)
+                                  dt=dt, steps=steps, feedback=True,
+                                  force_minimum=force_minimum, force_maximum=force_maximum)
     full_passive = _trajectory(model, q0, v0, force_column=force_column,
                                velocity_row=velocity_row, gain=0.0,
                                dt=dt, steps=steps, feedback=False)
@@ -660,7 +678,8 @@ def replay(model_path: str | os.PathLike[str], gains_path: str | os.PathLike[str
     reduced = _trajectory(rom, np.array([q_modal0]), np.array([v_modal0]),
                           force_column=np.array([modal_b]),
                           velocity_row=np.array([modal_sensor]), gain=runtime.gain,
-                          dt=dt, steps=steps, feedback=True)
+                          dt=dt, steps=steps, feedback=True,
+                          force_minimum=force_minimum, force_maximum=force_maximum)
 
     q_abs: list[float] = []
     q_rel: list[float] = []
@@ -1050,12 +1069,15 @@ def main(argv: list[str] | None = None) -> int:
                         help='initial perturbation displacement JSON vector, e.g. "[0.001,0,0]"')
     parser.add_argument("--initial-v-json", type=_initial_v_json,
                         help='initial perturbation velocity JSON vector; defaults to zero')
+    parser.add_argument("--force-minimum", type=float, help="verified actuator minimum force in N")
+    parser.add_argument("--force-maximum", type=float, help="verified actuator maximum force in N")
     parser.add_argument("--output", help="atomic output path for the gain artifact")
     args = parser.parse_args(argv)
     try:
         if args.model:
             if (args.replay_model is not None or args.gains is not None or args.dt is not None or
-                    args.steps is not None or args.initial_q_json is not None or args.initial_v_json is not None):
+                    args.steps is not None or args.initial_q_json is not None or args.initial_v_json is not None or
+                    args.force_minimum is not None or args.force_maximum is not None):
                 parser.error("--model design mode cannot be combined with replay/runtime options")
             if (args.target_damping is None or args.sensor_id is None or
                     args.actuator_id is None or args.output is None):
@@ -1073,14 +1095,16 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("design options cannot be combined with replay")
             _ensure_distinct_output(args.output, [args.replay_model, args.gains])
             report = replay(args.replay_model, args.gains, dt=args.dt, steps=args.steps,
-                            initial_q=args.initial_q_json, initial_v=args.initial_v_json)
+                            initial_q=args.initial_q_json, initial_v=args.initial_v_json,
+                            force_minimum=args.force_minimum, force_maximum=args.force_maximum)
             write_json_atomic(args.output, report, maximum=MAX_REPLAY_BYTES)
             return 0
         if args.gains is None:
             parser.error("select --model, --replay-model, or --gains")
         if any(value is not None for value in
                (args.target_damping, args.sensor_id, args.actuator_id, args.output,
-                args.dt, args.steps, args.initial_q_json, args.initial_v_json)) or args.mode != 0:
+                args.dt, args.steps, args.initial_q_json, args.initial_v_json,
+                args.force_minimum, args.force_maximum)) or args.mode != 0:
             parser.error("design/replay options are only valid with --model or --replay-model")
         return _serve(args.gains)
     except ControllerError as error:

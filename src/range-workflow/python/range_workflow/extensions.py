@@ -848,6 +848,10 @@ def _execute_rollback(service, job: dict, directory: Path, cancel: threading.Eve
 
 
 def _resolve_provenance(service, provenance: dict) -> tuple[dict, dict]:
+    if isinstance(provenance, dict) and "channelId" in provenance:
+        from .native_results import resolve_series
+        series, origin = resolve_series(service, provenance)
+        return validate_series(series), origin
     exact(provenance, {"jobId", "signal"})
     job_id = identifier(provenance["jobId"], "jobId")
     signal = provenance["signal"]
@@ -927,6 +931,11 @@ def _bind_run(service, parameters: dict) -> dict:
         series, current = _resolve_provenance(service, {"jobId": provenance["jobId"], "signal": provenance["signal"]})
         if current["artifactSha256"] != provenance["artifactSha256"] or series != parameters["series"]:
             _fail("SOURCE_CHANGED", "Accepted reference history changed since preview")
+    elif provenance["sourceKind"] in ("native-active-fe", "native-passive-fe", "native-fe"):
+        series, current = _resolve_provenance(service, {key: provenance[key]
+            for key in ("jobId", "mode", "artifactId", "channelId")})
+        if current != provenance or series != parameters["series"]:
+            _fail("SOURCE_CHANGED", "Native history changed since preview")
     return {"extensionId": parameters["extensionId"], "bundleHash": parameters["bundleHash"],
             "manifestSha256": version["manifestSha256"], "sourceSha256": version["sourceSha256"],
             "testsSha256": version["testsSha256"], "reportSha256": validation["reportSha256"],
@@ -950,8 +959,19 @@ def _execute_run(service, job: dict, directory: Path, cancel: threading.Event) -
     series = validate_series(p["series"])
     if hashlib.sha256(canonical(series)).hexdigest() != binding["seriesSha256"]:
         _fail("SOURCE_CHANGED", "Numeric-series input changed after preview")
+    native_origin = p["provenance"]["sourceKind"] in ("native-active-fe", "native-passive-fe", "native-fe")
+    if native_origin:
+        verified, origin = _resolve_provenance(service, {key: p["provenance"][key]
+            for key in ("jobId", "mode", "artifactId", "channelId")})
+        if verified != series or origin != p["provenance"]:
+            _fail("SOURCE_CHANGED", "Native source changed before extension execution")
     output = _execute_source(service, directory, {**version, "runtimeHash": binding["runtimeHash"]},
                              series, cancel)
+    if native_origin:
+        verified, origin = _resolve_provenance(service, {key: p["provenance"][key]
+            for key in ("jobId", "mode", "artifactId", "channelId")})
+        if verified != series or origin != p["provenance"]:
+            _fail("SOURCE_CHANGED", "Native source changed during extension execution")
     actual = _result(output, series)
     expected = statistics(series)
     if not _matches(actual, expected):
@@ -1289,7 +1309,7 @@ def _knowledge(query: str, extension_id: str | None, service) -> dict:
     package_path = Path(__file__).resolve()
     roots = (package_path.parents[3] / "doc", package_path.parents[4] / "docs")
     for filename in ("AGENT_OPERATIONS.md", "WORKFLOW_CONTRACT.md", "EXTENSION_SDK.md",
-                     "NATIVE_MODEL_OPERATIONS.md", "NATIVE_DOCUMENT_SDK.md", "PROJECT_CATALOG.md"):
+                     "NATIVE_MODEL_OPERATIONS.md", "NATIVE_DOCUMENT_SDK.md", "NATIVE_RESULTS.md", "PROJECT_CATALOG.md"):
         found = next((root / filename for root in roots if (root / filename).is_file() and not (root / filename).is_symlink()), None)
         if found is None or found.stat().st_size > 256 * 1024:
             continue
@@ -1356,7 +1376,7 @@ def install(service):
              "targetBundleHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
          ["extensionId", "expectedActiveBundleHash", "targetBundleHash"], True),
         ("extension.run", _normalize_run, _execute_run, _bind_run,
-         "Run the pinned active extension on explicit numeric-series input or a verified reference series", {
+         "Run the pinned active extension on explicit input, verified reference history, or registered native FE history", {
              "extensionId": {"type": "string"}, "bundleHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
              "series": {"$ref": SERIES_SCHEMA}, "provenance": {"type": "object"}},
          ["extensionId", "bundleHash"], False),

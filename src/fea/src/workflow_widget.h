@@ -21,6 +21,7 @@ class QTableWidget;
 class QCheckBox;
 class QTabWidget;
 class ControlMonitorWidget;
+class NativeResultsWidget;
 class Session;
 
 //! A user-facing host of the actual persisted rod/beam workflow service.
@@ -52,6 +53,11 @@ private:
     QTimer refreshTimer;
     QTabWidget *pages;
     ControlMonitorWidget *monitor;
+    NativeResultsWidget *workflowNativeResults;
+    NativeResultsWidget *documentNativeResults;
+    QComboBox *nativeMode;
+    QComboBox *nativeJobChoice;
+    QTimer nativeJobTimer;
     QLineEdit *workspaceEdit;
     QCheckBox *trustedExtensions;
     QComboBox *modelChoice;
@@ -99,7 +105,9 @@ private:
     QString modelBindingSummary(const QJsonObject &binding) const;
     void updateSourceChoiceLabel(const QString &sourceId);
     void updateSelectedSourceStatus();
+    void refreshNativeJobs();
     bool previewSourceIsCurrent() const;
+    QString previewSourceId() const;
     void onReply(const QString &id, const QString &operation, const QJsonObject &result);
     void showResult(const QJsonObject &result);
     void showFailure(const QString &message);

@@ -239,6 +239,36 @@ void PickList::removeItems(uint modelID)
     emit this->pickListChanged();
 }
 
+void PickList::removeModelItemsAndReindex(uint removedModelID)
+{
+    R_LOG_TRACE;
+    QVector<PickItem> reindexedItems;
+    reindexedItems.reserve(this->items.size());
+
+    for (const PickItem &item : this->items)
+    {
+        const uint modelID = item.getEntityID().getMid();
+        if (modelID == removedModelID)
+        {
+            continue;
+        }
+
+        SessionEntityID entityID = item.getEntityID();
+        if (modelID > removedModelID)
+        {
+            entityID.setMid(modelID - 1);
+        }
+        reindexedItems.append(PickItem(entityID,
+                                       item.getElementID(),
+                                       item.getElementPosition(),
+                                       item.getNodeID(),
+                                       item.getNodePosition()));
+    }
+
+    this->items.swap(reindexedItems);
+    emit this->pickListChanged();
+}
+
 bool PickList::hasItem(const PickItem &pickItem)
 {
     R_LOG_TRACE;

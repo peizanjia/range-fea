@@ -140,9 +140,15 @@ class WorkspaceLock:
 
 class WorkflowService:
     def __init__(self, workspace: Path, solver: Path, native: Path,
-                 examples: Path, python: Path, *, trusted_extensions: bool = False):
+                 examples: Path, python: Path, *, trusted_extensions: bool = False,
+                 native_results: Path | None = None):
         self.workspace = Path(workspace).resolve()
         self.solver, self.native, self.examples, self.python = map(Path, (solver, native, examples, python))
+        result_tool = Path(native_results) if native_results is not None else self.native.with_name(
+            "range-native-results" + self.native.suffix)
+        self.native_results = result_tool if result_tool.is_absolute() and result_tool.is_file() else None
+        if native_results is not None and self.native_results is None:
+            raise WorkflowError("INVALID_PATH", "Configured native results executable is unavailable")
         if type(trusted_extensions) is not bool:
             raise WorkflowError("INVALID_PARAMETERS", "trusted_extensions must be an explicit boolean")
         self.trusted_extensions = trusted_extensions
@@ -412,6 +418,8 @@ class WorkflowService:
                  "analysis": self.examples / "stage9_analysis.py",
                  "controller": self.examples / "stage9_velocity_controller.py",
                  "controllerHost": Path(__file__).with_name("controller_host.py")}
+        if self.native_results is not None:
+            paths["nativeResults"] = self.native_results
         if "sourceId" in configuration:
             from .model_sources import read_model_source
             source = read_model_source(self.workspace, configuration["sourceId"])
@@ -488,8 +496,15 @@ class WorkflowService:
                 raise WorkflowError("INVALID_PARAMETERS", "A trusted catalog root and snapshot reference are required")
             from .model_sources import register_snapshot_source
             source = register_snapshot_source(self.workspace, Path(p["catalogRoot"]), p["snapshotRef"], self.native)
-            self._commit(copy.deepcopy(self._state), "model.source.register", "registered",
-                         parameters={"sourceId": source["sourceId"], "originRef": source["originRef"]})
+            try:
+                candidate = copy.deepcopy(self._state)
+                candidate["revision"] += 1
+                self._commit(candidate, "model.source.register", "registered",
+                             parameters={"sourceId": source["sourceId"], "originRef": source["originRef"]})
+            except WorkflowError:
+                raise WorkflowError("SOURCE_REGISTERED_AUDIT_FAILED",
+                    "Immutable source " + source["sourceId"] + " was registered; its workflow audit failed. "
+                    "Reopen and query model.sources.query before registering again.") from None
             return {key: value for key, value in source.items() if key not in {"path", "manifestPath"}}
         if operation == "model.sources.query":
             exact(p, set(), {"offset", "limit"})
@@ -509,6 +524,9 @@ class WorkflowService:
                 return {"job": self._job(p["jobId"])} if operation == "jobs.query" else {"result": self.result_snapshot(p["jobId"])}
             jobs = list(self._state["jobs"].values())
             return {"jobs": jobs} if operation == "jobs.query" else {"results": [x["result"] for x in jobs if x["state"] == "succeeded" and "result" in x]}
+        if operation in {"result.catalog.query", "result.channels.query", "result.series.query", "result.summary.query"}:
+            from .native_results import query_registered
+            return query_registered(self, operation.split(".")[1], p)
         if operation == "telemetry.query":
             exact(p, {"jobId"}, {"afterSeq", "limit", "mode"})
             job_id = identifier(p["jobId"], "jobId")
@@ -580,6 +598,8 @@ class WorkflowService:
                      "binding": self._binding(command, normalized)}
             value["effectiveConfiguration"] = (copy.deepcopy(self._job(normalized["jobId"])["result"]["configuration"])
                 if command == "workflow.resume" else normalized if command == "workflow.configure" else copy.deepcopy(self._state["configuration"]))
+            if command in ("workflow.configure", "workflow.run", "workflow.resume"):
+                value["modelBinding"] = self._model_binding(value["effectiveConfiguration"])
             value["previewHash"] = digest(value)
             if len(candidate["previews"]) >= 1024:
                 raise WorkflowError("PREVIEW_LIMIT", "Workspace preview limit reached")
@@ -686,14 +706,19 @@ class WorkflowService:
 
     def _artifacts(self, directory: Path) -> list[dict]:
         files = sorted(x for x in directory.rglob("*") if x.is_file())
-        if len(files) > 256:
+        if len(files) > 12288:
             raise WorkflowError("ARTIFACT_LIMIT", "Job produced too many files")
         artifacts = []
+        total_bytes = 0
         for index, path in enumerate(files):
             if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
                 raise WorkflowError("ARTIFACT_PATH", "Artifact escaped its job directory")
+            size = path.stat().st_size
+            total_bytes += size
+            if size > 128 * 1024 * 1024 or total_bytes > 2 * 1024 * 1024 * 1024:
+                raise WorkflowError("ARTIFACT_LIMIT", "Job artifacts exceed the declared byte budget")
             artifacts.append({"artifactId": f"artifact/{directory.name}/{index}", "path": str(path),
-                              "sha256": file_hash(path), "sizeBytes": path.stat().st_size})
+                              "sha256": file_hash(path), "sizeBytes": size})
         return artifacts
 
     def _run_job(self, job_id: str, cancel: threading.Event, execution_parameters: dict | None = None):
@@ -807,12 +832,21 @@ class WorkflowService:
         operation_parameters["model.sources.query"] = schema({"offset": {"type": "integer", "minimum": 0},
                                                              "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])
         operation_parameters["model.source.query"] = schema({"sourceId": id_schema})
+        for quantity in ("catalog", "channels", "series", "summary"):
+            operation_parameters["result." + quantity + ".query"] = schema({
+                "jobId": id_schema, "mode": {"enum": ["active", "passive"]}, "artifactId": id_schema,
+                "channelId": id_schema, "nodePhysicalId": {"type": "integer", "minimum": 1},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                "cursor": {"type": "string", "maxLength": 16384}}, ["jobId"])
         read_operations = {"capabilities.query", "project.query", "project.catalog.query", "project.snapshot.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
                            "model.sources.query", "model.source.query",
                            "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
         operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]
         for item in operations:
+            if item["id"].startswith("result."):
+                item["readOnly"] = True
             if item["id"] == "model.source.register":
                 item["trustedOwnerOnly"] = True
         commands = [{"id": "workflow.configure", "readOnly": False, "requiresApproval": True,

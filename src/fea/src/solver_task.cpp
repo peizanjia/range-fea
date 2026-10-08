@@ -17,6 +17,8 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 #include <rml_file_utils.h>
 #include <rml_structural_control_setup.h>
@@ -228,7 +230,10 @@ bool supportsNativeResultCatalog(const Model &model)
     const bool timeSolver = model.getTimeSolver().getEnabled();
     if (problemTypes == R_PROBLEM_STRESS_MODAL) return !dynamics;
     if (problemTypes != R_PROBLEM_STRESS) return false;
-    if (dynamics) return timeSolver;
+    // RSolver enables and configures its time solver from the validated
+    // second-order dynamics setup before stepping, including fresh inputs
+    // whose stored RTimeSolver is still disabled.
+    if (dynamics) return true;
     return !timeSolver;
 }
 
@@ -337,7 +342,7 @@ bool stageRestartHistory(const Model &model,
     const QString inputHistoryBase = QDir(QFileInfo(inputFileName).absolutePath())
             .filePath(QStringLiteral("history/") + QFileInfo(inputFileName).fileName());
     const QRegularExpression recordPattern(QStringLiteral("^") + QRegularExpression::escape(sourceBaseName) +
-                                           QStringLiteral("-(\\d{5})\\.") +
+                                           QStringLiteral("-(\\d{5,})\\.") +
                                            QRegularExpression::escape(sourceExtension) + QStringLiteral("$"),
                                            QRegularExpression::CaseInsensitiveOption);
     const QFileInfoList candidates = QDir(sourceInfo.absolutePath()).entryInfoList(
@@ -353,14 +358,78 @@ bool stageRestartHistory(const Model &model,
         if (ok && recordNumber > 0) sourceRecords.insert(recordNumber, candidate.absoluteFilePath());
     }
 
+    QJsonArray historyOrigins;
+    const QString manifestPath = QDir(sourceInfo.absolutePath()).filePath(QStringLiteral("native-result.manifest.json"));
+    const bool hasManifest = QFileInfo::exists(manifestPath);
+    const QJsonObject registeredManifest = SolverManager::getInstance().nativeResultManifestForSource(sourceModelFileName);
+    const QString manifestHash = registeredManifest.isEmpty()
+            ? QString::fromLatin1(sha256File(manifestPath).toHex())
+            : registeredManifest.value(QStringLiteral("resultManifestSha256")).toString();
+    if (!registeredManifest.isEmpty() && (!hasManifest ||
+        QFileInfo(manifestPath).canonicalFilePath() != QFileInfo(registeredManifest.value(QStringLiteral("resultManifestRef")).toString()).canonicalFilePath()))
+    {
+        if (error) *error = QStringLiteral("The registered restart manifest is missing or its path changed.");
+        return false;
+    }
+    QJsonObject ancestor;
+    if (!sourceRecords.isEmpty() && hasManifest)
+    {
+        const QJsonObject catalog = RNativeResultBroker::query(manifestPath, manifestHash, QStringLiteral("catalog"), {});
+        QFile manifestFile(manifestPath);
+        if (!catalog.value(QStringLiteral("valid")).toBool() || !manifestFile.open(QIODevice::ReadOnly) ||
+            manifestFile.size() > 16 * 1024 * 1024)
+        {
+            if (error) *error = QStringLiteral("Restart history manifest could not be verified.");
+            return false;
+        }
+        ancestor = QJsonDocument::fromJson(manifestFile.readAll()).object();
+    }
+    const QString restartHash = QString::fromLatin1(sha256File(sourceModelFileName).toHex());
+
     try
     {
         for (auto it = sourceRecords.cbegin(); it != sourceRecords.cend(); ++it)
         {
+            const QString originalHash = QString::fromLatin1(sha256File(it.value()).toHex());
+            QJsonObject history{{QStringLiteral("recordNo"), double(it.key())},
+                                {QStringLiteral("originalFrameSha256"), originalHash}};
+            if (hasManifest)
+            {
+                QJsonObject originalFrame;
+                for (const QJsonValue &frame : ancestor.value(QStringLiteral("frames")).toArray())
+                    if (frame.toObject().value(QStringLiteral("recordNo")).toDouble() == double(it.key()) &&
+                        frame.toObject().value(QStringLiteral("sha256")).toString() == originalHash &&
+                        frame.toObject().value(QStringLiteral("relativePath")).toString() == QFileInfo(it.value()).fileName())
+                        originalFrame = frame.toObject();
+                if (originalFrame.isEmpty())
+                {
+                    if (error) *error = QStringLiteral("Restart frame does not match its original result manifest.");
+                    return false;
+                }
+                history.insert(QStringLiteral("originKind"), QStringLiteral("reused-history"));
+                history.insert(QStringLiteral("origin"), originalFrame.value(QStringLiteral("origin")));
+                history.insert(QStringLiteral("originManifestPath"), QFileInfo(manifestPath).canonicalFilePath());
+                history.insert(QStringLiteral("originManifestSha256"), manifestHash);
+                history.insert(QStringLiteral("ancestryValidationScope"), registeredManifest.isEmpty()
+                               ? QStringLiteral("captured-source-input") : QStringLiteral("registered-native-job-manifest"));
+            }
+            else
+            {
+                history.insert(QStringLiteral("originKind"), QStringLiteral("legacy-history-unattributed"));
+                history.insert(QStringLiteral("origin"), QJsonValue(QJsonValue::Null));
+                history.insert(QStringLiteral("sourceRestartSha256"), restartHash);
+                history.insert(QStringLiteral("ancestryValidationScope"), QStringLiteral("copied-restart-input-bytes"));
+            }
             RModel record;
             record.read(it.value());
             setRecordNumber(record, it.key());
             record.write(RFileUtils::getFileNameWithTimeStep(inputHistoryBase, it.key()), true);
+            if (QString::fromLatin1(sha256File(it.value()).toHex()) != originalHash)
+            {
+                if (error) *error = QStringLiteral("Restart frame changed during input capture.");
+                return false;
+            }
+            historyOrigins.append(history);
         }
     }
     catch (const RError &readError)
@@ -368,11 +437,26 @@ bool stageRestartHistory(const Model &model,
         if (error) *error = QStringLiteral("Could not snapshot restart record: %1").arg(readError.getMessage());
         return false;
     }
+    if (hasManifest && !sourceRecords.isEmpty() && QString::fromLatin1(sha256File(manifestPath).toHex()) != manifestHash)
+    {
+        if (error) *error = QStringLiteral("Restart result manifest changed during input capture.");
+        return false;
+    }
+    if (!historyOrigins.isEmpty())
+    {
+        QSaveFile index(QDir(QFileInfo(inputHistoryBase).absolutePath()).filePath(QStringLiteral("origin-index.json")));
+        if (!index.open(QIODevice::WriteOnly) || index.write(QJsonDocument(historyOrigins).toJson(QJsonDocument::Compact)) < 0 || !index.commit())
+        {
+            if (error) *error = QStringLiteral("Restart history provenance index could not be captured.");
+            return false;
+        }
+    }
     return true;
 }
 
 bool copyRestartHistoryToResult(const QString &inputFileName,
                                 const QString &resultFileName,
+                                QJsonArray *reusedHistory,
                                 QString *error)
 {
     const QFileInfo inputInfo(inputFileName);
@@ -382,7 +466,7 @@ bool copyRestartHistoryToResult(const QString &inputFileName,
             .filePath(QStringLiteral("history/") + inputInfo.fileName());
     const QFileInfo historyBaseInfo(inputHistoryBase);
     const QRegularExpression recordPattern(QStringLiteral("^") + QRegularExpression::escape(inputBaseName) +
-                                           QStringLiteral("-(\\d{5})\\.") +
+                                           QStringLiteral("-(\\d{5,})\\.") +
                                            QRegularExpression::escape(inputExtension) + QStringLiteral("$"),
                                            QRegularExpression::CaseInsensitiveOption);
     const QFileInfoList candidates = QDir(historyBaseInfo.absolutePath()).entryInfoList(
@@ -396,6 +480,17 @@ bool copyRestartHistoryToResult(const QString &inputFileName,
         const uint recordNumber = match.captured(1).toUInt(&ok);
         if (ok && recordNumber > 0) inputRecords.insert(recordNumber, candidate.absoluteFilePath());
     }
+    QJsonArray origins;
+    if (!inputRecords.isEmpty())
+    {
+        QFile index(QDir(historyBaseInfo.absolutePath()).filePath(QStringLiteral("origin-index.json")));
+        if (!index.open(QIODevice::ReadOnly) || index.size() > 16 * 1024 * 1024)
+        {
+            if (error) *error = QStringLiteral("Restart history has no captured provenance index.");
+            return false;
+        }
+        origins = QJsonDocument::fromJson(index.readAll()).array();
+    }
 
     try
     {
@@ -404,7 +499,19 @@ bool copyRestartHistoryToResult(const QString &inputFileName,
             RModel record;
             record.read(it.value());
             setRecordNumber(record, it.key());
-            record.write(RFileUtils::getFileNameWithTimeStep(resultFileName, it.key()), true);
+            const QString copiedPath = RFileUtils::getFileNameWithTimeStep(resultFileName, it.key());
+            record.write(copiedPath, true);
+            QJsonObject origin;
+            for (const QJsonValue &entry : origins)
+                if (entry.toObject().value(QStringLiteral("recordNo")).toDouble() == double(it.key())) origin = entry.toObject();
+            if (origin.isEmpty())
+            {
+                if (error) *error = QStringLiteral("Restart record has no provenance entry.");
+                return false;
+            }
+            origin.insert(QStringLiteral("relativePath"), QFileInfo(copiedPath).fileName());
+            origin.insert(QStringLiteral("sha256"), QString::fromLatin1(sha256File(copiedPath).toHex()));
+            reusedHistory->append(origin);
         }
     }
     catch (const RError &readError)
@@ -444,6 +551,8 @@ SolverTask::SolverTask(const ApplicationSettings *applicationSettings, uint mode
     this->monitoringFileName = QDir(logDirectory).filePath(artifactBaseName + ".mon");
     this->nativeProgressFileName = QDir(artifactDirectory)
             .filePath(QStringLiteral("events/native-progress.ndjson"));
+    this->nativeResultJournalFileName = QDir(artifactDirectory)
+            .filePath(QStringLiteral("events/native-results.ndjson"));
 
     this->solverArguments.append("--file=" + this->modelFileName);
     this->solverArguments.append("--log-file=" + this->logFileName);
@@ -718,6 +827,11 @@ const QString &SolverTask::getNativeProgressFileName() const
     return this->nativeProgressFileName;
 }
 
+const QString &SolverTask::getNativeResultJournalFileName() const
+{
+    return this->nativeResultJournalFileName;
+}
+
 uint SolverTask::getModelID() const
 {
     return this->modelID;
@@ -779,6 +893,8 @@ int SolverTask::perform()
     QString resultArtifactPath;
     QString resultArtifactSha256;
     QJsonObject resultSourceBinding;
+    QJsonArray reusedHistory;
+    QSet<QString> producedFramePaths;
     bool resultArtifactVerified = false;
     const auto reportTerminal = [this, &processStarted, &processExited, &processExitCode,
                                  &resultReadbackComplete, &resultArtifactPath,
@@ -1034,6 +1150,84 @@ int SolverTask::perform()
             if (progressOffset == previousOffset) return;
         }
     };
+    QByteArray resultTail;
+    qint64 resultOffset = 0;
+    quint64 resultSequence = 0;
+    bool resultJournalInvalid = false;
+    const auto resultUnavailable = [this, &resultJournalInvalid](const QString &reason)
+    {
+        if (!resultJournalInvalid) emit this->nativeResultFramesUnavailable(this->taskID.toString(), reason);
+        resultJournalInvalid = true;
+    };
+    const auto pollNativeResults = [this, &resultTail, &resultOffset, &resultSequence,
+                                     &resultJournalInvalid, &resultUnavailable, &producedFramePaths]()
+    {
+        if (resultJournalInvalid) return;
+        const QFileInfo info(this->nativeResultJournalFileName);
+        if (!info.exists()) return;
+        if (info.isSymLink() || !info.isFile() || info.canonicalFilePath() != info.absoluteFilePath() ||
+            info.size() > 16 * 1024 * 1024 || info.size() < resultOffset)
+        {
+            resultUnavailable(QStringLiteral("The native result journal path or size is invalid."));
+            return;
+        }
+        QFile journal(this->nativeResultJournalFileName);
+        if (!journal.open(QIODevice::ReadOnly) || !journal.seek(resultOffset))
+        {
+            resultUnavailable(QStringLiteral("The native result journal could not be read."));
+            return;
+        }
+        const QByteArray bytes = journal.read(64 * 1024);
+        if (journal.error() != QFileDevice::NoError)
+        {
+            resultUnavailable(QStringLiteral("The native result journal read failed."));
+            return;
+        }
+        resultOffset += bytes.size();
+        resultTail.append(bytes);
+        for (qsizetype newline = resultTail.indexOf('\n'); newline >= 0; newline = resultTail.indexOf('\n'))
+        {
+            const QByteArray line = resultTail.left(newline);
+            resultTail.remove(0, newline + 1);
+            QJsonParseError error;
+            const QJsonDocument document = QJsonDocument::fromJson(line, &error);
+            const QJsonObject frame = document.object();
+            const double sequence = frame.value(QStringLiteral("seq")).toDouble(-1);
+            const double recordNo = frame.value(QStringLiteral("recordNo")).toDouble(-1);
+            const QString relativePath = frame.value(QStringLiteral("relativePath")).toString();
+            const QFileInfo frameInfo(QDir(QFileInfo(this->resultArtifactFileName).absolutePath()).filePath(relativePath));
+            const QString hash = frame.value(QStringLiteral("sha256")).toString();
+            if (line.size() > 16384 || error.error != QJsonParseError::NoError || !document.isObject() ||
+                frame.value(QStringLiteral("protocolVersion")).toString() != QStringLiteral("range.native-result-frame/v1") ||
+                frame.value(QStringLiteral("jobId")).toString() != this->taskID.toString() ||
+                sequence != double(resultSequence + 1) || sequence > double((quint64(1) << 53) - 1) ||
+                recordNo < 0 || recordNo > double(std::numeric_limits<uint>::max()) || std::floor(recordNo) != recordNo ||
+                !frame.value(QStringLiteral("timeS")).isDouble() || !std::isfinite(frame.value(QStringLiteral("timeS")).toDouble()) ||
+                relativePath.isEmpty() || QFileInfo(relativePath).fileName() != relativePath ||
+                frameInfo.isSymLink() || !frameInfo.isFile() || frameInfo.canonicalFilePath() != frameInfo.absoluteFilePath() ||
+                !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(hash).hasMatch() ||
+                QString::fromLatin1(sha256File(frameInfo.absoluteFilePath()).toHex()) != hash)
+            {
+                resultUnavailable(QStringLiteral("The native result journal contains an invalid sequence, frame path or SHA-256."));
+                return;
+            }
+            ++resultSequence;
+            producedFramePaths.insert(relativePath);
+            emit this->nativeResultFrameReported(this->taskID.toString(), frame);
+        }
+        if (resultTail.size() > 16384)
+            resultUnavailable(QStringLiteral("The native result journal contains an oversized partial record."));
+    };
+    const auto drainNativeResults = [this, &resultOffset, &resultJournalInvalid, &pollNativeResults]()
+    {
+        for (int poll = 0; poll < 256 && !resultJournalInvalid; ++poll)
+        {
+            if (QFileInfo(this->nativeResultJournalFileName).size() <= resultOffset) return;
+            const qint64 previousOffset = resultOffset;
+            pollNativeResults();
+            if (resultOffset == previousOffset) return;
+        }
+    };
     try
     {
         RLogger::info("Solver task (#%s) - Begin\n",this->taskID.toString().toUtf8().constData());
@@ -1073,20 +1267,25 @@ int SolverTask::perform()
                              "Failed to create solver run artifact directories under '%s'.",
                              resultDirectory.toUtf8().constData());
             }
-            if (!QDir().mkpath(progressDirectory) || QFileInfo::exists(this->nativeProgressFileName))
+            if (!QDir().mkpath(progressDirectory) || QFileInfo::exists(this->nativeProgressFileName) ||
+                QFileInfo::exists(this->nativeResultJournalFileName))
             {
                 throw RError(RError::Type::InvalidFileName, R_ERROR_REF,
                              "Failed to prepare the private native progress journal directory.");
             }
-            ModelIO::save(*this->resultSnapshot, this->resultArtifactFileName, false);
             QString historyError;
             if (!copyRestartHistoryToResult(this->inputSnapshotFileName,
                                             this->resultArtifactFileName,
+                                            &reusedHistory,
                                             &historyError))
             {
                 throw RError(RError::Type::Application, R_ERROR_REF,
                              "Could not stage restart history: %s", historyError.toUtf8().constData());
             }
+            // Numbered history writes publish a logical latest LINK. Restore
+            // the prepared input MODEL last so the worker opens the requested
+            // continuation settings, rather than the old checkpoint's setup.
+            ModelIO::save(*this->resultSnapshot, this->resultArtifactFileName, false);
             if (sha256Directory(inputDirectory) != this->inputPackageSha256)
             {
                 throw RError(RError::Type::Application, R_ERROR_REF,
@@ -1119,6 +1318,10 @@ int SolverTask::perform()
         processEnvironment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"), this->taskID.toString());
         processEnvironment.insert(QStringLiteral("RANGE_NATIVE_PROGRESS_PATH"),
                                   QFileInfo(this->nativeProgressFileName).absoluteFilePath());
+        processEnvironment.insert(QStringLiteral("RANGE_NATIVE_RESULT_JOURNAL_PATH"),
+                                  QFileInfo(this->nativeResultJournalFileName).absoluteFilePath());
+        processEnvironment.insert(QStringLiteral("RANGE_NATIVE_RESULT_DIRECTORY"),
+                                  QFileInfo(this->resultArtifactFileName).absolutePath());
         this->solverProcess->setProcessEnvironment(processEnvironment);
 
         QObject::connect(this->solverProcess,&QProcess::readyReadStandardOutput,this,&SolverTask::onProcessReadyReadStandardOutput,Qt::DirectConnection);
@@ -1135,6 +1338,7 @@ int SolverTask::perform()
         {
             const bool processFinished = this->solverProcess->waitForFinished(100);
             pollNativeProgress();
+            pollNativeResults();
             if (processFinished) break;
             if (this->killRequested.load(std::memory_order_acquire))
             {
@@ -1152,6 +1356,9 @@ int SolverTask::perform()
             if (this->solverProcess->state() == QProcess::NotRunning) break;
         }
         drainNativeProgress();
+        drainNativeResults();
+        if (!resultTail.isEmpty())
+            resultUnavailable(QStringLiteral("The native result journal ended with an incomplete record."));
         if (!progressTail.isEmpty())
         {
             progressDiagnostic(QStringLiteral("Discarded incomplete final native progress line."));
@@ -1255,13 +1462,30 @@ int SolverTask::perform()
         }
 
         const QString resultDirectory = QFileInfo(this->resultArtifactFileName).absolutePath();
+        const auto verifyReadbackBinding = [&]()
+        {
+            QString error;
+            const auto current = RProjectCatalog::resolveSourceBinding(this->resultArtifactFileName, &error);
+            if (!current || *current != loadedSourceBinding)
+                throw RError(RError::Type::Application, R_ERROR_REF,
+                             "The native result source chain changed after readback and before publication.");
+        };
+        verifyReadbackBinding();
+        QJsonObject publicationProvenance = this->nativeResultProvenance;
+        QJsonArray retainedHistory;
+        for (const QJsonValue &history : reusedHistory)
+            if (!producedFramePaths.contains(history.toObject().value(QStringLiteral("relativePath")).toString()))
+                retainedHistory.append(history);
+        if (!retainedHistory.isEmpty()) publicationProvenance.insert(QStringLiteral("reusedHistory"), retainedHistory);
         const RNativeResultBroker::PublishResult manifestPublication =
                 RNativeResultBroker::publishResult(resultDirectory,
                                                    this->resultArtifactFileName,
-                                                   this->nativeResultProvenance);
+                                                   publicationProvenance);
+        verifyReadbackBinding();
         if (!manifestPublication.valid)
         {
-            if (manifestPublication.code == QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"))
+            if (!this->expectsNativeResultCatalog() &&
+                manifestPublication.code == QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"))
             {
                 emit this->nativeResultCatalogUnavailable(this->taskID.toString(),
                                                           manifestPublication.code,
@@ -1277,6 +1501,14 @@ int SolverTask::perform()
         }
         else
         {
+            const QJsonObject terminal = manifestPublication.manifest.value(QStringLiteral("terminalModel")).toObject();
+            if (QFileInfo(terminal.value(QStringLiteral("relativePath")).toString()).fileName() !=
+                    terminal.value(QStringLiteral("relativePath")).toString() ||
+                QFileInfo(QDir(resultDirectory).filePath(terminal.value(QStringLiteral("relativePath")).toString())).canonicalFilePath() !=
+                    loadedSourceBinding.resolvedSourcePath ||
+                terminal.value(QStringLiteral("sha256")).toString() != loadedSourceBinding.savedArtifactHash)
+                throw RError(RError::Type::Application, R_ERROR_REF,
+                             "The native result manifest terminal MODEL does not match readback.");
             const QJsonObject descriptor{
                 {QStringLiteral("jobId"), this->taskID.toString()},
                 {QStringLiteral("resultArtifactId"), manifestPublication.artifactId},
@@ -1363,6 +1595,7 @@ int SolverTask::perform()
             if (processStarted)
             {
                 drainNativeProgress();
+                drainNativeResults();
                 if (!progressTail.isEmpty())
                 {
                     progressDiagnostic(QStringLiteral("Discarded incomplete final native progress line."));

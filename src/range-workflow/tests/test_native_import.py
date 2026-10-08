@@ -1,6 +1,7 @@
 """WF-03 raw native model describe protocol and rejection coverage."""
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -19,8 +20,8 @@ class NativeImportTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def fixture(self, kind):
-        path = self.directory / f"{kind}.ram"
+    def fixture(self, kind, binary=False):
+        path = self.directory / f"{kind}.{'rbm' if binary else 'ram'}"
         result = subprocess.run([str(FIXTURE), kind, str(path)], capture_output=True,
                                 text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -92,7 +93,9 @@ class NativeImportTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.directory.iterdir()), ["rod.ram"])
 
     def test_beam_reports_all_four_initial_condition_fields_and_free_dofs(self):
-        source = self.fixture("beam")
+        # Verify the independently derived tube geometry without ASCII MODEL
+        # serialization rounding the declared inertia and recovery moduli.
+        source = self.fixture("beam", binary=True)
         response = self.describe(source)
         self.assertEqual(response["status"], "supported")
         self.assertEqual(response["modelKind"], "cantilever-beam")
@@ -107,8 +110,16 @@ class NativeImportTests(unittest.TestCase):
         self.assertEqual(len(response["pointElements"]), 2)
         self.assertEqual({(item["nodePhysicalId"], item["physicalDof"])
                           for item in response["freeDofs"]}, {(117, "UY"), (117, "RZ")})
-        self.assertEqual(response["elements"][0]["section"], {
-            "areaM2": 0.007, "iyM4": 0.0011, "izM4": 0.0015, "torsionM4": 0.0009})
+        area, outer_radius = 0.007, 0.08
+        inner_squared = outer_radius**2 - area / math.pi
+        inertia = area * (outer_radius**2 + inner_squared) / 4
+        expected_section = {"areaM2": area, "iyM4": inertia, "izM4": inertia,
+                            "torsionM4": 2 * inertia, "wyM3": inertia / outer_radius,
+                            "wzM3": inertia / outer_radius, "wtM3": 2 * inertia / outer_radius}
+        section = response["elements"][0]["section"]
+        self.assertEqual(section.keys(), expected_section.keys())
+        for field, expected in expected_section.items():
+            self.assertTrue(math.isclose(section[field], expected, rel_tol=1e-14, abs_tol=0.0), field)
         self.assertEqual(response["ports"]["velocity"]["globalDirection"], [0, 1, 0])
 
     def test_hash_mismatch_is_a_structured_rejection(self):
@@ -118,6 +129,48 @@ class NativeImportTests(unittest.TestCase):
         self.assertIn({"code": "SOURCE_SHA256_MISMATCH", "severity": "error",
                        "message": "Input bytes do not match the caller's expected SHA-256.",
                        "path": "/expectedSha256"}, response["diagnostics"])
+
+    def test_permuted_storage_preserves_physical_identity_and_actual_native_position(self):
+        for kind, positions, tip_id in (("rod", [2, 4, 1, 3, 0], 51000),
+                                        ("beam", [1, 0], 117)):
+            with self.subTest(kind=kind):
+                baseline = self.describe(self.fixture(kind))
+                source = self.fixture(f"{kind}-permuted")
+                original = source.read_bytes()
+                description = self.describe(source)
+                self.assertEqual([node["position"] for node in description["nodes"]], positions)
+                # Geometry, ICs, elements and supports must keep the same physical identity.
+                self.assertEqual([{key: value for key, value in node.items() if key != "position"}
+                                  for node in description["nodes"]],
+                                 [{key: value for key, value in node.items() if key != "position"}
+                                  for node in baseline["nodes"]])
+                for field in ("elements", "pointElements", "supports", "freeDofs", "ports"):
+                    self.assertEqual(description[field], baseline[field])
+                output = self.directory / f"{kind}-permuted-prepared.ram"
+                prepared = self.prepare_source(source, output)
+                actuator = prepared["mapping"]["actuators"][0]
+                self.assertEqual(actuator["targetNodePosition"], positions[-1])
+                self.assertEqual(actuator["targetNodePhysicalId"], tip_id)
+                self.assertTrue(all(sensor["targetNodePosition"] == positions[-1] and
+                                    sensor["targetNodePhysicalId"] == tip_id
+                                    for sensor in prepared["mapping"]["sensors"]))
+                self.assertEqual(self.describe(output)["nodes"], description["nodes"])
+                self.assertEqual(source.read_bytes(), original)
+
+    def test_saved_kinematic_results_cannot_be_registered_or_prepared_as_fresh_state(self):
+        for quantity in ("displacement", "rotation", "velocity", "angular-velocity"):
+            with self.subTest(quantity=quantity):
+                source = self.fixture(f"beam-saved-{quantity}")
+                original = source.read_bytes()
+                rejected = self.describe(source, success=False)
+                self.assertIn("SAVED_INITIAL_STATE_PRESENT",
+                              {item["code"] for item in rejected["diagnostics"]})
+                output = self.directory / f"saved-{quantity}-prepared.ram"
+                prepared = self.prepare_source(source, output, success=False)
+                self.assertIn("SAVED_INITIAL_STATE_PRESENT",
+                              {item["code"] for item in prepared["diagnostics"]})
+                self.assertFalse(output.exists())
+                self.assertEqual(source.read_bytes(), original)
 
     def test_unsupported_geometry_supports_and_loads_have_stable_diagnostics(self):
         cases = {
@@ -136,6 +189,24 @@ class NativeImportTests(unittest.TestCase):
                 self.assertTrue(all(item["path"].startswith("/")
                                     for item in response["diagnostics"]))
 
+    def test_missing_or_zero_beam_recovery_moduli_are_rejected_before_preparation(self):
+        for kind, fields in (("beam-modulus-missing", {"wyM3", "wzM3", "wtM3"}),
+                             ("beam-modulus-wy-zero", {"wyM3"}),
+                             ("beam-modulus-wz-zero", {"wzM3"}),
+                             ("beam-modulus-wt-zero", {"wtM3"})):
+            with self.subTest(kind=kind):
+                source = self.fixture(kind)
+                before = source.read_bytes()
+                rejected = self.describe(source, success=False)
+                diagnostics = [item for item in rejected["diagnostics"]
+                               if item["code"] == "INVALID_SECTION_PROPERTY"]
+                self.assertEqual({item["path"].rsplit("/", 1)[-1] for item in diagnostics}, fields)
+                output = self.directory / f"{kind}-prepared.ram"
+                response = self.prepare_source(source, output, success=False)
+                self.assertIn("INVALID_SECTION_PROPERTY", {item["code"] for item in response["diagnostics"]})
+                self.assertFalse(output.exists())
+                self.assertEqual(source.read_bytes(), before)
+
     def test_prepare_source_rebuilds_mappings_on_a_hash_bound_private_copy(self):
         source = self.fixture("rod-controlled")
         original = source.read_bytes()
@@ -146,8 +217,10 @@ class NativeImportTests(unittest.TestCase):
         self.assertEqual(response["sourceSha256"], source_sha)
         self.assertEqual(response["preparedSha256"], response["sha256"])
         self.assertEqual(response["preparedSha256"], hashlib.sha256(output.read_bytes()).hexdigest())
-        self.assertEqual(response["sourcePath"], str(source.resolve()))
-        self.assertEqual(response["sourceFiles"], [{"path": str(source.resolve()), "sha256": source_sha}])
+        self.assertEqual(Path(response["sourcePath"]).resolve(), source.resolve())
+        self.assertEqual(len(response["sourceFiles"]), 1)
+        self.assertEqual(Path(response["sourceFiles"][0]["path"]).resolve(), source.resolve())
+        self.assertEqual(response["sourceFiles"][0]["sha256"], source_sha)
         self.assertFalse(response["resume"])
         self.assertEqual(response["outputFrequency"], 1)
         self.assertEqual(response["modelKind"], "four-rod")
@@ -160,6 +233,9 @@ class NativeImportTests(unittest.TestCase):
         self.assertEqual(mapping["actuators"][0]["unit"], "N")
         self.assertEqual(mapping["actuators"][0]["minimum"], -1.0e6)
         self.assertEqual(mapping["actuators"][0]["maximum"], 1.0e6)
+        approved_port = self.describe(source)["ports"]["force"]
+        self.assertEqual(approved_port["minimum"], mapping["actuators"][0]["minimum"])
+        self.assertEqual(approved_port["maximum"], mapping["actuators"][0]["maximum"])
         self.assertEqual([sensor["id"] for sensor in mapping["sensors"]], [
             "source-tip-displacement", "source-tip-velocity", "source-tip-acceleration"])
         self.assertTrue(all(sensor["targetNodePhysicalId"] == 51000 for sensor in mapping["sensors"]))

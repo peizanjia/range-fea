@@ -9,6 +9,7 @@ install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
     ${CMAKE_SOURCE_DIR}/../docs/AGENT_OPERATIONS.md
     ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_SDK.md
     ${CMAKE_SOURCE_DIR}/../docs/NATIVE_DOCUMENT_SDK.md
+    ${CMAKE_SOURCE_DIR}/../docs/NATIVE_RESULTS.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_INTERACTION_DESIGN.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_UX_ACCEPTANCE.md
     ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
@@ -41,12 +42,16 @@ if(RANGE_BUILD_TESTS)
     set_tests_properties(tst_workflow_native_import tst_workflow_model_sources PROPERTIES TIMEOUT 120)
     add_test(NAME tst_workflow_source_reference COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_reference.py" -v)
+    add_test(NAME tst_workflow_native_results COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_results.py" -v)
+    set_tests_properties(tst_workflow_native_results PROPERTIES TIMEOUT 60)
     add_test(NAME tst_workflow_imported_runtime COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_imported_workflow.py"
         --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
         --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+        --fixture "$<TARGET_FILE:range-workflow-native-import-fixture>"
         --python "${Python3_EXECUTABLE}" -v)
-    set_tests_properties(tst_workflow_imported_runtime PROPERTIES TIMEOUT 300)
+    set_tests_properties(tst_workflow_imported_runtime PROPERTIES TIMEOUT 600)
     if(WIN32)
         set_tests_properties(tst_workflow_imported_runtime PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

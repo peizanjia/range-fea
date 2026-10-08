@@ -1,5 +1,16 @@
 # 续作交接
 
+## 2026-10-09 当前持续开发授权与进行中断点
+
+- 最新用户授权已扩大到按计划持续完成顺序2、同步WF06→07、顺序3的WF08/09/10/14、顺序4的WF11→12，达到交付水平。此处不是退出或暂停指令；下方旧退出记录已被覆盖。已建立持续目标，不降低验收门槛。
+- 新 astra-orchestrator skill 为 Luna max 优先；Sol 只用于证据明确的未解决推理问题。根模型/effort与用户配置不改。提高effort仍反复不能解决者可完整记录影响/失败/恢复后跳过，跳过不算验收通过。
+- 根分支 feature/structural-profile，HEAD仍12f0791，WF03/04正在工作树整合。WF03/04尚未done；WF05未启动实施，WF06只有独立SSE准备工件。构建/CTest/安装由根串行。
+- 已完成原W3-01–04/W4-01–05修复、二进位私有导入、梁恢复模量验证、独立完整B/Sv系数、GUI/Agent批准前后来源检查、真实结果SDK/统计扩展/live/逐帧来源CSV与native.result.display。当前未闭合：普通不可计算/孤立节点平移通道可用性P2；结果场测试verifiedNativeResultOpensAsIndependentReusableDocument仍SEGFAULT，Luna第二次不同诊断进行中。不得把旧一发式注入修复视为崩溃已闭合。
+- 本轮证据：build/audit-20261009/WF-03/imported-full.log 完整导入suite通过132.99s，含六种杆/梁置换/零/饱和、连续/续算、真实SDK/统计/比较/篡改。WF04/window-field-focused.log中Windows当前模型故事通过26.68s；closure-focused.log中同故事22.33s、native widget通过6.95s，但3/4整组因field崩溃失败。125项已注册，不等于125项通过。先前时间间隙/超时、格式舍入、CLI日志mask、测试错误均保留在audit-20261008/09，不删失败历史。
+- 实际窗口截图与CSV：build/audit-20261009/WF-03/window/。结果场测试失败堆栈：build/audit-20261009/WF-04/closure-focused.log。新版UI标签/字段接线仍需最终重建、完整回归、安装私有SDK/GUI和独立审查，随后冻结代码并逐条记录验收。
+- WF06准备工件仅为AI子模块内三个未注册新文件 include/rai_tool_stream.h、src/rai_tool_stream.cpp、tests/tst_agent_tool_stream.cpp；既有AI源码/CMake/HEAD未改，不参与WF03/04当前构建。待前项冻结后集成并单独验证，不能宣称流式功能已交付。
+- 用户 .agents/、.codex/、AGENTS.md、凭据与记忆保持原样，不混入提交；本地提交，不push。旧MODEL和模板兼容边界见docs/NATIVE_RESULTS.md；缺新来源证明的旧template续算明确拒绝，未用猜测哈希迁移。
+
 ## 2026-10-08 用户要求退出：WF03/WF04 WIP 交接（当前入口）
 
 - 最新指令是“新建 session 继续，整理所有交接并退出”；本 session 已停止功能推进，所有子代理完成，无根代理遗留构建/测试任务。下面旧记录只用于追溯，不覆盖本节。

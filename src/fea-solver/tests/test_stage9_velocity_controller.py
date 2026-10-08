@@ -210,6 +210,24 @@ class VelocityGainDesignTests(unittest.TestCase):
         self.assertAlmostEqual(report["fullOrder"]["q"][0], report["reducedOrder"]["q"][0], places=12)
         self.assertAlmostEqual(report["fullOrder"]["v"][0], report["reducedOrder"]["v"][0], places=12)
 
+    def test_saturated_initial_velocity_uses_held_force_for_initial_acceleration(self) -> None:
+        for velocity, expected_force in ((10.0, -3.0), (-10.0, 2.0)):
+            trajectory = controller._trajectory(
+                one_dof_model(), np.array([0.0]), np.array([velocity]),
+                force_column=np.array([1.0]), velocity_row=np.array([1.0]), gain=4.0,
+                dt=0.01, steps=1, feedback=True, force_minimum=-3.0, force_maximum=2.0)
+            self.assertEqual(trajectory["heldForce"], [expected_force])
+            initial_acceleration = (expected_force - 0.8 * velocity) / 2.0
+            self.assertAlmostEqual(trajectory["a"][0][0], initial_acceleration)
+            # Independent scalar Newmark calculation, with the saturated force held throughout.
+            predicted_q = 0.01 * velocity + 0.000025 * initial_acceleration
+            predicted_v = velocity + 0.005 * initial_acceleration
+            expected_q = (expected_force + 80000.0 * predicted_q +
+                          0.8 * (200.0 * predicted_q - predicted_v)) / 80168.0
+            expected_v = predicted_v + 0.005 * (expected_q - predicted_q) / 0.000025
+            self.assertAlmostEqual(trajectory["q"][1][0], expected_q)
+            self.assertAlmostEqual(trajectory["v"][1][0], expected_v)
+
     def test_sampled_newmark_solution_converges_to_continuous_feedback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)

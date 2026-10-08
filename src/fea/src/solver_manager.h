@@ -39,6 +39,8 @@ class SolverManager : public RJobManager
         QStringList nativeJobOrder;
         //! Live native task pointers, guarded by QObject lifetime tracking.
         QHash<QString,QPointer<SolverTask>> nativeTasks;
+        //! Immutable copied broker descriptors, kept out of paginated job status.
+        QHash<QString,QJsonObject> nativeResultDescriptors;
 
     public:
 
@@ -70,6 +72,13 @@ class SolverManager : public RJobManager
 
         //! Return a bounded page of native task records. Valid limits are 1 through 200.
         QJsonObject jobsQuery(int offset = 0, int limit = 100) const;
+
+        //! Query only registered native artifacts or accepted live frame snapshots.
+        //! Optional arguments.artifactId binds the request to the registry identity.
+        QJsonObject nativeResultQuery(const QString &jobId, const QString &operation,
+                                     const QJsonObject &arguments) const;
+        //! Trusted scheduling lookup; retained hashes pin managed restart ancestry.
+        QJsonObject nativeResultManifestForSource(const QString &sourcePath) const;
 
         //! Request cancellation for one native job ID.
         bool cancelJob(const QString &jobId, QString *error = nullptr);

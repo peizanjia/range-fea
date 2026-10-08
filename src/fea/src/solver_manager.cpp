@@ -3,6 +3,7 @@
 #include "model_command_host.h"
 #include "session.h"
 #include "solver_setup_checker.h"
+#include <rnative_result_broker.h>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -101,7 +102,9 @@ bool validResultSourceBinding(const QJsonObject &binding, const QString &rawResu
         const QString path = artifact.value(QStringLiteral("path")).toString();
         const QString hash = artifact.value(QStringLiteral("sha256")).toString();
         if (path.isEmpty() || !QFileInfo(path).isAbsolute() ||
-            !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(hash).hasMatch())
+            !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(hash).hasMatch() ||
+            QFileInfo(path).isSymLink() || !samePathText(QFileInfo(path).canonicalFilePath(), path) ||
+            QString::fromLatin1(sha256File(path).toHex()) != hash)
             return false;
         if (index == 0)
         {
@@ -179,6 +182,16 @@ bool validNativeResultManifestDescriptor(const QJsonObject &descriptor,
         return reject(QStringLiteral("The copied result manifest descriptor does not match the immutable manifest file."));
 
     const QJsonObject latest = manifest.value(QStringLiteral("logicalLatest")).toObject();
+    const QJsonObject terminal = manifest.value(QStringLiteral("terminalModel")).toObject();
+    const QJsonObject binding = jobRecord.value(QStringLiteral("resultSourceBinding")).toObject();
+    const QString terminalRelativePath = terminal.value(QStringLiteral("relativePath")).toString();
+    const QString terminalPath = QDir(resultDirectory).filePath(terminalRelativePath);
+    if (!jobRecord.value(QStringLiteral("resultSourceBindingVerified")).toBool() ||
+        !validResultSourceBinding(binding, resultSha256, resultPath, resultPath) ||
+        terminalRelativePath.isEmpty() || QFileInfo(terminalRelativePath).fileName() != terminalRelativePath ||
+        !samePathText(terminalPath, binding.value(QStringLiteral("resolvedSourcePath")).toString()) ||
+        terminal.value(QStringLiteral("sha256")).toString() != binding.value(QStringLiteral("savedArtifactHash")).toString())
+        return reject(QStringLiteral("The manifest terminal MODEL does not match the artifact accepted by result readback."));
     const QJsonObject analysis = manifest.value(QStringLiteral("analysis")).toObject();
     const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
     const QString analysisType = analysis.value(QStringLiteral("type")).toString();
@@ -209,6 +222,9 @@ bool validNativeResultManifestDescriptor(const QJsonObject &descriptor,
     const QByteArray currentResultSha256 = sha256File(resultPath);
     if (currentResultSha256.isEmpty() || QString::fromLatin1(currentResultSha256.toHex()) != resultSha256)
         return reject(QStringLiteral("The logical latest artifact changed after manifest publication."));
+    const QJsonObject catalog = RNativeResultBroker::query(manifestPath, manifestSha256, QStringLiteral("catalog"), {});
+    if (!catalog.value(QStringLiteral("valid")).toBool())
+        return reject(catalog.value(QStringLiteral("message")).toString());
     return true;
 }
 }
@@ -792,7 +808,8 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
     const QJsonObject logArtifactRefs{{QStringLiteral("solverLog"), solverTask->getLogFileName()},
                                       {QStringLiteral("convergence"), solverTask->getConvergenceFileName()},
                                       {QStringLiteral("monitoring"), solverTask->getMonitoringFileName()},
-                                      {QStringLiteral("nativeProgressJournal"), solverTask->getNativeProgressFileName()}};
+                                      {QStringLiteral("nativeProgressJournal"), solverTask->getNativeProgressFileName()},
+                                      {QStringLiteral("nativeResultJournal"), solverTask->getNativeResultJournalFileName()}};
     QJsonObject sourceRuntimeStamp{{QStringLiteral("documentId"), sourceStamp.first},
                                    {QStringLiteral("revision"), QString::number(sourceStamp.second)},
                                    {QStringLiteral("sessionEpoch"), sessionEpoch}};
@@ -844,6 +861,10 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                        {QStringLiteral("nativeResultCatalogCode"), QString()},
                        {QStringLiteral("nativeResultCatalogAvailable"), false},
                        {QStringLiteral("nativeResultCatalogMessage"), QString()},
+                       {QStringLiteral("resultFrames"), QJsonArray{}},
+                       {QStringLiteral("resultFrameSequence"), 0},
+                       {QStringLiteral("resultFramesAvailable"), false},
+                       {QStringLiteral("resultFramesStatus"), QStringLiteral("pending")},
                        {QStringLiteral("logArtifactRefs"), logArtifactRefs},
                        {QStringLiteral("progress"), QJsonValue::Null},
                        {QStringLiteral("progressAvailable"), false},
@@ -860,6 +881,36 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
     this->nativeJobs.insert(jobId, record);
     this->nativeJobOrder.append(jobId);
     this->nativeTasks.insert(jobId, solverTask);
+
+    QObject::connect(solverTask, &SolverTask::nativeResultFrameReported, this,
+                     [this, jobId](const QString &reportedJobId, const QJsonObject &frame)
+    {
+        const QJsonObject record = this->nativeJobs.value(jobId);
+        if (reportedJobId != jobId || frame.value(QStringLiteral("jobId")).toString() != jobId ||
+            frame.value(QStringLiteral("protocolVersion")).toString() != QStringLiteral("range.native-result-frame/v1") ||
+            record.value(QStringLiteral("resultFramesStatus")).toString() == QStringLiteral("unavailable")) return;
+        QJsonArray frames = record.value(QStringLiteral("resultFrames")).toArray();
+        if (frame.value(QStringLiteral("seq")).toDouble() != frames.size() + 1 || frames.size() >= 10000)
+        {
+            this->updateNativeJob(jobId, {{QStringLiteral("resultFramesAvailable"), false},
+                                          {QStringLiteral("resultFramesStatus"), QStringLiteral("unavailable")},
+                                          {QStringLiteral("resultFramesUnavailableReason"), QStringLiteral("Native frame sequence or count is invalid.")}});
+            return;
+        }
+        frames.append(frame);
+        this->updateNativeJob(jobId, {{QStringLiteral("resultFrames"), frames},
+                                      {QStringLiteral("resultFrameSequence"), frame.value(QStringLiteral("seq"))},
+                                      {QStringLiteral("resultFramesAvailable"), true},
+                                      {QStringLiteral("resultFramesStatus"), QStringLiteral("available")}});
+    }, Qt::QueuedConnection);
+    QObject::connect(solverTask, &SolverTask::nativeResultFramesUnavailable, this,
+                     [this, jobId](const QString &reportedJobId, const QString &reason)
+    {
+        if (reportedJobId != jobId) return;
+        this->updateNativeJob(jobId, {{QStringLiteral("resultFramesAvailable"), false},
+                                      {QStringLiteral("resultFramesStatus"), QStringLiteral("unavailable")},
+                                      {QStringLiteral("resultFramesUnavailableReason"), reason}});
+    }, Qt::QueuedConnection);
 
     QObject::connect(solverTask, &RJob::started, this, [this, jobId]()
     {
@@ -941,7 +992,6 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         const bool verified = !actualPath.isEmpty() && !reportedCanonicalPath.isEmpty() &&
                 !expectedCanonicalPath.isEmpty() &&
                 validResultSourceBinding(sourceBinding, sha256, reportedCanonicalPath, expectedCanonicalPath);
-        if (verified) this->lastResultArtifactFileName = actualPath;
         QJsonObject fields{{QStringLiteral("resultArtifactSha256"), verified ? QJsonValue(sha256) : QJsonValue(QJsonValue::Null)},
                            {QStringLiteral("resultArtifactVerified"), verified},
                            {QStringLiteral("resultSourceBindingVerified"), verified},
@@ -973,6 +1023,7 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         if (verified)
         {
             fields.insert(QStringLiteral("resultArtifactId"), descriptor.value(QStringLiteral("resultArtifactId")));
+            this->nativeResultDescriptors.insert(jobId, descriptor);
             fields.insert(QStringLiteral("resultManifestRef"), QFileInfo(
                 descriptor.value(QStringLiteral("resultManifestRef")).toString()).absoluteFilePath());
             fields.insert(QStringLiteral("resultManifestSha256"), descriptor.value(QStringLiteral("resultManifestSha256")));
@@ -1019,10 +1070,14 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                 currentRecord.value(QStringLiteral("resultArtifactVerified")).toBool() &&
                 currentRecord.value(QStringLiteral("resultArtifactSha256")).toString() == resultArtifactSha256 &&
                 registeredSourceBinding;
+        QString manifestError;
         const bool verifiedManifest = currentRecord.value(QStringLiteral("resultManifestDescriptorReported")).toBool() &&
                 currentRecord.value(QStringLiteral("resultManifestVerified")).toBool() &&
-                currentRecord.value(QStringLiteral("nativeResultCatalogAvailable")).toBool();
-        const bool explicitlyUnsupported = currentRecord.value(QStringLiteral("nativeResultCatalogCode")).toString() ==
+                currentRecord.value(QStringLiteral("nativeResultCatalogAvailable")).toBool() &&
+                validNativeResultManifestDescriptor(this->nativeResultDescriptors.value(jobId),
+                                                    currentRecord, jobId, &manifestError);
+        const bool explicitlyUnsupported = !currentRecord.value(QStringLiteral("nativeResultCatalogExpected")).toBool() &&
+                currentRecord.value(QStringLiteral("nativeResultCatalogCode")).toString() ==
                 QStringLiteral("UNSUPPORTED_ANALYSIS_MODE");
         const bool catalogEvidenceComplete = verifiedManifest || explicitlyUnsupported;
         const bool completeEvidence = processStarted && processExited && exitCode == 0 &&
@@ -1054,6 +1109,8 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                                                                         : QJsonValue(QJsonValue::Null)},
                            {QStringLiteral("resultArtifactVerified"), verifiedArtifact},
                            {QStringLiteral("resultSourceBindingVerified"), verifiedArtifact},
+                           {QStringLiteral("resultManifestVerified"), verifiedManifest},
+                           {QStringLiteral("nativeResultCatalogAvailable"), verifiedManifest},
                            {QStringLiteral("message"), terminalMessage}};
         if (verifiedArtifact)
             fields.insert(QStringLiteral("resultArtifactRef"), actualResultPath);
@@ -1066,6 +1123,8 @@ void SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
             fields.insert(QStringLiteral("progressUnavailableReason"), QStringLiteral("No valid native progress journal was reported for this task."));
         }
         this->updateNativeJob(jobId, fields);
+        if (state == QStringLiteral("succeeded") && verifiedArtifact)
+            this->lastResultArtifactFileName = actualResultPath;
         this->nativeTasks.remove(jobId);
     }, Qt::QueuedConnection);
     QObject::connect(solverTask, &RJob::failed, this, [this, jobId]()
@@ -1158,6 +1217,122 @@ QJsonObject SolverManager::jobsQuery(int offset, int limit) const
                   {QStringLiteral("hasMore"), end < total}};
     }))
         return {{QStringLiteral("error"), QStringLiteral("wrong_thread")}};
+    return result;
+}
+
+QJsonObject SolverManager::nativeResultManifestForSource(const QString &sourcePath) const
+{
+    QJsonObject result;
+    this->invokeOnOwner([this, &result, &sourcePath]()
+    {
+        for (const QString &jobId : this->nativeJobOrder)
+        {
+            const QJsonObject record = this->nativeJobs.value(jobId);
+            if (samePathText(record.value(QStringLiteral("resultArtifactRef")).toString(), sourcePath) ||
+                samePathText(record.value(QStringLiteral("resultSourceBinding")).toObject()
+                             .value(QStringLiteral("resolvedSourcePath")).toString(), sourcePath))
+            {
+                const QJsonObject descriptor = this->nativeResultDescriptors.value(jobId);
+                if (!descriptor.isEmpty())
+                    result = {{QStringLiteral("resultManifestRef"), descriptor.value(QStringLiteral("resultManifestRef"))},
+                              {QStringLiteral("resultManifestSha256"), descriptor.value(QStringLiteral("resultManifestSha256"))}};
+            }
+        }
+    });
+    return result;
+}
+
+QJsonObject SolverManager::nativeResultQuery(const QString &jobId, const QString &operation,
+                                           const QJsonObject &arguments) const
+{
+    const auto failure = [](const QString &code, const QString &message)
+    {
+        return QJsonObject{{QStringLiteral("valid"), false}, {QStringLiteral("code"), code},
+                           {QStringLiteral("message"), message}};
+    };
+    QJsonObject result;
+    if (!this->invokeOnOwner([this, &result, &jobId, &operation, &arguments, &failure]()
+    {
+        if (!this->nativeJobs.contains(jobId))
+        {
+            result = failure(QStringLiteral("UNKNOWN_NATIVE_JOB"), QStringLiteral("Unknown native solver job ID."));
+            return;
+        }
+        const QJsonObject record = this->nativeJobs.value(jobId);
+        QJsonObject brokerArguments = arguments;
+        if (brokerArguments.contains(QStringLiteral("artifactId")) &&
+            (!brokerArguments.value(QStringLiteral("artifactId")).isString() ||
+             brokerArguments.value(QStringLiteral("artifactId")).toString().isEmpty()))
+        {
+            result = failure(QStringLiteral("INVALID_ARGUMENTS"), QStringLiteral("artifactId must be a non-empty string."));
+            return;
+        }
+        const QString requestedArtifact = brokerArguments.take(QStringLiteral("artifactId")).toString();
+        const QJsonObject provenance = record.value(QStringLiteral("nativeResultProvenance")).toObject();
+        const QString mode = provenance.value(QStringLiteral("control")).toObject().value(QStringLiteral("enabled")).toBool()
+                ? QStringLiteral("active") : QStringLiteral("passive");
+        const QByteArray artifactSeed = jobId.toUtf8() + '\n' + mode.toUtf8() + '\n' +
+                provenance.value(QStringLiteral("inputPackageSha256")).toString().toLatin1();
+        const QString artifactId = QStringLiteral("artifact-") + QString::fromLatin1(QCryptographicHash::hash(
+                    artifactSeed, QCryptographicHash::Sha256).toHex()).left(32);
+        QJsonArray liveFrames = record.value(QStringLiteral("resultFrames")).toArray();
+        bool artifactMatches = requestedArtifact.isEmpty() || requestedArtifact == artifactId;
+        if (requestedArtifact.startsWith(artifactId + QStringLiteral("-live-")))
+        {
+            bool validSequence = false;
+            const int frozenSequence = requestedArtifact.mid(artifactId.size() + 6).toInt(&validSequence);
+            artifactMatches = validSequence && frozenSequence > 0 && frozenSequence <= liveFrames.size() &&
+                    requestedArtifact == artifactId + QStringLiteral("-live-") + QString::number(frozenSequence);
+            if (artifactMatches) while (liveFrames.size() > frozenSequence) liveFrames.removeLast();
+        }
+        if (!artifactMatches)
+        {
+            result = failure(QStringLiteral("ARTIFACT_ID_MISMATCH"), QStringLiteral("The artifact does not belong to the requested job."));
+            return;
+        }
+        if (record.value(QStringLiteral("state")).toString() == QStringLiteral("succeeded") &&
+            record.value(QStringLiteral("resultManifestVerified")).toBool())
+        {
+            QString error;
+            if (!validNativeResultManifestDescriptor(this->nativeResultDescriptors.value(jobId), record, jobId, &error))
+                result = failure(QStringLiteral("ARTIFACT_CHANGED"), error);
+            else if (requestedArtifact.startsWith(artifactId + QStringLiteral("-live-")))
+                result = RNativeResultBroker::queryLive(QFileInfo(record.value(QStringLiteral("resultArtifactRef")).toString()).absolutePath(),
+                                                        provenance, liveFrames, operation, brokerArguments);
+            else
+                result = RNativeResultBroker::query(record.value(QStringLiteral("resultManifestRef")).toString(),
+                                                    record.value(QStringLiteral("resultManifestSha256")).toString(),
+                                                    operation, brokerArguments);
+            return;
+        }
+        const QString state = record.value(QStringLiteral("state")).toString();
+        if (state == QStringLiteral("queued"))
+        {
+            result = failure(QStringLiteral("RESULT_PENDING"), QStringLiteral("The native job is queued and has no persisted frames yet."));
+            return;
+        }
+        if (state == QStringLiteral("succeeded") &&
+            !record.value(QStringLiteral("nativeResultCatalogExpected")).toBool() &&
+            record.value(QStringLiteral("nativeResultCatalogCode")).toString() == QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"))
+        {
+            result = failure(QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"), record.value(QStringLiteral("nativeResultCatalogMessage")).toString());
+            return;
+        }
+        if (state != QStringLiteral("running") && state != QStringLiteral("cancelling"))
+        {
+            result = failure(QStringLiteral("RESULT_NOT_AVAILABLE"), QStringLiteral("This job has no verified completed native result."));
+            return;
+        }
+        if (!record.value(QStringLiteral("resultFramesAvailable")).toBool())
+        {
+            result = failure(QStringLiteral("RESULT_PENDING"), QStringLiteral("No trusted persisted native frames are available yet."));
+            return;
+        }
+        result = RNativeResultBroker::queryLive(QFileInfo(record.value(QStringLiteral("resultArtifactRef")).toString()).absolutePath(),
+                                                provenance, liveFrames,
+                                                operation, brokerArguments);
+    }))
+        return failure(QStringLiteral("WRONG_THREAD"), QStringLiteral("Native result query could not reach the registry owner."));
     return result;
 }
 

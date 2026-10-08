@@ -52,6 +52,8 @@ class SolverTask : public RJob
         QString monitoringFileName;
         //! Native progress journal path inside this task's private run directory.
         QString nativeProgressFileName;
+        //! Actual persisted result-frame journal, separate from solver progress.
+        QString nativeResultJournalFileName;
         //! Detached model copy captured on the document thread at scheduling.
         std::unique_ptr<Model> inputSnapshot;
         //! Detached result copy owned and updated by the worker.
@@ -142,6 +144,7 @@ class SolverTask : public RJob
 
         //! Return the private native progress journal path.
         const QString &getNativeProgressFileName() const;
+        const QString &getNativeResultJournalFileName() const;
 
         //! Return model ID.
         uint getModelID() const;
@@ -211,6 +214,10 @@ class SolverTask : public RJob
 
         //! A malformed, stale, or skipped native progress record was diagnosed.
         void nativeProgressDiagnostic(QString jobId, QString message);
+
+        //! A hash-verified persisted frame, copied to the manager thread.
+        void nativeResultFrameReported(QString jobId, QJsonObject frame);
+        void nativeResultFramesUnavailable(QString jobId, QString reason);
 
 };
 

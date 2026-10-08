@@ -7,10 +7,12 @@
 #include <QDockWidget>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLockFile>
 #include <QSemaphore>
+#include <QSet>
 #include <QStringList>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -983,6 +985,25 @@ private slots:
         const QString resultSha = job.value(QStringLiteral("resultArtifactSha256")).toString();
         QCOMPARE(resultSha.size(), 64);
         QVERIFY(QFileInfo::exists(job.value(QStringLiteral("resultArtifactRef")).toString()));
+        const auto capabilityResponse = host->handle(hostRequest("capabilities.query", {}));
+        bool displaySupported = false;
+        for (const auto &entry : capabilityResponse.value("result").toObject().value("supportedOperations").toArray())
+            if (entry.toObject().value("id").toString() == "native.result.display")
+                displaySupported = entry.toObject().value("version").toInt() == 1;
+        QVERIFY(displaySupported);
+        const QString artifactId = job.value("resultArtifactId").toString();
+        QVERIFY(!artifactId.isEmpty());
+        const QJsonObject channelPage = manager.nativeResultQuery(jobId, "channels", {{"artifactId", artifactId}, {"offset", 0}, {"limit", 1}});
+        QVERIFY2(channelPage.value("valid").toBool(), qPrintable(QJsonDocument(channelPage).toJson()));
+        const QJsonObject physicalChannel = channelPage.value("channels").toArray().first().toObject();
+        const QString channelId = physicalChannel.value("channelId").toString();
+        const auto display = [&](const QString &artifact, const QString &channel) {
+            return host->handle(hostRequest("native.result.display", {{"jobId", jobId}, {"artifactId", artifact}, {"channelId", channel}}));
+        };
+        const uint beforeRejectedDisplay = session->getNModels();
+        QCOMPARE(display("artifact-another-job", channelId).value("status").toString(), QString("rejected"));
+        QCOMPARE(display(artifactId, "node:4294967294:displacement:X").value("status").toString(), QString("rejected"));
+        QCOMPARE(session->getNModels(), beforeRejectedDisplay);
 
         auto gateStarted = std::make_shared<QSemaphore>();
         auto gateRelease = std::make_shared<QSemaphore>();
@@ -1028,6 +1049,27 @@ private slots:
         QVERIFY(!resultIdentity.isEmpty());
         QVERIFY(resultIdentity != sourceIdentity);
         models.track(resultIdentity);
+        const auto sourceStampBeforeDisplay = session->modelCommandStamp(session->findModelByCommandIdentity(sourceIdentity));
+        const auto resultStampBeforeDisplay = session->modelCommandStamp(session->findModelByCommandIdentity(resultIdentity));
+        const auto displayed = display(artifactId, channelId);
+        QVERIFY2(displayed.value("status").toString() == "accepted", qPrintable(QJsonDocument(displayed).toJson()));
+        const QJsonObject field = displayed.value("result").toObject();
+        QCOMPARE(field.value("documentId").toString(), resultIdentity);
+        QCOMPARE(field.value("artifactId").toString(), artifactId);
+        QCOMPARE(field.value("fieldDisplayScope").toString(), QString("full-variable-magnitude"));
+        QCOMPARE(field.value("coordinateSystem").toString(), QString("global"));
+        QCOMPARE(field.value("unit"), physicalChannel.value("unit"));
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(sourceIdentity)), sourceStampBeforeDisplay);
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(resultIdentity)), resultStampBeforeDisplay);
+        const uint displayedID = session->findModelByCommandIdentity(resultIdentity);
+        QVERIFY(session->getSelectedModelIDs().contains(displayedID));
+        const auto picks = session->getPickList().getItems(displayedID);
+        QCOMPARE(picks.size(), 1);
+        QCOMPARE(session->getModel(displayedID).getNodePhysicalId(picks.first().getNodeID()),
+                 uint(field.value("nodePhysicalId").toDouble()));
+        const auto &displayData = session->getModel(displayedID).getEntityGroupPtr(
+            session->getModel(displayedID).getEntityGroupID(picks.first().getEntityID().getType(), picks.first().getEntityID().getEid()))->getData();
+        QVERIFY(displayData.findVariableByDisplayType(R_ENTITY_GROUP_VARIABLE_DISPLAY_SCALAR) != R_VARIABLE_NONE);
         QCOMPARE(openedResult.value(QStringLiteral("sourceJob")).toObject().value(QStringLiteral("jobId")).toString(), jobId);
         QVERIFY(!openedResult.value(QStringLiteral("persistentDocumentId")).toString().isEmpty());
         const QJsonObject sourceJob = openedResult.value(QStringLiteral("sourceJob")).toObject();
@@ -1082,7 +1124,7 @@ private slots:
         QVERIFY(resultView.value(QStringLiteral("modifiedSinceOpen")).toBool());
         QCOMPARE(resultView.value(QStringLiteral("dirtyStatus")).toString(), QStringLiteral("edited_after_open"));
 
-        const auto reopenedFresh = open();
+        const auto reopenedFresh = display(artifactId, channelId);
         QVERIFY2(reopenedFresh.value(QStringLiteral("status")).toString() == QStringLiteral("accepted"),
                  qPrintable(QJsonDocument(reopenedFresh).toJson(QJsonDocument::Compact)));
         const QJsonObject freshResult = reopenedFresh.value(QStringLiteral("result")).toObject();
@@ -1101,6 +1143,24 @@ private slots:
                  QStringLiteral("reused"));
         QCOMPARE(reopenedFreshAgain.value(QStringLiteral("result")).toObject().value(QStringLiteral("documentId")).toString(),
                  freshIdentity);
+
+        // A synchronous selection observer may edit a result document. The
+        // host must resolve its identity again rather than display stale data.
+        bool selectionEditInjected = false;
+        const auto selectionEdit = connect(session, &Session::modelSelectionChanged, session, [&](uint id) {
+            if (!selectionEditInjected && session->modelCommandStamp(id).first == freshIdentity)
+            {
+                selectionEditInjected = true;
+                session->setModelChanged(id);
+            }
+        });
+        const auto reentrantDisplay = display(artifactId, channelId);
+        disconnect(selectionEdit);
+        QVERIFY(selectionEditInjected);
+        QCOMPARE(reentrantDisplay.value("status").toString(), QString("rejected"));
+        QCOMPARE(reentrantDisplay.value("code").toString(), QString("RESULT_DOCUMENT_CHANGED"));
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(sourceIdentity)), sourceStampBeforeDisplay);
+        QCOMPARE(session->getModel(session->findModelByCommandIdentity(sourceIdentity)).getElementGroupPtr(0)->getMaterial().toJson(), sourceMaterial);
 
         const QJsonObject immutableBinding = job.value(QStringLiteral("resultSourceBinding")).toObject();
         const QString terminalPath = immutableBinding.value(QStringLiteral("resolvedSourcePath")).toString();
@@ -1122,6 +1182,113 @@ private slots:
         QVERIFY(terminal.open(QIODevice::WriteOnly | QIODevice::Truncate));
         QCOMPARE(terminal.write(originalTerminal), qint64(originalTerminal.size()));
         terminal.close();
+
+        // The source and two independent result documents exercise both a
+        // middle removal and the first-slot removal that previously left a
+        // surviving result pick with an out-of-range model ID.
+        const uint sourceModelID = session->findModelByCommandIdentity(sourceIdentity);
+        const uint resultModelID = session->findModelByCommandIdentity(resultIdentity);
+        const uint freshModelID = session->findModelByCommandIdentity(freshIdentity);
+        QVERIFY(sourceModelID != RConstants::eod);
+        QVERIFY(resultModelID != RConstants::eod);
+        QVERIFY(freshModelID != RConstants::eod);
+        QCOMPARE(resultModelID, sourceModelID + 1);
+        QCOMPARE(freshModelID, resultModelID + 1);
+
+        const auto sourceStampBeforeRemoval = session->modelCommandStamp(sourceModelID);
+        const auto freshStampBeforeRemoval = session->modelCommandStamp(freshModelID);
+        const QVector<uint> nodePositions{0, 1};
+        QHash<QString, QSet<uint>> expectedNodePositions;
+        QHash<QString, QHash<uint, uint>> expectedPhysicalNodes;
+        session->getPickList().clear();
+        for (const auto &entry : {qMakePair(sourceIdentity, sourceModelID),
+                                  qMakePair(resultIdentity, resultModelID),
+                                  qMakePair(freshIdentity, freshModelID)})
+        {
+            const Model &model = session->getModel(entry.second);
+            QVERIFY(model.getNLines() > 0);
+            QVERIFY(model.getNNodes() > 1);
+            const uint lineGroupID = model.getEntityGroupID(R_ENTITY_GROUP_LINE, 0);
+            QVERIFY(lineGroupID != RConstants::eod);
+            QVERIFY(model.getEntityGroupPtr(lineGroupID));
+
+            QSet<uint> nodeSet;
+            for (uint nodeID : nodePositions)
+            {
+                nodeSet.insert(nodeID);
+                expectedPhysicalNodes[entry.first].insert(nodeID, model.getNodePhysicalId(nodeID));
+                session->getPickList().addItem(PickItem(
+                    SessionEntityID(entry.second, R_ENTITY_GROUP_LINE, 0), 0, 0, nodeID, nodeID));
+            }
+            expectedNodePositions.insert(entry.first, nodeSet);
+        }
+
+        int observedPickListChanges = 0;
+        bool observedPicksRemainValid = true;
+        const auto validatePickList = [&]() {
+            const auto &items = session->getPickList().getItems();
+            qsizetype expectedCount = 0;
+            for (auto it = expectedNodePositions.cbegin(); it != expectedNodePositions.cend(); ++it)
+                expectedCount += it.value().size();
+            if (items.size() != expectedCount) return false;
+
+            QHash<QString, QSet<uint>> observedNodes;
+            for (const PickItem &item : items)
+            {
+                const uint modelID = item.getEntityID().getMid();
+                if (modelID >= session->getNModels()) return false;
+                const QString identity = session->modelCommandStamp(modelID).first;
+                if (!expectedNodePositions.contains(identity)) return false;
+                const uint nodeID = item.getNodeID();
+                const auto expectedPhysical = expectedPhysicalNodes.value(identity);
+                if (!expectedPhysical.contains(nodeID)
+                    || item.getEntityID().getType() != R_ENTITY_GROUP_LINE
+                    || item.getEntityID().getEid() != 0
+                    || item.getElementID() != 0
+                    || item.getElementPosition() != 0
+                    || item.getNodePosition() != nodeID
+                    || item.getItemType() != PICK_ITEM_NODE)
+                    return false;
+
+                const Model &model = session->getModel(modelID);
+                const uint lineGroupID = model.getEntityGroupID(R_ENTITY_GROUP_LINE, 0);
+                if (lineGroupID == RConstants::eod || !model.getEntityGroupPtr(lineGroupID)
+                    || nodeID >= model.getNNodes()
+                    || model.getNodePhysicalId(nodeID) != expectedPhysical.value(nodeID))
+                    return false;
+                observedNodes[identity].insert(nodeID);
+            }
+            return observedNodes == expectedNodePositions;
+        };
+        const auto pickListObserver = connect(session, &Session::pickListChanged, session, [&]() {
+            ++observedPickListChanges;
+            observedPicksRemainValid = observedPicksRemainValid && validatePickList();
+        }, Qt::DirectConnection);
+
+        expectedNodePositions.remove(resultIdentity);
+        expectedPhysicalNodes.remove(resultIdentity);
+        session->removeModel(resultModelID);
+        QCOMPARE(observedPickListChanges, 1);
+        QVERIFY(observedPicksRemainValid);
+        QCOMPARE(session->findModelByCommandIdentity(sourceIdentity), sourceModelID);
+        QCOMPARE(session->findModelByCommandIdentity(resultIdentity), RConstants::eod);
+        QCOMPARE(session->findModelByCommandIdentity(freshIdentity), resultModelID);
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(sourceIdentity)),
+                 sourceStampBeforeRemoval);
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(freshIdentity)),
+                 freshStampBeforeRemoval);
+
+        expectedNodePositions.clear();
+        expectedNodePositions.insert(freshIdentity, QSet<uint>{0, 1});
+        expectedPhysicalNodes.remove(sourceIdentity);
+        session->removeModel(sourceModelID);
+        QCOMPARE(observedPickListChanges, 2);
+        QVERIFY(observedPicksRemainValid);
+        QCOMPARE(session->findModelByCommandIdentity(sourceIdentity), RConstants::eod);
+        QCOMPARE(session->findModelByCommandIdentity(freshIdentity), sourceModelID);
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(freshIdentity)),
+                 freshStampBeforeRemoval);
+        disconnect(pickListObserver);
     }
 };
 

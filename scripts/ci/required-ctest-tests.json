@@ -123,7 +123,9 @@
       "tst_agent_conversation_widget",
       "tst_project_session",
       "tst_native_job_registry",
-      "tst_gui_model_operations"
+      "tst_gui_model_operations",
+      "tst_native_results_widget",
+      "tst_current_model_workflow"
     ],
     "range-workflow": [
       "tst_workflow_native",
@@ -136,7 +138,8 @@
       "tst_private_python_packaging",
       "tst_native_document_sdk",
       "tst_workflow_source_reference",
-      "tst_workflow_imported_runtime"
+      "tst_workflow_imported_runtime",
+      "tst_workflow_native_results"
     ],
     "range-ai-lib": [
       "tst_agent_tool_turn"

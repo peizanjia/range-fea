@@ -23,6 +23,7 @@
 #include <rml_file_io.h>
 #include <rml_file_utils.h>
 #include <rml_model.h>
+#include <rml_element_descriptor.h>
 
 namespace
 {
@@ -297,14 +298,92 @@ const std::vector<FieldDefinition> &fieldDefinitions()
     return values;
 }
 
-bool hasNativeBeam(const RModel &model)
+QSet<uint> computableStressElements(const RModel &model)
 {
+    QSet<uint> computable;
+    QList<RMaterialProperty::Type> requiredProperties;
+    for (uint property = 0; property < RMaterialProperty::nTypes; ++property)
+        if (R_PROBLEM_STRESS & RMaterialProperty::getProblemTypeMask(RMaterialProperty::Type(property)))
+            requiredProperties.append(RMaterialProperty::Type(property));
+    for (uint groupIndex = 0; groupIndex < model.getNElementGroups(); ++groupIndex)
+    {
+        const RElementGroup *group = model.getElementGroupPtr(groupIndex);
+        bool active = group->getMaterial().hasProperties(requiredProperties);
+        for (uint boundary = 0; !active && boundary < group->getNBoundaryConditions(); ++boundary)
+            active = (R_PROBLEM_STRESS & RBoundaryCondition::getProblemTypeMask(group->getBoundaryCondition(boundary).getType())) != 0;
+        if (!active) continue;
+        for (uint local = 0; local < group->size(); ++local)
+        {
+            if (group->get(local) >= model.getNElements())
+                fail(QStringLiteral("INVALID_ROTATION_NODE_MAPPING"), QStringLiteral("A structural group references an unavailable element."));
+            computable.insert(group->get(local));
+        }
+    }
+    return computable;
+}
+
+QVector<uint> translationNodePhysicalIds(const RModel &model, const QSet<uint> &computable)
+{
+    QSet<uint> positions;
     for (uint index = 0; index < model.getNElements(); ++index)
     {
-        const RElementType type = model.getElement(index).getType();
-        if (type == R_ELEMENT_BEAM1 || type == R_ELEMENT_BEAM2) return true;
+        if (!computable.contains(index)) continue;
+        const RElement &element = model.getElement(index);
+        const RElementDescriptor &descriptor = RElementDescriptor::get(element.getType());
+        if (!descriptor.hasDof(RDofType::UX) || !descriptor.hasDof(RDofType::UY) ||
+            !descriptor.hasDof(RDofType::UZ))
+            continue;
+        if (element.size() != descriptor.getNNodes())
+            fail(QStringLiteral("INVALID_TRANSLATION_NODE_MAPPING"), QStringLiteral("A structural element has an invalid node count."));
+        for (uint local = 0; local < element.size(); ++local)
+        {
+            const uint position = element.getNodeId(local);
+            if (position >= model.getNNodes())
+                fail(QStringLiteral("INVALID_TRANSLATION_NODE_MAPPING"), QStringLiteral("A structural element references an unavailable node."));
+            positions.insert(position);
+        }
     }
-    return false;
+    QVector<uint> ids;
+    for (uint position = 0; position < model.getNNodes(); ++position)
+        if (positions.contains(position)) ids.append(model.getNode(position).getPhysicalId());
+    return ids;
+}
+
+QVector<uint> rotationNodePhysicalIds(const RModel &model, const QSet<uint> &computable)
+{
+    QSet<uint> positions;
+    for (uint index = 0; index < model.getNElements(); ++index)
+    {
+        const RElement &element = model.getElement(index);
+        if (!computable.contains(index)) continue;
+        if (element.getType() != R_ELEMENT_BEAM1 && element.getType() != R_ELEMENT_BEAM2) continue;
+        const RElementDescriptor &descriptor = RElementDescriptor::get(element.getType());
+        if (!descriptor.hasDof(RDofType::RX) || !descriptor.hasDof(RDofType::RY) || !descriptor.hasDof(RDofType::RZ)) continue;
+        if (element.size() != (element.getType() == R_ELEMENT_BEAM1 ? 2U : 3U))
+            fail(QStringLiteral("INVALID_ROTATION_NODE_MAPPING"), QStringLiteral("A beam has an invalid node count."));
+        for (uint local = 0; local < element.size(); ++local)
+        {
+            const uint position = element.getNodeId(local);
+            if (position >= model.getNNodes())
+                fail(QStringLiteral("INVALID_ROTATION_NODE_MAPPING"), QStringLiteral("A beam references an unavailable node."));
+            positions.insert(position);
+        }
+    }
+    QVector<uint> ids;
+    // Beam nodes carry all three physical rotations, including constrained
+    // rotations. Truss-only nodes have no rotational DOFs; their scattered
+    // zero values are not measurements.
+    for (uint position = 0; position < model.getNNodes(); ++position)
+        if (positions.contains(position)) ids.append(model.getNode(position).getPhysicalId());
+    return ids;
+}
+
+QVector<uint> idsFromJson(const QJsonArray &ids)
+{
+    QVector<uint> result;
+    result.reserve(ids.size());
+    for (const QJsonValue &value : ids) result.append(uint(value.toDouble()));
+    return result;
 }
 
 QVector<uint> physicalNodeIds(const RModel &model)
@@ -388,6 +467,8 @@ struct ModelInfo
     QString nodeMapSha256;
     QSet<QString> variables;
     bool beamModel = false;
+    QVector<uint> translationNodeIds;
+    QVector<uint> rotationNodeIds;
 };
 
 ModelInfo inspectModel(const QString &path,
@@ -442,7 +523,10 @@ ModelInfo inspectModel(const QString &path,
     info.nodeIds = physicalNodeIds(model);
     const QJsonArray nodeIdsJson = idsToJson(info.nodeIds);
     info.nodeMapSha256 = physicalMapSha256(nodeIdsJson);
-    info.beamModel = hasNativeBeam(model);
+    const QSet<uint> computable = computableStressElements(model);
+    info.translationNodeIds = translationNodePhysicalIds(model, computable);
+    info.rotationNodeIds = rotationNodePhysicalIds(model, computable);
+    info.beamModel = !info.rotationNodeIds.isEmpty();
 
     if (taskTypes == R_PROBLEM_STRESS && dynamics.getEnabled())
     {
@@ -618,8 +702,10 @@ QVector<FieldDefinition> availableChannelFields(const QJsonObject &manifest)
 
 int totalChannelCount(const QJsonObject &manifest)
 {
-    const qint64 count = qint64(availableChannelFields(manifest).size()) * 3 *
-                         manifest.value(QStringLiteral("nodePhysicalIds")).toArray().size();
+    qint64 count = 0;
+    for (const FieldDefinition &field : availableChannelFields(manifest))
+        count += 3 * qint64(manifest.value(field.angular ? QStringLiteral("rotationNodePhysicalIds")
+                                                       : QStringLiteral("translationNodePhysicalIds")).toArray().size());
     if (count > std::numeric_limits<int>::max())
         fail(QStringLiteral("UNSUPPORTED_CHANNEL_LIMIT"), QStringLiteral("The channel catalog exceeds its explicit index limit."));
     return int(count);
@@ -628,24 +714,29 @@ int totalChannelCount(const QJsonObject &manifest)
 QVector<Channel> channelPage(const QJsonObject &manifest, int offset, int limit)
 {
     const QVector<FieldDefinition> fields = availableChannelFields(manifest);
-    const QJsonArray nodeIds = manifest.value(QStringLiteral("nodePhysicalIds")).toArray();
     const QStringList axes{QStringLiteral("X"), QStringLiteral("Y"), QStringLiteral("Z")};
-    const int nodesPerQuantity = int(nodeIds.size()) * 3;
     QVector<Channel> page;
     page.reserve(limit);
-    for (int index = offset; index < std::min(totalChannelCount(manifest), offset + limit); ++index)
+    int fieldOffset = 0;
+    for (const FieldDefinition &field : fields)
     {
-        const int fieldIndex = index / nodesPerQuantity;
-        const int withinField = index % nodesPerQuantity;
-        const int axisIndex = withinField / nodeIds.size();
-        const int nodeIndex = withinField % nodeIds.size();
-        const FieldDefinition &field = fields.at(fieldIndex);
-        const uint nodeId = uint(nodeIds.at(nodeIndex).toDouble());
-        const QString quantity = QString::fromLatin1(field.quantity);
-        const QString axis = axes.at(axisIndex);
-        page.append(Channel{QStringLiteral("node:%1:%2:%3").arg(nodeId).arg(quantity, axis),
-                            QString::fromLatin1(field.id), quantity, axis,
-                            RVariable::getUnits(field.type)});
+        const QJsonArray nodeIds = manifest.value(field.angular ? QStringLiteral("rotationNodePhysicalIds")
+                                                               : QStringLiteral("translationNodePhysicalIds")).toArray();
+        const int fieldCount = nodeIds.size() * 3;
+        for (int index = std::max(offset, fieldOffset);
+             index < std::min(fieldOffset + fieldCount, offset + limit); ++index)
+        {
+            const int withinField = index - fieldOffset;
+            const int axisIndex = withinField / nodeIds.size();
+            const int nodeIndex = withinField % nodeIds.size();
+            const uint nodeId = uint(nodeIds.at(nodeIndex).toDouble());
+            const QString quantity = QString::fromLatin1(field.quantity);
+            const QString axis = axes.at(axisIndex);
+            page.append(Channel{QStringLiteral("node:%1:%2:%3").arg(nodeId).arg(quantity, axis),
+                                QString::fromLatin1(field.id), quantity, axis,
+                                RVariable::getUnits(field.type)});
+        }
+        fieldOffset += fieldCount;
     }
     return page;
 }
@@ -676,6 +767,16 @@ QString variableIdForQuantity(const QString &quantity)
     return QString();
 }
 
+QJsonObject frameOrigin(const QJsonObject &value)
+{
+    QJsonObject origin;
+    const QStringList keys{QStringLiteral("jobId"), QStringLiteral("proofScope"), QStringLiteral("sourceRuntimeStamp"),
+        QStringLiteral("sourceSnapshotRef"), QStringLiteral("inputSnapshotSha256"), QStringLiteral("inputPackageSha256"),
+        QStringLiteral("runtime"), QStringLiteral("control")};
+    for (const QString &key : keys) origin.insert(key, value.value(key));
+    return origin;
+}
+
 RVariableType variableTypeForId(const QString &variableId)
 {
     for (const FieldDefinition &field : fieldDefinitions())
@@ -688,7 +789,10 @@ QJsonObject framePublic(const QJsonObject &frame)
     return QJsonObject{{QStringLiteral("recordNo"), frame.value(QStringLiteral("recordNo"))},
                        {QStringLiteral("timeS"), frame.value(QStringLiteral("timeS"))},
                        {QStringLiteral("relativePath"), frame.value(QStringLiteral("relativePath"))},
-                       {QStringLiteral("sha256"), frame.value(QStringLiteral("sha256"))}};
+                       {QStringLiteral("sha256"), frame.value(QStringLiteral("sha256"))},
+                       {QStringLiteral("originKind"), frame.value(QStringLiteral("originKind"))},
+                       {QStringLiteral("origin"), frame.value(QStringLiteral("origin"))},
+                       {QStringLiteral("historyProof"), frame.value(QStringLiteral("historyProof"))}};
 }
 
 QString encodeCursor(const QString &artifactId, int offset)
@@ -746,6 +850,10 @@ QJsonObject loadManifest(const QString &manifestPath,
                          const QString &expectedSha256,
                          QString *canonicalRoot)
 {
+    static thread_local int ancestryDepth = 0;
+    if (ancestryDepth >= 64)
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Result history ancestry exceeds the bounded depth or contains a cycle."));
+    struct DepthGuard { int &depth; DepthGuard(int &value) : depth(value) { ++depth; } ~DepthGuard() { --depth; } } guard(ancestryDepth);
     if (!isSha256(expectedSha256))
         fail(QStringLiteral("INVALID_EXPECTED_SHA256"), QStringLiteral("expectedSha256 must be a lowercase SHA-256 digest."));
     const QFileInfo info(manifestPath);
@@ -780,8 +888,66 @@ QJsonObject loadManifest(const QString &manifestPath,
     return manifest;
 }
 
+QHash<int, QJsonObject> validateReusedHistory(const QJsonObject &value)
+{
+    if (value.contains(QStringLiteral("reusedHistory")) && !value.value(QStringLiteral("reusedHistory")).isArray())
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The reused history index must be an array."));
+    const QJsonArray entries = value.value(QStringLiteral("reusedHistory")).toArray();
+    if (entries.size() > MaxFrames)
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The reused history index exceeds the frame limit."));
+    QHash<int, QJsonObject> result;
+    QHash<QString, QHash<int, QJsonObject>> ancestors;
+    for (const QJsonValue &rawEntry : entries)
+    {
+        const QJsonObject entry = rawEntry.toObject();
+        const double rawRecord = entry.value(QStringLiteral("recordNo")).toDouble(-1.0);
+        if (!rawEntry.isObject() || !std::isfinite(rawRecord) || std::floor(rawRecord) != rawRecord ||
+            rawRecord < 1.0 || rawRecord > 1000000.0 || result.contains(int(rawRecord)) ||
+            !isSha256(entry.value(QStringLiteral("sha256")).toString()) ||
+            !isSha256(entry.value(QStringLiteral("originalFrameSha256")).toString()) ||
+            entry.value(QStringLiteral("relativePath")).toString().isEmpty())
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A reused history entry has invalid record or file hashes."));
+        if (entry.value(QStringLiteral("originKind")).toString() == QLatin1String("legacy-history-unattributed"))
+        {
+            if (!entry.value(QStringLiteral("origin")).isNull() ||
+                !isSha256(entry.value(QStringLiteral("sourceRestartSha256")).toString()) ||
+                entry.contains(QStringLiteral("originManifestPath")) || entry.contains(QStringLiteral("originManifestSha256")))
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Legacy history must declare unavailable origin and a hash-bound restart source."));
+        }
+        else
+        {
+            if (entry.value(QStringLiteral("originKind")).toString() != QLatin1String("reused-history"))
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A reused frame has no explicit origin kind."));
+            const QString ancestorKey = entry.value(QStringLiteral("originManifestPath")).toString() + QLatin1Char('\n') +
+                                        entry.value(QStringLiteral("originManifestSha256")).toString();
+            if (!ancestors.contains(ancestorKey))
+            {
+                QString originalRoot;
+                const QJsonObject original = loadManifest(entry.value(QStringLiteral("originManifestPath")).toString(),
+                    entry.value(QStringLiteral("originManifestSha256")).toString(), &originalRoot);
+                QHash<int, QJsonObject> ancestorFrames;
+                for (const QJsonValue &rawFrame : original.value(QStringLiteral("frames")).toArray())
+                {
+                    const QJsonObject frame = rawFrame.toObject();
+                    ancestorFrames.insert(frame.value(QStringLiteral("recordNo")).toInt(), frame);
+                }
+                ancestors.insert(ancestorKey, ancestorFrames);
+            }
+            const QJsonObject frame = ancestors.value(ancestorKey).value(int(rawRecord));
+            if (frame.isEmpty())
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The ancestor manifest does not contain the reused frame."));
+            if (frame.value(QStringLiteral("sha256")) != entry.value(QStringLiteral("originalFrameSha256")) ||
+                frame.value(QStringLiteral("origin")) != entry.value(QStringLiteral("origin")))
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A reused frame disagrees with its hash-bound ancestor."));
+        }
+        result.insert(int(rawRecord), entry);
+    }
+    return result;
+}
+
 void validateManifestShape(const QString &root, const QJsonObject &manifest)
 {
+    const QHash<int, QJsonObject> reusedHistory = validateReusedHistory(manifest);
     const QString artifactId = manifest.value(QStringLiteral("artifactId")).toString();
     const QString jobId = manifest.value(QStringLiteral("jobId")).toString();
     const QString sourceKind = manifest.value(QStringLiteral("sourceKind")).toString();
@@ -843,6 +1009,28 @@ void validateManifestShape(const QString &root, const QJsonObject &manifest)
     }
     if (physicalMapSha256(nodeIds) != manifest.value(QStringLiteral("nodePhysicalIdMapSha256")).toString())
         fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The manifest node-map digest is invalid."));
+    if (!manifest.value(QStringLiteral("translationNodePhysicalIds")).isArray())
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The physical translation node map is missing."));
+    QSet<uint> translationIds;
+    for (const QJsonValue &value : manifest.value(QStringLiteral("translationNodePhysicalIds")).toArray())
+    {
+        const double raw = value.toDouble(-1.0);
+        if (!value.isDouble() || !std::isfinite(raw) || std::floor(raw) != raw || raw < 1.0 ||
+            raw >= double(RConstants::eod) || !seenIds.contains(uint(raw)) || translationIds.contains(uint(raw)))
+            fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The physical translation node map is invalid."));
+        translationIds.insert(uint(raw));
+    }
+    if (!manifest.value(QStringLiteral("rotationNodePhysicalIds")).isArray())
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The physical rotation node map is missing."));
+    QSet<uint> rotationIds;
+    for (const QJsonValue &value : manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray())
+    {
+        const double raw = value.toDouble(-1.0);
+        if (!value.isDouble() || !std::isfinite(raw) || std::floor(raw) != raw || raw < 1.0 ||
+            raw >= double(RConstants::eod) || !seenIds.contains(uint(raw)) || rotationIds.contains(uint(raw)))
+            fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The physical rotation node map is invalid."));
+        rotationIds.insert(uint(raw));
+    }
 
     const QString analysisType = analysis.value(QStringLiteral("type")).toString();
     if (analysis.value(QStringLiteral("domain")).toString() != QLatin1String("structural-fe") ||
@@ -938,6 +1126,20 @@ void validateManifestShape(const QString &root, const QJsonObject &manifest)
         if (!std::isfinite(recordRaw) || std::floor(recordRaw) != recordRaw || recordRaw < 1.0 || recordRaw > 1000000.0)
             fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("A frame record number is invalid."));
         const int recordNo = int(recordRaw);
+        const bool reused = reusedHistory.contains(recordNo);
+        if (reused)
+        {
+            const QJsonObject proof = reusedHistory.value(recordNo);
+            if (proof.value(QStringLiteral("relativePath")) != frame.value(QStringLiteral("relativePath")) ||
+                proof.value(QStringLiteral("sha256")) != frame.value(QStringLiteral("sha256")) ||
+                proof.value(QStringLiteral("originKind")) != frame.value(QStringLiteral("originKind")) ||
+                proof.value(QStringLiteral("origin")) != frame.value(QStringLiteral("origin")) ||
+                frame.value(QStringLiteral("historyProof")).toObject() != proof)
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The copied frame does not match its reused history proof."));
+        }
+        else if (frame.value(QStringLiteral("originKind")).toString() != QLatin1String("produced") ||
+                 frame.value(QStringLiteral("origin")).toObject() != frameOrigin(manifest))
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A newly produced frame must identify this job's frozen provenance."));
         if (recordNo <= previousRecord || !std::isfinite(timeS) || timeS <= previousTime || !isSha256(sha) ||
             frame.value(QStringLiteral("nodePhysicalIdMapSha256")).toString() !=
                 manifest.value(QStringLiteral("nodePhysicalIdMapSha256")).toString())
@@ -948,9 +1150,17 @@ void validateManifestShape(const QString &root, const QJsonObject &manifest)
             fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("A frame path does not follow the native numbered MODEL pattern."));
         const QString framePath = safeChildPath(root, QDir(root).filePath(relativePath),
                                                 QStringLiteral("UNSAFE_RESULT_PATH"));
-        Q_UNUSED(framePath);
+        if (hashFile(framePath, MaxFrameBytes, QStringLiteral("RESULT_FRAME_TAMPERED")) != sha)
+            fail(QStringLiteral("RESULT_FRAME_TAMPERED"), QStringLiteral("A MODEL frame no longer matches its published SHA-256."));
         previousRecord = recordNo;
         previousTime = timeS;
+    }
+    for (auto it = reusedHistory.constBegin(); it != reusedHistory.constEnd(); ++it)
+    {
+        bool found = false;
+        for (const QJsonValue &frame : frames)
+            if (frame.toObject().value(QStringLiteral("recordNo")).toInt() == it.key()) { found = true; break; }
+        if (!found) fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The history proof names a frame outside this result."));
     }
     if (analysisType == QLatin1String("structural-dynamics"))
     {
@@ -984,6 +1194,7 @@ struct ParsedQueryChannel
     RVariableType type = R_VARIABLE_NONE;
     uint component = 0;
     QString unit;
+    bool angular = false;
 };
 
 ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonObject &arguments)
@@ -997,6 +1208,8 @@ ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonO
     channel.component = channel.axis == QLatin1String("X") ? 0U
                       : channel.axis == QLatin1String("Y") ? 1U : 2U;
     channel.unit = RVariable::getUnits(channel.type);
+    for (const FieldDefinition &field : fieldDefinitions())
+        if (field.type == channel.type) { channel.angular = field.angular; break; }
 
     const QJsonObject analysis = manifest.value(QStringLiteral("analysis")).toObject();
     if (analysis.value(QStringLiteral("type")).toString() != QLatin1String("structural-dynamics"))
@@ -1004,7 +1217,8 @@ ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonO
              QStringLiteral("Series and summary are available only for structural-dynamics results."));
     if (!manifest.value(QStringLiteral("availableVariables")).toArray().contains(channel.variableId))
         fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("The requested native result field is unavailable."));
-    const QJsonArray nodeIds = manifest.value(QStringLiteral("nodePhysicalIds")).toArray();
+    const QJsonArray nodeIds = manifest.value(channel.angular ? QStringLiteral("rotationNodePhysicalIds")
+                                                              : QStringLiteral("translationNodePhysicalIds")).toArray();
     bool nodeFound = false;
     for (const QJsonValue &value : nodeIds)
         if (uint(value.toDouble()) == channel.nodeId) { nodeFound = true; break; }
@@ -1031,25 +1245,20 @@ double valueAt(const QString &root,
     RModel model;
     const int recordNo = frame.value(QStringLiteral("recordNo")).toInt(-1);
     const ModelInfo info = inspectModel(framePath, recordNo,
-        Provenance{QJsonObject{}, manifest.value(QStringLiteral("jobId")).toString(),
-                   manifest.value(QStringLiteral("inputPackageSha256")).toString(),
-                   manifest.value(QStringLiteral("sourceKind")).toString() == QLatin1String("native-active-fe")
-                       ? QStringLiteral("active") : QStringLiteral("passive"),
-                   manifest.value(QStringLiteral("sourceKind")).toString(),
-                   manifest.value(QStringLiteral("control")).toObject().value(QStringLiteral("enabled")).toBool(),
-                   manifest.value(QStringLiteral("control")).toObject().value(QStringLiteral("controllerId")).toString()},
+        validateProvenance(frame.value(QStringLiteral("origin")).isObject()
+            ? frame.value(QStringLiteral("origin")).toObject() : frameOrigin(manifest)),
         true, &model, frame.value(QStringLiteral("sha256")).toString());
     if (info.analysisType != QLatin1String("structural-dynamics") ||
         !closeTime(info.timeS, frame.value(QStringLiteral("timeS")).toDouble()) ||
         info.nodeMapSha256 != frame.value(QStringLiteral("nodePhysicalIdMapSha256")).toString() ||
-        info.nodeIds != [&manifest]() {
-            QVector<uint> ids;
-            for (const QJsonValue &value : manifest.value(QStringLiteral("nodePhysicalIds")).toArray())
-                ids.append(uint(value.toDouble()));
-            return ids;
-        }())
+        info.nodeIds != idsFromJson(manifest.value(QStringLiteral("nodePhysicalIds")).toArray()) ||
+        info.translationNodeIds != idsFromJson(manifest.value(QStringLiteral("translationNodePhysicalIds")).toArray()) ||
+        info.rotationNodeIds != idsFromJson(manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray()))
         fail(QStringLiteral("RESULT_FRAME_METADATA_CHANGED"), QStringLiteral("A MODEL frame's persisted time or domain changed."));
 
+    const QVector<uint> &availableNodeIds = channel.angular ? info.rotationNodeIds : info.translationNodeIds;
+    if (!availableNodeIds.contains(channel.nodeId))
+        fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("The requested node does not carry the queried physical degrees of freedom."));
     const int nodeIndex = info.nodeIds.indexOf(channel.nodeId);
     if (nodeIndex < 0)
         fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("The requested node physical identifier is unavailable in this MODEL frame."));
@@ -1089,6 +1298,7 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
             QFileInfo(latestArtifactPath).isAbsolute() ? latestArtifactPath : QDir(root).filePath(latestArtifactPath),
             QStringLiteral("UNSAFE_RESULT_PATH"));
         const Provenance provenance = validateProvenance(provenanceObject);
+        const QHash<int, QJsonObject> reusedHistory = validateReusedHistory(provenanceObject);
         const QFileInfo logicalInfo(logicalPath);
         const QString logicalShaBefore = hashFile(logicalPath, MaxFrameBytes,
                                                    QStringLiteral("INVALID_LATEST_ARTIFACT"));
@@ -1162,10 +1372,17 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
             double previousTime = -std::numeric_limits<double>::infinity();
             for (const NumberedFile &file : actualFiles)
             {
-                const ModelInfo frame = inspectModel(file.path, file.recordNo, provenance, true);
+                const QJsonObject proof = reusedHistory.value(file.recordNo);
+                const ModelInfo frame = inspectModel(file.path, file.recordNo,
+                    proof.value(QStringLiteral("origin")).isObject()
+                        ? validateProvenance(proof.value(QStringLiteral("origin")).toObject()) : provenance,
+                    true, nullptr, proof.value(QStringLiteral("sha256")).toString());
+                if (!proof.isEmpty() && proof.value(QStringLiteral("relativePath")).toString() != file.relativePath)
+                    fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The reused frame path does not match the copied history proof."));
                 if (frame.analysisType != terminalAnalysisType || frame.nodeIds != canonicalNodeIds ||
                     frame.meshFingerprint != terminalModelInfo.meshFingerprint ||
-                    frame.beamModel != terminalModelInfo.beamModel || frame.timeS <= previousTime)
+                    frame.translationNodeIds != terminalModelInfo.translationNodeIds ||
+                    frame.rotationNodeIds != terminalModelInfo.rotationNodeIds || frame.timeS <= previousTime)
                     fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"),
                          QStringLiteral("Numbered MODEL frames disagree on analysis, physical node order, or actual time."));
                 previousTime = frame.timeS;
@@ -1182,11 +1399,15 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
                         else ++it;
                     }
                 }
-                frameObjects.append(QJsonObject{{QStringLiteral("recordNo"), file.recordNo},
+                QJsonObject frameObject{{QStringLiteral("recordNo"), file.recordNo},
                     {QStringLiteral("timeS"), frame.timeS},
                     {QStringLiteral("relativePath"), file.relativePath},
                     {QStringLiteral("sha256"), frame.sha256},
-                    {QStringLiteral("nodePhysicalIdMapSha256"), frame.nodeMapSha256}});
+                    {QStringLiteral("nodePhysicalIdMapSha256"), frame.nodeMapSha256},
+                    {QStringLiteral("originKind"), proof.isEmpty() ? QJsonValue(QStringLiteral("produced")) : proof.value(QStringLiteral("originKind"))},
+                    {QStringLiteral("origin"), proof.isEmpty() ? QJsonValue(frameOrigin(provenanceObject)) : proof.value(QStringLiteral("origin"))}};
+                if (!proof.isEmpty()) frameObject.insert(QStringLiteral("historyProof"), proof);
+                frameObjects.append(frameObject);
             }
             if (frameObjects.isEmpty() || frameObjects.last().value(QStringLiteral("relativePath")).toString() !=
                     QFileInfo(terminalPath).fileName())
@@ -1266,10 +1487,14 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
                 {QStringLiteral("sha256"), terminalSha},
                 {QStringLiteral("recordNo"), linkedRecordNo}}},
             {QStringLiteral("nodePhysicalIds"), nodeIds},
+            {QStringLiteral("translationNodePhysicalIds"), idsToJson(terminalModelInfo.translationNodeIds)},
+            {QStringLiteral("rotationNodePhysicalIds"), idsToJson(terminalModelInfo.rotationNodeIds)},
             {QStringLiteral("nodePhysicalIdMapSha256"), nodeMapSha},
             {QStringLiteral("availableVariables"), variables},
+            {QStringLiteral("reusedHistory"), provenanceObject.value(QStringLiteral("reusedHistory")).toArray()},
             {QStringLiteral("frames"), framesArray}
         };
+        validateManifestShape(root, manifest);
         const QByteArray manifestBytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
         if (manifestBytes.size() > MaxManifestBytes)
             fail(QStringLiteral("UNSUPPORTED_MANIFEST_SIZE"),
@@ -1306,15 +1531,13 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
     return result;
 }
 
-QJsonObject RNativeResultBroker::query(const QString &manifestPath,
-                                       const QString &expectedSha256,
-                                       const QString &operation,
-                                       const QJsonObject &arguments)
+static QJsonObject queryManifest(const QString &root,
+                                const QJsonObject &manifest,
+                                const QString &operation,
+                                const QJsonObject &arguments)
 {
     try
     {
-        QString root;
-        const QJsonObject manifest = loadManifest(manifestPath, expectedSha256, &root);
         const QString artifactId = manifest.value(QStringLiteral("artifactId")).toString();
         const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
         const int totalFrames = int(frames.size());
@@ -1327,8 +1550,14 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
             const int offset = pageOffset(arguments, artifactId, totalFrames);
             const int limit = pageLimit(arguments);
             QJsonArray page;
+            QJsonArray historyPage;
             for (int i = offset; i < std::min(totalFrames, offset + limit); ++i)
-                page.append(framePublic(frames.at(i).toObject()));
+            {
+                const QJsonObject frame = frames.at(i).toObject();
+                page.append(framePublic(frame));
+                if (frame.value(QStringLiteral("historyProof")).isObject())
+                    historyPage.append(frame.value(QStringLiteral("historyProof")));
+            }
             const bool more = offset + int(page.size()) < totalFrames;
             QJsonObject response{{QStringLiteral("valid"), true},
                 {QStringLiteral("operation"), operation},
@@ -1345,6 +1574,9 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
                 {QStringLiteral("runtime"), manifest.value(QStringLiteral("runtime"))},
                 {QStringLiteral("control"), manifest.value(QStringLiteral("control"))},
                 {QStringLiteral("sampleScope"), manifest.value(QStringLiteral("sampleScope"))},
+                {QStringLiteral("reusedHistory"), historyPage},
+                {QStringLiteral("reusedHistoryCount"), manifest.value(QStringLiteral("reusedHistory")).toArray().size()},
+                {QStringLiteral("reusedHistoryScope"), QStringLiteral("catalog-frame-page")},
                 {QStringLiteral("analysis"), manifest.value(QStringLiteral("analysis"))},
                 {QStringLiteral("frameCount"), frames.size()},
                 {QStringLiteral("frames"), page},
@@ -1352,6 +1584,8 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
                 {QStringLiteral("limit"), limit},
                 {QStringLiteral("nodeCount"), manifest.value(QStringLiteral("nodePhysicalIds")).toArray().size()},
                 {QStringLiteral("availableVariables"), manifest.value(QStringLiteral("availableVariables"))},
+                {QStringLiteral("translationNodePhysicalIds"), manifest.value(QStringLiteral("translationNodePhysicalIds"))},
+                {QStringLiteral("rotationNodePhysicalIds"), manifest.value(QStringLiteral("rotationNodePhysicalIds"))},
                 {QStringLiteral("logicalLatest"), manifest.value(QStringLiteral("logicalLatest"))},
                 {QStringLiteral("terminalModel"), manifest.value(QStringLiteral("terminalModel"))}};
             if (more) response.insert(QStringLiteral("nextCursor"), encodeCursor(artifactId, offset + page.size()));
@@ -1402,6 +1636,10 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
                 const double value = valueAt(root, manifest, frame, channel);
                 samples.append(QJsonObject{{QStringLiteral("recordNo"), frame.value(QStringLiteral("recordNo"))},
                     {QStringLiteral("timeS"), frame.value(QStringLiteral("timeS"))},
+                    {QStringLiteral("originKind"), frame.value(QStringLiteral("originKind"))},
+                    {QStringLiteral("origin"), frame.value(QStringLiteral("origin"))},
+                    {QStringLiteral("historyProof"), frame.value(QStringLiteral("historyProof")).isObject()
+                        ? frame.value(QStringLiteral("historyProof")) : QJsonValue(QJsonValue::Null)},
                     {QStringLiteral("value"), value}});
             }
             const bool more = offset + int(samples.size()) < totalFrames;
@@ -1491,4 +1729,110 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
     {
         return failureJson(QStringLiteral("NATIVE_RESULT_ERROR"), QStringLiteral("Native result query failed."));
     }
+}
+
+QJsonObject RNativeResultBroker::query(const QString &manifestPath,
+                                     const QString &expectedSha256,
+                                     const QString &operation,
+                                     const QJsonObject &arguments)
+{
+    try
+    {
+        QString root;
+        const QJsonObject manifest = loadManifest(manifestPath, expectedSha256, &root);
+        QJsonObject result = queryManifest(root, manifest, operation, arguments);
+        result.insert(QStringLiteral("completed"), true);
+        result.insert(QStringLiteral("live"), false);
+        return result;
+    }
+    catch (const BrokerFailure &failure) { return failureJson(failure.code, failure.message); }
+    catch (...) { return failureJson(QStringLiteral("NATIVE_RESULT_ERROR"), QStringLiteral("Native result query failed.")); }
+}
+
+QJsonObject RNativeResultBroker::queryLive(const QString &resultDirectory,
+                                         const QJsonObject &provenanceObject,
+                                         const QJsonArray &journalFrames,
+                                         const QString &operation,
+                                         const QJsonObject &arguments)
+{
+    try
+    {
+        const QString root = canonicalDirectory(resultDirectory);
+        const Provenance provenance = validateProvenance(provenanceObject);
+        const QHash<int, QJsonObject> reused = validateReusedHistory(provenanceObject);
+        if (journalFrames.size() > MaxFrames)
+            fail(QStringLiteral("UNSUPPORTED_FRAME_LIMIT"), QStringLiteral("The live frame index exceeds its explicit limit."));
+        QJsonArray frames;
+        QSet<QString> sharedVariables;
+        ModelInfo first;
+        int previousRecord = 0;
+        double previousTime = -std::numeric_limits<double>::infinity();
+        double previousSeq = 0.0;
+        for (const QJsonValue &raw : journalFrames)
+        {
+            const QJsonObject descriptor = raw.toObject();
+            const double record = descriptor.value(QStringLiteral("recordNo")).toDouble(-1.0);
+            const double seq = descriptor.value(QStringLiteral("seq")).toDouble(-1.0);
+            const QString relativePath = descriptor.value(QStringLiteral("relativePath")).toString();
+            const QString sha = descriptor.value(QStringLiteral("sha256")).toString();
+            if (!raw.isObject() || !std::isfinite(record) || std::floor(record) != record ||
+                record <= previousRecord || record > 1000000 || !std::isfinite(seq) || std::floor(seq) != seq ||
+                seq <= previousSeq || seq > 9007199254740991.0 || !isSha256(sha) ||
+                relativePath.isEmpty() || QFileInfo(relativePath).fileName() != relativePath)
+                fail(QStringLiteral("INVALID_LIVE_FRAME"), QStringLiteral("A live frame descriptor has invalid sequence, record, path, or hash."));
+            const QString path = safeChildPath(root, QDir(root).filePath(relativePath), QStringLiteral("UNSAFE_RESULT_PATH"));
+            const QJsonObject proof = reused.value(int(record));
+            if (!proof.isEmpty() && (proof.value(QStringLiteral("relativePath")).toString() != relativePath ||
+                                     proof.value(QStringLiteral("sha256")).toString() != sha))
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The live history frame disagrees with its copy proof."));
+            const ModelInfo info = inspectModel(path, int(record),
+                proof.value(QStringLiteral("origin")).isObject()
+                    ? validateProvenance(proof.value(QStringLiteral("origin")).toObject()) : provenance,
+                true, nullptr, sha);
+            const double declaredTime = descriptor.value(QStringLiteral("timeS")).toDouble(std::numeric_limits<double>::quiet_NaN());
+            if (info.analysisType != QLatin1String("structural-dynamics") || !std::isfinite(declaredTime) ||
+                !closeTime(info.timeS, declaredTime) || info.timeS <= previousTime)
+                fail(QStringLiteral("INVALID_LIVE_FRAME"), QStringLiteral("The live descriptor does not match a persisted accepted dynamics frame."));
+            if (frames.isEmpty()) { first = info; sharedVariables = info.variables; }
+            else
+            {
+                if (info.nodeIds != first.nodeIds || info.rotationNodeIds != first.rotationNodeIds ||
+                    info.translationNodeIds != first.translationNodeIds ||
+                    info.meshFingerprint != first.meshFingerprint)
+                    fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"), QStringLiteral("Live frames disagree on their physical domain."));
+                sharedVariables.intersect(info.variables);
+            }
+            QJsonObject frame{{QStringLiteral("recordNo"), int(record)}, {QStringLiteral("seq"), seq},
+                {QStringLiteral("timeS"), info.timeS}, {QStringLiteral("relativePath"), relativePath},
+                {QStringLiteral("sha256"), info.sha256}, {QStringLiteral("nodePhysicalIdMapSha256"), info.nodeMapSha256},
+                {QStringLiteral("originKind"), proof.isEmpty() ? QJsonValue(QStringLiteral("produced")) : proof.value(QStringLiteral("originKind"))},
+                {QStringLiteral("origin"), proof.isEmpty() ? QJsonValue(frameOrigin(provenanceObject)) : proof.value(QStringLiteral("origin"))}};
+            if (!proof.isEmpty()) frame.insert(QStringLiteral("historyProof"), proof);
+            frames.append(frame);
+            previousRecord = int(record); previousTime = info.timeS; previousSeq = seq;
+        }
+        QJsonArray variables;
+        for (const QString &id : sortedVariableIds(sharedVariables)) variables.append(id);
+        QJsonObject manifest = frameOrigin(provenanceObject);
+        manifest.insert(QStringLiteral("artifactId"), artifactIdFor(provenance) + QStringLiteral("-live-%1").arg(previousSeq, 0, 'f', 0));
+        manifest.insert(QStringLiteral("sourceKind"), provenance.sourceKind);
+        manifest.insert(QStringLiteral("mode"), provenance.mode);
+        manifest.insert(QStringLiteral("validationScope"), QStringLiteral("trusted-job-manager-complete-journal-frames"));
+        manifest.insert(QStringLiteral("sampleScope"), QStringLiteral("verified-published-journal-model-records"));
+        manifest.insert(QStringLiteral("analysis"), QJsonObject{{QStringLiteral("domain"), QStringLiteral("structural-fe")},
+            {QStringLiteral("type"), QStringLiteral("structural-dynamics")}, {QStringLiteral("modeIndex"), QJsonValue(QJsonValue::Null)}});
+        manifest.insert(QStringLiteral("nodePhysicalIds"), idsToJson(first.nodeIds));
+        manifest.insert(QStringLiteral("translationNodePhysicalIds"), idsToJson(first.translationNodeIds));
+        manifest.insert(QStringLiteral("rotationNodePhysicalIds"), idsToJson(first.rotationNodeIds));
+        manifest.insert(QStringLiteral("availableVariables"), variables);
+        manifest.insert(QStringLiteral("frames"), frames);
+        manifest.insert(QStringLiteral("reusedHistory"), provenanceObject.value(QStringLiteral("reusedHistory")).toArray());
+        QJsonObject result = queryManifest(root, manifest, operation, arguments);
+        result.insert(QStringLiteral("completed"), false);
+        result.insert(QStringLiteral("live"), true);
+        result.insert(QStringLiteral("generation"), previousSeq);
+        return result;
+    }
+    catch (const BrokerFailure &failure) { return failureJson(failure.code, failure.message); }
+    catch (...) { return failureJson(QStringLiteral("NATIVE_RESULT_ERROR"), QStringLiteral("Native live result query failed.")); }
 }

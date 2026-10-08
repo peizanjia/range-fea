@@ -178,11 +178,12 @@ int main(int argc,char **argv) {
                 {"rotation",components(model,R_VARIABLE_ROTATION,i)},
                 {"angularVelocity",components(model,R_VARIABLE_ANGULAR_VELOCITY,i)},
                 {"angularAcceleration",components(model,R_VARIABLE_ANGULAR_ACCELERATION,i)}});
+            const auto &control=model.getProblemSetup().getStructuralControlSetup();
             print({{"apiVersion","range.workflow.native/v1"},{"status","ok"},
                 {"sourceSha256",QString::fromLatin1(before)},{"nodes",nodes},
                 {"sourcePath",source.model},{"sourceFiles",source.references()},
                 {"checkpointAvailable",restart.available},{"step",int(restart.completedSteps)},
-                {"controlEnabled",model.getProblemSetup().getStructuralControlSetup().enabled},
+                {"controlEnabled",control.enabled},{"controllerId",control.controllerId},
                 {"plannedSteps",int(model.getProblemSetup().getStructuralDynamicsSetup().getNSteps())},
                 {"configuredDt",model.getProblemSetup().getStructuralDynamicsSetup().getTimeStep()},
                 {"time",restart.time},{"dt",restart.fixedTimeStep},

@@ -1,11 +1,14 @@
 #include <QtTest>
 #include <QUuid>
+#include <QTemporaryDir>
+#include <QFile>
 
 #include <rml_model.h>
 
 #include "application.h"
 #include "model_command_host.h"
 #include "session.h"
+#include "model_io.h"
 
 namespace
 {
@@ -42,12 +45,119 @@ QJsonObject targetFor(const QJsonObject &context)
     return {{QStringLiteral("documentId"), context.value(QStringLiteral("documentId"))},
             {QStringLiteral("sessionEpoch"), context.value(QStringLiteral("sessionEpoch"))}};
 }
+
+QJsonObject sourceOrigin(const QJsonObject &snapshot)
+{
+    QJsonObject origin;
+    for (const QString &key : {QStringLiteral("projectId"), QStringLiteral("persistentDocumentId"),
+         QStringLiteral("sourceRevision"), QStringLiteral("modelSha256"), QStringLiteral("instanceRef")})
+        origin.insert(key, snapshot.value(key));
+    return origin;
+}
 }
 
 class TestGuiHostContext : public QObject
 {
     Q_OBJECT
 private slots:
+    void sourceFileConflictRejectsMatchingOriginWithoutRuntimeEdit()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        const QString sourcePath = workspace.filePath(QStringLiteral("external-source.ram"));
+        Model source = modalFixture();
+        ModelIO::save(source, sourcePath, false);
+        Model loaded;
+        ModelIO::open(loaded, sourcePath);
+        session->addModel(loaded);
+        const uint modelID = session->getNModels() - 1;
+        const QJsonObject snapshot = session->createDocumentSnapshot(modelID, &error);
+        QVERIFY2(!snapshot.isEmpty(), qPrintable(error));
+        const QJsonObject origin = sourceOrigin(snapshot);
+        const QPair<QString, quint64> runtimeStamp = session->modelCommandStamp(modelID);
+        QCOMPARE(host->handle(request(QStringLiteral("document.source.validate"), {{QStringLiteral("snapshotRef"), origin}}))
+                     .value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+
+        // Change the real persisted source independently of Session. Its
+        // document revision and cached accepted snapshot fields remain equal
+        // to the registered origin; freshness depends on conflict availability.
+        QFile externalWriter(sourcePath);
+        QVERIFY(externalWriter.open(QIODevice::WriteOnly | QIODevice::Append));
+        QCOMPARE(externalWriter.write("\n"), qint64(1));
+        externalWriter.close();
+        const QJsonObject conflict = session->documentProjectContext(modelID);
+        QCOMPARE(session->modelCommandStamp(modelID), runtimeStamp);
+        QVERIFY(conflict.value(QStringLiteral("sourceConflict")).toBool());
+        QCOMPARE(conflict.value(QStringLiteral("availability")).toString(), QStringLiteral("unavailable"));
+        QCOMPARE(conflict.value(QStringLiteral("persistence")).toObject().value(QStringLiteral("status")).toString(), QStringLiteral("conflict"));
+        for (const QString &field : {QStringLiteral("projectId"), QStringLiteral("persistentDocumentId"),
+             QStringLiteral("sourceRevision"), QStringLiteral("modelSha256")})
+            QCOMPARE(conflict.value(field), origin.value(field));
+        const QJsonObject rejected = host->handle(request(QStringLiteral("document.source.validate"), {{QStringLiteral("snapshotRef"), origin}}));
+        QCOMPARE(rejected.value(QStringLiteral("code")).toString(), QStringLiteral("SOURCE_UNAVAILABLE"));
+        QCOMPARE(session->modelCommandStamp(modelID), runtimeStamp);
+        session->removeModel(modelID);
+    }
+
+    void sourceValidationRequiresCurrentDocumentWithoutDraftAndExactOrigin()
+    {
+        // Keep the project alive until process exit because Session retains its
+        // catalog after individual documents close.
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        const uint modelID = session->getNModels() - 1;
+        const QJsonObject snapshot = session->createDocumentSnapshot(modelID, &error);
+        QVERIFY2(!snapshot.isEmpty(), qPrintable(error));
+        const QJsonObject origin = sourceOrigin(snapshot);
+        const auto validate = [host](const QJsonObject &reference)
+        {
+            return host->handle(request(QStringLiteral("document.source.validate"), {{QStringLiteral("snapshotRef"), reference}}));
+        };
+        const QJsonObject current = validate(origin);
+        QCOMPARE(current.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QVERIFY(current.value(QStringLiteral("result")).toObject().value(QStringLiteral("valid")).toBool());
+        QCOMPARE(current.value(QStringLiteral("result")).toObject().value(QStringLiteral("snapshotRef")).toObject(), origin);
+
+        QJsonObject earlierSession = origin;
+        QJsonObject instance = origin.value(QStringLiteral("instanceRef")).toObject();
+        instance.insert(QStringLiteral("sessionEpoch"), QUuid::createUuid().toString(QUuid::WithoutBraces));
+        earlierSession.insert(QStringLiteral("instanceRef"), instance);
+        QCOMPARE(validate(earlierSession).value(QStringLiteral("code")).toString(), QStringLiteral("STALE_SESSION"));
+        QJsonObject wrongHash = origin;
+        wrongHash.insert(QStringLiteral("modelSha256"), QString(64, QLatin1Char('0')));
+        QCOMPARE(validate(wrongHash).value(QStringLiteral("code")).toString(), QStringLiteral("STALE_SOURCE"));
+        QJsonObject arbitraryPath = origin;
+        arbitraryPath.insert(QStringLiteral("path"), workspace.filePath(QStringLiteral("model.ram")));
+        QCOMPARE(validate(arbitraryPath).value(QStringLiteral("code")).toString(), QStringLiteral("INVALID_PARAMETERS"));
+
+        session->setNumericDraft(modelID, QStringLiteral("analysis.modal"), QStringLiteral("iterations"),
+                                 QStringLiteral("invalid"), QStringLiteral("unfinished-value"));
+        QVERIFY(session->hasDocumentDraft(modelID));
+        QCOMPARE(validate(origin).value(QStringLiteral("code")).toString(), QStringLiteral("STALE_SOURCE"));
+        session->clearNumericDraft(modelID, QStringLiteral("analysis.modal"), QStringLiteral("iterations"));
+        QVERIFY(!session->hasDocumentDraft(modelID));
+        QCOMPARE(validate(origin).value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+
+        session->getModel(modelID).getProblemSetup().getModalSetup().setNIterations(19);
+        session->setProblemChanged(modelID);
+        QCOMPARE(validate(origin).value(QStringLiteral("code")).toString(), QStringLiteral("STALE_SOURCE"));
+        const QJsonObject nextSnapshot = session->createDocumentSnapshot(modelID, &error);
+        QVERIFY2(!nextSnapshot.isEmpty(), qPrintable(error));
+        const QJsonObject nextOrigin = sourceOrigin(nextSnapshot);
+        QCOMPARE(validate(nextOrigin).value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        session->removeModel(modelID);
+        QCOMPARE(validate(nextOrigin).value(QStringLiteral("code")).toString(), QStringLiteral("DOCUMENT_CLOSED"));
+    }
+
     void cleanup()
     {
         QTRY_VERIFY_WITH_TIMEOUT(!ModelCommandHost::isBusy(), 15000);
@@ -69,9 +179,14 @@ private slots:
         QVERIFY(!epoch.isEmpty());
         QCOMPARE(capabilityResult.value(QStringLiteral("identityPersistence")).toString(), QStringLiteral("host-session"));
         bool hasPreview = false;
+        bool hasSourceValidation = false;
         for (const auto &value : capabilityResult.value(QStringLiteral("supportedOperations")).toArray())
+        {
             hasPreview |= value.toObject().value(QStringLiteral("id")).toString() == QStringLiteral("command.preview");
+            hasSourceValidation |= value.toObject().value(QStringLiteral("id")).toString() == QStringLiteral("document.source.validate");
+        }
         QVERIFY(hasPreview);
+        QVERIFY(hasSourceValidation);
 
         const auto contextResponse = host->handle(request(QStringLiteral("context.query"),
             {{QStringLiteral("target"), QJsonObject{{QStringLiteral("documentId"), stamp.first},

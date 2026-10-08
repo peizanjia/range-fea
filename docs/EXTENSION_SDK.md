@@ -1,5 +1,7 @@
 # Range Workflow 扩展 SDK v1
 
+真实 active/passive FE 时程输入、来源哈希和 GUI 选择见 [NATIVE_RESULTS.md](NATIVE_RESULTS.md)。独立参考与调用方序列保留不同 sourceKind，native 输入在批准绑定和执行前后重验。
+
 本文说明当前 Python 工作流服务支持的扩展接口。它描述的是已实现的窄接口：纯 Python 标准库、数值序列统计、宿主生成表单和结果表格。它不代表扩展可以增加有限元单元、材料、求解器内核或任意 GUI 控件。
 
 协议版本为 `range.extension/v1`，承载命令的工作流协议为 `range.workflow/v1`。调用前先查询 `capabilities.query` 和相应版本化 schema；未知版本必须拒绝，不能按相似字段猜测。

@@ -40,6 +40,8 @@ namespace RangeNativeImport
 namespace
 {
 constexpr double kGeometryTolerance = 1.0e-9;
+constexpr double kSourceForceMinimum = -1.0e6;
+constexpr double kSourceForceMaximum = 1.0e6;
 
 struct Diagnostic
 {
@@ -624,6 +626,9 @@ QJsonObject materialAndSection(const RLine &line,
     const double iy = line.getSecondMomentY();
     const double iz = line.getSecondMomentZ();
     const double torsion = line.getTorsionalConstant();
+    const double wy = line.getSectionModulusY();
+    const double wz = line.getSectionModulusZ();
+    const double wt = line.getTorsionalSectionModulus();
     const auto checkSection = [&](double value, const QString &name) {
         if (!std::isfinite(value) || value <= 0.0)
             diagnostics.add("INVALID_SECTION_PROPERTY", path + QStringLiteral("/section/") + name,
@@ -635,16 +640,26 @@ QJsonObject materialAndSection(const RLine &line,
         checkSection(iy, QStringLiteral("iyM4"));
         checkSection(iz, QStringLiteral("izM4"));
         checkSection(torsion, QStringLiteral("torsionM4"));
+        // Native beam stress recovery executes even for zero-motion sources.
+        checkSection(wy, QStringLiteral("wyM3"));
+        checkSection(wz, QStringLiteral("wzM3"));
+        checkSection(wt, QStringLiteral("wtM3"));
     }
 
     QJsonObject section{{"areaM2", area}, {"iyM4", QJsonValue(QJsonValue::Null)},
                         {"izM4", QJsonValue(QJsonValue::Null)},
-                        {"torsionM4", QJsonValue(QJsonValue::Null)}};
+                        {"torsionM4", QJsonValue(QJsonValue::Null)},
+                        {"wyM3", QJsonValue(QJsonValue::Null)},
+                        {"wzM3", QJsonValue(QJsonValue::Null)},
+                        {"wtM3", QJsonValue(QJsonValue::Null)}};
     if (beam)
     {
         section.insert("iyM4", iy);
         section.insert("izM4", iz);
         section.insert("torsionM4", torsion);
+        section.insert("wyM3", wy);
+        section.insert("wzM3", wz);
+        section.insert("wtM3", wt);
     }
     return {{"material", QJsonObject{{"youngModulusPa", young}, {"densityKgM3", density},
                                       {"poissonRatio", poisson}}},
@@ -736,6 +751,19 @@ void validateStoredSettings(const RModel &model, Diagnostics &diagnostics)
     if (problem.getRestart() || restart.available)
         diagnostics.add("ACCEPTED_RESTART_PRESENT", "/dynamics/restart",
                         "An accepted restart cannot be used as a fresh WF-03 source.");
+
+    // Fresh native stress solves recover these result vectors before applying
+    // explicit initial conditions. Reject them rather than describe missing ICs
+    // as zero while silently retaining a previous solve's state.
+    for (uint index = 0; index < model.getNVariables(); ++index)
+    {
+        const auto type = model.getVariable(index).getType();
+        if (type == R_VARIABLE_DISPLACEMENT || type == R_VARIABLE_ROTATION ||
+            type == R_VARIABLE_VELOCITY || type == R_VARIABLE_ANGULAR_VELOCITY)
+            diagnostics.add("SAVED_INITIAL_STATE_PRESENT",
+                            QStringLiteral("/results/variables/") + QString::number(index),
+                            "Saved displacement, rotation, velocity or angular velocity cannot be used as a fresh WF-03 source.");
+    }
 
     const auto &cable = problem.getStructuralCableSetup();
     if (cable.enabled || !cable.members.empty())
@@ -1158,7 +1186,7 @@ QJsonObject describeModel(const RModel &model,
         const uint nodeIndex = nodeOrder[position];
         const auto &node = model.getNode(nodeIndex);
         nodesJson.append(QJsonObject{
-            {"position", int(position)}, {"physicalId", jsonPhysicalId(model.getNodePhysicalId(nodeIndex))},
+            {"position", int(nodeIndex)}, {"physicalId", jsonPhysicalId(model.getNodePhysicalId(nodeIndex))},
             {"coordinates", QJsonArray{node.getX(), node.getY(), node.getZ()}},
             {"initialDisplacementM", vectorJson(initialU[nodeIndex])},
             {"initialVelocityMS", vectorJson(initialV[nodeIndex])},
@@ -1226,6 +1254,7 @@ QJsonObject describeModel(const RModel &model,
         {"force", QJsonObject{{"id", "source-tip-force"},
                               {"nodePhysicalId", jsonPhysicalId(model.getNodePhysicalId(tip))},
                               {"globalDirection", dofDirection(portDof)}, {"unit", "N"},
+                              {"minimum", kSourceForceMinimum}, {"maximum", kSourceForceMaximum},
                               {"kind", "nodal_force"}}},
         {"velocity", QJsonObject{{"id", "source-tip-velocity"},
                                  {"nodePhysicalId", jsonPhysicalId(model.getNodePhysicalId(tip))},
@@ -1464,8 +1493,8 @@ QJsonObject prepareSource(const QString &inputPath,
     actuator.frame = RStructuralFrame::Global;
     actuator.direction = directionVector;
     actuator.unit = RVariable::getUnits(forceVariable);
-    actuator.minimum = -1.0e6;
-    actuator.maximum = 1.0e6;
+    actuator.minimum = kSourceForceMinimum;
+    actuator.maximum = kSourceForceMaximum;
     interaction.getActuators().push_back(actuator);
 
     const struct
@@ -1495,6 +1524,8 @@ QJsonObject prepareSource(const QString &inputPath,
     const quint64 sourceSeed = model.getProblemSetup().getStructuralControlSetup().deterministicSeed;
     if (passive)
     {
+        interaction.getActuators().clear();
+        interaction.getSensors().clear();
         model.getProblemSetup().setStructuralControlSetup(RStructuralControlSetup());
     }
     else
@@ -1576,6 +1607,10 @@ QJsonObject prepareSource(const QString &inputPath,
     QJsonArray actuatorJson;
     for (const auto &saved : preparedInteraction.getActuators())
     {
+        if (saved.minimum != forcePort.value("minimum").toDouble() ||
+            saved.maximum != forcePort.value("maximum").toDouble())
+            return rejected("PREPARED_FORCE_BOUNDS_MISMATCH", "/mapping/actuators",
+                            "Saved actuator bounds differ from the preflight force port bounds.");
         actuatorJson.append(QJsonObject{
             {"id", saved.id}, {"kind", "nodal_force"},
             {"targetNodePosition", int(saved.target.nodeId)},

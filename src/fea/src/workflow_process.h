@@ -16,7 +16,7 @@ class WorkflowProcess : public QObject
 public:
     struct Configuration
     {
-        QString python, packageDirectory, solver, native, examples, workspace;
+        QString python, packageDirectory, solver, native, examples, workspace, nativeResults;
         int requestTimeoutMs = 30000;
         bool trustedExtensions = false;
     };

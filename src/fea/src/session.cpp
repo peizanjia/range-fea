@@ -2052,7 +2052,7 @@ void Session::removeModel(uint position)
         this->models.swap(nextModels);
         this->commandStamps.swap(nextStamps);
     }
-    this->pickList.removeItems(position);
+    this->pickList.removeModelItemsAndReindex(position);
     this->projectDocuments.remove(removedStamp.first);
     {
         QMutexLocker updateGuard(&this->pendingProjectUpdatesMutex);

@@ -202,6 +202,8 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     sourceMode->setObjectName(QStringLiteral("extensionSourceMode"));
     sourceMode->addItem(tr("Enter a numeric series"), QStringLiteral("series"));
     sourceMode->addItem(tr("Use an independent reference result"), QStringLiteral("provenance"));
+    sourceMode->addItem(tr("Use actual active FE frames"), QStringLiteral("native-active"));
+    sourceMode->addItem(tr("Use actual passive FE frames"), QStringLiteral("native-passive"));
     sourceJob = new QComboBox(featureGroup);
     sourceJob->setObjectName(QStringLiteral("extensionSourceJob"));
     sourceSignal = new QComboBox(featureGroup);
@@ -238,7 +240,7 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     seriesForm->addRow(tr("Value unit"), valueUnitInput);
     featureLayout->addLayout(seriesForm);
 
-    auto *provenanceNote = new QLabel(tr("Reference signals are resolved by the extension service from its independent reference history. Native solver endpoints are not substituted."), featureGroup);
+    auto *provenanceNote = new QLabel(tr("Native FE channels use published MODEL frames and a registered manifest. Independent reference histories and manually entered series retain their own source labels. The service revalidates the selected source before and after execution."), featureGroup);
     provenanceNote->setObjectName(QStringLiteral("extensionProvenanceNote"));
     provenanceNote->setWordWrap(true);
     featureLayout->addWidget(provenanceNote);
@@ -327,6 +329,8 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     connect(valueUnitInput, &QComboBox::currentTextChanged, this, invalidateRunPreview);
     connect(sourceJob, &QComboBox::currentIndexChanged, this, invalidateRunPreview);
     connect(sourceSignal, &QComboBox::currentIndexChanged, this, invalidateRunPreview);
+    connect(sourceMode, &QComboBox::currentIndexChanged, this, &ExtensionWidget::refreshSourceSignals);
+    connect(sourceJob, &QComboBox::currentIndexChanged, this, &ExtensionWidget::refreshSourceSignals);
     connect(refreshTimer, &QTimer::timeout, this, [this] {
         refreshExtensions();
         refreshJobs();
@@ -557,6 +561,30 @@ void ExtensionWidget::onReply(const QString &requestId, const QString &operation
             updateAvailability();
             break;
         }
+        case RequestKind::NativeChannels:
+        {
+            if (requestId != nativeChannelRequest || context.intent != nativeSourceKey) break;
+            nativeChannelRequest.clear();
+            if (result.value("artifactId") != nativeSourceDescriptor.value("artifactId")) break;
+            const QSignalBlocker blocker(sourceSignal);
+            for (const auto &value : result.value("channels").toArray())
+            {
+                const auto channel = value.toObject();
+                const QString id = channel.value("channelId").toString();
+                if (id.isEmpty() || sourceSignal->findData(id) >= 0) continue;
+                sourceSignal->addItem(id + " [" + channel.value("unit").toString() + "]", id);
+                if (id == desiredNativeChannel) sourceSignal->setCurrentIndex(sourceSignal->count() - 1);
+            }
+            if (result.contains("nextCursor"))
+            {
+                const QString mode = sourceMode->currentData().toString().mid(7);
+                nativeChannelRequest = request("result.channels.query", {{"jobId", sourceJob->currentData().toString()},
+                    {"mode", mode}, {"artifactId", nativeSourceDescriptor.value("artifactId")},
+                    {"cursor", result.value("nextCursor")}, {"limit", 200}}, context);
+            }
+            updateAvailability();
+            break;
+        }
         case RequestKind::ManifestSchema:
             if (result.value(QStringLiteral("apiVersion")).toString() == QStringLiteral("range.extension/v1") &&
                 result.value(QStringLiteral("schemaId")).toString() == QStringLiteral("range.extension/v1/manifest"))
@@ -647,6 +675,7 @@ void ExtensionWidget::onReply(const QString &requestId, const QString &operation
                     clearPreview(tr("Reference source changed. Create a new preview before running the extension."));
             }
             updateAvailability();
+            refreshSourceSignals();
             break;
         }
         case RequestKind::ProjectForPreview:
@@ -766,6 +795,15 @@ void ExtensionWidget::onRequestFailed(const QString &requestId, const QString &o
             break;
         case RequestKind::Jobs:
             status->setText(tr("Could not refresh reference job sources: %1").arg(detail));
+            break;
+        case RequestKind::NativeChannels:
+            if (nativeChannelRequest == requestId)
+            {
+                nativeChannelRequest.clear(); nativeSourceKey.clear(); nativeSourceDescriptor = {};
+                sourceSignal->clear();
+                clearPreview(tr("Native source channels are unavailable. Refresh and create a new preview."));
+                status->setText(tr("Could not read native FE channels: %1").arg(detail));
+            }
             break;
         case RequestKind::JobPoll:
             status->setText(tr("Could not read job %1: %2. Refresh the workspace state before retrying.").arg(pendingJobId, detail));
@@ -1424,6 +1462,20 @@ bool ExtensionWidget::buildRunParameters(QJsonObject *parameters, QString *error
             return false;
         parameters->insert(QStringLiteral("series"), series);
     }
+    else if (sourceMode->currentData().toString().startsWith("native-"))
+    {
+        const QString jobId = sourceJob->currentData().toString();
+        const QString channel = sourceSignal->currentData().toString();
+        if (jobId.isEmpty() || channel.isEmpty() || !nativeChannelRequest.isEmpty()
+            || nativeSourceDescriptor.value("artifactId").toString().isEmpty())
+        {
+            if (error) *error = tr("Choose an available native FE job and channel after its catalog finishes loading.");
+            return false;
+        }
+        parameters->insert("provenance", QJsonObject{{"jobId", jobId},
+            {"mode", sourceMode->currentData().toString().mid(7)},
+            {"artifactId", nativeSourceDescriptor.value("artifactId")}, {"channelId", channel}});
+    }
     else
     {
         const QString jobId = sourceJob->currentData().toString();
@@ -1437,6 +1489,48 @@ bool ExtensionWidget::buildRunParameters(QJsonObject *parameters, QString *error
             {QStringLiteral("jobId"), jobId}, {QStringLiteral("signal"), signal}});
     }
     return true;
+}
+
+void ExtensionWidget::refreshSourceSignals()
+{
+    const QString sourceModeId = sourceMode->currentData().toString();
+    const bool native = sourceModeId.startsWith("native-");
+    const QString mode = native ? sourceModeId.mid(7) : QString();
+    const QString selectedJob = sourceJob->currentData().toString();
+    QJsonObject descriptor;
+    if (native)
+        for (const auto &value : availableJobs)
+        {
+            const auto job = value.toObject();
+            if (job.value("jobId").toString() == selectedJob)
+                descriptor = job.value("result").toObject().value("nativeResults").toObject().value(mode).toObject();
+        }
+    const QString key = sourceModeId + ":" + selectedJob + ":" + descriptor.value("artifactId").toString();
+    if (key == nativeSourceKey) return;
+    if (!nativeSourceKey.isEmpty() && !currentPreview.isEmpty()
+        && currentPreview.value("normalized").toObject().value("command") == QJsonValue("extension.run"))
+        clearPreview(tr("Result source changed. Create a new preview before running the extension."));
+    const QString previous = sourceSignal->currentData().toString();
+    nativeSourceKey = key;
+    nativeSourceDescriptor = descriptor;
+    nativeChannelRequest.clear();
+    const QSignalBlocker blocker(sourceSignal);
+    sourceSignal->clear();
+    if (!native)
+    {
+        sourceSignal->addItem(tr("Active sensor velocity (m/s)"), "reference.active.sensorVelocity");
+        sourceSignal->addItem(tr("Active energy (J)"), "reference.active.energyJ");
+        sourceSignal->addItem(tr("Passive energy (J)"), "reference.passive.energyJ");
+        const int index = sourceSignal->findData(previous);
+        if (index >= 0) sourceSignal->setCurrentIndex(index);
+        return;
+    }
+    desiredNativeChannel = previous.startsWith("node:") ? previous : QString();
+    if (!service || !service->isReady() || descriptor.isEmpty()) return;
+    PendingRequest context{RequestKind::NativeChannels};
+    context.intent = key;
+    nativeChannelRequest = request("result.channels.query", {{"jobId", selectedJob}, {"mode", mode},
+        {"artifactId", descriptor.value("artifactId")}, {"offset", 0}, {"limit", 200}}, context);
 }
 
 bool ExtensionWidget::selectedVersionActive() const

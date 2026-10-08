@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -52,6 +53,93 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
+def _publish_native_results(service, job, result, variant, native_path, accepted, binding,
+                            directory, cancel):
+    """Freeze actual numbered MODEL frames with declared software-input provenance."""
+    from .native_results import NativeResultsClient
+
+    executable = getattr(service, "native_results", None)
+    if executable is None:
+        raise WorkflowError("NATIVE_RESULTS_UNAVAILABLE", "Native results executable is required for result publication")
+    result_directory = native_path.parent
+    terminal = Path(result[variant]["checkpointPath"])
+    terminal_sha = result[variant]["checkpointSha256"]
+    if file_hash(terminal) != terminal_sha:
+        raise WorkflowError("SOURCE_CHANGED", "Accepted terminal MODEL changed before native result publication")
+    source_ref = result.get("sourceRef")
+    if source_ref:
+        snapshot_ref = {"usesOpenDocument": True, **source_ref["originRef"],
+                        "sourceId": source_ref["sourceId"],
+                        "registeredModelSha256": source_ref["registeredModelSha256"]}
+        runtime_stamp = source_ref["originRef"]["instanceRef"]
+    else:
+        snapshot_ref = result["templateSourceRef"]
+        runtime_stamp = {"kind": "workflow-template", "model": result["model"]}
+    software = {key: binding[key] for key in ("solver", "native", "python", "nativeResults") if key in binding}
+    runtime = {"scope": "declared-software-inputs/v1", "inputs": software,
+               "fingerprintSha256": hashlib.sha256(canonical(software)).hexdigest()}
+    control_enabled = variant == "active"
+    if accepted.get("controlEnabled") is not control_enabled:
+        raise WorkflowError("INVALID_NATIVE_RESPONSE", "Accepted MODEL control mode differs from the workflow variant")
+    controller_id = accepted.get("controllerId")
+    if not _native_controller_id(controller_id, control_enabled):
+        raise WorkflowError("INVALID_NATIVE_RESPONSE", "Accepted MODEL has invalid persisted controller identity")
+    control_inputs = {key: {"path": result[key + "Path"],
+                            "sha256": file_hash(Path(result[key + "Path"]))}
+                      for key in ("controller", "controllerHost", "gains")}
+    control = {"enabled": control_enabled, "controllerId": controller_id,
+               "controllerVersionSha256": hashlib.sha256(canonical(control_inputs)).hexdigest() if control_enabled else ""}
+    if control_enabled:
+        control["inputs"] = control_inputs
+    input_sha = result[variant]["inputSnapshotSha256"]
+    package = {"inputSnapshotSha256": input_sha, "sourceSnapshotRef": snapshot_ref,
+               "runtime": runtime, "control": control}
+    provenance = {"jobId": job["jobId"], "proofScope": "solver-and-declared-controller-runtime/v1",
+                  "sourceRuntimeStamp": runtime_stamp, "sourceSnapshotRef": snapshot_ref,
+                  "inputSnapshotSha256": input_sha,
+                  "inputPackageSha256": hashlib.sha256(canonical(package)).hexdigest(),
+                  "runtime": runtime, "control": control}
+    provenance_path = result_directory / "native-result.provenance.json"
+    provenance_path.write_bytes(canonical(provenance))
+    raw = service.runner.run([str(executable), "publish", "--result-directory", str(result_directory),
+                              "--latest", str(native_path), "--provenance-file", str(provenance_path)],
+                             directory, "publish-native-" + variant, cancel)
+    try:
+        responses = [json.loads(line, object_pairs_hook=_unique_object) for line in raw.splitlines()
+                     if line.lstrip().startswith(b"{")]
+        if len(responses) != 1:
+            raise ValueError()
+        descriptor = responses[0]
+        canonical(descriptor)
+    except (ValueError, TypeError):
+        raise WorkflowError("INVALID_NATIVE_RESPONSE", "Native result publication returned invalid JSON") from None
+    manifest_path = result_directory / "native-result.manifest.json"
+    if (not isinstance(descriptor, dict) or descriptor.get("valid") is not True or
+            not _same_path(descriptor.get("manifestPath"), manifest_path) or
+            not _native_sha256(descriptor.get("manifestSha256")) or
+            file_hash(manifest_path) != descriptor["manifestSha256"]):
+        raise WorkflowError("INVALID_NATIVE_RESPONSE", "Native result publication did not bind its manifest")
+    manifest = _read(manifest_path)
+    terminal_record = manifest.get("terminalModel", {})
+    if (manifest.get("jobId") != job["jobId"] or manifest.get("artifactId") != descriptor.get("artifactId") or
+            terminal_record.get("sha256") != terminal_sha or
+            not _same_path(result_directory / terminal_record.get("relativePath", ""), terminal) or
+            file_hash(terminal) != terminal_sha):
+        raise WorkflowError("SOURCE_CHANGED", "Native manifest differs from the accepted terminal MODEL")
+    catalog = NativeResultsClient(executable, manifest_path, descriptor["manifestSha256"]).query("catalog", {"limit": 1})
+    if catalog.get("artifactId") != descriptor["artifactId"] or catalog.get("jobId") != job["jobId"]:
+        raise WorkflowError("ARTIFACT_IDENTITY_MISMATCH", "Native catalog differs from its accepted job")
+    artifacts = {"manifest": {"path": str(manifest_path), "sha256": descriptor["manifestSha256"]}}
+    for index, frame in enumerate(manifest["frames"]):
+        path = result_directory / frame["relativePath"]
+        if (path.is_symlink() or not path.resolve().is_relative_to(result_directory.resolve()) or
+                file_hash(path) != frame["sha256"]):
+            raise WorkflowError("SOURCE_CHANGED", "Native frame differs from its immutable manifest")
+        artifacts["frame/" + str(index)] = {"path": str(path), "sha256": frame["sha256"]}
+    result.setdefault("nativeResults", {})[variant] = descriptor
+    result.setdefault("nativeResultArtifacts", {})[variant] = artifacts
+
+
 def _native_sha256(value: object) -> bool:
     return (isinstance(value, str) and len(value) == 64 and
             all(char in "0123456789abcdef" for char in value))
@@ -65,6 +153,15 @@ def _native_source_files(value: object) -> bool:
     return (isinstance(value, list) and bool(value) and all(
         isinstance(item, dict) and _native_path(item.get("path")) and
         _native_sha256(item.get("sha256")) for item in value))
+
+
+def _native_controller_id(value: object, enabled: bool) -> bool:
+    if not isinstance(value, str):
+        return False
+    if not enabled:
+        return value == ""
+    return (bool(value) and len(value) <= 128 and value.strip() == value and
+            not any(character.isspace() or character in ('\x00', '"') for character in value))
 
 
 def _native_finite_number(value: object, *, minimum: float | None = None) -> bool:
@@ -107,6 +204,7 @@ def _valid_native_response(result: dict, operation: str) -> bool:
             type(result.get("checkpointAvailable")) is bool and
             type(result.get("step")) is int and 0 <= result["step"] <= 5000 and
             type(result.get("controlEnabled")) is bool and
+            _native_controller_id(result.get("controllerId"), result["controlEnabled"]) and
             type(result.get("plannedSteps")) is int and 1 <= result["plannedSteps"] <= 5000 and
             _native_finite_number(result.get("configuredDt"), minimum=0.0) and result["configuredDt"] > 0.0 and
             _native_finite_number(result.get("time"), minimum=0.0) and
@@ -305,7 +403,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
             _copy_bound(Path(binding[key]["path"]), target, binding[key]["sha256"])
         linear_path, gains_path, analysis_path = (directory / name for name in
                                                    ("linear.json", "gains.json", "analysis.json"))
-        linear_input_path = directory / "active-linear-input.ram"
+        linear_input_path = directory / "active-linear-input.rbm"
         reference_path = directory / "source-reference.json"
 
     registered, model_binding = _read_registered_source(
@@ -350,20 +448,28 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
         }
         source_sha = registered["registeredModelSha256"]
         for variant in ("active", "passive"):
-            native_path = directory / (variant + "-prepared.ram")
+            native_path = directory / (variant + "-prepared.rbm")
             args = ["prepare-source", "--input", str(source_snapshot_copy), "--expected-sha", source_sha,
                     "--output", str(native_path), "--steps", str(total), "--dt", str(configuration["dt"])]
             if variant == "passive":
                 args.append("--passive")
             prepared = _native(service, directory, "prepare-source-" + variant, cancel, args)
             expected_prepared = prepared.get("preparedSha256")
-            if (prepared.get("sourceSha256") != source_sha or prepared.get("output") != str(native_path) or
+            if (prepared.get("sourceSha256") != source_sha or not _same_path(prepared.get("output"), native_path) or
                     not _same_path(prepared.get("sourcePath"), source_snapshot_copy) or
                     prepared.get("resume") is not False or file_hash(native_path) != expected_prepared or
                     not any(_same_path(item.get("path"), source_snapshot_copy) and item.get("sha256") == source_sha
                             for item in prepared.get("sourceFiles", []))):
                 raise WorkflowError("INVALID_NATIVE_RESPONSE", "Native source preparation did not preserve its hash binding")
             prepared_inputs[variant] = {"path": str(native_path), "sha256": expected_prepared}
+            if variant == "active":
+                port = descriptor["ports"]["force"]
+                actuators = prepared.get("mapping", {}).get("actuators")
+                if (not isinstance(actuators, list) or len(actuators) != 1 or
+                        any(actuators[0].get(key) != port.get(key) for key in
+                            ("id", "globalDirection", "unit", "minimum", "maximum")) or
+                        actuators[0].get("targetNodePhysicalId") != port["nodePhysicalId"]):
+                    raise WorkflowError("INVALID_NATIVE_RESPONSE", "Prepared actuator differs from the verified source force port")
 
         _copy_bound(Path(prepared_inputs["active"]["path"]), linear_input_path,
                     prepared_inputs["active"]["sha256"])
@@ -405,6 +511,9 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
                    "--gains", str(gains_path), "--dt", str(configuration["dt"]), "--steps", str(total),
                    "--initial-q-json", canonical(initial_q).decode(), "--output", str(replay_path)]
     replay_args += ["--initial-v-json", canonical(initial_v).decode()]
+    force_port = descriptor["ports"]["force"]
+    replay_args += ["--force-minimum", str(force_port["minimum"]),
+                    "--force-maximum", str(force_port["maximum"])]
     service.runner.run(replay_args, directory, "independent-reference", cancel)
     replay = _read(replay_path)
     result = {"jobId": job["jobId"], "totalSteps": total, "dtSeconds": configuration["dt"],
@@ -438,7 +547,9 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
     for variant in ("active", "passive"):
         if mode not in (variant, "both"):
             continue
-        native_path = directory / (variant + ".ram")
+        variant_directory = directory / variant
+        variant_directory.mkdir(exist_ok=True)
+        native_path = variant_directory / (variant + ".rbm")
         if resume:
             checkpoint = Path(source[variant]["checkpointPath"])
             if file_hash(checkpoint) != source[variant]["checkpointSha256"]:
@@ -496,11 +607,13 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
                            "preparedInputSha256": prepared_sha,
                            "nativeInputPath": str(native_path),
                            "checkpointPath": str(checkpoint_path), "checkpointSha256": file_hash(checkpoint_path)}
+        _publish_native_results(service, job, result, variant, native_path, accepted, binding, directory, cancel)
     if mode == "both":
         passive_energy = result["passive"]["energyJ"]
-        if passive_energy <= 0:
-            raise WorkflowError("INVALID_ENERGY", "Passive reference energy must be positive")
-        result["controlledToPassiveEnergyRatio"] = result["active"]["energyJ"] / passive_energy
+        if passive_energy < 0:
+            raise WorkflowError("INVALID_ENERGY", "Passive reference energy must be nonnegative")
+        result["controlledToPassiveEnergyRatio"] = (
+            result["active"]["energyJ"] / passive_energy if passive_energy > 0 else None)
     (directory / "verification.json").write_bytes(canonical(result))
     return result
 
@@ -517,6 +630,9 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
         source = service.result_snapshot(job["parameters"]["jobId"])
         if source.get("modelBinding", {}).get("kind") == "native-snapshot":
             return _run_imported_native_workflow(service, job, directory, cancel, binding, source)
+        if not isinstance(source.get("templateSourceRef"), dict):
+            raise WorkflowError("SOURCE_REFERENCE_UNAVAILABLE",
+                                "This legacy result lacks native catalog source provenance; run the workflow again before resuming")
         configuration = source["configuration"]
         additional = job["parameters"]["additionalSteps"]
         total = source["totalSteps"] + additional
@@ -581,6 +697,9 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
     result = {"jobId": job["jobId"], "totalSteps": total, "dtSeconds": configuration["dt"],
               "mode": mode, "configuration": configuration, "independentReference": True,
               "model": model, "dofs": dofs,
+              "templateSourceRef": source["templateSourceRef"] if resume else {
+                  "usesOpenDocument": False, "kind": "template", "model": model,
+                  "sourceSha256": binding["template"]["sha256"]},
               "referencePath": str(reference_path), "linearPath": str(linear_path),
               "gainsPath": str(gains_path), "controllerPath": str(controller_path),
               "controllerHostPath": str(controller_host_path),
@@ -592,7 +711,9 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
     for variant in ("active", "passive"):
         if mode not in (variant, "both"):
             continue
-        native_path = directory / (variant + ".ram")
+        variant_directory = directory / variant
+        variant_directory.mkdir(exist_ok=True)
+        native_path = variant_directory / (variant + ".ram")
         if resume:
             checkpoint = Path(source[variant]["checkpointPath"])
             if file_hash(checkpoint) != source[variant]["checkpointSha256"]:
@@ -604,6 +725,8 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
             _native(service, directory, "prepare-passive", cancel,
                     ["prepare", "--input", str(directory / "template.ram"), "--output", str(native_path),
                      "--steps", str(total), "--dt", str(configuration["dt"]), "--passive"])
+        else:
+            _copy_bound(directory / "active.ram", native_path, file_hash(directory / "active.ram"))
         args = [str(service.solver), "--file=" + str(native_path)]
         if resume:
             args.append("--restart")
@@ -643,6 +766,7 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
                            "maxRotationErrorRad": rotation_error, "maxAngularVelocityErrorRadPerSecond": angular_velocity_error,
                            "inputSnapshotSha256": environment["RANGE_WORKFLOW_INPUT_SHA256"],
                            "checkpointPath": str(checkpoint_path), "checkpointSha256": file_hash(checkpoint_path)}
+        _publish_native_results(service, job, result, variant, native_path, accepted, binding, directory, cancel)
     if mode == "both":
         passive_energy = result["passive"]["energyJ"]
         if passive_energy <= 0:

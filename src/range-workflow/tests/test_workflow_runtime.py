@@ -169,6 +169,34 @@ class ContractTest(unittest.TestCase):
                     _native(self.service, self.base, "fake-inspect", threading.Event(), ["inspect"])
                 self.assertEqual(caught.exception.code, "INVALID_NATIVE_RESPONSE")
 
+    def test_native_inspect_requires_consistent_persisted_controller_identity(self):
+        source = self.base / "accepted.ram"
+        base = {"apiVersion": "range.workflow.native/v1", "status": "ok",
+                "sourceSha256": "a" * 64, "sourcePath": str(source),
+                "sourceFiles": [{"path": str(source), "sha256": "a" * 64}],
+                "checkpointAvailable": False, "step": 0, "plannedSteps": 1,
+                "configuredDt": .005, "time": 0.0, "dt": .005,
+                "q": [], "v": [], "a": [], "controlWork": [],
+                "controlAvailable": False, "nodes": []}
+        valid = ((False, ""), (True, "stage10-beam-velocity-feedback"))
+        for enabled, controller_id in valid:
+            response = {**base, "controlEnabled": enabled, "controllerId": controller_id}
+            with self.subTest(enabled=enabled, controller_id=controller_id), mock.patch.object(
+                    self.service.runner, "run", return_value=json.dumps(response).encode("utf-8")):
+                self.assertEqual(_native(self.service, self.base, "inspect", threading.Event(), ["inspect"]),
+                                 response)
+
+        invalid = ({**base, "controlEnabled": True},
+                   {**base, "controlEnabled": True, "controllerId": ""},
+                   {**base, "controlEnabled": False, "controllerId": "stage9-velocity-feedback"},
+                   {**base, "controlEnabled": True, "controllerId": "controller with space"})
+        for response in invalid:
+            with self.subTest(response=response), mock.patch.object(
+                    self.service.runner, "run", return_value=json.dumps(response).encode("utf-8")):
+                with self.assertRaises(WorkflowError) as caught:
+                    _native(self.service, self.base, "inspect", threading.Event(), ["inspect"])
+                self.assertEqual(caught.exception.code, "INVALID_NATIVE_RESPONSE")
+
 
 class NativeIntegration(unittest.TestCase):
     def test_actual_fe_beam_configure_run_both_and_resume(self):
@@ -201,6 +229,8 @@ class NativeIntegration(unittest.TestCase):
                 self.assertEqual(len(result["active"]["q"]), 2)
                 self.assertEqual(len(result["passive"]["q"]), 2)
                 self.assertLess(result["controlledToPassiveEnergyRatio"], 1.0)
+                self.assertEqual(result["nativeResults"]["active"]["manifest"]["control"]["controllerId"],
+                                 "stage10-beam-velocity-feedback")
                 original_id = original["jobId"]
                 original_hashes = {item["path"]: item["sha256"] for item in original["artifacts"]}
 

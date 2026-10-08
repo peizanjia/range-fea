@@ -189,7 +189,7 @@ def build_source_reference(descriptor: dict, linear: dict) -> dict:
 
     nodes_by_id: dict[str, dict] = {}
     positions: dict[str, int] = {}
-    for index, node in enumerate(nodes):
+    for node in nodes:
         if not isinstance(node, dict):
             _fail("source node catalog contains an invalid record")
         node_id = str(node.get("physicalId"))
@@ -197,8 +197,8 @@ def build_source_reference(descriptor: dict, linear: dict) -> dict:
             _fail("source node identities or positions are invalid")
         nodes_by_id[node_id] = node
         positions[node_id] = node["position"]
-        if positions[node_id] != index:
-            _fail("source node positions are not a contiguous ordered catalog")
+    if set(positions.values()) != set(range(len(nodes))):
+        _fail("source node positions must be a contiguous unique internal index catalog")
 
     source_by_key: dict[tuple, dict] = {}
     for item in free_dofs:
@@ -297,18 +297,24 @@ def build_source_reference(descriptor: dict, linear: dict) -> dict:
             sv_matrix.shape != (len(outputs), len(linear_dofs)) or
             not np.isfinite(b_matrix).all() or not np.isfinite(sv_matrix).all()):
         _fail("native input/output matrix dimensions are invalid")
-    b_column = b_matrix[:, input_index]
-    nonzero = np.flatnonzero(np.abs(b_column) > max(float(np.max(np.abs(b_column))) * 1.0e-12, 1.0e-15))
-    port_key = _physical_key(force_port.get("nodePhysicalId"), force_port.get("globalDirection"), "m")
-    force_coordinate = key_to_index.get(port_key)
-    if force_coordinate is None or len(nonzero) != 1 or int(nonzero[0]) != force_coordinate:
-        _fail("source nodal force must map to its matching free generalized coordinate")
-    sensor_row = sv_matrix[output_index, :]
-    sensor_nonzero = np.flatnonzero(np.abs(sensor_row) > max(float(np.max(np.abs(sensor_row))) * 1.0e-12,
-                                                              1.0e-15))
-    if (not np.isfinite(sensor_row).all() or len(sensor_nonzero) != 1 or
-            int(sensor_nonzero[0]) != force_coordinate):
-        _fail("source velocity sensor must map to the collocated free generalized coordinate")
+    # Virtual work and velocity projection determine the signed coefficients
+    # independently: force_axis dot coordinate_axis, never exporter magnitudes.
+    force_axis = _global_axis(force_port.get("globalDirection"), "force port direction")
+    velocity_axis = _global_axis(velocity_port.get("globalDirection"), "velocity port direction")
+    expected_force = np.zeros(len(linear_dofs))
+    expected_velocity = np.zeros(len(linear_dofs))
+    for index, item in enumerate(linear_dofs):
+        if item["unit"] == "m" and str(item["nodePhysicalId"]) == str(force_port["nodePhysicalId"]):
+            coordinate_axis = _global_axis(item["globalDirection"], "native DOF direction")
+            expected_force[index] = float(force_axis @ coordinate_axis)
+            expected_velocity[index] = float(velocity_axis @ coordinate_axis)
+    nonzero = np.flatnonzero(expected_force)
+    if len(nonzero) != 1:
+        _fail("source nodal force must map to one matching free generalized coordinate")
+    if not np.allclose(b_matrix[:, input_index], expected_force, rtol=0.0, atol=1.0e-12):
+        _fail("native nodal force coefficients differ from the source physical port projection")
+    if not np.allclose(sv_matrix[output_index, :], expected_velocity, rtol=0.0, atol=1.0e-12):
+        _fail("native velocity sensor coefficients differ from the source physical port projection")
 
     boundary_indices = [int(nonzero[0])]
     modes = min(2, len(linear_dofs) - len(boundary_indices))

@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import threading
 import uuid
 
@@ -24,9 +25,10 @@ MAX_CHANNELS = 4_096
 MAX_CACHED_SAMPLE_BYTES = 16 * 1024 * 1024
 MAX_CACHED_JOURNALS = 8
 MAX_DIRECTORY_ENTRIES = 1_024
+MAX_TRAJECTORY_DIRECTORY_ENTRIES = 8_192  # Up to 5,000 actual numbered MODEL frames plus bounded journals/metadata.
 MAX_EXACT_INTEGER = (1 << 53) - 1
 _JOURNAL_NAME = re.compile(
-    r"^(active|passive)\.ram\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.events\.jsonl$"
+    r"^(active|passive)\.r(?:a|b)m\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.events\.jsonl$"
 )
 _CHANNEL_ID = re.compile(r"^[^\s\x00-\x1f\x7f\"]{1,128}$")
 
@@ -168,15 +170,30 @@ class TelemetryReader:
     def _find_journal(self, directory: Path, mode: str) -> tuple[Path | None, str | None]:
         candidates: list[tuple[Path, str]] = []
         try:
-            with os.scandir(directory) as entries:
-                for index, entry in enumerate(entries):
-                    if index >= MAX_DIRECTORY_ENTRIES:
-                        raise WorkflowError("TELEMETRY_LIMIT", "Job directory contains too many entries")
-                    match = _JOURNAL_NAME.fullmatch(entry.name)
-                    if match and match.group(1) == mode:
-                        candidates.append((Path(entry.path), match.group(2)))
-                        if len(candidates) > 1:
-                            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Multiple native event journals match this trajectory")
+            locations = [directory]
+            variant_directory = directory / mode
+            try:
+                info = variant_directory.lstat()
+            except FileNotFoundError:
+                info = None
+            if info is not None:
+                if (variant_directory.is_symlink() or
+                        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT or
+                        not stat.S_ISDIR(info.st_mode) or
+                        not variant_directory.resolve(strict=True).is_relative_to(directory.resolve())):
+                    raise WorkflowError("TELEMETRY_PATH", "Trajectory directory must be a regular managed directory")
+                locations.append(variant_directory)
+            for location in locations:
+                limit = MAX_DIRECTORY_ENTRIES if location == directory else MAX_TRAJECTORY_DIRECTORY_ENTRIES
+                with os.scandir(location) as entries:
+                    for index, entry in enumerate(entries):
+                        if index >= limit:
+                            raise WorkflowError("TELEMETRY_LIMIT", "Job directory contains too many entries")
+                        match = _JOURNAL_NAME.fullmatch(entry.name)
+                        if match and match.group(1) == mode:
+                            candidates.append((Path(entry.path), match.group(2)))
+                            if len(candidates) > 1:
+                                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Multiple native event journals match this trajectory")
         except WorkflowError:
             raise
         except OSError:

@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QJsonObject>
+#include <QJsonArray>
 
 //! Read-only publication and query boundary for verified native FE results.
 class RNativeResultBroker
@@ -30,6 +31,14 @@ public:
                              const QString &expectedSha256,
                              const QString &operation,
                              const QJsonObject &arguments);
+
+    //! Query only complete journal frames supplied by the trusted job manager.
+    //! No success manifest is published; every frame is revalidated per query.
+    static QJsonObject queryLive(const QString &resultDirectory,
+                                const QJsonObject &provenance,
+                                const QJsonArray &frames,
+                                const QString &operation,
+                                const QJsonObject &arguments);
 };
 
 #endif // RNATIVE_RESULT_BROKER_H

@@ -2,6 +2,7 @@
 #include <QElapsedTimer>
 #include <QDir>
 #include <QEventLoop>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonDocument>
@@ -9,14 +10,18 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUuid>
+#include <limits>
 
 #include <rai_agent.h>
 #include <rml_model.h>
+#include <rml_time_solver.h>
 
 #include "agent_task_runner.h"
 #include "application.h"
 #include "model_command_host.h"
 #include "session.h"
+#include "model_io.h"
+#include "solver_manager.h"
 
 namespace
 {
@@ -209,12 +214,419 @@ QString toolResultContent(const QJsonArray &messages, const QString &callId)
     }
     return {};
 }
+
+bool registerCurrentAgentSource(WorkflowProcess &workflow, uint &modelID, QJsonObject &origin, QString *error)
+{
+    static QTemporaryDir projectRoot;
+    if (!projectRoot.isValid()) { *error = QStringLiteral("Invalid source project root"); return false; }
+    const QString project = projectRoot.filePath(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    if (!QDir().mkpath(project)) { *error = QStringLiteral("Cannot create source project"); return false; }
+    auto *session = Application::instance()->getSession();
+    if (!session->openProject(project, error)) return false;
+#ifndef RANGE_WORKFLOW_SOURCE_ROOT
+#define RANGE_WORKFLOW_SOURCE_ROOT "."
+#endif
+    const QString source = QDir(project).filePath(QStringLiteral("agent-source.ram"));
+    if (!QFile::copy(QDir(QStringLiteral(RANGE_WORKFLOW_SOURCE_ROOT)).filePath(
+            QStringLiteral("fea-solver/examples/stage9/stage9_truss4.ram")), source))
+    { *error = QStringLiteral("Cannot copy source fixture"); return false; }
+    Model model;
+    try { ModelIO::open(model, source); }
+    catch (const RError &failure) { *error = failure.getMessage(); return false; }
+    model.getProblemSetup().setStructuralControlSetup(RStructuralControlSetup());
+    model.getProblemSetup().setRestart(false);
+    session->addModel(model);
+    modelID = session->getNModels() - 1;
+    const QJsonObject snapshot = session->createDocumentSnapshot(modelID, error);
+    if (snapshot.isEmpty()) return false;
+    for (const QString &key : {QStringLiteral("projectId"), QStringLiteral("persistentDocumentId"),
+         QStringLiteral("sourceRevision"), QStringLiteral("modelSha256"), QStringLiteral("instanceRef")})
+        origin.insert(key, snapshot.value(key));
+    const QJsonObject registered = workflowRequest(workflow, QStringLiteral("model.source.register"),
+        {{QStringLiteral("catalogRoot"), project}, {QStringLiteral("snapshotRef"), origin}}, error);
+    if (!error->isEmpty()) return false;
+    const QString sourceId = registered.value(QStringLiteral("sourceId")).toString();
+    if (sourceId.isEmpty()) { *error = QStringLiteral("Source registration returned no sourceId"); return false; }
+    const QJsonObject projectState = workflowRequest(workflow, QStringLiteral("project.query"), {}, error);
+    if (!error->isEmpty()) return false;
+    const QJsonObject preview = workflowRequest(workflow, QStringLiteral("command.preview"),
+        {{QStringLiteral("command"), QStringLiteral("workflow.configure")},
+         {QStringLiteral("expectedRevision"), projectState.value(QStringLiteral("revision"))},
+         {QStringLiteral("parameters"), QJsonObject{{QStringLiteral("sourceId"), sourceId}, {QStringLiteral("dt"), 0.001},
+            {QStringLiteral("steps"), 4}, {QStringLiteral("targetDamping"), 0.05}}}}, error);
+    if (!error->isEmpty()) return false;
+    const QJsonObject approval = workflowRequest(workflow, QStringLiteral("host.approve"),
+        {{QStringLiteral("previewId"), preview.value(QStringLiteral("previewId"))},
+         {QStringLiteral("previewHash"), preview.value(QStringLiteral("previewHash"))}}, error);
+    if (!error->isEmpty()) return false;
+    workflowRequest(workflow, QStringLiteral("command.execute"),
+        {{QStringLiteral("previewId"), preview.value(QStringLiteral("previewId"))},
+         {QStringLiteral("approvalToken"), approval.value(QStringLiteral("approvalToken"))}}, error);
+    return error->isEmpty();
+}
+
+QJsonObject sourceRunCall(const QString &callId)
+{
+    return providerCall(callId, QStringLiteral("workflow_propose"),
+        {{QStringLiteral("command"), QStringLiteral("workflow.run")},
+         {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("mode"), QStringLiteral("passive")},
+            {QStringLiteral("independentReference"), true}}}});
+}
+
+QStringList workflowJobIds(const QJsonObject &response)
+{
+    QStringList ids;
+    for (const QJsonValue &value : response.value(QStringLiteral("jobs")).toArray())
+        ids.append(value.toObject().value(QStringLiteral("jobId")).toString());
+    ids.sort();
+    return ids;
+}
 }
 
 class TestAgentTaskRunner : public QObject
 {
     Q_OBJECT
 private slots:
+    void changedRegisteredSourceCannotApproveFreshRun_data()
+    {
+        QTest::addColumn<QString>("change");
+        QTest::newRow("draft") << QStringLiteral("draft");
+        QTest::newRow("edit") << QStringLiteral("edit");
+        QTest::newRow("closed") << QStringLiteral("closed");
+    }
+
+    void changedRegisteredSourceCannotApproveFreshRun()
+    {
+        QFETCH(QString, change);
+        QTemporaryDir workspace;
+        WorkflowProcess workflow;
+        workflow.start(WorkflowProcess::defaultConfiguration(workspace.path()));
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isReady(), 15000);
+        uint modelID = 0;
+        QJsonObject origin;
+        QString error;
+        QVERIFY2(registerCurrentAgentSource(workflow, modelID, origin, &error), qPrintable(error));
+        const QStringList baselineJobIds = workflowJobIds(workflowRequest(workflow, QStringLiteral("jobs.query"), {}, &error));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!baselineJobIds.isEmpty()); // Trusted setup submitted workflow.configure.
+        auto *session = Application::instance()->getSession();
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy replies(&workflow, &WorkflowProcess::replyReceived);
+        runner.startTask(QStringLiteral("Preview a fresh run of the registered source."));
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({}, {sourceRunCall(QStringLiteral("fresh-run"))})));
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 15000);
+        QCOMPARE(proposals.first().at(2).toJsonObject().value(QStringLiteral("modelBinding")).toObject()
+                     .value(QStringLiteral("originRef")).toObject(), origin);
+        replies.clear();
+        if (change == QStringLiteral("draft"))
+            session->setNumericDraft(modelID, QStringLiteral("analysis.modal"), QStringLiteral("iterations"), QStringLiteral("invalid"), QStringLiteral("pending"));
+        else if (change == QStringLiteral("edit"))
+        {
+            session->getModel(modelID).setDescription(QStringLiteral("Edited after source registration"));
+            session->setModelChanged(modelID);
+        }
+        else session->removeModel(modelID);
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 5000);
+        QVERIFY(toolResultContent(requested.last().at(1).toJsonArray(), QStringLiteral("fresh-run")).contains(QStringLiteral("STALE_SOURCE")));
+        QCOMPARE(actions.size(), 0);
+        for (const QList<QVariant> &reply : replies)
+        {
+            QVERIFY(reply.at(1).toString() != QStringLiteral("host.approve"));
+            QVERIFY(reply.at(1).toString() != QStringLiteral("command.execute"));
+        }
+        const QJsonObject jobs = workflowRequest(workflow, QStringLiteral("jobs.query"), {}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(workflowJobIds(jobs), baselineJobIds);
+        for (const QJsonValue &job : jobs.value(QStringLiteral("jobs")).toArray())
+            QVERIFY(job.toObject().value(QStringLiteral("command")) != QJsonValue(QStringLiteral("workflow.run")));
+        runner.cancel(); workflow.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isStopped(), 10000);
+    }
+
+    void sourceChangeWhileApprovalIsReturningPreventsExecute()
+    {
+        QTemporaryDir workspace;
+        WorkflowProcess workflow;
+        workflow.start(WorkflowProcess::defaultConfiguration(workspace.path()));
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isReady(), 15000);
+        uint modelID = 0;
+        QJsonObject origin;
+        QString error;
+        QVERIFY2(registerCurrentAgentSource(workflow, modelID, origin, &error), qPrintable(error));
+        const QStringList baselineJobIds = workflowJobIds(workflowRequest(workflow, QStringLiteral("jobs.query"), {}, &error));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!baselineJobIds.isEmpty());
+        auto *session = Application::instance()->getSession();
+        bool sourceChanged = false;
+        // Registered before the runner's reply handler: change real Session
+        // state at the returning approval boundary, before it can execute.
+        connect(&workflow, &WorkflowProcess::replyReceived, &workflow,
+                [session, modelID, &sourceChanged](const QString &, const QString &operation, const QJsonObject &)
+        {
+            if (operation != QStringLiteral("host.approve")) return;
+            session->setNumericDraft(modelID, QStringLiteral("analysis.modal"), QStringLiteral("iterations"), QStringLiteral("invalid"), QStringLiteral("pending"));
+            sourceChanged = true;
+        });
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy replies(&workflow, &WorkflowProcess::replyReceived);
+        runner.startTask(QStringLiteral("Approve this current source run."));
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({}, {sourceRunCall(QStringLiteral("approval-race"))})));
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 15000);
+        replies.clear();
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 15000);
+        QVERIFY(sourceChanged);
+        QVERIFY(toolResultContent(requested.last().at(1).toJsonArray(), QStringLiteral("approval-race")).contains(QStringLiteral("STALE_SOURCE")));
+        QCOMPARE(actions.size(), 0);
+        bool approved = false;
+        for (const QList<QVariant> &reply : replies)
+        {
+            approved |= reply.at(1).toString() == QStringLiteral("host.approve");
+            QVERIFY(reply.at(1).toString() != QStringLiteral("command.execute"));
+        }
+        QVERIFY(approved);
+        const QJsonObject jobs = workflowRequest(workflow, QStringLiteral("jobs.query"), {}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(workflowJobIds(jobs), baselineJobIds);
+        for (const QJsonValue &job : jobs.value(QStringLiteral("jobs")).toArray())
+            QVERIFY(job.toObject().value(QStringLiteral("command")) != QJsonValue(QStringLiteral("workflow.run")));
+        runner.cancel(); workflow.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isStopped(), 10000);
+    }
+
+    void sourceOutsideInitialSelectionRequiresExplicitAndCurrentApproval()
+    {
+        QTemporaryDir workspace;
+        WorkflowProcess workflow;
+        workflow.start(WorkflowProcess::defaultConfiguration(workspace.path()));
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isReady(), 15000);
+        uint modelID = 0;
+        QJsonObject origin;
+        QString error;
+        QVERIFY2(registerCurrentAgentSource(workflow, modelID, origin, &error), qPrintable(error));
+        const QStringList baselineJobIds = workflowJobIds(workflowRequest(workflow, QStringLiteral("jobs.query"), {}, &error));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!baselineJobIds.isEmpty());
+        auto *session = Application::instance()->getSession();
+        session->setModelSelected(modelID, false);
+        session->addModel(modalFixture());
+        session->setModelSelected(session->getNModels() - 1, true);
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy replies(&workflow, &WorkflowProcess::replyReceived);
+        runner.startTask(QStringLiteral("Run the workspace source with task authorization."), true);
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({}, {sourceRunCall(QStringLiteral("outside-scope"))})));
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 15000);
+        QTest::qWait(100);
+        QCOMPARE(actions.size(), 0);
+        QVERIFY(!runner.pendingProposal().isEmpty());
+        for (const QList<QVariant> &reply : replies)
+            QVERIFY(reply.at(1).toString() != QStringLiteral("host.approve") && reply.at(1).toString() != QStringLiteral("command.execute"));
+        // Later selection changes do not extend the task's initial authority.
+        session->setModelSelected(modelID, true);
+        session->setNumericDraft(modelID, QStringLiteral("analysis.modal"), QStringLiteral("iterations"), QStringLiteral("invalid"), QStringLiteral("pending"));
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 5000);
+        QVERIFY(toolResultContent(requested.last().at(1).toJsonArray(), QStringLiteral("outside-scope")).contains(QStringLiteral("STALE_SOURCE")));
+        QCOMPARE(actions.size(), 0);
+        const QJsonObject jobs = workflowRequest(workflow, QStringLiteral("jobs.query"), {}, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(workflowJobIds(jobs), baselineJobIds);
+        for (const QJsonValue &job : jobs.value(QStringLiteral("jobs")).toArray())
+            QVERIFY(job.toObject().value(QStringLiteral("command")) != QJsonValue(QStringLiteral("workflow.run")));
+        runner.cancel(); workflow.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isStopped(), 10000);
+    }
+
+    void workflowResultAndSourceReadsUseOnlyReadonlyOperationsAndConfigureAcceptsSourceId()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        WorkflowProcess workflow;
+        workflow.start(WorkflowProcess::defaultConfiguration(workspace.path()));
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isReady(), 15000);
+        QString transportError;
+        const QJsonObject before = workflowRequest(workflow, QStringLiteral("project.query"), {}, &transportError);
+        QVERIFY2(transportError.isEmpty(), qPrintable(transportError));
+        QSignalSpy replies(&workflow, &WorkflowProcess::replyReceived);
+        QSignalSpy failures(&workflow, &WorkflowProcess::requestFailed);
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Read actual native result operations and registered sources."));
+        QJsonArray reads;
+        for (const QString &operation : {QStringLiteral("catalog"), QStringLiteral("channels"), QStringLiteral("series"), QStringLiteral("summary")})
+            reads.append(providerCall(QStringLiteral("read-") + operation, QStringLiteral("workflow_native_result"),
+                {{QStringLiteral("jobId"), QStringLiteral("job-does-not-exist")}, {QStringLiteral("operation"), operation},
+                 {QStringLiteral("mode"), QStringLiteral("passive")}}));
+        reads.append(providerCall(QStringLiteral("registered-sources"), QStringLiteral("workflow_sources"), {}));
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({}, reads)));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 15000);
+        QStringList observed;
+        for (const QList<QVariant> &event : replies) observed.append(event.at(1).toString());
+        for (const QList<QVariant> &event : failures) observed.append(event.at(1).toString());
+        for (const QString &operation : {QStringLiteral("catalog"), QStringLiteral("channels"), QStringLiteral("series"), QStringLiteral("summary")})
+            QVERIFY2(observed.contains(QStringLiteral("result.") + operation + QStringLiteral(".query")), qPrintable(observed.join(QLatin1Char(','))));
+        QVERIFY(observed.contains(QStringLiteral("model.sources.query")));
+        QVERIFY(!observed.contains(QStringLiteral("model.source.register")));
+        const QJsonObject sourceList = QJsonDocument::fromJson(toolResultContent(requested.last().at(1).toJsonArray(), QStringLiteral("registered-sources")).toUtf8()).object();
+        QVERIFY(!sourceList.contains(QStringLiteral("code")));
+        QCOMPARE(proposals.size(), 0);
+        QCOMPARE(finished.size(), 0);
+
+        replies.clear(); failures.clear();
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({}, {
+            providerCall(QStringLiteral("configure-known-id-schema"), QStringLiteral("workflow_propose"),
+                {{QStringLiteral("command"), QStringLiteral("workflow.configure")},
+                 {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("dt"), 0.001}, {QStringLiteral("steps"), 4},
+                    {QStringLiteral("targetDamping"), 0.05}, {QStringLiteral("sourceId"), QStringLiteral("source-does-not-exist")}}}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 15000);
+        observed.clear();
+        for (const QList<QVariant> &event : replies) observed.append(event.at(1).toString());
+        for (const QList<QVariant> &event : failures) observed.append(event.at(1).toString());
+        // The schema accepts an opaque sourceId and reaches service preview;
+        // the service then correctly rejects an unregistered source.
+        QVERIFY(observed.contains(QStringLiteral("command.preview")));
+        QCOMPARE(proposals.size(), 0);
+        QCOMPARE(finished.size(), 0);
+        const QJsonObject after = workflowRequest(workflow, QStringLiteral("project.query"), {}, &transportError);
+        QVERIFY2(transportError.isEmpty(), qPrintable(transportError));
+        QCOMPARE(after.value(QStringLiteral("configuration")).toObject(), before.value(QStringLiteral("configuration")).toObject());
+        runner.cancel();
+        workflow.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isStopped(), 10000);
+    }
+
+    void nativeResultAndSourceToolsRejectPathsNonfiniteAndRegistration()
+    {
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        WorkflowProcess workflow;
+        const auto reject = [host, &workflow](const QString &name, const QJsonObject &arguments)
+        {
+            AgentTaskRunner runner(host, &workflow);
+            QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+            QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+            runner.startTask(QStringLiteral("Validate a bounded read or source selector."));
+            runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+                {providerCall(QStringLiteral("invalid-call"), name, arguments)})));
+            QCOMPARE(finished.size(), 1);
+            QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
+            QCOMPARE(proposals.size(), 0);
+            QCOMPARE(requested.size(), 1);
+        };
+        const QJsonObject native{{QStringLiteral("jobId"), QStringLiteral("opaque-job")},
+                                 {QStringLiteral("operation"), QStringLiteral("catalog")}};
+        for (const QString &name : {QStringLiteral("native_result_query"), QStringLiteral("workflow_native_result")})
+        {
+            QJsonObject path = native;
+            path.insert(QStringLiteral("manifestPath"), QStringLiteral("C:/private/result.manifest.json"));
+            reject(name, path);
+            QJsonObject nonfinite = native;
+            // JSON represents non-finite numeric input as null. Neither that
+            // representation nor an in-memory non-finite value is a page size.
+            nonfinite.insert(QStringLiteral("limit"), std::numeric_limits<double>::infinity());
+            reject(name, nonfinite);
+            QJsonObject wrongArtifact = native;
+            wrongArtifact.insert(QStringLiteral("artifactId"), 1);
+            reject(name, wrongArtifact);
+        }
+        QJsonObject wrongMode = native;
+        wrongMode.insert(QStringLiteral("mode"), QStringLiteral("active"));
+        reject(QStringLiteral("native_result_query"), wrongMode);
+        reject(QStringLiteral("workflow_sources"), {{QStringLiteral("operation"), QStringLiteral("model.source.register")}});
+        reject(QStringLiteral("workflow_sources"), {{QStringLiteral("path"), QStringLiteral("C:/private/source.ram")}});
+        // A legal provider function name reaches the agent's tool allowlist.
+        // The dotted backend RPC name is rejected earlier by the provider parser.
+        reject(QStringLiteral("model_source_register"), {});
+        QJsonObject configure{{QStringLiteral("dt"), 0.001}, {QStringLiteral("steps"), 4},
+                               {QStringLiteral("targetDamping"), 0.05}, {QStringLiteral("path"), QStringLiteral("C:/private/source.ram")}};
+        reject(QStringLiteral("workflow_propose"), {{QStringLiteral("command"), QStringLiteral("workflow.configure")},
+                                                   {QStringLiteral("arguments"), configure}});
+        configure.remove(QStringLiteral("path"));
+        configure.insert(QStringLiteral("sourceId"), QStringLiteral("source-opaque"));
+        configure.insert(QStringLiteral("model"), QStringLiteral("four-rod"));
+        reject(QStringLiteral("workflow_propose"), {{QStringLiteral("command"), QStringLiteral("workflow.configure")},
+                                                   {QStringLiteral("arguments"), configure}});
+    }
+
+    void nativeResultToolReadsActualHostBrokerSamplesAndRejectsAnotherArtifact()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        SolverManager &manager = SolverManager::getInstance();
+        QTRY_VERIFY_WITH_TIMEOUT(manager.getNRunning() == 0 && manager.getNWaiting() == 0, 15000);
+#ifndef RANGE_WORKFLOW_SOURCE_ROOT
+#define RANGE_WORKFLOW_SOURCE_ROOT "."
+#endif
+        const QString fixture = QDir(QStringLiteral(RANGE_WORKFLOW_SOURCE_ROOT)).filePath(QStringLiteral("fea-solver/examples/stage9/stage9_truss4.ram"));
+        const QString input = directory.filePath(QStringLiteral("agent-native.ram"));
+        QVERIFY(QFile::copy(fixture, input));
+        Model model;
+        ModelIO::open(model, input);
+        model.getProblemSetup().setStructuralControlSetup(RStructuralControlSetup());
+        QVERIFY(model.getNLines() > 0);
+        for (uint i = 0; i < model.getNPoints(); ++i) model.getPoint(i).setMaterial(model.getLine(0).getMaterial());
+        auto &dynamics = model.getProblemSetup().getStructuralDynamicsSetup();
+        dynamics.setEnabled(true); dynamics.setMethod(RStructuralTimeIntegrationMethod::Newmark);
+        dynamics.setTimeStep(0.001); dynamics.setNSteps(4); dynamics.setOutputFrequency(2);
+        auto &time = model.getTimeSolver();
+        time.setEnabled(true); time.setInputStartTime(0.0); time.setInputNTimeSteps(4);
+        time.setInputTimeStepSize(0.001); time.setOutputFrequency(2); time.setComputedTime(0.0);
+        time.setTimes(RTimeSolver::findTimesVector(4, 0.0, 0.001)); time.setCurrentTimeStep(0);
+        session->addModel(model);
+        QString error;
+        const QString jobId = manager.submitValidated(session->getNModels() - 1, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"), 120000);
+        QTRY_VERIFY_WITH_TIMEOUT(manager.getNRunning() == 0 && manager.getNWaiting() == 0, 15000);
+        const QJsonObject catalog = host->handle(hostRequest(QStringLiteral("native.result.catalog.query"), {{QStringLiteral("jobId"), jobId}}));
+        QCOMPARE(catalog.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        const QString artifactId = catalog.value(QStringLiteral("result")).toObject().value(QStringLiteral("artifactId")).toString();
+        const QJsonObject channels = host->handle(hostRequest(QStringLiteral("native.result.channels.query"),
+            {{QStringLiteral("jobId"), jobId}, {QStringLiteral("artifactId"), artifactId}}));
+        QCOMPARE(channels.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        const QJsonArray available = channels.value(QStringLiteral("result")).toObject().value(QStringLiteral("channels")).toArray();
+        QVERIFY(!available.isEmpty());
+        const QString channelId = available.first().toObject().value(QStringLiteral("channelId")).toString();
+        QJsonObject seriesArguments{{QStringLiteral("jobId"), jobId}, {QStringLiteral("artifactId"), artifactId},
+                                    {QStringLiteral("channelId"), channelId}, {QStringLiteral("limit"), 10}};
+        const QJsonObject expectedSeries = host->handle(hostRequest(QStringLiteral("native.result.series.query"), seriesArguments));
+        QCOMPARE(expectedSeries.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QCOMPARE(expectedSeries.value(QStringLiteral("result")).toObject().value(QStringLiteral("samples")).toArray().size(), 2);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        runner.startTask(QStringLiteral("Read the actual persisted native result samples."));
+        seriesArguments.insert(QStringLiteral("operation"), QStringLiteral("series"));
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({}, {
+            providerCall(QStringLiteral("actual-series"), QStringLiteral("native_result_query"), seriesArguments),
+            providerCall(QStringLiteral("wrong-artifact"), QStringLiteral("native_result_query"),
+                {{QStringLiteral("jobId"), jobId}, {QStringLiteral("operation"), QStringLiteral("catalog")},
+                 {QStringLiteral("artifactId"), QStringLiteral("artifact-from-another-job")}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 10000);
+        const QJsonArray messages = requested.last().at(1).toJsonArray();
+        const QJsonObject actual = QJsonDocument::fromJson(toolResultContent(messages, QStringLiteral("actual-series")).toUtf8()).object();
+        QCOMPARE(actual.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QCOMPARE(actual.value(QStringLiteral("result")).toObject(), expectedSeries.value(QStringLiteral("result")).toObject());
+        const QJsonObject wrong = QJsonDocument::fromJson(toolResultContent(messages, QStringLiteral("wrong-artifact")).toUtf8()).object();
+        QCOMPARE(wrong.value(QStringLiteral("code")).toString(), QStringLiteral("ARTIFACT_ID_MISMATCH"));
+        runner.cancel();
+    }
+
     void cleanup()
     {
         QTRY_VERIFY_WITH_TIMEOUT(!ModelCommandHost::isBusy(), 15000);
@@ -248,7 +660,8 @@ private slots:
             const QString toolName = function.value(QStringLiteral("name")).toString();
             if (toolName == QStringLiteral("document_inputs") || toolName == QStringLiteral("document_targets")
                 || toolName == QStringLiteral("native_jobs") || toolName == QStringLiteral("native_job")
-                || toolName == QStringLiteral("native_result_open")) hostTools.append(toolName);
+                || toolName == QStringLiteral("native_result_open") || toolName == QStringLiteral("native_result_query")
+                || toolName == QStringLiteral("workflow_native_result") || toolName == QStringLiteral("workflow_sources")) hostTools.append(toolName);
             if (toolName == QStringLiteral("document_propose"))
                 documentCommands = function.value(QStringLiteral("parameters")).toObject()
                     .value(QStringLiteral("properties")).toObject().value(QStringLiteral("command")).toObject()
@@ -266,7 +679,8 @@ private slots:
         QVERIFY(hasAskUser);
         QVERIFY(hasTelemetry);
         for (const QString &toolName : {QStringLiteral("document_inputs"), QStringLiteral("document_targets"),
-             QStringLiteral("native_jobs"), QStringLiteral("native_job"), QStringLiteral("native_result_open")})
+             QStringLiteral("native_jobs"), QStringLiteral("native_job"), QStringLiteral("native_result_open"),
+             QStringLiteral("native_result_query"), QStringLiteral("workflow_native_result"), QStringLiteral("workflow_sources")})
             QVERIFY(hostTools.contains(toolName));
         for (const QString &command : {QStringLiteral("analysis.structural_dynamics.configure"),
              QStringLiteral("entity.material.set"), QStringLiteral("entity.boundary.set"),

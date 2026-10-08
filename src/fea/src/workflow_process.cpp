@@ -92,6 +92,7 @@ WorkflowProcess::Configuration WorkflowProcess::defaultConfiguration(const QStri
     result.python = firstFile(pythonCandidates);
     result.solver = firstFile({bin.filePath("fea-solver" + suffix)});
     result.native = firstFile({bin.filePath("range-workflow-native" + suffix)});
+    result.nativeResults = firstFile({bin.filePath("range-native-results" + suffix)});
     QStringList packages{bin.filePath("../share/range-workflow")};
     QStringList examples{bin.filePath("../examples/control/stage9")};
 #ifdef RANGE_WORKFLOW_SOURCE_ROOT
@@ -141,6 +142,7 @@ void WorkflowProcess::start(const Configuration &configuration)
                           "--solver", config.solver, "--native", config.native,
                           "--examples", config.examples, "--python", config.python};
     if (config.trustedExtensions) arguments.append("--trusted-extensions");
+    if (!config.nativeResults.isEmpty()) arguments.append({"--native-results", config.nativeResults});
     process.setArguments(arguments);
     process.start();
     deadlineTimer.start();

@@ -64,6 +64,7 @@ private:
     int nextCall = 0, turns = 0, toolCount = 0;
     bool active = false, providerPending = false, automatic = false;
     QJsonObject hostRequest(const QString &operation, const QJsonObject &parameters = {});
+    bool workflowSourceIsCurrent(const QJsonObject &preview);
     void beginTask(const QString &goal, bool executeRequestedActions, const QJsonArray &priorConversation);
     void retireTaskForSteering();
     QJsonArray summarizeConversation(bool interrupted) const;

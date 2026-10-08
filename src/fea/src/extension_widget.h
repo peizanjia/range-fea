@@ -55,6 +55,7 @@ private:
         CandidateDetails,
         VersionDetails,
         Jobs,
+        NativeChannels,
         ProjectForPreview,
         CommandPreview,
         HostApproval,
@@ -128,6 +129,10 @@ private:
     QString observedWorkspace;
     QString extensionListRequest;
     QString jobsRequest;
+    QString nativeChannelRequest;
+    QString nativeSourceKey;
+    QString desiredNativeChannel;
+    QJsonObject nativeSourceDescriptor;
     bool commandInFlight = false;
     bool trustEnabled = false;
     bool runtimeCapabilityKnown = false;
@@ -160,6 +165,7 @@ private:
     void updateAvailability();
     void updateTrustStatus();
     void syncRollbackTargets();
+    void refreshSourceSignals();
     QString currentSelectionKey() const;
     QJsonObject currentExtensionSummary() const;
     QJsonObject currentCandidateSummary() const;

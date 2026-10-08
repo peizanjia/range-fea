@@ -12,6 +12,7 @@
 #include <QSemaphore>
 #include <QTemporaryDir>
 #include <memory>
+#include <atomic>
 
 #include <algorithm>
 #include <cmath>
@@ -107,6 +108,9 @@ bool loadTinyTruss(QTemporaryDir &directory, const QString &stem, Model &model, 
     // The tiny native GUI run uses the structural model; the fixture's
     // controller binding belongs to the separate workflow CLI benchmark.
     model.getProblemSetup().setStructuralControlSetup(RStructuralControlSetup());
+    model.getProblemSetup().getStructuralDynamicsSetup().setEnabled(false);
+    model.getProblemSetup().setRestart(false);
+    model.getTimeSolver().setEnabled(false);
     if (model.getNLines() == 0) return false;
     for (uint index = 0; index < model.getNPoints(); ++index)
         model.getPoint(index).setMaterial(model.getLine(0).getMaterial());
@@ -204,6 +208,200 @@ class TestNativeJobRegistry : public QObject
     Q_OBJECT
 
 private slots:
+    void managedRestartHistoryKeepsOriginalJobAndRejectsChangedAncestorManifest()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("restart-origin"), model));
+        configureSingleOutputDynamics(model);
+        const uint originalID = models.add(model);
+        QString error;
+        const QString originalJob = manager.submitValidated(originalID, {}, true, &error);
+        QVERIFY2(!originalJob.isEmpty(), qPrintable(error));
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(originalJob).value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"), 120000);
+        QVERIFY(waitForManagerIdle(manager));
+        const QJsonObject original = manager.jobQuery(originalJob);
+        Model restart;
+        ModelIO::open(restart, original.value(QStringLiteral("resultArtifactRef")).toString());
+        restart.getProblemSetup().setRestart(true);
+        // Native restart input step counts are additional steps: harmonize
+        // retains accepted steps 1..400 and appends 600, ending at record 1000.
+        restart.getProblemSetup().getStructuralDynamicsSetup().setNSteps(600);
+        restart.getProblemSetup().getStructuralDynamicsSetup().setOutputFrequency(200);
+        restart.getTimeSolver().setInputNTimeSteps(600);
+        restart.getTimeSolver().setTimes(RTimeSolver::findTimesVector(600, 0.0, 0.001));
+        restart.getTimeSolver().setOutputFrequency(200);
+        const uint restartID = models.add(restart);
+        const QString restartedJob = manager.submitValidated(restartID, {}, true, &error);
+        QVERIFY2(!restartedJob.isEmpty(), qPrintable(error));
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(restartedJob).value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"), 120000);
+        QVERIFY(waitForManagerIdle(manager));
+        const QJsonObject catalog = manager.nativeResultQuery(restartedJob, QStringLiteral("catalog"), {});
+        QVERIFY2(catalog.value(QStringLiteral("valid")).toBool(), qPrintable(catalog.value(QStringLiteral("message")).toString()));
+        const QJsonArray frames = catalog.value(QStringLiteral("frames")).toArray();
+        const QJsonObject restarted = manager.jobQuery(restartedJob);
+        QCOMPARE(frames.size(), 4);
+        for (int index = 0; index < frames.size(); ++index)
+        {
+            const QJsonObject frame = frames.at(index).toObject();
+            const int recordNo = 400 + 200 * index;
+            QCOMPARE(frame.value(QStringLiteral("recordNo")).toInt(), recordNo);
+            QVERIFY(std::fabs(frame.value(QStringLiteral("timeS")).toDouble() - double(recordNo) * 0.001) < 1e-10);
+            QCOMPARE(frame.value(QStringLiteral("originKind")).toString(), index == 0
+                     ? QStringLiteral("reused-history") : QStringLiteral("produced"));
+            // Compare the complete origin, including input, source and runtime
+            // hashes; prior history must never inherit the continuation job.
+            QCOMPARE(frame.value(QStringLiteral("origin")).toObject(),
+                     (index == 0 ? original : restarted).value(QStringLiteral("nativeResultProvenance")).toObject());
+        }
+        const QJsonObject reused = frames.first().toObject();
+        const QJsonObject proof = reused.value(QStringLiteral("historyProof")).toObject();
+        QCOMPARE(proof.value(QStringLiteral("sha256")), reused.value(QStringLiteral("sha256")));
+        QCOMPARE(proof.value(QStringLiteral("originalFrameSha256")).toString(),
+                 original.value(QStringLiteral("resultSourceBinding")).toObject().value(QStringLiteral("savedArtifactHash")).toString());
+        QCOMPARE(proof.value(QStringLiteral("originManifestSha256")), original.value(QStringLiteral("resultManifestSha256")));
+        QCOMPARE(proof.value(QStringLiteral("originManifestPath")), original.value(QStringLiteral("resultManifestRef")));
+        const QJsonArray journal = restarted.value(QStringLiteral("resultFrames")).toArray();
+        QCOMPARE(journal.size(), 3);
+        for (int index = 0; index < journal.size(); ++index)
+        {
+            QCOMPARE(journal.at(index).toObject().value(QStringLiteral("seq")).toInt(), index + 1);
+            QCOMPARE(journal.at(index).toObject().value(QStringLiteral("recordNo")).toInt(), 600 + 200 * index);
+            QCOMPARE(journal.at(index).toObject().value(QStringLiteral("sha256")), frames.at(index + 1).toObject().value(QStringLiteral("sha256")));
+        }
+
+        // Even a semantically unchanged replacement must fail the retained
+        // registry hash; it cannot fall back to unattributed legacy history.
+        QFile ancestor(original.value(QStringLiteral("resultManifestRef")).toString());
+        QVERIFY(ancestor.open(QIODevice::WriteOnly | QIODevice::Append));
+        QCOMPARE(ancestor.write("\n"), qint64(1));
+        ancestor.close();
+        auto rejected = std::make_unique<SolverTask>(Application::instance()->getApplicationSettings(), restartID);
+        QVERIFY(!rejected->captureInputSnapshot(restart, session->modelCommandStamp(restartID), restartID));
+        QVERIFY(!manager.nativeResultQuery(restartedJob, QStringLiteral("catalog"), {}).value(QStringLiteral("valid")).toBool());
+    }
+
+    void terminalModelReplacementAfterReadbackCannotSucceed()
+    {
+        for (const bool replaceAfterManifest : {false, true})
+        {
+            QTemporaryDir directory;
+            QVERIFY(directory.isValid());
+            Session *session = Application::instance()->getSession();
+            SolverManager &manager = SolverManager::getInstance();
+            QVERIFY(waitForManagerIdle(manager));
+            SessionModelGuard models(session);
+            Model model;
+            QVERIFY(loadTinyTruss(directory, QStringLiteral("replacement-gate"), model));
+            configureSingleOutputDynamics(model);
+            const uint modelID = models.add(model);
+            auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
+            QVERIFY(task->captureInputSnapshot(session->getModel(modelID), session->modelCommandStamp(modelID), modelID));
+            auto started = std::make_shared<QSemaphore>();
+            auto release = std::make_shared<QSemaphore>();
+            GateReleaseGuard releaseGuard{release};
+            manager.RJobManager::submit(new GateJob(started, release));
+            QVERIFY(waitForGate(started));
+            auto replaced = std::make_shared<std::atomic_bool>(false);
+            const auto replace = [replaced](const QString &path)
+            {
+                try
+                {
+                    RModel replacement;
+                    replacement.read(path);
+                    replacement.setDescription(QStringLiteral("MODEL Y replaced readback MODEL X"));
+                    replacement.write(path, true);
+                    replaced->store(true);
+                }
+                catch (const RError &) {}
+            };
+            if (!replaceAfterManifest)
+                QObject::connect(task, &SolverTask::resultArtifactCreated, task,
+                                 [replace](const QString &, const QString &, const QJsonObject &binding)
+                {
+                    replace(binding.value(QStringLiteral("resolvedSourcePath")).toString());
+                }, Qt::DirectConnection);
+            QString error;
+            const QString jobId = manager.submitValidated(task, {}, true, &error);
+            QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+            if (replaceAfterManifest)
+                // Connected after registration: the manager first verifies the
+                // descriptor, then this queued replacement runs before its
+                // terminal evidence handler. This exercises the success gate.
+                QObject::connect(task, &SolverTask::nativeResultManifestPublished, &manager,
+                                 [replace](const QString &, const QJsonObject &descriptor)
+                {
+                    const QString root = QFileInfo(descriptor.value(QStringLiteral("resultManifestRef")).toString()).absolutePath();
+                    replace(QDir(root).filePath(descriptor.value(QStringLiteral("resultManifest")).toObject()
+                                               .value(QStringLiteral("terminalModel")).toObject()
+                                               .value(QStringLiteral("relativePath")).toString()));
+                }, Qt::QueuedConnection);
+            release->release();
+            releaseGuard.release.reset();
+            QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                      QStringLiteral("failed"), 120000);
+            QVERIFY(replaced->load());
+            QVERIFY(!manager.jobQuery(jobId).value(QStringLiteral("resultManifestVerified")).toBool());
+            QVERIFY(!manager.nativeResultQuery(jobId, QStringLiteral("catalog"), {}).value(QStringLiteral("valid")).toBool());
+            QVERIFY(waitForManagerIdle(manager));
+        }
+    }
+
+    void supportedFrozenInputCannotUseUnsupportedSignalAsSuccessEvidence()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("unsupported-signal-gate"), model));
+        configureSingleOutputDynamics(model);
+        // Native RSolver derives its clock from Newmark configuration. This
+        // valid input remains supported even before that clock is enabled.
+        model.getTimeSolver().setEnabled(false);
+        const uint modelID = models.add(model);
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
+        QVERIFY(task->captureInputSnapshot(session->getModel(modelID), session->modelCommandStamp(modelID), modelID));
+        auto started = std::make_shared<QSemaphore>();
+        auto release = std::make_shared<QSemaphore>();
+        GateReleaseGuard releaseGuard{release};
+        manager.RJobManager::submit(new GateJob(started, release));
+        QVERIFY(waitForGate(started));
+        QString error;
+        const QString jobId = manager.submitValidated(task, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QVERIFY(manager.jobQuery(jobId).value(QStringLiteral("nativeResultCatalogExpected")).toBool());
+        const QString path = task->getResultArtifactFileName();
+        ModelIO::save(model, path, false);
+        RProjectCatalog::SourceBinding binding;
+        Model saved;
+        ModelIO::open(saved, path, &binding);
+        QJsonArray artifacts;
+        for (const auto &artifact : binding.sourceArtifacts)
+            artifacts.append(QJsonObject{{QStringLiteral("path"), artifact.path}, {QStringLiteral("sha256"), artifact.sha256}});
+        const QJsonObject bindingJson{{QStringLiteral("logicalSourcePath"), binding.logicalSourcePath},
+                                      {QStringLiteral("resolvedSourcePath"), binding.resolvedSourcePath},
+                                      {QStringLiteral("savedArtifactHash"), binding.savedArtifactHash},
+                                      {QStringLiteral("sourceArtifacts"), artifacts}};
+        const QString hash = fileSha256(path);
+        task->resultArtifactCreated(path, hash, bindingJson);
+        task->nativeResultCatalogUnavailable(jobId, QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"), QStringLiteral("Injected unsupported result"));
+        task->terminalReported(jobId, QStringLiteral("succeeded"), true, true, 0, true, path, hash, true, {});
+        QTRY_COMPARE(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(), QStringLiteral("failed"));
+        QVERIFY(manager.jobQuery(jobId).value(QStringLiteral("resultArtifactVerified")).toBool());
+        task->kill();
+        release->release();
+        releaseGuard.release.reset();
+        QVERIFY(waitForManagerIdle(manager));
+    }
+
     void invalidSetupCreatesNoJob()
     {
         Session *session = Application::instance()->getSession();
@@ -451,6 +649,23 @@ private slots:
                      .value(QStringLiteral("relativePath")).toString(), frameRelativePath);
         QCOMPARE(manifest.value(QStringLiteral("terminalModel")).toObject()
                      .value(QStringLiteral("sha256")).toString(), frame.value(QStringLiteral("sha256")).toString());
+
+        QVERIFY(finished.value(QStringLiteral("resultFramesAvailable")).toBool());
+        QCOMPARE(finished.value(QStringLiteral("resultFrameSequence")).toInt(), 1);
+        const QJsonArray journalFrames = finished.value(QStringLiteral("resultFrames")).toArray();
+        QCOMPARE(journalFrames.size(), 1);
+        QCOMPARE(journalFrames.first().toObject().value(QStringLiteral("recordNo")).toInt(), 400);
+        QCOMPARE(journalFrames.first().toObject().value(QStringLiteral("sha256")).toString(), frame.value(QStringLiteral("sha256")).toString());
+        const QJsonObject completedCatalog = manager.nativeResultQuery(jobId, QStringLiteral("catalog"), {});
+        QVERIFY2(completedCatalog.value(QStringLiteral("valid")).toBool(), qPrintable(completedCatalog.value(QStringLiteral("message")).toString()));
+        const QString liveId = finished.value(QStringLiteral("resultArtifactId")).toString() + QStringLiteral("-live-1");
+        const QJsonObject liveCatalog = manager.nativeResultQuery(jobId, QStringLiteral("catalog"), {{QStringLiteral("artifactId"), liveId}});
+        QVERIFY2(liveCatalog.value(QStringLiteral("valid")).toBool(), qPrintable(liveCatalog.value(QStringLiteral("message")).toString()));
+        QVERIFY(liveCatalog.value(QStringLiteral("live")).toBool());
+        QVERIFY(!liveCatalog.value(QStringLiteral("completed")).toBool());
+        QCOMPARE(liveCatalog.value(QStringLiteral("artifactId")).toString(), liveId);
+        QVERIFY(!manager.nativeResultQuery(jobId, QStringLiteral("catalog"), {{QStringLiteral("artifactId"), QStringLiteral("artifact-wrong-job")}})
+                .value(QStringLiteral("valid")).toBool());
 
         Model capturedInput;
         ModelIO::open(capturedInput, inputPath);

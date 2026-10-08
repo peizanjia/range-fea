@@ -17,10 +17,10 @@
 | 共线杆 | 5 节点、4 TRUSS1 构成沿全局 X 的连通链，保留已有 6 POINT 支承/初值/控制点拓扑；有限正段长，可改 X 坐标、材料及截面值 | 其它拓扑/单元、非共线、自由 DOF 模式变化、缺节点/实体引用 |
 | 平面梁 | 2 节点、1 BEAM1、2 POINT，沿全局 X，局部 Y 对齐全局 Y；有限正长度，已验证平面自由 DOF 为 tip UY/RZ | 其它拓扑/取向/自由 DOF、非平面、局部轴无法验证 |
 | 支承/约束 | 杆根 XYZ=0、沿链 Y/Z=0；梁根平移/转动全固定，tip UX/UZ/RX/RY=0 | 非零/时变支承、MPC、coupling、prescribed motion、未知条件 |
-| 材料/截面 | 源模型的常量 solid E/rho/nu，正杆面积；梁正 A/Iy/Iz/J；逐元素由真实 group 数据解析 | 缺值、非有限/非法物性、温度表/不支持材料、附加物理或未验证点质量 |
+| 材料/截面 | 源模型的常量 solid E/rho/nu，正杆面积；梁正 A/Iy/Iz/J 及原生应力恢复 Wy/Wz/Wt；逐元素由真实 group 数据解析 | 缺值、非有限/非法物性、温度表/不支持材料、附加物理或未验证点质量 |
 | 动力路径 | Stress-only，consistent mass，Newmark gamma=.5/beta=.25；首版 Rayleigh alpha/beta=0、modal ratios 为空 | legacy-only 动力、generalized-alpha/centralDifference/其它参数、额外分析、非线性/热/压电/拉索路径 |
-| 初值 | 源条件中的常量位移/速度/转角/角速度，投影到导出的真实物理 DOF；零初值仅采用已声明的原生缺省规则 | 冲突、未知/时变初值、无法解析的轴；已有 accepted checkpoint 当作 fresh 初值 |
-| 控制映射 | 末端全局 X（杆）/Y（梁）的 nodal force N 和 translational velocity m/s，实际 nodePhysicalId/globalDirection 可预览 | moment/base-motion/其它方向或单位，缺失/重复/歧义端口 |
+| 初值 | 源条件中的常量位移/速度/转角/角速度，投影到导出的真实物理 DOF；零初值仅采用已声明的原生缺省规则 | 冲突、未知/时变初值、无法解析的轴；已有 checkpoint 或保存的四类运动结果当作 fresh 初值 |
+| 控制映射 | 末端全局 X（杆）/Y（梁）的 nodal force N 和 translational velocity m/s，实际 nodePhysicalId/globalDirection 可预览，force ±1e6 N；独立验证 B/Sv 符号和系数 | moment/base-motion/其它方向或单位，缺失/重复/歧义端口 |
 
 物理 node IDs 不硬编码成夹具的 7118…/9277。导出 DOF 的 `nodePhysicalId/globalDirection/unit` 是权威：杆夹具的局部标签 `UZ` 实际方向是全局 X。初值不能套用模板 sine/零速度公式，也不能用 profile 的 IC-enabled 谓词代替真实求解器支持检查。
 

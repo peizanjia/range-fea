@@ -16,7 +16,7 @@ from .service import API_VERSION, MAX_REQUEST_BYTES, WorkflowError, canonical
 
 class WorkflowClient:
     def __init__(self, workspace, solver, native, examples, python=sys.executable, *, timeout=30,
-                 trusted_extensions=False):
+                 trusted_extensions=False, native_results=None):
         self.timeout = timeout
         self._mutex = threading.Lock()
         self._responses = queue.Queue()
@@ -32,6 +32,8 @@ class WorkflowClient:
                     "--native", str(native), "--examples", str(examples), "--python", str(python)]
         if trusted_extensions:
             arguments.append("--trusted-extensions")
+        if native_results is not None:
+            arguments.extend(["--native-results", str(native_results)])
         self.process = subprocess.Popen(arguments,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     env=environment, creationflags=0x08000000 if os.name == "nt" else 0)
@@ -144,6 +146,35 @@ class WorkflowClient:
     def project_snapshot(self, persistent_document_id):
         """Resolve and verify immutable native snapshot bytes before use."""
         return self.request("project.snapshot.query", {"persistentDocumentId": persistent_document_id})
+
+    def register_model_source(self, catalog_root, snapshot_ref):
+        """Trusted file-owner operation, outside the product Agent tool catalog."""
+        return self.request("model.source.register", {"catalogRoot": str(catalog_root), "snapshotRef": snapshot_ref})
+
+    def native_result(self, job_id, operation="catalog", *, mode="active", **arguments):
+        if operation not in ("catalog", "channels", "series", "summary"):
+            raise WorkflowError("UNKNOWN_OPERATION", "Unsupported native result query")
+        return self.request("result." + operation + ".query", {"jobId": job_id, "mode": mode, **arguments})
+
+    def native_series(self, job_id, channel_id, *, mode="active"):
+        catalog = self.native_result(job_id, mode=mode, limit=1)
+        artifact_id = catalog["artifactId"]
+        samples, cursor, result = [], None, None
+        while True:
+            result = self.native_result(job_id, "series", mode=mode, artifactId=artifact_id,
+                channelId=channel_id, limit=200, **({"cursor": cursor} if cursor else {}))
+            samples.extend(result["samples"])
+            if len(samples) > 100000:
+                raise WorkflowError("RESULT_TOO_LARGE", "Native history exceeds the SDK point limit")
+            next_cursor = result.get("nextCursor")
+            if not next_cursor: break
+            if next_cursor == cursor:
+                raise WorkflowError("INVALID_RESPONSE", "Native history cursor failed to advance")
+            cursor = next_cursor
+        result.pop("nextCursor", None)
+        result.update(samples=samples, coverageComplete=len(samples) == catalog["frameCount"],
+            sourceSnapshotRef=catalog["sourceSnapshotRef"], proofScope=catalog.get("proofScope"))
+        return result
 
     def close(self):
         if self._closed:

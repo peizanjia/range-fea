@@ -33,11 +33,17 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--workspace", required=True, help="absolute writable project workspace")
     parser.add_argument("--solver", required=True, help="absolute fea-solver executable")
     parser.add_argument("--native", required=True, help="absolute range-workflow-native executable")
+    parser.add_argument("--native-results", help="absolute native results broker executable")
     parser.add_argument("--examples", required=True, help="absolute installed/source examples directory")
     parser.add_argument("--python", required=True, help="absolute Python interpreter executable")
     parser.add_argument("--trusted-extensions", action="store_true",
                         help="allow host-approved extension Python in trusted developer mode; not an OS sandbox")
     result = parser.parse_args(argv)
+    if result.native_results:
+        try:
+            result.native_results = _absolute_file(result.native_results, "native-results")
+        except argparse.ArgumentTypeError as error:
+            parser.error(str(error))
     result.workspace = Path(result.workspace)
     if not result.workspace.is_absolute() or len(str(result.workspace)) > 32768:
         parser.error("--workspace must be an absolute path")
@@ -120,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         with WorkflowService(arguments.workspace, arguments.solver,
                              arguments.native, arguments.examples,
                              arguments.python,
-                             trusted_extensions=arguments.trusted_extensions) as service:
+                             trusted_extensions=arguments.trusted_extensions,
+                             native_results=arguments.native_results) as service:
             return serve(service)
     except WorkflowError as error:
         print(f"range-workflow: {error.code}: {error.message}", file=sys.stderr)

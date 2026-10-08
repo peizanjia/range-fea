@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -94,6 +96,37 @@ def beam_case():
 
 
 class SourceReferenceTest(unittest.TestCase):
+    def test_legacy_template_resume_reports_missing_provenance_without_rewriting_result(self):
+        from range_workflow.jobs import run_native_workflow
+        from range_workflow.service import WorkflowError
+        legacy = {"configuration": {"model": "four-rod"}, "referencePath": "legacy-reference.json"}
+        service = mock.Mock()
+        service.result_snapshot.return_value = legacy
+        with self.assertRaises(WorkflowError) as caught:
+            run_native_workflow(service, {"command": "workflow.resume", "parameters": {"jobId": "old"}},
+                                Path("unused"), mock.Mock(), {})
+        self.assertEqual(caught.exception.code, "SOURCE_REFERENCE_UNAVAILABLE")
+        self.assertEqual(legacy, {"configuration": {"model": "four-rod"}, "referencePath": "legacy-reference.json"})
+
+    def test_internal_positions_can_be_permuted_independently_of_geometry_order(self):
+        for factory, permutation in ((rod_case, [2, 0, 1]), (beam_case, [1, 0])):
+            descriptor, linear = factory()
+            expected = build_source_reference(descriptor, linear)
+            positions = {}
+            for record, position in zip(descriptor["nodes"], permutation):
+                record["position"] = position
+                positions[str(record["physicalId"])] = position
+            for record in linear["dofs"]:
+                record["nodePosition"] = positions[record["nodePhysicalId"]]
+            actual = build_source_reference(descriptor, linear)
+            self.assertEqual(actual["initialQ"], expected["initialQ"])
+            self.assertEqual(actual["initialV"], expected["initialV"])
+            self.assertEqual(actual["analyticalM"], expected["analyticalM"])
+            self.assertEqual(actual["analyticalK"], expected["analyticalK"])
+            linear["dofs"][0]["nodePosition"] = len(permutation)
+            with self.assertRaisesRegex(SourceReferenceError, "physical ID"):
+                build_source_reference(descriptor, linear)
+
     def test_rod_uses_actual_local_axis_mapping_geometry_and_initial_state(self):
         descriptor, linear = rod_case()
         result = build_source_reference(descriptor, linear)
@@ -120,6 +153,25 @@ class SourceReferenceTest(unittest.TestCase):
         descriptor, linear = rod_case()
         linear["M"][0][0] = 1.25
         with self.assertRaisesRegex(SourceReferenceError, "mass matrix"):
+            build_source_reference(descriptor, linear)
+
+    def test_port_coefficients_are_independently_signed_unit_projections_even_for_zero_initial_state(self):
+        for zero_initial in (False, True):
+            descriptor, linear = rod_case()
+            if zero_initial:
+                for item in descriptor["nodes"]:
+                    item["initialDisplacementM"] = item["initialVelocityMS"] = [0.0, 0.0, 0.0]
+            for matrix, value in (("B", -1.0), ("B", -2.0), ("B", 2.0),
+                                  ("Sv", -1.0), ("Sv", -3.0), ("Sv", 3.0)):
+                broken = copy.deepcopy(linear)
+                broken[matrix][0][0] = value
+                with self.subTest(matrix=matrix, value=value, zero_initial=zero_initial):
+                    with self.assertRaisesRegex(SourceReferenceError, "coefficients"):
+                        build_source_reference(descriptor, broken)
+            # A physically reversed force/sensor axis legitimately requires -1.
+            for port in descriptor["ports"].values():
+                port["globalDirection"] = [-1.0, 0.0, 0.0]
+            linear["B"][0][0] = linear["Sv"][0][0] = -1.0
             build_source_reference(descriptor, linear)
 
     def test_replay_accepts_initial_velocity_and_keeps_zero_default(self):

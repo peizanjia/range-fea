@@ -25,6 +25,9 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include "control_monitor_widget.h"
+#include "native_results_widget.h"
+#include "solver_manager.h"
+#include <QUuid>
 #include "model_command_host.h"
 #include "session.h"
 
@@ -44,9 +47,41 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     auto *resultsPage = new QWidget;
     auto *resultsLayout = new QVBoxLayout(resultsPage);
     pages->addTab(resultsPage, tr("Results & history"));
+    auto *nativePage = new QWidget;
+    auto *nativeLayout = new QVBoxLayout(nativePage);
+    nativeMode = new QComboBox;
+    nativeMode->setObjectName("workflowNativeMode");
+    nativeMode->addItem(tr("Actual active FE output"), "active");
+    nativeMode->addItem(tr("Actual passive FE output"), "passive");
+    nativeLayout->addWidget(nativeMode);
+    workflowNativeResults = new NativeResultsWidget;
+    workflowNativeResults->setObjectName("workflowNativeResults");
+    workflowNativeResults->setWorkflow(&service);
+    nativeLayout->addWidget(workflowNativeResults);
+    pages->addTab(nativePage, tr("Workflow FE output"));
+    auto *documentPage = new QWidget;
+    auto *nativeDocumentLayout = new QVBoxLayout(documentPage);
+    nativeJobChoice = new QComboBox;
+    nativeJobChoice->setObjectName("nativeResultJobChoice");
+    nativeDocumentLayout->addWidget(nativeJobChoice);
+    documentNativeResults = new NativeResultsWidget;
+    documentNativeResults->setObjectName("documentNativeResults");
+    nativeDocumentLayout->addWidget(documentNativeResults);
+    pages->addTab(documentPage, tr("Document FE output"));
+    connect(nativeMode, &QComboBox::currentIndexChanged, this, [this] {
+        if (const auto *item = jobTree->currentItem())
+            workflowNativeResults->setWorkflowJob(item->data(0, Qt::UserRole).toString(), nativeMode->currentData().toString());
+    });
+    connect(nativeJobChoice, &QComboBox::currentIndexChanged, this, [this] {
+        documentNativeResults->setArtifact(nativeJobChoice->currentData().toString(), {}, nativeJobChoice->currentText());
+    });
+    nativeJobTimer.setInterval(1000);
+    connect(&nativeJobTimer, &QTimer::timeout, this, &WorkflowWidget::refreshNativeJobs);
+    nativeJobTimer.start();
     auto *layout = new QVBoxLayout(experiment);
-    auto *intro = new QLabel(tr("Rod / beam control experiments. These reference workflows have their own workspace and do not replace the model you are editing."));
+    auto *intro = new QLabel(tr("Run bounded rod / beam control from a template or an accepted document snapshot. Review the source, units and controller mapping before approval."));
     intro->setWordWrap(true);
+    intro->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     layout->addWidget(intro);
     auto *workspaceRow = new QHBoxLayout;
     workspaceEdit = new QLineEdit(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/workflows/default");
@@ -85,7 +120,7 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     modelChoice->addItem(tr("Four-rod chain"), "four-rod");
     modelChoice->addItem(tr("Cantilever beam"), "cantilever-beam");
     modelChoice->setObjectName("workflowModel");
-    form->addRow(tr("Reference model"), modelChoice);
+    form->addRow(tr("Model source"), modelChoice);
     sourceButton = new QPushButton(tr("Use current document snapshot"));
     sourceButton->setObjectName("workflowUseDocumentSnapshot");
     sourceButton->setToolTip(tr("Select exactly one supported document, freeze its accepted snapshot, and register it as a workflow source."));
@@ -151,6 +186,7 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     layout->addWidget(applyButton);
     connect(applyButton, &QPushButton::clicked, this, &WorkflowWidget::applyPreview);
     status = new QLabel(tr("Open a workspace to begin."));
+    status->setTextFormat(Qt::PlainText);
     status->setObjectName("workflowStatus"); status->setWordWrap(true);
     rootLayout->addWidget(status);
     auto *monitorSplit = new QSplitter(Qt::Horizontal);
@@ -186,6 +222,7 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
         if (item && item->data(1, Qt::UserRole).toString() == "succeeded")
         {
             const auto id = item->data(0, Qt::UserRole).toString();
+            if (calculation) workflowNativeResults->setWorkflowJob(id, nativeMode->currentData().toString());
             if (displayedResult != id) request("results.query", {{"jobId", id}});
         }
     });
@@ -225,7 +262,8 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
         workspaceEdit->setEnabled(!ready);
         trustedExtensions->setEnabled(!ready);
         status->setText(ready ? tr("Workspace ready.") : tr("Workspace is closed."));
-        if (ready) { refreshTimer.start(); refreshJobs(); request("audit.query", {{"limit", 100}}); }
+        if (ready) { refreshTimer.start(); refreshJobs(); request("audit.query", {{"limit", 100}});
+                    request("model.sources.query", {{"offset", 0}, {"limit", 100}}); }
         else refreshTimer.stop();
         setActionAvailability();
     });
@@ -273,6 +311,19 @@ void WorkflowWidget::setSession(Session *value)
     if (session) disconnect(session, nullptr, this, nullptr);
     session = value;
     if (!session) return;
+    documentNativeResults->setQueryHandler([this](const QString &operation, const QJsonObject &parameters) {
+        if (!session) return QJsonObject{{"valid", false}, {"message", tr("Document session is unavailable.")}};
+        const auto response = session->getModelCommandHost()->handle(QJsonObject{{"apiVersion", "range.host/v1"},
+            {"requestId", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"operation", operation}, {"parameters", parameters}});
+        if (response.value("status") == "ok" || response.value("status") == "accepted")
+        {
+            auto result = response.value("result").toObject();
+            if (!result.contains("valid")) result.insert("valid", true);
+            return result;
+        }
+        return QJsonObject{{"valid", false}, {"code", response.value("code")},
+            {"message", response.value("message")}};
+    });
 
     connect(session, &Session::documentRevisionChanged, this,
             [this](const QString &documentId, quint64 revision) {
@@ -359,6 +410,8 @@ bool WorkflowWidget::sourceRuntimeIsCurrent(const DocumentSourceChoice &source, 
     const auto context = session->documentProjectContext(modelId);
     if (context.value(QStringLiteral("availability")).toString() != QStringLiteral("available"))
         return fail(tr("The source document is no longer synchronized with its project catalog."));
+    if (context.value("persistence").toObject().value("status") != QJsonValue("available"))
+        return fail(tr("The source project persistence is not available."));
     if (context.value(QStringLiteral("projectId")) != snapshotRef.value(QStringLiteral("projectId")) ||
         context.value(QStringLiteral("persistentDocumentId")) != snapshotRef.value(QStringLiteral("persistentDocumentId")) ||
         context.value(QStringLiteral("sourceRevision")) != snapshotRef.value(QStringLiteral("sourceRevision")) ||
@@ -474,12 +527,22 @@ void WorkflowWidget::updateSelectedSourceStatus()
     updateSourceChoiceLabel(sourceId);
 }
 
-bool WorkflowWidget::previewSourceIsCurrent() const
+QString WorkflowWidget::previewSourceId() const
 {
     const auto normalized = preview.value(QStringLiteral("normalized")).toObject();
-    if (normalized.value(QStringLiteral("command")).toString() != QStringLiteral("workflow.configure")) return true;
-    const auto parameters = normalized.value(QStringLiteral("parameters")).toObject();
-    const QString sourceId = parameters.value(QStringLiteral("sourceId")).toString();
+    const QString command = normalized.value(QStringLiteral("command")).toString();
+    if (command == QStringLiteral("workflow.configure"))
+        return normalized.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("sourceId")).toString();
+    if (command == QStringLiteral("workflow.run"))
+        return preview.value(QStringLiteral("effectiveConfiguration")).toObject().value(QStringLiteral("sourceId")).toString();
+    // Resume owns an already accepted immutable source; it does not require
+    // the original GUI instance to remain open.
+    return {};
+}
+
+bool WorkflowWidget::previewSourceIsCurrent() const
+{
+    const QString sourceId = previewSourceId();
     if (sourceId.isEmpty()) return true;
     const auto source = documentSources.constFind(sourceId);
     return source != documentSources.cend() && sourceRuntimeIsCurrent(source.value());
@@ -657,6 +720,39 @@ void WorkflowWidget::refreshJobs()
 void WorkflowWidget::onReply(const QString &id, const QString &operation, const QJsonObject &result)
 {
     if (!ownedRequests.remove(id)) return;
+    if (operation == QStringLiteral("model.sources.query"))
+    {
+        const QString selected = selectedSourceId();
+        const QSignalBlocker blocker(modelChoice);
+        for (const auto &value : result.value(QStringLiteral("sources")).toArray())
+        {
+            const QJsonObject registration = value.toObject();
+            const QString sourceId = registration.value(QStringLiteral("sourceId")).toString();
+            if (sourceId.isEmpty() || documentSources.contains(sourceId)) continue;
+            const auto origin = registration.value(QStringLiteral("originRef")).toObject();
+            const auto instance = origin.value(QStringLiteral("instanceRef")).toObject();
+            DocumentSourceChoice source;
+            source.registration = registration;
+            source.snapshotRef = origin;
+            source.runtimeDocumentId = instance.value(QStringLiteral("documentId")).toString();
+            source.sessionEpoch = instance.value(QStringLiteral("sessionEpoch")).toString();
+            source.runtimeRevision = quint64(instance.value(QStringLiteral("documentRevision")).toDouble());
+            source.catalogRoot = session ? session->projectWorkspace() : QString();
+            documentSources.insert(sourceId, source);
+            const QString kind = registration.value(QStringLiteral("descriptor")).toObject().value(QStringLiteral("modelKind")).toString();
+            modelChoice->addItem(tr("Saved document snapshot · %1 · %2").arg(kind,
+                registration.value(QStringLiteral("registeredModelSha256")).toString().left(12)), kind);
+            modelChoice->setItemData(modelChoice->count() - 1, sourceId, Qt::UserRole + 1);
+            updateSourceChoiceLabel(sourceId);
+            if (selected == sourceId) modelChoice->setCurrentIndex(modelChoice->count() - 1);
+        }
+        const int offset = result.value(QStringLiteral("offset")).toInt();
+        const int count = result.value(QStringLiteral("sources")).toArray().size();
+        if (offset + count < result.value(QStringLiteral("total")).toInt() && count > 0)
+            request("model.sources.query", {{"offset", offset + count}, {"limit", 100}});
+        setActionAvailability();
+        return;
+    }
     if (operation == QStringLiteral("model.source.register") && id == sourceRegisterRequest)
     {
         sourceRegisterRequest.clear();
@@ -676,6 +772,7 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
             return;
         }
         pendingDocumentSource.registration = result;
+        preview = {}; applyButton->setEnabled(false);
         pendingDocumentSource.registration.remove(QStringLiteral("path"));
         pendingDocumentSource.registration.remove(QStringLiteral("manifestPath"));
         documentSources.insert(sourceId, pendingDocumentSource);
@@ -714,8 +811,7 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
             .arg(configuration.value("targetDamping").toDouble())
             .arg(command == "workflow.resume" ? tr("Additional steps: %1").arg(normalized.value("parameters").toObject().value("additionalSteps").toInt())
                                               : tr("FE results will be checked against an independent reference."));
-        const QString sourceId = normalized.value(QStringLiteral("parameters")).toObject()
-                                     .value(QStringLiteral("sourceId")).toString();
+        const QString sourceId = previewSourceId();
         const auto source = documentSources.constFind(sourceId);
         if (!sourceId.isEmpty() && source != documentSources.cend())
         {
@@ -773,7 +869,7 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
                 {"workflow.run", tr("Control run")}, {"workflow.resume", tr("Continuation")}};
             item->setText(0, labels.value(command, tr("Extension task")) + " · " + jobId.left(6));
             QString jobTooltip = tr("Created: %1\nTask: %2").arg(job.value("createdAt").toString(), jobId);
-            const auto jobBinding = job.value(QStringLiteral("modelBinding")).toObject();
+            const auto jobBinding = job.value(QStringLiteral("result")).toObject().value(QStringLiteral("modelBinding")).toObject();
             if (!jobBinding.isEmpty()) jobTooltip += QStringLiteral("\n") + modelBindingSummary(jobBinding);
             item->setToolTip(0, jobTooltip);
             item->setText(1, state == "succeeded" ? tr("Completed") : state);
@@ -814,6 +910,8 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
 void WorkflowWidget::showResult(const QJsonObject &result)
 {
     displayedResult = result.value("jobId").toString();
+    if (result.contains("nativeResults"))
+        workflowNativeResults->setWorkflowJob(displayedResult, nativeMode->currentData().toString());
     results->setRowCount(0);
     const QString bindingSummary = modelBindingSummary(result.value(QStringLiteral("modelBinding")).toObject());
     if (!result.contains("active") && !result.contains("passive"))
@@ -846,6 +944,33 @@ void WorkflowWidget::showResult(const QJsonObject &result)
     emit resultDisplayed(result);
 }
 
+void WorkflowWidget::refreshNativeJobs()
+{
+    if (!session || !isVisible()) return;
+    const QString selected = nativeJobChoice->currentData().toString();
+    const QSignalBlocker blocker(nativeJobChoice);
+    QJsonArray records;
+    for (int offset = 0; offset < 10000; offset += 200)
+    {
+        const QJsonArray page = SolverManager::getInstance().jobsQuery(offset, 200).value("jobs").toArray();
+        for (const auto &job : page) records.append(job);
+        if (page.size() < 200) break;
+    }
+    nativeJobChoice->clear();
+    for (const auto &value : records)
+    {
+        const auto job = value.toObject();
+        const QString state = job.value("state").toString();
+        if (state != "succeeded" && state != "running" && state != "cancelling") continue;
+        const QString id = job.value("jobId").toString();
+        nativeJobChoice->addItem(tr("%1 · %2").arg(id.left(8), state), id);
+        if (id == selected) nativeJobChoice->setCurrentIndex(nativeJobChoice->count() - 1);
+    }
+    const QString current = nativeJobChoice->currentData().toString();
+    if (current != selected)
+        documentNativeResults->setArtifact(current, {}, nativeJobChoice->currentText());
+}
+
 void WorkflowWidget::showFailure(const QString &message)
 {
     status->setText(message); commandInFlight = false; preview = {};
@@ -862,13 +987,11 @@ void WorkflowWidget::setActionAvailability()
     const QString sourceId = selectedSourceId();
     const auto source = documentSources.constFind(sourceId);
     const bool selectedSourceCurrent = sourceId.isEmpty() ||
-        (source != documentSources.cend() && sourceRuntimeStampMatches(source.value(), &sourceReason));
-    const auto normalized = preview.value(QStringLiteral("normalized")).toObject();
-    const auto previewParameters = normalized.value(QStringLiteral("parameters")).toObject();
-    const QString previewSourceId = previewParameters.value(QStringLiteral("sourceId")).toString();
-    const auto previewSource = documentSources.constFind(previewSourceId);
-    const bool previewRuntimeCurrent = previewSourceId.isEmpty() ||
-        (previewSource != documentSources.cend() && sourceRuntimeStampMatches(previewSource.value()));
+        (source != documentSources.cend() && sourceRuntimeIsCurrent(source.value(), &sourceReason));
+    const QString previewSourceIdentity = previewSourceId();
+    const auto previewSource = documentSources.constFind(previewSourceIdentity);
+    const bool previewRuntimeCurrent = previewSourceIdentity.isEmpty() ||
+        (previewSource != documentSources.cend() && sourceRuntimeIsCurrent(previewSource.value()));
     sourceButton->setEnabled(service.isReady() && session && !sourceRegistrationInFlight);
     configureButton->setEnabled(available && selectedSourceCurrent); runButton->setEnabled(available);
     modelChoice->setEnabled(!commandInFlight); dt->setEnabled(!commandInFlight);

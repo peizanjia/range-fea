@@ -2,6 +2,8 @@
 
 ## 使用边界
 
+当前文档导入、原生结果分页/比较和扩展 FE 来源见 [NATIVE_RESULTS.md](NATIVE_RESULTS.md)。模板、文档快照、实际 FE、独立参考保留不同来源。
+
 `range_workflow.WorkflowClient` 是受信客户端 SDK，使用 `range.workflow/v1` JSON-lines 协议启动独立工作区服务。GUI、外部 Python 客户端和 Agent 复用该服务的参数校验、预览、批准及作业记录。GUI 打开的文档另由 `range.host/v1` 管理；不能通过工作区 SDK 推断当前 GUI 模型状态。
 
 外部进程不能同时占有同一工作区。连接超时或进程退出后，重新打开工作区并查询持久化作业状态，再决定是否继续。GUI 宿主的内存事件游标与跨进程的工作区审计版本是不同概念。

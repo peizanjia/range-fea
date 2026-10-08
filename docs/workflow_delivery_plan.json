@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "range-fea",
-  "updatedAt": "2026-10-08",
+  "updatedAt": "2026-10-09",
   "baseline": {
     "rootCommit": "15297a966da27e501fb66fb6b37d13e3c1df3af3",
     "submodules": [
@@ -188,7 +188,7 @@
       "id": "WF-03",
       "title": "Open-model bounded control bridge",
       "status": "in_progress",
-      "statusReason": "用户要求新session继续，本session停止推进并保存WIP；快照登记/原生导入/独立参考/GUI来源已部分实现，W3-01至04未闭合，最新完整回归与实际FE/GUI验收未完成。续作见docs/agent_playbooks/wf03_wf04_checkpoint.md。",
+      "statusReason": "持续续作已授权至顺序4。原节点/保存初态/限幅/零能量问题及独立B/Sv映射已修；实际导入完整套件133s通过，Windows非默认梁快照到active/passive曲线CSV通过。共享最终回归、安装及冻结证据仍待闭合。",
       "priority": "P0",
       "effort": "L",
       "dependsOn": [
@@ -218,7 +218,7 @@
       "id": "WF-04",
       "title": "Native result broker",
       "status": "in_progress",
-      "statusReason": "用户要求新session继续，本session停止推进并保存WIP；原生broker/终态manifest/接受帧observer-journal已部分实现，W4-01至05未闭合（含P1），live/Host/Agent/SDK接线与完整验收未完成。续作见docs/agent_playbooks/wf03_wf04_checkpoint.md。",
+      "statusReason": "持续整合中：原9项W3/W4审查问题已修，broker/SDK/Agent/live/逐帧CSV/结果场接口已接通。当前P2不可计算节点平移通道与结果场重入测试崩溃正在修；完整125项回归、安装和最终复审未验收。",
       "priority": "P0",
       "effort": "M",
       "dependsOn": [

@@ -60,6 +60,9 @@ class PickList : public QObject
         //! Remove items with given modelID from the list.
         void removeItems(uint modelID);
 
+        //! Remove items for a deleted model and reindex picks for surviving models.
+        void removeModelItemsAndReindex(uint removedModelID);
+
         //! Check if given pick item is in the list.
         bool hasItem(const PickItem &pickItem);
 

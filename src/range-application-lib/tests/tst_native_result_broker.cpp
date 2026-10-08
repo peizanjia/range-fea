@@ -5,6 +5,7 @@
 #include <QTemporaryDir>
 
 #include <cmath>
+#include <functional>
 #include <vector>
 
 #include <rml_file_utils.h>
@@ -58,6 +59,21 @@ void addVector(RModel &model, RVariableType type, double scale, bool missingUnit
     model.addVariable(variable);
 }
 
+void addComputableTrussGroup(RModel &model, uint elementId = 0)
+{
+    model.setNLines(1);
+    model.getLine(0).add(elementId);
+    RMaterial material(RMaterial::Solid);
+    for (const RMaterialProperty::Type type : {RMaterialProperty::ModulusOfElasiticity,
+         RMaterialProperty::PoissonRatio, RMaterialProperty::Density, RMaterialProperty::ThermalExpansionCoefficient})
+    {
+        RMaterialProperty property(type);
+        property.add(293.15, 1.0);
+        material.add(property);
+    }
+    model.getLine(0).setMaterial(material);
+}
+
 RModel dynamicModel(int recordNo,
                     const QVector<uint> &nodeIds = {1, 2},
                     bool missingDisplacementUnit = false,
@@ -79,6 +95,7 @@ RModel dynamicModel(int recordNo,
     truss.setNodeId(0, 0);
     truss.setNodeId(1, 1);
     model.setElement(0, truss);
+    addComputableTrussGroup(model);
     model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS));
 
     std::vector<double> times;
@@ -170,6 +187,15 @@ private slots:
     void catalogsModalResultAndRejectsTimeSeries();
     void summarizesExtremeFiniteValuesWithoutOverflow();
     void derivesSourceKindFromPersistedControlSetup();
+    void rejectsTamperedUnrequestedFrameAtEveryQueryBoundary();
+    void exposesRotationsOnlyAtBeamNodes();
+    void exposesTranslationsOnlyAtComputableNodes();
+    void rejectsMissingOrInvalidTranslationNodeMaps();
+    void rejectsTranslationAvailabilityDriftAcrossFrames();
+    void preservesVerifiedHistoryOriginAndRejectsAncestorTampering();
+    void marksLegacyHistoryOriginUnavailable();
+    void queriesOnlyCompleteLiveFrames();
+    void preservesMixedHistoryProofsAcrossSeriesPages();
 };
 
 void NativeResultBrokerTest::publishesBoundedSeriesAndStableSummary()
@@ -483,6 +509,426 @@ void NativeResultBrokerTest::derivesSourceKindFromPersistedControlSetup()
     QVERIFY2(published.valid, qPrintable(published.message));
     QCOMPARE(published.manifest.value(QStringLiteral("sourceKind")).toString(),
              QStringLiteral("native-active-fe"));
+}
+
+void NativeResultBrokerTest::rejectsTamperedUnrequestedFrameAtEveryQueryBoundary()
+{
+    QTemporaryDir directory;
+    const QString logicalPath = writeDynamicFrame(directory.path(), 1);
+    writeDynamicFrame(directory.path(), 2);
+    writeDynamicFrame(directory.path(), 3);
+    const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+    QVERIFY2(published.valid, qPrintable(published.message));
+    QFile altered(framePath(directory.path(), 2));
+    QVERIFY(altered.open(QIODevice::Append));
+    altered.write("changed");
+    altered.close();
+    const QStringList operations{QStringLiteral("catalog"), QStringLiteral("channels"),
+        QStringLiteral("series"), QStringLiteral("summary")};
+    for (const QString &operation : operations)
+    {
+        QJsonObject arguments;
+        if (operation == QLatin1String("series") || operation == QLatin1String("summary"))
+            arguments.insert(QStringLiteral("channelId"), QStringLiteral("node:1:displacement:X"));
+        if (operation != QLatin1String("summary")) arguments.insert(QStringLiteral("limit"), 1);
+        const QJsonObject result = RNativeResultBroker::query(published.manifestPath, published.manifestSha256, operation, arguments);
+        QVERIFY(!result.value(QStringLiteral("valid")).toBool());
+        QCOMPARE(result.value(QStringLiteral("code")).toString(), QStringLiteral("RESULT_FRAME_TAMPERED"));
+    }
+}
+
+void NativeResultBrokerTest::exposesRotationsOnlyAtBeamNodes()
+{
+    QTemporaryDir directory;
+    const QString logicalPath = QDir(directory.path()).filePath(QStringLiteral("run.rbm"));
+    RModel model = dynamicModel(1, {11, 22, 33});
+    model.setNLines(0);
+    model.setNElements(2);
+    RElement beam(R_ELEMENT_BEAM1);
+    beam.setNodeId(0, 0); beam.setNodeId(1, 1);
+    RElement truss(R_ELEMENT_TRUSS1);
+    truss.setNodeId(0, 1); truss.setNodeId(1, 2);
+    model.setElement(0, beam); model.setElement(1, truss);
+    model.setNLines(1);
+    model.getLine(0).add(0);
+    model.getLine(0).add(1);
+    RMaterial material(RMaterial::Solid);
+    for (const RMaterialProperty::Type type : {RMaterialProperty::ModulusOfElasiticity,
+         RMaterialProperty::PoissonRatio, RMaterialProperty::Density, RMaterialProperty::ThermalExpansionCoefficient})
+    {
+        RMaterialProperty property(type);
+        property.add(293.15, 1.0);
+        material.add(property);
+    }
+    model.getLine(0).setMaterial(material);
+    addVector(model, R_VARIABLE_ROTATION, 1.0);
+    addVector(model, R_VARIABLE_ANGULAR_VELOCITY, 2.0);
+    addVector(model, R_VARIABLE_ANGULAR_ACCELERATION, 3.0);
+    RStructuralDynamicsRestartData checkpoint = model.getProblemSetup().getStructuralDynamicsRestartData();
+    checkpoint.meshElementCount = model.getNElements();
+    checkpoint.meshFingerprint = RStructuralDynamicsRestartData::computeMeshFingerprint(model);
+    model.getProblemSetup().setStructuralDynamicsRestartData(checkpoint);
+    model.write(logicalPath, true);
+    const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+    QVERIFY2(published.valid, qPrintable(published.message));
+    QCOMPARE(published.manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray(), QJsonArray({11, 22}));
+    const QJsonObject catalog = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+        QStringLiteral("channels"), {});
+    QCOMPARE(catalog.value(QStringLiteral("channelCount")).toInt(), 45);
+    for (const QJsonValue &value : catalog.value(QStringLiteral("channels")).toArray())
+        QVERIFY(!value.toObject().value(QStringLiteral("channelId")).toString().startsWith(QStringLiteral("node:33:rotation")) &&
+                !value.toObject().value(QStringLiteral("channelId")).toString().startsWith(QStringLiteral("node:33:angular")));
+    for (const QString &quantity : {QStringLiteral("rotation"), QStringLiteral("angularVelocity"), QStringLiteral("angularAcceleration")})
+    {
+        const QJsonObject unavailable = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+            QStringLiteral("series"), {{QStringLiteral("channelId"), QStringLiteral("node:33:%1:X").arg(quantity)}});
+        QCOMPARE(unavailable.value(QStringLiteral("code")).toString(), QStringLiteral("CHANNEL_UNAVAILABLE"));
+        const QJsonObject available = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+            QStringLiteral("series"), {{QStringLiteral("channelId"), QStringLiteral("node:22:%1:X").arg(quantity)}});
+        QVERIFY(available.value(QStringLiteral("valid")).toBool());
+    }
+    QTemporaryDir inactiveDirectory;
+    model.setNLines(0);
+    checkpoint = model.getProblemSetup().getStructuralDynamicsRestartData();
+    checkpoint.meshFingerprint = RStructuralDynamicsRestartData::computeMeshFingerprint(model);
+    model.getProblemSetup().setStructuralDynamicsRestartData(checkpoint);
+    model.write(QDir(inactiveDirectory.path()).filePath(QStringLiteral("run.rbm")), true);
+    const auto inactive = RNativeResultBroker::publishResult(inactiveDirectory.path(),
+        QDir(inactiveDirectory.path()).filePath(QStringLiteral("run.rbm")), provenance());
+    QVERIFY2(inactive.valid, qPrintable(inactive.message));
+    QVERIFY(inactive.manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray().isEmpty());
+    QVERIFY(!inactive.manifest.value(QStringLiteral("availableVariables")).toArray().contains(QStringLiteral("var-rotation")));
+}
+
+void NativeResultBrokerTest::exposesTranslationsOnlyAtComputableNodes()
+{
+    QTemporaryDir directory;
+    RModel model = dynamicModel(1, {11, 22, 33, 44});
+    model.setNLines(0);
+    model.setNElements(2);
+    RElement inactiveBeam(R_ELEMENT_BEAM1);
+    inactiveBeam.setNodeId(0, 0);
+    inactiveBeam.setNodeId(1, 1);
+    model.setElement(0, inactiveBeam, false);
+    RElement supportedTruss(R_ELEMENT_TRUSS1);
+    supportedTruss.setNodeId(0, 1);
+    supportedTruss.setNodeId(1, 2);
+    model.setElement(1, supportedTruss, false);
+    addComputableTrussGroup(model, 1);
+    QCOMPARE(model.getLine(0).size(), 1U);
+    QCOMPARE(model.getLine(0).get(0), 1U);
+    RBoundaryCondition support(R_BOUNDARY_CONDITION_DISPLACEMENT);
+    for (const RVariableType type : {R_VARIABLE_DISPLACEMENT_X, R_VARIABLE_DISPLACEMENT_Y,
+                                     R_VARIABLE_DISPLACEMENT_Z})
+        support.getComponent(support.findComponentPosition(type)).add(0.0, 0.0);
+    model.getLine(0).addBoundaryCondition(support);
+    RStructuralDynamicsRestartData checkpoint = model.getProblemSetup().getStructuralDynamicsRestartData();
+    checkpoint.meshElementCount = model.getNElements();
+    checkpoint.meshFingerprint = RStructuralDynamicsRestartData::computeMeshFingerprint(model);
+    model.getProblemSetup().setStructuralDynamicsRestartData(checkpoint);
+
+    const QString logicalPath = QDir(directory.path()).filePath(QStringLiteral("run.rbm"));
+    model.write(logicalPath, true);
+    const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+    QVERIFY2(published.valid, qPrintable(published.message));
+    QCOMPARE(published.manifest.value(QStringLiteral("nodePhysicalIds")).toArray(), QJsonArray({11, 22, 33, 44}));
+    QCOMPARE(published.manifest.value(QStringLiteral("translationNodePhysicalIds")).toArray(), QJsonArray({22, 33}));
+
+    const QJsonObject catalog = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+        QStringLiteral("channels"), {});
+    QVERIFY2(catalog.value(QStringLiteral("valid")).toBool(), qPrintable(catalog.value(QStringLiteral("message")).toString()));
+    QCOMPARE(catalog.value(QStringLiteral("channelCount")).toInt(), 18);
+    for (const QJsonValue &value : catalog.value(QStringLiteral("channels")).toArray())
+    {
+        const QString channelId = value.toObject().value(QStringLiteral("channelId")).toString();
+        QVERIFY(!channelId.startsWith(QStringLiteral("node:11:")));
+        QVERIFY(!channelId.startsWith(QStringLiteral("node:44:")));
+    }
+
+    for (const uint inactiveNode : {11U, 44U})
+    {
+        for (const QString &quantity : {QStringLiteral("displacement"), QStringLiteral("velocity"),
+                                        QStringLiteral("acceleration")})
+        {
+            const QString channelId = QStringLiteral("node:%1:%2:X").arg(inactiveNode).arg(quantity);
+            const QJsonObject series = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+                QStringLiteral("series"), {{QStringLiteral("channelId"), channelId}});
+            QCOMPARE(series.value(QStringLiteral("code")).toString(), QStringLiteral("CHANNEL_UNAVAILABLE"));
+            const QJsonObject summary = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+                QStringLiteral("summary"), {{QStringLiteral("channelId"), channelId}});
+            QCOMPARE(summary.value(QStringLiteral("code")).toString(), QStringLiteral("CHANNEL_UNAVAILABLE"));
+        }
+    }
+    for (const uint supportedNode : {22U, 33U})
+    {
+        for (const QString &quantity : {QStringLiteral("displacement"), QStringLiteral("velocity"),
+                                        QStringLiteral("acceleration")})
+        {
+            const QString channelId = QStringLiteral("node:%1:%2:X").arg(supportedNode).arg(quantity);
+            const QJsonObject series = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+                QStringLiteral("series"), {{QStringLiteral("channelId"), channelId}});
+            QVERIFY2(series.value(QStringLiteral("valid")).toBool(), qPrintable(series.value(QStringLiteral("message")).toString()));
+            const QJsonObject summary = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+                QStringLiteral("summary"), {{QStringLiteral("channelId"), channelId}});
+            QVERIFY2(summary.value(QStringLiteral("valid")).toBool(), qPrintable(summary.value(QStringLiteral("message")).toString()));
+        }
+    }
+
+    QFile frame(framePath(directory.path(), 1));
+    QVERIFY(frame.open(QIODevice::ReadOnly));
+    const QString frameSha = sha(frame.readAll());
+    frame.close();
+    const QJsonArray liveFrames{QJsonObject{{QStringLiteral("recordNo"), 1},
+        {QStringLiteral("timeS"), 0.1}, {QStringLiteral("seq"), 1},
+        {QStringLiteral("relativePath"), QStringLiteral("run-00001.rbm")}, {QStringLiteral("sha256"), frameSha}}};
+    const QJsonObject liveCatalog = RNativeResultBroker::queryLive(directory.path(), provenance(), liveFrames,
+        QStringLiteral("channels"), {});
+    QVERIFY2(liveCatalog.value(QStringLiteral("valid")).toBool(),
+             qPrintable(liveCatalog.value(QStringLiteral("message")).toString()));
+    QCOMPARE(liveCatalog.value(QStringLiteral("channelCount")).toInt(), 18);
+    for (const uint supportedNode : {22U, 33U})
+    {
+        for (const QString &quantity : {QStringLiteral("displacement"), QStringLiteral("velocity"),
+                                        QStringLiteral("acceleration")})
+        {
+            const QString channelId = QStringLiteral("node:%1:%2:X").arg(supportedNode).arg(quantity);
+            const QJsonObject liveAvailable = RNativeResultBroker::queryLive(directory.path(), provenance(), liveFrames,
+                QStringLiteral("series"), {{QStringLiteral("channelId"), channelId}});
+            QVERIFY2(liveAvailable.value(QStringLiteral("valid")).toBool(),
+                     qPrintable(liveAvailable.value(QStringLiteral("message")).toString()));
+        }
+    }
+    for (const uint inactiveNode : {11U, 44U})
+    {
+        for (const QString &quantity : {QStringLiteral("displacement"), QStringLiteral("velocity"),
+                                        QStringLiteral("acceleration")})
+        {
+            const QString channelId = QStringLiteral("node:%1:%2:X").arg(inactiveNode).arg(quantity);
+            const QJsonObject liveUnavailable = RNativeResultBroker::queryLive(directory.path(), provenance(), liveFrames,
+                QStringLiteral("series"), {{QStringLiteral("channelId"), channelId}});
+            QCOMPARE(liveUnavailable.value(QStringLiteral("code")).toString(), QStringLiteral("CHANNEL_UNAVAILABLE"));
+        }
+    }
+}
+
+void NativeResultBrokerTest::rejectsMissingOrInvalidTranslationNodeMaps()
+{
+    const auto rewrittenManifestQuery = [](const std::function<void(QJsonObject &)> &mutate)
+    {
+        QTemporaryDir directory;
+        const QString logicalPath = writeDynamicFrame(directory.path(), 1);
+        const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+        if (!published.valid) return QJsonObject{{QStringLiteral("valid"), true}};
+
+        QJsonObject manifest = published.manifest;
+        mutate(manifest);
+        const QByteArray bytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+        QFile file(published.manifestPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(bytes) != bytes.size())
+            return QJsonObject{{QStringLiteral("valid"), true}};
+        file.close();
+        return RNativeResultBroker::query(published.manifestPath, sha(bytes), QStringLiteral("channels"), {});
+    };
+
+    const QJsonObject missing = rewrittenManifestQuery([](QJsonObject &manifest)
+    {
+        manifest.remove(QStringLiteral("translationNodePhysicalIds"));
+    });
+    QVERIFY(!missing.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(missing.value(QStringLiteral("code")).toString(), QStringLiteral("INVALID_MANIFEST"));
+
+    for (const QJsonArray invalidMap : {QJsonArray{1, 1}, QJsonArray{9999}})
+    {
+        const QJsonObject invalid = rewrittenManifestQuery([&invalidMap](QJsonObject &manifest)
+        {
+            manifest.insert(QStringLiteral("translationNodePhysicalIds"), invalidMap);
+        });
+        QVERIFY(!invalid.value(QStringLiteral("valid")).toBool());
+        QCOMPARE(invalid.value(QStringLiteral("code")).toString(), QStringLiteral("INVALID_MANIFEST"));
+    }
+}
+
+void NativeResultBrokerTest::rejectsTranslationAvailabilityDriftAcrossFrames()
+{
+    QTemporaryDir directory;
+    const QString logicalPath = writeDynamicFrame(directory.path(), 1);
+    RModel secondFrame = dynamicModel(2);
+    secondFrame.setNLines(0);
+    RStructuralDynamicsRestartData checkpoint = secondFrame.getProblemSetup().getStructuralDynamicsRestartData();
+    checkpoint.meshFingerprint = RStructuralDynamicsRestartData::computeMeshFingerprint(secondFrame);
+    secondFrame.getProblemSetup().setStructuralDynamicsRestartData(checkpoint);
+    secondFrame.write(logicalPath, true);
+
+    const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+    QVERIFY(!published.valid);
+    QCOMPARE(published.code, QStringLiteral("INCONSISTENT_FRAME_METADATA"));
+}
+
+void NativeResultBrokerTest::preservesVerifiedHistoryOriginAndRejectsAncestorTampering()
+{
+    QTemporaryDir originalDirectory, resumedDirectory;
+    const QString originalLogical = writeDynamicFrame(originalDirectory.path(), 1);
+    QJsonObject originalProvenance = provenance(QStringLiteral("old-job"));
+    originalProvenance.insert(QStringLiteral("inputSnapshotSha256"), sha("old-input"));
+    originalProvenance.insert(QStringLiteral("runtime"), QJsonObject{{QStringLiteral("fingerprintSha256"), sha("old-runtime")},
+        {QStringLiteral("scope"), QStringLiteral("old-runtime/v1")}});
+    originalProvenance.insert(QStringLiteral("sourceSnapshotRef"), QJsonObject{{QStringLiteral("sourceRevision"), QStringLiteral("1")}});
+    const auto original = RNativeResultBroker::publishResult(originalDirectory.path(), originalLogical, originalProvenance);
+    QVERIFY2(original.valid, qPrintable(original.message));
+    const QString resumedLogical = writeDynamicFrame(resumedDirectory.path(), 1);
+    writeDynamicFrame(resumedDirectory.path(), 2);
+    const QJsonObject originalFrame = original.manifest.value(QStringLiteral("frames")).toArray().first().toObject();
+    QFile copied(framePath(resumedDirectory.path(), 1));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    const QString copiedSha = sha(copied.readAll());
+    copied.close();
+    const QJsonObject proof{{QStringLiteral("recordNo"), 1}, {QStringLiteral("relativePath"), QStringLiteral("run-00001.rbm")},
+        {QStringLiteral("sha256"), copiedSha}, {QStringLiteral("originalFrameSha256"), originalFrame.value(QStringLiteral("sha256"))},
+        {QStringLiteral("originKind"), QStringLiteral("reused-history")}, {QStringLiteral("origin"), originalFrame.value(QStringLiteral("origin"))},
+        {QStringLiteral("originManifestPath"), original.manifestPath}, {QStringLiteral("originManifestSha256"), original.manifestSha256}};
+    QJsonObject resumedProvenance = provenance(QStringLiteral("new-job"));
+    resumedProvenance.insert(QStringLiteral("reusedHistory"), QJsonArray{proof});
+    QJsonObject forgedProof = proof;
+    forgedProof.insert(QStringLiteral("origin"), provenance(QStringLiteral("new-job")));
+    QJsonObject forgedProvenance = resumedProvenance;
+    forgedProvenance.insert(QStringLiteral("reusedHistory"), QJsonArray{forgedProof});
+    const auto forged = RNativeResultBroker::publishResult(resumedDirectory.path(), resumedLogical, forgedProvenance);
+    QCOMPARE(forged.code, QStringLiteral("INVALID_HISTORY_PROVENANCE"));
+    const auto resumed = RNativeResultBroker::publishResult(resumedDirectory.path(), resumedLogical, resumedProvenance);
+    QVERIFY2(resumed.valid, qPrintable(resumed.message));
+    const QJsonArray frames = resumed.manifest.value(QStringLiteral("frames")).toArray();
+    QCOMPARE(frames.at(0).toObject().value(QStringLiteral("origin")), originalFrame.value(QStringLiteral("origin")));
+    QCOMPARE(frames.at(0).toObject().value(QStringLiteral("origin")).toObject().value(QStringLiteral("jobId")).toString(), QStringLiteral("old-job"));
+    QCOMPARE(frames.at(1).toObject().value(QStringLiteral("origin")).toObject().value(QStringLiteral("jobId")).toString(), QStringLiteral("new-job"));
+    const QJsonObject firstPage = RNativeResultBroker::query(resumed.manifestPath, resumed.manifestSha256,
+        QStringLiteral("catalog"), {{QStringLiteral("limit"), 1}});
+    QVERIFY(firstPage.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(firstPage.value(QStringLiteral("reusedHistoryCount")).toInt(), 1);
+    QCOMPARE(firstPage.value(QStringLiteral("reusedHistoryScope")).toString(), QStringLiteral("catalog-frame-page"));
+    QCOMPARE(firstPage.value(QStringLiteral("reusedHistory")).toArray(), QJsonArray{proof});
+    const QJsonObject secondPage = RNativeResultBroker::query(resumed.manifestPath, resumed.manifestSha256,
+        QStringLiteral("catalog"), {{QStringLiteral("limit"), 1}, {QStringLiteral("offset"), 1}});
+    QVERIFY(secondPage.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(secondPage.value(QStringLiteral("reusedHistoryCount")).toInt(), 1);
+    QVERIFY(secondPage.value(QStringLiteral("reusedHistory")).toArray().isEmpty());
+    QFile tampered(framePath(originalDirectory.path(), 1));
+    QVERIFY(tampered.open(QIODevice::Append)); tampered.write("changed"); tampered.close();
+    const QJsonObject rejected = RNativeResultBroker::query(resumed.manifestPath, resumed.manifestSha256, QStringLiteral("catalog"), {});
+    QVERIFY(!rejected.value(QStringLiteral("valid")).toBool());
+}
+
+void NativeResultBrokerTest::marksLegacyHistoryOriginUnavailable()
+{
+    QTemporaryDir directory;
+    const QString logical = writeDynamicFrame(directory.path(), 1);
+    writeDynamicFrame(directory.path(), 2);
+    QFile copied(framePath(directory.path(), 1));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    const QString copiedSha = sha(copied.readAll());
+    copied.close();
+    QJsonObject declared = provenance();
+    declared.insert(QStringLiteral("reusedHistory"), QJsonArray{QJsonObject{
+        {QStringLiteral("recordNo"), 1}, {QStringLiteral("relativePath"), QStringLiteral("run-00001.rbm")},
+        {QStringLiteral("sha256"), copiedSha}, {QStringLiteral("originalFrameSha256"), copiedSha},
+        {QStringLiteral("sourceRestartSha256"), sha("legacy-restart")},
+        {QStringLiteral("originKind"), QStringLiteral("legacy-history-unattributed")},
+        {QStringLiteral("origin"), QJsonValue(QJsonValue::Null)}}});
+    const auto published = RNativeResultBroker::publishResult(directory.path(), logical, declared);
+    QVERIFY2(published.valid, qPrintable(published.message));
+    const QJsonObject history = published.manifest.value(QStringLiteral("frames")).toArray().first().toObject();
+    QVERIFY(history.value(QStringLiteral("origin")).isNull());
+    QCOMPARE(history.value(QStringLiteral("originKind")).toString(), QStringLiteral("legacy-history-unattributed"));
+}
+
+void NativeResultBrokerTest::queriesOnlyCompleteLiveFrames()
+{
+    QTemporaryDir directory;
+    writeDynamicFrame(directory.path(), 1);
+    QFile file(framePath(directory.path(), 1));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QString digest = sha(file.readAll());
+    file.close();
+    const QJsonArray frames{QJsonObject{{QStringLiteral("recordNo"), 1}, {QStringLiteral("timeS"), 0.1},
+        {QStringLiteral("seq"), 1}, {QStringLiteral("relativePath"), QStringLiteral("run-00001.rbm")}, {QStringLiteral("sha256"), digest}}};
+    QFile pending(framePath(directory.path(), 2));
+    QVERIFY(pending.open(QIODevice::WriteOnly)); pending.write("partial"); pending.close();
+    const QJsonObject catalog = RNativeResultBroker::queryLive(directory.path(), provenance(), frames, QStringLiteral("catalog"), {});
+    QVERIFY2(catalog.value(QStringLiteral("valid")).toBool(), qPrintable(catalog.value(QStringLiteral("message")).toString()));
+    QCOMPARE(catalog.value(QStringLiteral("frameCount")).toInt(), 1);
+    QCOMPARE(catalog.value(QStringLiteral("generation")).toInt(), 1);
+    QVERIFY(catalog.value(QStringLiteral("live")).toBool());
+    QVERIFY(!catalog.value(QStringLiteral("completed")).toBool());
+    QVERIFY(!QFile::exists(QDir(directory.path()).filePath(QStringLiteral("native-result.manifest.json"))));
+    QVERIFY(file.open(QIODevice::Append)); file.write("changed"); file.close();
+    const QJsonObject changed = RNativeResultBroker::queryLive(directory.path(), provenance(), frames, QStringLiteral("channels"), {});
+    QCOMPARE(changed.value(QStringLiteral("code")).toString(), QStringLiteral("RESULT_FRAME_TAMPERED"));
+}
+
+void NativeResultBrokerTest::preservesMixedHistoryProofsAcrossSeriesPages()
+{
+    QTemporaryDir originalDirectory, resumedDirectory;
+    const QString originalLogical = writeDynamicFrame(originalDirectory.path(), 1);
+    const auto original = RNativeResultBroker::publishResult(originalDirectory.path(), originalLogical,
+        provenance(QStringLiteral("original-job")));
+    QVERIFY2(original.valid, qPrintable(original.message));
+    const QString resumedLogical = writeDynamicFrame(resumedDirectory.path(), 1);
+    writeDynamicFrame(resumedDirectory.path(), 2);
+    writeDynamicFrame(resumedDirectory.path(), 3);
+    const auto frameHash = [&resumedDirectory](int recordNo)
+    {
+        QFile file(framePath(resumedDirectory.path(), recordNo));
+        if (!file.open(QIODevice::ReadOnly)) return QString();
+        return sha(file.readAll());
+    };
+    const QJsonObject originalFrame = original.manifest.value(QStringLiteral("frames")).toArray().first().toObject();
+    const QJsonObject known{{QStringLiteral("recordNo"), 1},
+        {QStringLiteral("relativePath"), QStringLiteral("run-00001.rbm")},
+        {QStringLiteral("sha256"), frameHash(1)},
+        {QStringLiteral("originalFrameSha256"), originalFrame.value(QStringLiteral("sha256"))},
+        {QStringLiteral("originKind"), QStringLiteral("reused-history")},
+        {QStringLiteral("origin"), originalFrame.value(QStringLiteral("origin"))},
+        {QStringLiteral("originManifestPath"), original.manifestPath},
+        {QStringLiteral("originManifestSha256"), original.manifestSha256}};
+    const QJsonObject legacy{{QStringLiteral("recordNo"), 2},
+        {QStringLiteral("relativePath"), QStringLiteral("run-00002.rbm")},
+        {QStringLiteral("sha256"), frameHash(2)},
+        {QStringLiteral("originalFrameSha256"), frameHash(2)},
+        {QStringLiteral("sourceRestartSha256"), sha("legacy-restart")},
+        {QStringLiteral("originKind"), QStringLiteral("legacy-history-unattributed")},
+        {QStringLiteral("origin"), QJsonValue(QJsonValue::Null)}};
+    QJsonObject declared = provenance(QStringLiteral("resumed-job"));
+    declared.insert(QStringLiteral("reusedHistory"), QJsonArray{known, legacy});
+    const auto published = RNativeResultBroker::publishResult(resumedDirectory.path(), resumedLogical, declared);
+    QVERIFY2(published.valid, qPrintable(published.message));
+    QJsonObject arguments{{QStringLiteral("channelId"), QStringLiteral("node:1:displacement:X")},
+        {QStringLiteral("limit"), 1}};
+    for (int pageIndex = 0; pageIndex < 3; ++pageIndex)
+    {
+        const QJsonObject page = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+            QStringLiteral("series"), arguments);
+        QVERIFY2(page.value(QStringLiteral("valid")).toBool(), qPrintable(page.value(QStringLiteral("message")).toString()));
+        const QJsonArray samples = page.value(QStringLiteral("samples")).toArray();
+        QCOMPARE(samples.size(), 1);
+        const QJsonObject sample = samples.first().toObject();
+        QCOMPARE(sample.value(QStringLiteral("recordNo")).toInt(), pageIndex + 1);
+        QVERIFY(sample.contains(QStringLiteral("historyProof")));
+        if (pageIndex < 2)
+        {
+            const QJsonObject proof = pageIndex == 0 ? known : legacy;
+            QCOMPARE(sample.value(QStringLiteral("historyProof")).toObject(), proof);
+            QCOMPARE(sample.value(QStringLiteral("originKind")), proof.value(QStringLiteral("originKind")));
+            QCOMPARE(sample.value(QStringLiteral("origin")), proof.value(QStringLiteral("origin")));
+            QVERIFY(page.contains(QStringLiteral("nextCursor")));
+            arguments.insert(QStringLiteral("cursor"), page.value(QStringLiteral("nextCursor")));
+        }
+        else
+        {
+            QVERIFY(sample.value(QStringLiteral("historyProof")).isNull());
+            QCOMPARE(sample.value(QStringLiteral("originKind")).toString(), QStringLiteral("produced"));
+            QCOMPARE(sample.value(QStringLiteral("origin")).toObject().value(QStringLiteral("jobId")).toString(), QStringLiteral("resumed-job"));
+            QVERIFY(!page.contains(QStringLiteral("nextCursor")));
+        }
+    }
 }
 
 } // namespace
