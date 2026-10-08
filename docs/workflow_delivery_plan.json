@@ -187,8 +187,8 @@
     {
       "id": "WF-03",
       "title": "Open-model bounded control bridge",
-      "status": "in_progress",
-      "statusReason": "持续续作已授权至顺序4。原节点/保存初态/限幅/零能量问题及独立B/Sv映射已修；实际导入完整套件133s通过，Windows非默认梁快照到active/passive曲线CSV通过。共享最终回归、安装及冻结证据仍待闭合。",
+      "status": "done",
+      "statusReason": "冻结实现ae2cd80已完成逐条验收、独立审查、Release/125完整回归与本机安装私有SDK/Windows真实窗口；外部全交付门槛仍按WF13记录。",
       "priority": "P0",
       "effort": "L",
       "dependsOn": [
@@ -212,13 +212,70 @@
         "src/range-workflow/python/range_workflow/templates.py",
         "src/range-workflow/native/main.cpp"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "acceptanceId": "WF-03-A01",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A02",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A03",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A04",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A05",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A06",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A07",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A08",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        }
+      ]
     },
     {
       "id": "WF-04",
       "title": "Native result broker",
-      "status": "in_progress",
-      "statusReason": "持续整合中：原9项W3/W4审查问题已修，broker/SDK/Agent/live/逐帧CSV/结果场接口已接通。当前P2不可计算节点平移通道与结果场重入测试崩溃正在修；完整125项回归、安装和最终复审未验收。",
+      "status": "done",
+      "statusReason": "冻结实现ae2cd80已完成逐条验收、独立审查、Release/125完整回归与本机安装私有SDK/Windows真实窗口；外部全交付门槛仍按WF13记录。",
       "priority": "P0",
       "effort": "M",
       "dependsOn": [
@@ -241,13 +298,70 @@
         "src/range-workflow/python/range_workflow/telemetry.py",
         "src/range-workflow/python/range_workflow/extensions.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "acceptanceId": "WF-04-A01",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A02",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A03",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A04",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A05",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A06",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A07",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A08",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        }
+      ]
     },
     {
       "id": "WF-05",
       "title": "Durable operations and checkpoint recovery",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "WF04已验收，按最新持续开发授权启动；恢复契约准备已冻结，先持久操作/发布账本，再周期接受检查点与both恢复/UI，尚未产品验收。",
       "priority": "P0",
       "effort": "XL",
       "dependsOn": [
@@ -282,8 +396,8 @@
     {
       "id": "WF-06",
       "title": "SSE and activity feed",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "同步体验线已授权，依赖WF01完成；有界SSE核心已准备但未注册/编译，接下来公开接口与真实Widget/取消/滚动/非流式兼容接线，尚未验收。",
       "priority": "P1",
       "effort": "M",
       "dependsOn": [

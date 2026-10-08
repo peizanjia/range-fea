@@ -1,5 +1,15 @@
 # 续作交接
 
+## 2026-10-09 WF03/WF04验收闭合，持续推进WF05/WF06（最新入口）
+
+- 最新用户目标持续到顺序4：WF05、同步WF06→07、WF08/09/10/14、WF11→12。目标仍active，不是退出/暂停；Root settings不改，执行Luna max优先，具体未解决推理再按新skill升Sol。难题经真实升级仍不能解可完整记录跳过，不标验收通过。
+- WF03/WF04均done，实现冻结ae2cd809615dcdfff86c146ba15f089f661c9c4b；结论docs/acceptance/WF-03.md和WF-04.md。最终Release通过、必跑125注册、完整125/125 0失败655.46s，日志build/audit-20261009/WF-04/frozen-full-ctest.log。最后模板controller身份读取/绑定也由独立Sol high复审闭合。
+- 本机安装树build/stage12-install已更新。仅安装bin/Windows PATH、私有Python3.13.5真实非默认beam源12+12步：两attempt各12幀、记录1–24完整；原生统计/RMS/比较/安装知识查询通过，WF-03/installed-sdk-final.log。安装Windows同源测试3/3、0skip20.326s，installed-window.txt/installed-window截图已查看；临时testexe/Qt6Test.dll已清理。干净外部Windows/远程CI/全供应商仍按WF13保留，不借本机证据冒称通过。
+- 原W3/W4九项及后续source/B/Sv/可用性/PickList问题已闭合。最终场显示typed native.result.display；PickList模型删除后专用重索引，旧clear-only removeItems语义不变。源码/窗口+CSV同broker，origin/历史proof完整。所有先前失败/时间间隙/错误假设日志保留audit-20261008/09。
+- WF05/WF06现在in_progress。先读docs/RECOVERY_CONTRACT.md、WORKFLOW_DELIVERY_PLAN对应全部条款（WF05为A01–A10），然后当前源码。WF05接受态已有表示，但周期落盘/持久作业/跨重启账本仍待实现，不把成功后resume充恢复。Root拥有service/workflow_widget/CMake/状态和串行build/CTest/install；子代理必须文件所有权先划定。
+- WF06 AI子模块三个新SSE准备文件尚未注册/编译：include/rai_tool_stream.h、src/rai_tool_stream.cpp、tests/tst_agent_tool_stream.cpp；AI HEAD仍21bbdc1，此前不参与冻结构建。下一步注册有界parser测试、接口/UI增量与代次安全，再独立验收。当前Root tree可有此后续准备dirty，不误称整个工作树clean。
+- 保留用户.agents/.codex/AGENTS.md、凭据和记忆，不混入提交；本地提交不push。当前所有前阶段代理已完成，没有必需代理遗留；下一批按新skill调度。最新Git/运行进程续作时重查，不用旧记录猜重发副作用。
+
 ## 2026-10-09 当前持续开发授权与进行中断点
 
 - 最新用户授权已扩大到按计划持续完成顺序2、同步WF06→07、顺序3的WF08/09/10/14、顺序4的WF11→12，达到交付水平。此处不是退出或暂停指令；下方旧退出记录已被覆盖。已建立持续目标，不降低验收门槛。
