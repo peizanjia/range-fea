@@ -4,6 +4,8 @@
 
 当前实际接口见 `AGENT_OPERATIONS.md`、`WORKFLOW_SDK.md` 和 `EXTENSION_SDK.md`。`range.host/v1` 覆盖 GUI 模态配置、Undo/Redo、版本化上下文及有界事件；`range.workflow/v1` 覆盖独立杆/梁工作区；`range.extension/v1` 只支持固定数值序列统计及声明式表单/结果表。窗口 RMS、包络、曲线、参数扫描、工件分片、任意依赖环境和 OS 隔离属于后续扩展，不是当前 v1 的能力。
 
+2026-10-08 已把剩余目标拆入 `WORKFLOW_DELIVERY_PLAN.md`，任务状态/依赖以 `workflow_delivery_plan.json` 为准。上段“曲线”指扩展自定义图表；现有控制 GUI 已有原生接受步曲线，见 `GUI_UX_ACCEPTANCE.md`。第 17 节的初始工作量/实施顺序保留历史语境，当前开发 Agent 按 WF 条款与续作指南执行。
+
 ## 1. 操作链与模块边界
 
 工作流顺序为模型快照 → 分析/控制配置 → 预览 → 执行 → 接受结果 → 对照/报告；长任务具有排队、运行、成功、失败和取消状态。先以已验证四杆算例完成整条路径，再扩展已有梁功能。

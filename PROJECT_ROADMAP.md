@@ -1,10 +1,10 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
-更新时间：2026-10-01。当前任务、依赖、验收条件和研究扩展统一见 [当前开发与验收计划](docs/DEVELOPMENT_PLAN.md)。本文件保留总体架构和阶段目标；历史执行数字不是当前待办。
+更新时间：2026-10-08。阶段入口与研究范围见 [开发与验收计划](docs/DEVELOPMENT_PLAN.md)；后续全工作流设计/验收见 [WF 交付方案](docs/WORKFLOW_DELIVERY_PLAN.md)，状态/依赖以 [机器清单](docs/workflow_delivery_plan.json) 为准。本文件保留总体架构和历史阶段目标；历史执行数字不是当前待办。
 
-当前基线：Stage 1–5 在约定范围完成；Stage 6 的 C++/Python/MATLAB TCP 路径已验证；Stage 7–9 为明确物理/规模边界内的交付。2026-10-01 新增 Stage 10A 模态配置服务、有限 GUI/原生 CLI 接线及 CI 必跑门槛，全目标 Release 构建成功、CTest 94/94（69.62 s）。新 CLI 本机安装树缩减 PATH 冒烟通过；Stage 0 干净 Windows 发布终验、完整 GUI 操作、持久审计与 Stage 10 后续工作仍待完成。本日未重跑 MATLAB 实机控制器测试，远程 CI 尚未运行。详见 HANDOFF.md。
+当前实现基线为 `15297a9`：已形成 GUI 模态/Undo/Redo、模板杆/梁控制与实时曲线、受信统计扩展和私有 Python 的受控 v1。当前文档通用控制、完整结果接线、项目恢复、连续任务、几何/网格迁移及通用科学扩展仍按 WF-01–14 交付。数值 Stage 1–9 保持各自支持矩阵；历史 105/107 项、真实模型和安装证据分别见验收文档与 HANDOFF.md，不代表规划功能已实现。
 
-用户已授权按修订计划继续开发、审查、验收和自动提交，覆盖历史“停止在 Stage 9”要求。当前顺序为 P0 计划/CI → Stage 10A 共用服务 → 10B 完整工作流 → 10C GUI → Stage 11 Agent → Stage 12 SDK/受控开发；Stage 13 质量门槛持续执行。权限相关外部验收继续单列，不试探系统权限。
+历史 Stage 10–12 已有继续开发、审查、验收和本地自动提交的授权，覆盖当时的 Stage 9 停止要求；P0 → 10A/10B/10C → 11 → 12 是该轮实施顺序。2026-10-08 的本轮任务是补齐 WF 规划与验收入口，后续实施按当前用户任务及保留的授权范围执行，eligible 不自行扩大范围，已授权事项不重复询问。质量线持续进行，外部验收保持明确环境与权限条件。
 
 适用仓库：`range-fea` 及其 `range-model-lib`、`range-solver-lib`、`range-gui-lib`、`range-ai-lib` 子模块
 

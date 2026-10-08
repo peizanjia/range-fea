@@ -2,6 +2,8 @@
 
 适用：确定控制输入的物理位置、编写/诊断控制器适配器、核对每步输入与功账。2026-09-24 主 Release 53/53 CTest 已通过；这里只描述已验证的 C++/Python 范围及其限制。
 
+上述日期/数字为 v1 基础说明。当前型别控制与 MATLAB 软件 TCP 接线分别见 `../TYPED_FE_CONTROL.md`、`../CONTROLLER_ADAPTERS.md`；GUI/Agent/工作流入口见 `../AGENT_OPERATIONS.md`，后续任务见 `../WORKFLOW_DELIVERY_PLAN.md`。
+
 ## 入口、时序与数据所有权
 
 - 模型侧 `RProblemSetup::getStructuralControlSetup()` 保存 `enabled`、协议版本 `1`、`controllerId`、决定性种子；感测器与执行器目录在 `RStructuralInteractionSetup`。源：`src/range-model-lib/include/rml_structural_control_setup.h`、`rml_structural_interaction.h`、`src/range-model-lib/src/rml_problem_setup.cpp`。
@@ -30,4 +32,4 @@ CLI 整合代码提供 `--control-program=<绝对可执行文件>`、`--control-
 
 基础算例看 `src/range-solver-lib/tests/tst_structural_control_force_map.cpp`（映射、物理功率、trial/reject）；`tst_structural_dynamics_fe.cpp`（解析保持力、幅值/速率、重启与观察者）；`src/fea-solver/tests/tst_control_ndjson_transport.cpp`（协议失效关闭）；`tst_solver_audit_cli.cpp`（进程外闭环与事件）。外部控制程序应自行保证同一请求/已接受状态可重复输出，保存算法版本并比较无控制基线。
 
-**不可用**：GUI 全流程控制工作台、Agent 侧栏的统一 Command Service/Query API、自动授权工具调用、压电/拉索执行器、全状态热耦合、硬实时承诺。`RInteractionRecordV1` 只是数据契约，CLI 的 `ControlStepAccepted` 是运行事件，不等于 GUI/Agent 全流程 InteractionRecord。遇到能力缺口应报告与提出受控扩展建议，不得直接写模型私有状态或编译热载未经审核代码。
+当前已有 GUI 模态命令、受监督 Agent、模板控制工作流和接受步曲线；通用当前模型导入、运行中调参和完整项目恢复按 WF-02/03/05/09 继续交付。型别执行器的内核能力不自动成为模板工作流的可用入口；全状态热耦合和实物硬实时仍有独立范围。`RInteractionRecordV1` 是数据契约，应用服务/工作区已有上层审计，CLI `ControlStepAccepted` 则是求解运行事件。遇到能力缺口按 capability 报告，不直接写模型私有状态或热载未经验证代码。

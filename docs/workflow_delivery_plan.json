@@ -1,0 +1,445 @@
+{
+  "schemaVersion": 1,
+  "project": "range-fea",
+  "updatedAt": "2026-10-08",
+  "baseline": {
+    "rootCommit": "15297a966da27e501fb66fb6b37d13e3c1df3af3",
+    "submodules": [
+      {
+        "path": "src/range-ai-lib",
+        "sha": "21bbdc14ce1f8c4ba1a47194085895a0b99f4d42"
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "WF-01",
+      "title": "Project identity and contracts",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P0",
+      "effort": "S",
+      "dependsOn": [],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-01-A01",
+        "WF-01-A02",
+        "WF-01-A03",
+        "WF-01-A04",
+        "WF-01-A05",
+        "WF-01-A06",
+        "WF-01-A07"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/session.cpp",
+        "src/fea/src/session.h",
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/model_command_host.h",
+        "src/fea/src/workflow_process.cpp",
+        "src/fea/src/workflow_process.h",
+        "src/range-workflow/python/range_workflow/service.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-02",
+      "title": "Native context, commands, and solve",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P0",
+      "effort": "L",
+      "dependsOn": ["WF-01"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-02-A01",
+        "WF-02-A02",
+        "WF-02-A03",
+        "WF-02-A04",
+        "WF-02-A05",
+        "WF-02-A06",
+        "WF-02-A07",
+        "WF-02-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/model_command_host.h",
+        "src/fea/src/session.cpp",
+        "src/fea/src/session.h",
+        "src/fea/src/solver_task.cpp",
+        "src/fea/src/solver_task.h",
+        "src/fea/src/solver_manager.cpp",
+        "src/fea/src/solver_manager.h",
+        "src/fea/src/modal_setup_widget.cpp",
+        "src/fea/src/time_solver_setup_widget.cpp",
+        "src/range-application-lib/src/rmodel_command_session.cpp"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-03",
+      "title": "Open-model bounded control bridge",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P0",
+      "effort": "L",
+      "dependsOn": ["WF-02"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-03-A01",
+        "WF-03-A02",
+        "WF-03-A03",
+        "WF-03-A04",
+        "WF-03-A05",
+        "WF-03-A06",
+        "WF-03-A07",
+        "WF-03-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/workflow_widget.cpp",
+        "src/fea/src/workflow_process.cpp",
+        "src/range-workflow/python/range_workflow/jobs.py",
+        "src/range-workflow/python/range_workflow/templates.py",
+        "src/range-workflow/native/main.cpp"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-04",
+      "title": "Native result broker",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P0",
+      "effort": "M",
+      "dependsOn": ["WF-02"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-04-A01",
+        "WF-04-A02",
+        "WF-04-A03",
+        "WF-04-A04",
+        "WF-04-A05",
+        "WF-04-A06",
+        "WF-04-A07",
+        "WF-04-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/workflow_widget.cpp",
+        "src/range-workflow/python/range_workflow/telemetry.py",
+        "src/range-workflow/python/range_workflow/extensions.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-05",
+      "title": "Durable operations and checkpoint recovery",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P0",
+      "effort": "XL",
+      "dependsOn": ["WF-02", "WF-04"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-05-A01",
+        "WF-05-A02",
+        "WF-05-A03",
+        "WF-05-A04",
+        "WF-05-A05",
+        "WF-05-A06",
+        "WF-05-A07",
+        "WF-05-A08",
+        "WF-05-A09",
+        "WF-05-A10"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/session.cpp",
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/solver_task.cpp",
+        "src/range-application-lib/src/rmodel_command_session.cpp",
+        "src/range-workflow/python/range_workflow/service.py",
+        "src/range-workflow/python/range_workflow/runtime.py",
+        "src/range-workflow/python/range_workflow/jobs.py",
+        "src/range-workflow/tests/test_workflow_runtime.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-06",
+      "title": "SSE and activity feed",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "M",
+      "dependsOn": ["WF-01"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-06-A01",
+        "WF-06-A02",
+        "WF-06-A03",
+        "WF-06-A04",
+        "WF-06-A05",
+        "WF-06-A06",
+        "WF-06-A07",
+        "WF-06-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/agent_widget.cpp",
+        "src/fea/src/agent_task_runner.cpp",
+        "src/range-ai-lib/src/rai_agent.cpp",
+        "src/range-ai-lib/src/rai_agent_file_store.cpp",
+        "src/range-workflow/python/range_workflow/process.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-07",
+      "title": "Persistent conversations and parallel read-only questions",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "L",
+      "dependsOn": ["WF-05", "WF-06"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-07-A01",
+        "WF-07-A02",
+        "WF-07-A03",
+        "WF-07-A04",
+        "WF-07-A05",
+        "WF-07-A06",
+        "WF-07-A07",
+        "WF-07-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/agent_widget.cpp",
+        "src/fea/src/agent_task_runner.cpp",
+        "src/range-ai-lib/src/rai_agent.cpp",
+        "src/range-ai-lib/src/rai_agent_file_store.cpp",
+        "src/range-ai-lib/src/rai_agent_settings_manager.cpp",
+        "src/range-ai-lib/tests/tst_agent_tool_turn.cpp",
+        "src/range-workflow/python/range_workflow/service.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-08",
+      "title": "Durable recipes and knowledge",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "L",
+      "dependsOn": ["WF-04", "WF-05", "WF-07"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-08-A01",
+        "WF-08-A02",
+        "WF-08-A03",
+        "WF-08-A04",
+        "WF-08-A05",
+        "WF-08-A06",
+        "WF-08-A07",
+        "WF-08-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/workflow_widget.cpp",
+        "src/fea/src/agent_task_runner.cpp",
+        "src/range-workflow/python/range_workflow/runtime.py",
+        "src/range-workflow/python/range_workflow/service.py",
+        "src/range-workflow/python/range_workflow/templates.py",
+        "src/range-workflow/python/range_workflow/extensions.py",
+        "docs/WORKFLOW_SDK.md"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-09",
+      "title": "Accepted-step live tuning and pause",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": ["WF-03", "WF-05"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-09-A01",
+        "WF-09-A02",
+        "WF-09-A03",
+        "WF-09-A04",
+        "WF-09-A05",
+        "WF-09-A06",
+        "WF-09-A07",
+        "WF-09-A08",
+        "WF-09-A09",
+        "WF-09-A10"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/control_monitor_widget.cpp",
+        "src/fea/src/workflow_process.cpp",
+        "src/fea/src/agent_widget.cpp",
+        "src/range-workflow/python/range_workflow/controller_host.py",
+        "src/range-workflow/python/range_workflow/telemetry.py",
+        "src/range-ai-lib/src/rai_agent.cpp"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-10",
+      "title": "Comparison and long plots",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "L",
+      "dependsOn": ["WF-03", "WF-04"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-10-A01",
+        "WF-10-A02",
+        "WF-10-A03",
+        "WF-10-A04",
+        "WF-10-A05",
+        "WF-10-A06",
+        "WF-10-A07",
+        "WF-10-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/control_monitor_widget.cpp",
+        "src/fea/src/workflow_widget.cpp",
+        "src/fea/src/graph_widget.cpp",
+        "src/range-workflow/python/range_workflow/telemetry.py",
+        "src/range-workflow/python/range_workflow/service.py",
+        "src/range-workflow/tests/test_telemetry.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-11",
+      "title": "Scientific extension v2 and declarative GUI",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": ["WF-04", "WF-08"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-11-A01",
+        "WF-11-A02",
+        "WF-11-A03",
+        "WF-11-A04",
+        "WF-11-A05",
+        "WF-11-A06",
+        "WF-11-A07",
+        "WF-11-A08",
+        "WF-11-A09"
+      ],
+      "existingCodePaths": [
+        "src/range-workflow/python/range_workflow/extensions.py",
+        "src/range-workflow/python/range_workflow/extension_child.py",
+        "src/range-workflow/tests/test_extensions.py",
+        "src/fea/src/extension_widget.cpp",
+        "scripts/packaging/build_private_python.py",
+        "scripts/packaging/test_private_python.py"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-12",
+      "title": "Proven OS isolation and environment lifecycle",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": ["WF-05", "WF-11"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-12-A01",
+        "WF-12-A02",
+        "WF-12-A03",
+        "WF-12-A04",
+        "WF-12-A05",
+        "WF-12-A06",
+        "WF-12-A07",
+        "WF-12-A08",
+        "WF-12-A09"
+      ],
+      "existingCodePaths": [
+        "src/range-workflow/python/range_workflow/extensions.py",
+        "src/range-workflow/python/range_workflow/extension_child.py",
+        "src/range-workflow/python/range_workflow/process.py",
+        "scripts/packaging/build_private_python.py",
+        "scripts/packaging/test_private_python.py",
+        "src/packaging/windows"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-13",
+      "title": "Commercial quality and release gates",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "release",
+      "effort": "L",
+      "dependsOn": [
+        "WF-02",
+        "WF-03",
+        "WF-04",
+        "WF-05",
+        "WF-06",
+        "WF-07",
+        "WF-08",
+        "WF-09",
+        "WF-10",
+        "WF-11",
+        "WF-12",
+        "WF-14"
+      ],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-13-A01",
+        "WF-13-A02",
+        "WF-13-A03",
+        "WF-13-A04",
+        "WF-13-A05",
+        "WF-13-A06",
+        "WF-13-A07",
+        "WF-13-A08",
+        "WF-13-A09",
+        "WF-13-A10"
+      ],
+      "existingCodePaths": [
+        "scripts/ci/verify_required_ctest.py",
+        "scripts/ci/required-ctest-tests.json",
+        "scripts/packaging/build_private_python.py",
+        "docs/CI_VALIDATION.md"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-14",
+      "title": "Geometry and mesh command migration",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": ["WF-02", "WF-05"],
+      "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-14-A01",
+        "WF-14-A02",
+        "WF-14-A03",
+        "WF-14-A04",
+        "WF-14-A05",
+        "WF-14-A06",
+        "WF-14-A07",
+        "WF-14-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/geometry_transform_widget.cpp",
+        "src/fea/src/mesh_setup_widget.cpp",
+        "src/fea/src/mesh_generator.cpp",
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/session.cpp"
+      ],
+      "evidence": []
+    }
+  ]
+}

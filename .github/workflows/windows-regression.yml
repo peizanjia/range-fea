@@ -86,11 +86,18 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force build/ci-windows/ci-logs | Out-Null
 
-      - name: Test CTest inventory verifier
+      - name: Test CI metadata verifiers
         shell: pwsh
         run: |
           python -m unittest discover -s scripts/ci -p 'test_*.py' *>&1 |
             Tee-Object -FilePath build/ci-windows/ci-logs/ci-tool-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check workflow delivery plan
+        shell: pwsh
+        run: |
+          python scripts/ci/verify_workflow_plan.py --next --json *>&1 |
+            Tee-Object -FilePath build/ci-windows/ci-logs/workflow-plan.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Configure numeric tests
