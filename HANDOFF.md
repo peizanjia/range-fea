@@ -2,6 +2,8 @@
 
 ## 2026-10-08 WF-01 → WF-02 → WF-04 → WF-05 实施中
 
+- WF-02 验收提交 `6145f34` 后，已按用户追加授权启动 WF-03 与 WF-04：各一名 Luna max explorer 核对真实快照导入/独立物理参考和原生结果/实时状态数据面。当前为契约/导入矩阵冻结阶段，尚未实现或验收这两项；JSON 为 in_progress。根保留 shared `service.py/workflow_widget.cpp` 的唯一写入权，独立模块的实现分工在接口冻结后下达。
+
 - 当前断点：WF-01 已验收，根实现 `9ecad58`、验收 `58a5405`。WF-02 已完成八项受限验收并在 JSON 标为 done；基础实现 `dcd11ef`、最终实现冻结 `1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d`，模型子模块 `9d6a60ed42bab535ad5b8bda193092d3c38deed4`。原生 MODEL 1.3.18 持久群组ID已交付，真实旧 1.3.17 ASCII/binary fixtures 未改字节。
 - 最终证据：`docs/acceptance/WF-02.md`；忽略目录 `build/audit-20261008/WF-02/acceptance-build.log` 全目标通过、`acceptance-full-ctest.log` 115/115（282.41s）、`acceptance-native-window.txt` Windows14/14无跳过（13.469s）、安装私有SDK/CLI与知识查询通过；必跑115注册、CI工具14/14。首次 full-ctest.log 和各种 focused/focus 失败保留作追踪，不作为最终通过证据。
 - 修复已由 Sol high 独立复审及实际回归闭合：sourceStamp三字段/锁重入、frozen body实际读入、manual来源关闭后取消、编辑结果不复用、V1 nullable轴无损日志/Undo审计失败幂等、真实progress结束消息、完整MODEL/LINK resultSourceBinding/terminal单独篡改、duplicate结果副本身份捕获；另补接受控制配置只读分页（uint64 seed字符串）及同一UUID编辑器焦点/光标/反向选区保持。真实窗口用鼠标选文档并以键盘输入草稿；只读查询/另一文档刷新/重建均保留焦点和接受版本。测试当前itemWidget避免退休控件，GUI/Session选择通过实际鼠标同步。
