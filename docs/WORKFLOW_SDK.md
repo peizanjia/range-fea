@@ -6,6 +6,8 @@
 
 外部进程不能同时占有同一工作区。连接超时或进程退出后，重新打开工作区并查询持久化作业状态，再决定是否继续。GUI 宿主的内存事件游标与跨进程的工作区审计版本是不同概念。
 
+若工作区已有宿主 `project.json`，服务保持相同 projectId；与既有工作流状态的身份冲突会明确拒绝。`client.project_catalog()` 读取目录元数据，`client.project_catalog(persistent_id)` 筛选文档；`client.project_snapshot(persistent_id)` 在返回冻结路径前检查来源版本与实际 SHA-256。元数据查询的 `snapshotBytesVerified=false` 不代表已验证模型字节。目录格式、CLI 创建方法及生命周期见 `PROJECT_CATALOG.md`。
+
 ## 安装后的独立客户端
 
 安装目录包含 `bin/`、`runtime/python/`、`share/range-workflow/`、`examples/control/stage9/`。私有解释器的路径配置已经包含 SDK，不需要安装系统 Python 或设置 PYTHONPATH。

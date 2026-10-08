@@ -3,16 +3,10 @@
 
 #include <QLineEdit>
 #include <QDoubleValidator>
-#include <QTimer>
 
 class ValueLineEdit : public QLineEdit
 {
     Q_OBJECT
-
-    protected:
-
-        //! Timer.
-        QTimer *timer;
 
     public:
 
@@ -55,13 +49,13 @@ class ValueLineEdit : public QLineEdit
         //! Set new value.
         void setValue(uint value);
 
+        //! Restore an in-progress edit without emitting an accepted value.
+        void restoreDraftText(const QString &text);
+
         //! Return validator state.
         QValidator::State getValidatorState() const;
 
     private:
-
-        //! Create timer.
-        void createTimer();
 
         //! Paint background based on entered value.
         void paintBackground();
@@ -71,14 +65,15 @@ class ValueLineEdit : public QLineEdit
         //! Value changed signal.
         void valueChanged(double value);
 
+        //! Text validity changed; the text is UI-local draft data.
+        void draftStateChanged(const QString &state, const QString &text);
+
 
     private slots:
 
         //! Catch signal textChanged
         void onTextChaged(QString text);
 
-        //! Catch timer timeout signal.
-        void onTimeout();
 };
 
 #endif /* VALUE_LINE_EDIT_H */

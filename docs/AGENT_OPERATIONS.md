@@ -11,6 +11,8 @@
 
 GUI 文档目前支持模态设置及已有的撤销／重做。全局上下文中的草稿和未保存状态可能为 `unknown`；这不等于没有草稿或已经保存。`cached` 内容只能称为最后已知状态。尚未迁移到命令服务的编辑操作不可由 Agent 猜测调用。
 
+项目身份、原生 LINK 来源链、冻结快照及草稿状态见 `PROJECT_CATALOG.md`。`project.query` 与 `document.project.query` 是 GUI 宿主只读查询；`context.query` 附带文档的持久身份、来源版本及状态。工作区 SDK 的 `project.catalog.query`/`project.snapshot.query` 读取相同目录；它们不将独立模板变为当前文档计算，也不提供模型自动批准或任意路径写入。
+
 ## 2. 标准任务循环
 
 1. 读取上下文、能力与目标身份，说明当前可用范围和缺失信息。

@@ -746,6 +746,10 @@ private slots:
         auto *host = session->getModelCommandHost();
         session->addModel(modalFixture());
         const QString identity = session->modelCommandStamp(0).first;
+        // MainWindow selects newly opened models. Freeze an actually empty
+        // selection instead of relying on a later refresh changing revisions.
+        session->setModelSelected(0, false);
+        QVERIFY(documentContext(host).value(QStringLiteral("documents")).toArray().isEmpty());
 
         WorkflowProcess workflow;
         AgentTaskRunner runner(host, &workflow);

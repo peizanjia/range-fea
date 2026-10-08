@@ -1,8 +1,14 @@
 #include <QFileInfo>
 #include <QFileDialog>
+#include <QDir>
+#include <QFile>
+#include <QScopeGuard>
+#include <QSaveFile>
+#include <QTemporaryDir>
 #include <QThread>
 
 #include <rml_file_utils.h>
+#include <rproject_catalog.h>
 
 #include "model_io.h"
 #include "application.h"
@@ -10,6 +16,85 @@
 
 namespace
 {
+bool sameSourceBinding(const RProjectCatalog::SourceBinding &left,
+                       const RProjectCatalog::SourceBinding &right)
+{
+    if (left.logicalSourcePath != right.logicalSourcePath
+        || left.resolvedSourcePath != right.resolvedSourcePath
+        || left.savedArtifactHash != right.savedArtifactHash
+        || left.sourceArtifacts.size() != right.sourceArtifacts.size())
+        return false;
+    for (qsizetype i = 0; i < left.sourceArtifacts.size(); ++i)
+    {
+        if (left.sourceArtifacts.at(i).path != right.sourceArtifacts.at(i).path
+            || left.sourceArtifacts.at(i).sha256 != right.sourceArtifacts.at(i).sha256)
+            return false;
+    }
+    return true;
+}
+
+RProjectCatalog::SourceBinding resolveNativeSource(const QString &path)
+{
+    QString error;
+    QString errorCode;
+    const auto binding = RProjectCatalog::resolveSourceBinding(path, &error, &errorCode);
+    if (!binding)
+        throw RError(RError::Type::OpenFile, R_ERROR_REF,
+                     "Failed to resolve native source '%s': %s",
+                     path.toUtf8().constData(), error.toUtf8().constData());
+    return *binding;
+}
+
+bool copyFileAtomically(const QString &sourcePath, const QString &targetPath, QString &error)
+{
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly))
+    {
+        error = QStringLiteral("Could not read staged native file '%1'.").arg(sourcePath);
+        return false;
+    }
+    QSaveFile target(targetPath);
+    target.setDirectWriteFallback(false);
+    if (!target.open(QIODevice::WriteOnly))
+    {
+        error = QStringLiteral("Could not open native publication target '%1'.").arg(targetPath);
+        return false;
+    }
+
+    // Native saves also run in QThreadPool workers with the Windows default
+    // stack reserve. Keep copying bounded without allocating a MiB on stack.
+    char buffer[64 * 1024];
+    while (true)
+    {
+        const qint64 bytesRead = source.read(buffer, qint64(sizeof(buffer)));
+        if (bytesRead < 0)
+        {
+            target.cancelWriting();
+            error = QStringLiteral("Could not read staged native file '%1'.").arg(sourcePath);
+            return false;
+        }
+        if (bytesRead == 0) break;
+        if (target.write(buffer, bytesRead) != bytesRead)
+        {
+            target.cancelWriting();
+            error = QStringLiteral("Could not write native publication target '%1'.").arg(targetPath);
+            return false;
+        }
+    }
+    if (!source.atEnd() || source.error() != QFileDevice::NoError)
+    {
+        target.cancelWriting();
+        error = QStringLiteral("Staged native file '%1' could not be read completely.").arg(sourcePath);
+        return false;
+    }
+    if (!target.commit())
+    {
+        error = QStringLiteral("Could not commit native publication target '%1'.").arg(targetPath);
+        return false;
+    }
+    return true;
+}
+
 template <typename Function> void onSessionThread(Function function)
 {
     auto *session = Application::instance()->getSession();
@@ -91,7 +176,12 @@ void ModelIO::save(Model &rModel, const QString &fileName, bool writeLinkFile)
 
     try
     {
-        rModel.write(fileName,writeLinkFile);
+        rModel.clearLoadedSourceBinding();
+        const QString logicalBase = static_cast<const RModel &>(rModel).write(fileName, writeLinkFile);
+        rModel.setFileName(logicalBase);
+        const auto source = resolveNativeSource(logicalBase);
+        rModel.setLoadedSourceBinding(source);
+        rModel.clearNativeReadNormalization();
 
         RLogger::unindent();
         RLogger::info("Model has been successfully saved to file \'%s\'.\n", fileName.toUtf8().constData());
@@ -105,7 +195,8 @@ void ModelIO::save(Model &rModel, const QString &fileName, bool writeLinkFile)
     R_LOG_TRACE_OUT;
 }
 
-void ModelIO::open(Model &rModel, const QString &fileName)
+void ModelIO::open(Model &rModel, const QString &fileName,
+                   RProjectCatalog::SourceBinding *validatedSource)
 {
     R_LOG_TRACE_IN;
     RLogger::info("Loading model file \'%s\'.\n", fileName.toUtf8().constData());
@@ -113,7 +204,16 @@ void ModelIO::open(Model &rModel, const QString &fileName)
 
     try
     {
-        rModel.read(fileName);
+        const auto sourceBefore = resolveNativeSource(fileName);
+        rModel.read(sourceBefore.resolvedSourcePath);
+        const auto sourceAfter = resolveNativeSource(fileName);
+        if (!sameSourceBinding(sourceBefore, sourceAfter))
+            throw RError(RError::Type::OpenFile, R_ERROR_REF,
+                         "Native source changed while it was being read: '%s'.",
+                         fileName.toUtf8().constData());
+        rModel.setFileName(fileName);
+        rModel.setLoadedSourceBinding(sourceAfter);
+        if (validatedSource) *validatedSource = sourceAfter;
 
         RLogger::unindent();
         RLogger::info("Model has been successfully loaded from file \'%s\'.\n", fileName.toUtf8().constData());
@@ -127,7 +227,8 @@ void ModelIO::open(Model &rModel, const QString &fileName)
     R_LOG_TRACE_OUT;
 }
 
-void ModelIO::update(Model &rModel, const QString &fileName)
+void ModelIO::update(Model &rModel, const QString &fileName,
+                     RProjectCatalog::SourceBinding *validatedSource)
 {
     R_LOG_TRACE_IN;
     RLogger::info("Updating model from file \'%s\'.\n", fileName.toUtf8().constData());
@@ -135,11 +236,19 @@ void ModelIO::update(Model &rModel, const QString &fileName)
 
     try
     {
+        const auto sourceBefore = resolveNativeSource(fileName);
         RModel tmpModel;
-
-        tmpModel.read(fileName);
+        tmpModel.read(sourceBefore.resolvedSourcePath);
+        const auto sourceAfter = resolveNativeSource(fileName);
+        if (!sameSourceBinding(sourceBefore, sourceAfter))
+            throw RError(RError::Type::OpenFile, R_ERROR_REF,
+                         "Native source changed while it was being read: '%s'.",
+                         fileName.toUtf8().constData());
 
         rModel.update(tmpModel);
+        rModel.setFileName(fileName);
+        rModel.setLoadedSourceBinding(sourceAfter);
+        if (validatedSource) *validatedSource = sourceAfter;
 
         RLogger::unindent();
         RLogger::info("Model has been successfully updated from file \'%s\'.\n", fileName.toUtf8().constData());
@@ -323,19 +432,107 @@ int ModelIO::perform()
         }
         else if (this->type == MODEL_IO_SAVE)
         {
-            ModelIO::save(*this->modelSnapshot,this->fileName,true);
+            const QStringList actualWritePaths = this->modelSnapshot->nativeWritePaths(this->fileName, true);
+            Session::ProjectPublicationLease publicationLease;
             QString publicationError;
-            onSessionThread([this, &publicationError] {
+            onSessionThread([this, &actualWritePaths, &publicationLease, &publicationError] {
+                auto *session = Application::instance()->getSession();
+                const uint id = session->findModelByCommandIdentity(this->modelStamp.first);
+                if (id == RConstants::eod || session->modelCommandStamp(id) != this->modelStamp)
+                {
+                    publicationError = tr("The model changed or closed before the save started.");
+                    return;
+                }
+                publicationLease = session->reserveModelSave(id, this->fileName, actualWritePaths,
+                                                             &publicationError);
+            });
+            if (!publicationLease)
+            {
+                RLogger::error("Model save was refused: %s\n", publicationError.toUtf8().constData());
+                R_LOG_TRACE_RETURN(1);
+            }
+            auto abortPublication = qScopeGuard([this, &publicationLease] {
+                if (!publicationLease) return;
+                onSessionThread([this, &publicationLease] {
+                    Application::instance()->getSession()->abortModelSave(this->modelStamp.first,
+                                                                           publicationLease);
+                });
+            });
+            QTemporaryDir stagingDirectory(QDir(QDir::tempPath()).filePath(
+                QStringLiteral("range-fea-model-save-XXXXXX")));
+            if (!stagingDirectory.isValid())
+                throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                             "Could not create a private staging directory for the native save.");
+
+            const QFileInfo requestedInfo(this->fileName);
+            const QString stagedRequestedPath = QDir(stagingDirectory.path()).filePath(requestedInfo.fileName());
+            const QString stagedLogicalPath = static_cast<const RModel &>(*this->modelSnapshot)
+                                                  .write(stagedRequestedPath, true);
+            const RProjectCatalog::SourceBinding stagedBinding = resolveNativeSource(stagedLogicalPath);
+            const QStringList stagedWritePaths = this->modelSnapshot->nativeWritePaths(stagedRequestedPath, true);
+            if (stagedWritePaths.size() != actualWritePaths.size())
+                throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                             "The staged native output list differs from the reserved output list.");
+
+            const QString publicParent = requestedInfo.absoluteDir().canonicalPath();
+            if (publicParent.isEmpty())
+                throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                             "The native save destination directory could not be resolved.");
+            const QString stageRoot = QDir::cleanPath(QDir::fromNativeSeparators(stagingDirectory.path()));
+            const auto mapStagedPath = [&stageRoot, &publicParent](const QString &stagedPath) {
+                const QString relative = QDir::fromNativeSeparators(
+                    QDir(stageRoot).relativeFilePath(QDir::fromNativeSeparators(stagedPath)));
+                if (relative.isEmpty() || relative == QStringLiteral("..")
+                    || relative.startsWith(QStringLiteral("../")) || QFileInfo(relative).isAbsolute())
+                    throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                                 "A staged native output escaped its private directory.");
+                return QDir::cleanPath(QDir::fromNativeSeparators(QDir(publicParent).filePath(relative)));
+            };
+
+            RProjectCatalog::SourceBinding expectedWrittenBinding = stagedBinding;
+            expectedWrittenBinding.logicalSourcePath = mapStagedPath(stagedBinding.logicalSourcePath);
+            expectedWrittenBinding.resolvedSourcePath = mapStagedPath(stagedBinding.resolvedSourcePath);
+            for (auto &artifact : expectedWrittenBinding.sourceArtifacts)
+                artifact.path = mapStagedPath(artifact.path);
+            const QString publicLogicalPath = mapStagedPath(stagedLogicalPath);
+
+            qsizetype publishedFiles = 0;
+            for (qsizetype i = 0; i < stagedWritePaths.size(); ++i)
+            {
+                QString copyError;
+                if (!copyFileAtomically(stagedWritePaths.at(i), actualWritePaths.at(i), copyError))
+                    throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                                 "Native save publication stopped after %u of %u files at '%s': %s. Earlier files may already be published.",
+                                 uint(publishedFiles), uint(stagedWritePaths.size()),
+                                 actualWritePaths.at(i).toUtf8().constData(), copyError.toUtf8().constData());
+                ++publishedFiles;
+            }
+            const RProjectCatalog::SourceBinding publishedBinding = resolveNativeSource(publicLogicalPath);
+            if (!sameSourceBinding(publishedBinding, expectedWrittenBinding))
+                throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                             "The public native files no longer match the staged save at '%s'. Files may already have been published.",
+                             publicLogicalPath.toUtf8().constData());
+            this->modelSnapshot->setFileName(publicLogicalPath);
+            this->modelSnapshot->setLoadedSourceBinding(expectedWrittenBinding);
+            bool metadataRecorded = false;
+            onSessionThread([this, &publicationError, &publicationLease, &metadataRecorded,
+                             &expectedWrittenBinding] {
                 auto *session = Application::instance()->getSession();
                 const uint id = session->findModelByCommandIdentity(this->modelStamp.first);
                 if (id == RConstants::eod || session->modelCommandStamp(id) != this->modelStamp)
                 {
                     publicationError = tr("The model changed or closed while saving; the saved snapshot was not attached to the current model.");
+                    session->abortModelSave(this->modelStamp.first, publicationLease, publicationError);
                     return;
                 }
-                session->getModel(id).setFileName(this->modelSnapshot->getFileName());
-                session->recordModelSaved(id, this->modelSnapshot->getFileName(), &publicationError);
+                metadataRecorded = session->recordModelSaved(id, expectedWrittenBinding.logicalSourcePath,
+                                                             expectedWrittenBinding, publicationLease,
+                                                             this->modelStamp, &publicationError);
+                if (!metadataRecorded)
+                    session->abortModelSave(this->modelStamp.first, publicationLease, publicationError);
             });
+            publicationLease.reset();
+            abortPublication.dismiss();
             if (!publicationError.isEmpty())
             {
                 RLogger::error("Model file was saved but publication did not complete: %s\n", publicationError.toUtf8().constData());
@@ -345,21 +542,51 @@ int ModelIO::perform()
         else if (this->type == MODEL_IO_OPEN)
         {
             Model model;
-            ModelIO::open(model,this->fileName);
-            onSessionThread([&model] { Application::instance()->getSession()->addModel(model); });
+            RProjectCatalog::SourceBinding sourceBinding;
+            ModelIO::open(model,this->fileName,&sourceBinding);
+            onSessionThread([&model, &sourceBinding] {
+                Application::instance()->getSession()->addModel(model, sourceBinding);
+            });
         }
         else if (this->type == MODEL_IO_UPDATE)
         {
-            ModelIO::update(*this->modelSnapshot,this->fileName);
+            RProjectCatalog::SourceBinding sourceBinding;
+            ModelIO::update(*this->modelSnapshot,this->fileName,&sourceBinding);
+            this->modelSnapshot->setFileName(this->fileName);
+            this->modelSnapshot->setLoadedSourceBinding(sourceBinding);
             bool applied = false;
             QString auditError;
-            onSessionThread([this, &applied, &auditError] {
+            onSessionThread([this, &applied, &auditError, &sourceBinding] {
                 auto *session = Application::instance()->getSession();
                 const uint id = session->findModelByCommandIdentity(this->modelStamp.first);
                 if (id == RConstants::eod || session->modelCommandStamp(id) != this->modelStamp) return;
+                QString sourceError;
+                if (!session->validateReloadSource(id, sourceBinding, &sourceError))
+                {
+                    auditError = sourceError;
+                    return;
+                }
+                Model previous = session->getModel(id);
+                previous.copyHistoryFrom(session->getModel(id));
                 session->storeCurentModelVersion(id, tr("Update model from file"));
                 session->setModel(id, *this->modelSnapshot);
-                session->getModelCommandHost()->recordExternalChange(id, "reload", &auditError);
+                QString hostError;
+                session->getModelCommandHost()->recordExternalChange(id, "reload", &hostError);
+                QString projectError;
+                if (!session->recordModelReloaded(id, sourceBinding, &projectError))
+                {
+                    session->setModel(id, previous);
+                    QString rollbackError;
+                    session->getModelCommandHost()->recordExternalChange(id, "reload_rejected", &rollbackError);
+                    if (!auditError.isEmpty()) auditError += QStringLiteral("; ");
+                    auditError += projectError;
+                    if (!rollbackError.isEmpty()) auditError += QStringLiteral("; ") + rollbackError;
+                }
+                if (!hostError.isEmpty())
+                {
+                    if (!auditError.isEmpty()) auditError += QStringLiteral("; ");
+                    auditError += hostError;
+                }
                 applied = true;
             });
             if (!applied)

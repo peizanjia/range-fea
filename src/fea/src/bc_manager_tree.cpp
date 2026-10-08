@@ -38,8 +38,6 @@ BCManagerTree::BCManagerTree(QWidget *parent) :
                      this,&BCManagerTree::onItemChanged);
     QObject::connect(this,&BCManagerTree::itemSelectionChanged,
                      this,&BCManagerTree::onItemSelectionChanged);
-    QObject::connect(this,&BCManagerTree::bcSelected,
-                     this,&BCManagerTree::onBcSelected);
 }
 
 void BCManagerTree::populate()
@@ -287,6 +285,7 @@ void BCManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
     Qt::CheckState checkState = item->checkState(column);
     RBoundaryConditionType bcType = (RBoundaryConditionType) item->data(BC_TREE_COLUMN_NAME,Qt::UserRole).toInt();
     QList<SessionEntityID> entityIDs = Application::instance()->getSession()->getSelectedEntityIDs();
+    QList<uint> changedModelIDs;
 
     if (checkState == Qt::Checked)
     {
@@ -302,19 +301,25 @@ void BCManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
     for (int i=0;i<entityIDs.size();i++)
     {
         Model *pModel = Application::instance()->getSession()->getModelPtr(entityIDs[i].getMid());
-        RBoundaryCondition defaultBoundaryCondition = pModel->generateDefaultBoundayCondition(bcType,entityIDs[i].getType(),entityIDs[i].getEid());
+        bool changed = false;
 
         if (entityIDs[i].getType() == R_ENTITY_GROUP_POINT)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getPoint(entityIDs[i].getEid()).addBoundaryCondition(defaultBoundaryCondition);
+                if (!pModel->getPoint(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
+                {
+                    pModel->getPoint(entityIDs[i].getEid()).addBoundaryCondition(
+                        pModel->generateDefaultBoundayCondition(bcType,entityIDs[i].getType(),entityIDs[i].getEid()));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getPoint(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
                 {
                     pModel->getPoint(entityIDs[i].getEid()).removeBoundaryCondition(bcType);
+                    changed = true;
                 }
             }
         }
@@ -322,13 +327,19 @@ void BCManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getLine(entityIDs[i].getEid()).addBoundaryCondition(defaultBoundaryCondition);
+                if (!pModel->getLine(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
+                {
+                    pModel->getLine(entityIDs[i].getEid()).addBoundaryCondition(
+                        pModel->generateDefaultBoundayCondition(bcType,entityIDs[i].getType(),entityIDs[i].getEid()));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getLine(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
                 {
                     pModel->getLine(entityIDs[i].getEid()).removeBoundaryCondition(bcType);
+                    changed = true;
                 }
             }
         }
@@ -336,13 +347,19 @@ void BCManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getSurface(entityIDs[i].getEid()).addBoundaryCondition(defaultBoundaryCondition);
+                if (!pModel->getSurface(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
+                {
+                    pModel->getSurface(entityIDs[i].getEid()).addBoundaryCondition(
+                        pModel->generateDefaultBoundayCondition(bcType,entityIDs[i].getType(),entityIDs[i].getEid()));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getSurface(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
                 {
                     pModel->getSurface(entityIDs[i].getEid()).removeBoundaryCondition(bcType);
+                    changed = true;
                 }
             }
         }
@@ -350,16 +367,38 @@ void BCManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getVolume(entityIDs[i].getEid()).addBoundaryCondition(defaultBoundaryCondition);
+                if (!pModel->getVolume(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
+                {
+                    pModel->getVolume(entityIDs[i].getEid()).addBoundaryCondition(
+                        pModel->generateDefaultBoundayCondition(bcType,entityIDs[i].getType(),entityIDs[i].getEid()));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getVolume(entityIDs[i].getEid()).hasBoundaryCondition(bcType))
                 {
                     pModel->getVolume(entityIDs[i].getEid()).removeBoundaryCondition(bcType);
+                    changed = true;
                 }
             }
         }
+
+        if (changed && !changedModelIDs.contains(entityIDs[i].getMid()))
+        {
+            changedModelIDs.append(entityIDs[i].getMid());
+        }
+    }
+
+    if (!changedModelIDs.isEmpty())
+    {
+        bool previousDoNotPopulate = this->doNotPopulate;
+        this->doNotPopulate = true;
+        for (int i=0;i<changedModelIDs.size();i++)
+        {
+            Application::instance()->getSession()->setProblemChanged(changedModelIDs[i]);
+        }
+        this->doNotPopulate = previousDoNotPopulate;
     }
 
     if (item->isSelected())
@@ -386,11 +425,5 @@ void BCManagerTree::onItemSelectionChanged()
 
 void BCManagerTree::onBcSelected()
 {
-    this->doNotPopulate = true;
-    QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
-    for (int i=0;i<modelIDs.size();i++)
-    {
-        Application::instance()->getSession()->setProblemChanged(modelIDs[i]);
-    }
-    this->doNotPopulate = false;
+    // Selection signals only refresh the condition editor.
 }

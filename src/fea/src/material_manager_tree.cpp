@@ -501,6 +501,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getPoint(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getPoint(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_POINT, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNLines();j++)
@@ -508,6 +509,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getLine(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getLine(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_LINE, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNSurfaces();j++)
@@ -515,6 +517,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getSurface(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getSurface(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_SURFACE, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNVolumes();j++)
@@ -522,6 +525,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getVolume(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getVolume(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_VOLUME, j);
                 }
             }
         }
@@ -571,6 +575,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getPoint(j).getMaterial().getName() == citer.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getPoint(j).setMaterial(citer.value());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_POINT, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNLines();j++)
@@ -578,6 +583,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getLine(j).getMaterial().getName() == citer.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getLine(j).setMaterial(citer.value());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_LINE, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNSurfaces();j++)
@@ -585,6 +591,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getSurface(j).getMaterial().getName() == citer.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getSurface(j).setMaterial(citer.value());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_SURFACE, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNVolumes();j++)
@@ -592,6 +599,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getVolume(j).getMaterial().getName() == citer.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getVolume(j).setMaterial(citer.value());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_VOLUME, j);
                 }
             }
         }
@@ -607,6 +615,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getPoint(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getPoint(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_POINT, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNLines();j++)
@@ -614,6 +623,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getLine(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getLine(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_LINE, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNSurfaces();j++)
@@ -621,6 +631,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getSurface(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getSurface(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_SURFACE, j);
                 }
             }
             for (uint j=0;j<Application::instance()->getSession()->getModel(modelID).getNVolumes();j++)
@@ -628,6 +639,7 @@ void MaterialManagerTree::onModelAdded(uint modelID)
                 if (Application::instance()->getSession()->getModel(modelID).getVolume(j).getMaterial().getName() == iter.key())
                 {
                     Application::instance()->getSession()->getModel(modelID).getVolume(j).setMaterial(RMaterial());
+                    Application::instance()->getSession()->setMaterialChanged(modelID, R_ENTITY_GROUP_VOLUME, j);
                 }
             }
         }
@@ -714,8 +726,10 @@ void MaterialManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
                     Application::instance()->getSession()->getModel(selectedEntityIDs[i].getMid()).getVolume(selectedEntityIDs[i].getEid()).setMaterial(material);
                     break;
                 default:
-                    break;
+                    continue;
             }
+            Application::instance()->getSession()->setMaterialChanged(
+                selectedEntityIDs[i].getMid(), selectedEntityIDs[i].getType(), selectedEntityIDs[i].getEid());
         }
     }
     this->updateCheckStates();

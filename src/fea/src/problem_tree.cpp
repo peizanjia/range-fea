@@ -6,8 +6,13 @@
 #include "radiation_setup_widget.h"
 #include "time_solver_setup_widget.h"
 #include "model_command_host.h"
+#include "value_line_edit.h"
+#include <QLayout>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QTimer>
+#include <QStringList>
 
 typedef enum _ProblemTreeColumn
 {
@@ -30,18 +35,26 @@ ProblemTree::ProblemTree(QWidget *parent) :
 
     this->populate();
 
-    QObject::connect(Application::instance()->getSession(),
+    auto *session = Application::instance()->getSession();
+    QObject::connect(session,
                      &Session::problemSelectionChanged,
                      this,
                      &ProblemTree::onProblemChanged);
-    QObject::connect(Application::instance()->getSession(),
+    QObject::connect(session,
                      &Session::modelChanged,
                      this,
                      &ProblemTree::onModelChanged);
-    QObject::connect(Application::instance()->getSession(),
+    QObject::connect(session,
                      &Session::modelSelectionChanged,
                      this,
                      &ProblemTree::onModelSelectionChanged);
+    QObject::connect(session, &Session::runtimeDocumentRemoved, this,
+                     [this](const QString &documentId) { this->clearDraftCacheForRuntimeDocument(documentId); });
+    QObject::connect(session, &Session::documentDraftsCleared, this,
+                     [this](const QString &documentId) {
+                         this->clearDraftCacheForRuntimeDocument(documentId);
+                         QTimer::singleShot(0, this, &ProblemTree::populate);
+                     });
 
 
 }
@@ -50,7 +63,71 @@ void ProblemTree::populate()
 {
     this->clear();
 
-    QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
+    auto *session = Application::instance()->getSession();
+    QList<uint> modelIDs = session->getSelectedModelIDs();
+    auto createModalEditor = [this, session, &modelIDs](const RModalSetup &setup) {
+        QStringList recoveredDraftRuntimeIds;
+        for (const uint modelID : modelIDs)
+        {
+            const QJsonObject draft = session->documentProjectContext(modelID)
+                                          .value(QStringLiteral("draft")).toObject();
+            const QString status = draft.value(QStringLiteral("status")).toString();
+            if (status == QStringLiteral("unknown"))
+                session->clearNumericDraft(modelID, QStringLiteral("analysis.modal"),
+                                           QStringLiteral("convergenceValue"));
+            else if (status == QStringLiteral("pending")
+                     && draft.value(QStringLiteral("scope")).toString()
+                            == QStringLiteral("analysis.modal")
+                     && draft.value(QStringLiteral("changedFields")).toArray()
+                            .contains(QStringLiteral("convergenceValue")))
+            {
+                const QString runtimeId = session->modelCommandStamp(modelID).first;
+                const QString key = this->numericDraftKey(runtimeId, QStringLiteral("analysis.modal"),
+                                                          QStringLiteral("convergenceValue"));
+                if (!this->numericDraftText.contains(key)) recoveredDraftRuntimeIds.append(runtimeId);
+            }
+        }
+        auto *editor = new ModalSetupWidget(setup);
+        if (!modelIDs.isEmpty())
+        {
+            const QString runtimeId = session->modelCommandStamp(modelIDs.first()).first;
+            const QString key = this->numericDraftKey(runtimeId, QStringLiteral("analysis.modal"),
+                                                      QStringLiteral("convergenceValue"));
+            if (this->numericDraftText.contains(key))
+            {
+                auto *line = editor->findChild<ValueLineEdit *>(QStringLiteral("modalTolerance"));
+                if (line) line->restoreDraftText(this->numericDraftText.value(key));
+            }
+        }
+        if (!recoveredDraftRuntimeIds.isEmpty())
+        {
+            auto *notice = new QLabel(
+                tr("Previous input could not be restored. Keep the accepted value or enter a new value."), editor);
+            notice->setObjectName(QStringLiteral("recoveredModalDraftNotice"));
+            notice->setWordWrap(true);
+            editor->layout()->addWidget(notice);
+
+            auto *keepAcceptedValue = new QPushButton(tr("Keep accepted value"), editor);
+            keepAcceptedValue->setObjectName(QStringLiteral("keepAcceptedModalValue"));
+            editor->layout()->addWidget(keepAcceptedValue);
+            connect(keepAcceptedValue, &QPushButton::clicked, this,
+                    [this, session, recoveredDraftRuntimeIds] {
+                for (const QString &runtimeId : recoveredDraftRuntimeIds)
+                {
+                    const uint modelID = session->findModelByCommandIdentity(runtimeId);
+                    if (modelID >= session->getNModels()) continue;
+                    this->numericDraftText.remove(this->numericDraftKey(
+                        runtimeId, QStringLiteral("analysis.modal"), QStringLiteral("convergenceValue")));
+                    session->clearNumericDraft(modelID, QStringLiteral("analysis.modal"),
+                                               QStringLiteral("convergenceValue"));
+                }
+                QTimer::singleShot(0, this, &ProblemTree::populate);
+            });
+        }
+        connect(editor, &ModalSetupWidget::changed, this, &ProblemTree::onModalSetupChanged);
+        connect(editor, &ModalSetupWidget::draftStateChanged, this, &ProblemTree::onModalDraftStateChanged);
+        return editor;
+    };
 
     if (modelIDs.size() == 0)
     {
@@ -71,9 +148,8 @@ void ProblemTree::populate()
         if (allModal)
         {
             auto *row = new QTreeWidgetItem(this);
-            auto *editor = new ModalSetupWidget(Application::instance()->getSession()->getModel(modelIDs[0]).getProblemSetup().getModalSetup());
+            auto *editor = createModalEditor(session->getModel(modelIDs[0]).getProblemSetup().getModalSetup());
             this->setItemWidget(row, PROBLEM_TREE_COLUMN_1, editor);
-            connect(editor, &ModalSetupWidget::changed, this, &ProblemTree::onModalSetupChanged);
         }
         return;
     }
@@ -91,9 +167,8 @@ void ProblemTree::populate()
     if (rModel.getProblemTaskTree().getProblemTypeMask() & R_PROBLEM_STRESS_MODAL)
     {
         QTreeWidgetItem *modalSetup = new QTreeWidgetItem(this);
-        ModalSetupWidget *modalSetupWidget = new ModalSetupWidget(rModel.getProblemSetup().getModalSetup());
+        ModalSetupWidget *modalSetupWidget = createModalEditor(rModel.getProblemSetup().getModalSetup());
         this->setItemWidget(modalSetup,PROBLEM_TREE_COLUMN_1,modalSetupWidget);
-        QObject::connect(modalSetupWidget,&ModalSetupWidget::changed,this,&ProblemTree::onModalSetupChanged);
     }
 
     if (rModel.getProblemTaskTree().getProblemTypeMask() & R_PROBLEM_ACOUSTICS)
@@ -139,6 +214,29 @@ void ProblemTree::onModelSelectionChanged(uint)
     this->populate();
 }
 
+void ProblemTree::onModalDraftStateChanged(const QString &field, const QString &state, const QString &text)
+{
+    auto *session = Application::instance()->getSession();
+    const QList<uint> modelIDs = session->getSelectedModelIDs();
+    const QString scope = QStringLiteral("analysis.modal");
+    for (const uint modelID : modelIDs)
+    {
+        const QString runtimeId = session->modelCommandStamp(modelID).first;
+        if (runtimeId.isEmpty()) continue;
+        const QString key = this->numericDraftKey(runtimeId, scope, field);
+        if (state == QStringLiteral("none"))
+        {
+            this->numericDraftText.remove(key);
+            session->clearNumericDraft(modelID, scope, field);
+        }
+        else
+        {
+            this->numericDraftText.insert(key, text);
+            session->setNumericDraft(modelID, scope, field, state, text);
+        }
+    }
+}
+
 void ProblemTree::onTimeSolverChanged(const RTimeSolver &timeSolver)
 {
     QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
@@ -161,6 +259,20 @@ void ProblemTree::onModalSetupChanged(const RModalSetup &modalSetup)
         QTimer::singleShot(0, this, &ProblemTree::populate);
         return;
     }
+}
+
+QString ProblemTree::numericDraftKey(const QString &runtimeDocumentId, const QString &scope,
+                                    const QString &field) const
+{
+    return runtimeDocumentId + QChar(0x1f) + scope + QChar(0x1f) + field;
+}
+
+void ProblemTree::clearDraftCacheForRuntimeDocument(const QString &runtimeDocumentId)
+{
+    const QString prefix = runtimeDocumentId + QChar(0x1f);
+    const QStringList keys = this->numericDraftText.keys();
+    for (const QString &key : keys)
+        if (key.startsWith(prefix)) this->numericDraftText.remove(key);
 }
 
 void ProblemTree::onAcousticSetupChanged(const RAcousticSetup &acousticSetup)

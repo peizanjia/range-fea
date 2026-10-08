@@ -6,9 +6,11 @@
 #include <QSet>
 #include <QStack>
 #include <QMutex>
+#include <optional>
 
 #include <rml_model.h>
 #include <rbl_limit_box.h>
+#include <rproject_catalog.h>
 
 #include "pick_item.h"
 #include "pick_value.h"
@@ -57,6 +59,10 @@ class Model : public RModel
         int validConsolidationCacheMask;
         //! Model filename.
         QString fileName;
+        //! Native source binding validated when this model was loaded or saved.
+        std::optional<RProjectCatalog::SourceBinding> loadedSourceBinding;
+        //! Native metadata normalized by Model::read/update after accepting source data.
+        bool nativeReadNormalization = false;
         //! Mesh generator input object.
         RMeshInput meshInput;
         //! View-factor matrix.
@@ -118,6 +124,21 @@ class Model : public RModel
 
         //! Set new model filename.
         void setFileName(const QString &fileName);
+
+        //! Return the validated native source chain associated with this runtime model.
+        const std::optional<RProjectCatalog::SourceBinding> &getLoadedSourceBinding() const;
+
+        //! Attach a validated logical native source chain.
+        void setLoadedSourceBinding(const RProjectCatalog::SourceBinding &sourceBinding);
+
+        //! Clear native source provenance.
+        void clearLoadedSourceBinding();
+
+        //! Return true if native read/update filled supported metadata defaults.
+        bool hasNativeReadNormalization() const;
+
+        //! Clear the native read/update normalization marker after acceptance.
+        void clearNativeReadNormalization();
 
         //! Return const reference to mesh generator input.
         const RMeshInput & getMeshInput() const;

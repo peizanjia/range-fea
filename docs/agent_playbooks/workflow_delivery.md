@@ -69,7 +69,7 @@ python scripts/ci/verify_workflow_plan.py --next --json
 
 ```powershell
 cmake --build build/vs2026 --config Release --parallel 4
-python scripts/ci/verify_required_ctest.py --build-dir build/vs2026 --configuration Release --manifest scripts/ci/required-ctest-tests.json
+python scripts/ci/verify_required_ctest.py --build-dir build/vs2026 --configuration Release --manifest scripts/ci/required-ctest-tests.json --inventory-out build/required-ctest-inventory.json
 ctest --test-dir build/vs2026 -C Release --output-on-failure
 ```
 

@@ -102,14 +102,14 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["next"]["recommended"], ["WF-01"])
 
-    def test_current_plan_matches_document_and_cli_recommends_wf01(self) -> None:
+    def test_current_plan_matches_document_and_cli_is_readonly(self) -> None:
         checkout = Path(__file__).resolve().parents[2]
         plan_file = checkout / "docs" / "workflow_delivery_plan.json"
         plan = json.loads(plan_file.read_text(encoding="utf-8"))
         result = validate_plan_data(plan, checkout)
-        self.assertEqual(result["taskCount"], 14)
-        self.assertEqual(result["acceptanceCount"], 119)
-        self.assertEqual(result["statusCounts"]["planned"], 14)
+        self.assertEqual(result["taskCount"], len(plan["tasks"]))
+        self.assertEqual(result["acceptanceCount"], sum(len(task["acceptanceIds"]) for task in plan["tasks"]))
+        expected_next = get_next_work(result["tasks"])
 
         original = plan_file.read_text(encoding="utf-8")
         output = io.StringIO()
@@ -117,8 +117,10 @@ class WorkflowPlanTests(unittest.TestCase):
             exit_code = main(["--repo-root", str(checkout), "--next", "--json"])
         report = json.loads(output.getvalue())
         self.assertEqual(exit_code, 0)
-        self.assertEqual(report["next"]["recommended"], ["WF-01"])
-        self.assertEqual(report["next"]["recommendedDetail"], "docs/WORKFLOW_DELIVERY_PLAN.md#wf-01")
+        self.assertEqual(report["next"]["recommended"], expected_next["recommended"])
+        if expected_next["recommended"]:
+            first = next(task for task in plan["tasks"] if task["id"] == expected_next["recommended"][0])
+            self.assertEqual(report["next"]["recommendedDetail"], first["detail"] + "#" + first["id"].lower())
         self.assertEqual(plan_file.read_text(encoding="utf-8"), original)
 
     def test_replan_uses_json_dependencies_and_priorities(self) -> None:

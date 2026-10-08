@@ -377,7 +377,9 @@ private slots:
         QTemporaryDir directory;
         auto *session = Application::instance()->getSession();
         auto source = fixture("publication");
-        source.setFileName(directory.filePath("source.rbm"));
+        const QString sourcePath = directory.filePath("source.rbm");
+        ModelIO::save(source, sourcePath, true);
+        ModelIO::open(source, sourcePath);
         session->addModel(source);
         session->addModel(fixture("Other document with history"));
         auto *host = session->getModelCommandHost();
@@ -699,11 +701,14 @@ private slots:
         QVERIFY(auditLock.tryLock(0));
         failed.clear();
         finished.clear();
-        RJobManager::getInstance().submit(new ModelIO(MODEL_IO_UPDATE, disk.getFileName(), session->getModelPtr(0)));
-        QTRY_COMPARE_WITH_TIMEOUT(finished.count() + failed.count(), 1, 15000);
+        auto *reloadJob = new ModelIO(MODEL_IO_UPDATE, disk.getFileName(), session->getModelPtr(0));
+        QSignalSpy reloadFailed(reloadJob, &RJob::failed);
+        QSignalSpy reloadFinished(reloadJob, &RJob::finished);
+        RJobManager::getInstance().submit(reloadJob);
+        QTRY_COMPARE_WITH_TIMEOUT(reloadFinished.count() + reloadFailed.count(), 1, 15000);
         QTRY_VERIFY_WITH_TIMEOUT(!ModelCommandHost::isBusy(), 15000);
         auditLock.unlock();
-        QCOMPARE(failed.count(), 1);
+        QCOMPARE(reloadFailed.count(), 1);
         QCOMPARE(host->execute(0, old).value("status").toString(), QString("rejected"));
     }
 
@@ -765,6 +770,7 @@ int runSolverSnapshotTests(int argc, char **argv);
 int runExtensionWidgetTests(int argc, char **argv);
 int runAgentEventViewTests(int argc, char **argv);
 int runAgentConversationWidgetTests(int argc, char **argv);
+int runProjectSessionTests(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
@@ -791,7 +797,8 @@ int main(int argc, char **argv)
     const bool extensionWidget = argc > 1 && QByteArray(argv[1]) == "--extension-widget";
     const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
     const bool agentConversation = argc > 1 && QByteArray(argv[1]) == "--agent-conversation";
-    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation)
+    const bool projectSession = argc > 1 && QByteArray(argv[1]) == "--project-session";
+    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
@@ -801,7 +808,8 @@ int main(int argc, char **argv)
         : solverSnapshot ? runSolverSnapshotTests(argc, argv)
         : extensionWidget ? runExtensionWidgetTests(argc, argv)
         : agentEventView ? runAgentEventViewTests(argc, argv)
-        : agentConversation ? runAgentConversationWidgetTests(argc, argv) : QTest::qExec(&test, argc, argv);
+        : agentConversation ? runAgentConversationWidgetTests(argc, argv)
+        : projectSession ? runProjectSessionTests(argc, argv) : QTest::qExec(&test, argc, argv);
     application.getSession()->clear();
     delete application.getMainWindow();
     SolverManager::getInstance().stopServer();

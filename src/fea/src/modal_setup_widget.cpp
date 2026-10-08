@@ -78,6 +78,8 @@ ModalSetupWidget::ModalSetupWidget(const RModalSetup &modalSetup, QWidget *paren
     groupLayout->addWidget(lineConvergenceValue,groupLayoutRow++,1);
 
     QObject::connect(lineConvergenceValue,&ValueLineEdit::valueChanged,this,&ModalSetupWidget::onConvergenceValueChanged);
+    QObject::connect(lineConvergenceValue,&ValueLineEdit::draftStateChanged,
+                     this,&ModalSetupWidget::onConvergenceDraftChanged);
 }
 
 void ModalSetupWidget::onModalMethodChanged(int index)
@@ -108,4 +110,9 @@ void ModalSetupWidget::onConvergenceValueChanged(double convergenceValue)
 {
     this->modalSetup.setConvergenceValue(convergenceValue);
     emit this->changed(this->modalSetup);
+}
+
+void ModalSetupWidget::onConvergenceDraftChanged(const QString &state, const QString &text)
+{
+    emit this->draftStateChanged(QStringLiteral("convergenceValue"), state, text);
 }

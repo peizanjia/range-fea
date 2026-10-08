@@ -181,8 +181,10 @@ class WorkflowService:
             raise
 
     def _load(self) -> dict:
+        from .project_catalog import load_project_catalog
+        catalog = load_project_catalog(self.workspace)
         if not self._state_path.exists():
-            return {"storageVersion": 1, "projectId": str(uuid.uuid4()), "modelId": str(uuid.uuid4()),
+            return {"storageVersion": 1, "projectId": catalog["projectId"] if catalog else str(uuid.uuid4()), "modelId": str(uuid.uuid4()),
                     "sessionId": str(uuid.uuid4()), "revision": 0, "auditRevision": 0,
                     "configuration": {"dt": 0.005, "steps": 400, "targetDamping": 0.1, "model": "four-rod"},
                     "jobs": {}, "previews": {}, "audit": [], "extensions": {}}
@@ -211,9 +213,11 @@ class WorkflowService:
             for jid, job in value["jobs"].items():
                 if str(uuid.UUID(jid)) != jid or job["jobId"] != jid or job["state"] not in TERMINAL_STATES | {"queued", "running", "cancelling"}:
                     raise ValueError("invalid job")
-            return value
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
             raise WorkflowError("CORRUPT_STATE", "Workspace state is invalid; it was preserved") from error
+        if catalog is not None and catalog["projectId"] != value["projectId"]:
+            raise WorkflowError("PROJECT_ID_CONFLICT", "Host catalog and workflow state belong to different projects")
+        return value
 
     def _state_digest(self, state: dict) -> str:
         return digest({k: v for k, v in state.items() if k not in {"audit", "previews"}})
@@ -285,8 +289,14 @@ class WorkflowService:
 
     def project_snapshot(self) -> dict:
         with self._lock:
+            from .project_catalog import query_project_catalog
+            catalog = query_project_catalog(self.workspace)
+            if catalog.get("projectId", self._state["projectId"]) != self._state["projectId"]:
+                raise WorkflowError("PROJECT_ID_CONFLICT", "Host catalog and workflow state belong to different projects")
             return {k: copy.deepcopy(self._state[k]) for k in
-                    ("projectId", "modelId", "sessionId", "revision", "configuration")} | {"busy": self._busy("project"), "template": self._state["configuration"].get("model", "four-rod")}
+                    ("projectId", "modelId", "sessionId", "revision", "configuration")} | {
+                    "busy": self._busy("project"), "template": self._state["configuration"].get("model", "four-rod"),
+                    "catalog": catalog, "modelBinding": {"kind": "template", "usesOpenDocument": False}}
 
     def result_snapshot(self, job_id: str) -> dict:
         with self._lock:
@@ -433,6 +443,15 @@ class WorkflowService:
         if operation == "project.query":
             exact(p, set())
             return self.project_snapshot()
+        if operation == "project.catalog.query":
+            exact(p, set(), {"persistentDocumentId"})
+            from .project_catalog import query_project_catalog
+            selected = identifier(p["persistentDocumentId"], "persistentDocumentId") if "persistentDocumentId" in p else None
+            return query_project_catalog(self.workspace, selected)
+        if operation == "project.snapshot.query":
+            exact(p, {"persistentDocumentId"})
+            from .project_catalog import resolve_project_snapshot
+            return resolve_project_snapshot(self.workspace, p["persistentDocumentId"])
         if operation in ("jobs.query", "results.query"):
             exact(p, set(), {"jobId"})
             if "jobId" in p:
@@ -712,6 +731,8 @@ class WorkflowService:
         revision_schema = {"type": "integer", "minimum": 0, "maximum": 2**53 - 1}
         operation_parameters = {
             "capabilities.query": schema({}), "project.query": schema({}),
+            "project.catalog.query": schema({"persistentDocumentId": id_schema}, []),
+            "project.snapshot.query": schema({"persistentDocumentId": id_schema}),
             "jobs.query": schema({"jobId": id_schema}, []), "results.query": schema({"jobId": id_schema}, []),
             "telemetry.query": schema({"jobId": id_schema,
                                         "afterSeq": {"type": "integer", "minimum": 0, "maximum": 2**53 - 1},
@@ -730,7 +751,7 @@ class WorkflowService:
                 "range.extension/v1/manifest", "range.extension/v1/numeric-series", "range.extension/v1/statistics"]}}),
             "knowledge.query": schema({"query": {"type": "string", "maxLength": 256},
                                         "extensionId": id_schema}, ["query"])}
-        read_operations = {"capabilities.query", "project.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
+        read_operations = {"capabilities.query", "project.query", "project.catalog.query", "project.snapshot.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
                            "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
         operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]

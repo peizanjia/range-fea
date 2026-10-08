@@ -1,4 +1,5 @@
 #include <QString>
+#include <QCryptographicHash>
 #include <cmath>
 #include <limits>
 
@@ -35,6 +36,23 @@ const double Model::SliverElementEdgeRatio = 30.0;
 
 namespace
 {
+
+QByteArray surfaceConnectivityHash(const RModel &model)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    for (uint id = 0; id < model.getNElements(); ++id)
+    {
+        const auto &element = model.getElement(id);
+        if (!R_ELEMENT_TYPE_IS_SURFACE(element.getType())) continue;
+        hash.addData(QByteArrayView(reinterpret_cast<const char *>(&id), sizeof(id)));
+        for (uint node = 0; node < element.size(); ++node)
+        {
+            const uint nodeId = element.getNodeId(node);
+            hash.addData(QByteArrayView(reinterpret_cast<const char *>(&nodeId), sizeof(nodeId)));
+        }
+    }
+    return hash.result();
+}
 
 struct NodeGridKey
 {
@@ -78,6 +96,8 @@ void Model::_init(const Model *pModel)
         this->surfaceNeigs = pModel->surfaceNeigs;
         this->volumeNeigs = pModel->volumeNeigs;
         this->fileName = pModel->fileName;
+        this->loadedSourceBinding = pModel->loadedSourceBinding;
+        this->nativeReadNormalization = pModel->nativeReadNormalization;
         this->meshInput = pModel->meshInput;
         this->viewFactorMatrix = pModel->viewFactorMatrix;
         this->patchColors = pModel->patchColors;
@@ -86,6 +106,7 @@ void Model::_init(const Model *pModel)
     else
     {
         this->validConsolidationCacheMask = Model::ConsolidateNone;
+        this->nativeReadNormalization = false;
     }
 }
 
@@ -417,7 +438,33 @@ const QString &Model::getFileName() const
 
 void Model::setFileName(const QString &fileName)
 {
+    if (this->fileName != fileName) this->loadedSourceBinding.reset();
     this->fileName = fileName;
+}
+
+const std::optional<RProjectCatalog::SourceBinding> &Model::getLoadedSourceBinding() const
+{
+    return this->loadedSourceBinding;
+}
+
+void Model::setLoadedSourceBinding(const RProjectCatalog::SourceBinding &sourceBinding)
+{
+    this->loadedSourceBinding = sourceBinding;
+}
+
+void Model::clearLoadedSourceBinding()
+{
+    this->loadedSourceBinding.reset();
+}
+
+bool Model::hasNativeReadNormalization() const
+{
+    return this->nativeReadNormalization;
+}
+
+void Model::clearNativeReadNormalization()
+{
+    this->nativeReadNormalization = false;
 }
 
 const RMeshInput &Model::getMeshInput() const
@@ -3171,6 +3218,16 @@ bool Model::findPickedHoleElement(const RR3Vector &position, const RR3Vector &di
 void Model::update(const RModel &rModel)
 {
     RModel::update(rModel);
+    const RTimeSolver &incomingTime = rModel.getTimeSolver();
+    const RTimeSolver &mergedTime = this->getTimeSolver();
+    // Result reloads deliberately retain the live document's time inputs.
+    // Those retained native values can differ from the saved incoming source.
+    this->nativeReadNormalization = mergedTime.getInputNTimeSteps() != incomingTime.getInputNTimeSteps()
+        || mergedTime.getInputStartTime() != incomingTime.getInputStartTime()
+        || mergedTime.getInputTimeStepSize() != incomingTime.getInputTimeStepSize()
+        || mergedTime.getTimes() != incomingTime.getTimes();
+    const double acceptedMinEdgeLength = this->getProblemSetup().getMeshSetup().getMinEdgeLength();
+    const double acceptedMaxEdgeLength = this->getProblemSetup().getMeshSetup().getMaxEdgeLength();
     this->invalidateConsolidationCache();
 
     int consolidateActionMask = Model::ConsolidateEdgeElements | Model::ConsolidateHoleElements;
@@ -3185,13 +3242,20 @@ void Model::update(const RModel &rModel)
         if (this->getVariable(i).getVariableData().getValueRangeName().isEmpty())
         {
             this->getVariable(i).getVariableData().setValueRangeName(ColorScale::getDefaultColorScale());
+            this->nativeReadNormalization = true;
         }
     }
+    if (this->getProblemSetup().getMeshSetup().getMinEdgeLength() != acceptedMinEdgeLength
+        || this->getProblemSetup().getMeshSetup().getMaxEdgeLength() != acceptedMaxEdgeLength)
+        this->nativeReadNormalization = true;
 }
 
 void Model::read(const QString &fileName)
 {
     RModel::read(fileName);
+    this->nativeReadNormalization = false;
+    const double acceptedMinEdgeLength = this->getProblemSetup().getMeshSetup().getMinEdgeLength();
+    const double acceptedMaxEdgeLength = this->getProblemSetup().getMeshSetup().getMaxEdgeLength();
     this->invalidateConsolidationCache();
     this->setFileName(fileName);
     if (this->getProblemTaskTree().getProblemTypeMask() & R_PROBLEM_RADIATIVE_HEAT)
@@ -3221,13 +3285,20 @@ void Model::read(const QString &fileName)
         if (this->getVariable(i).getVariableData().getValueRangeName().isEmpty())
         {
             this->getVariable(i).getVariableData().setValueRangeName(ColorScale::getDefaultColorScale());
+            this->nativeReadNormalization = true;
         }
     }
+    if (this->getProblemSetup().getMeshSetup().getMinEdgeLength() != acceptedMinEdgeLength
+        || this->getProblemSetup().getMeshSetup().getMaxEdgeLength() != acceptedMaxEdgeLength)
+        this->nativeReadNormalization = true;
 }
 
 void Model::write(const QString &fileName, bool writeLinkFile)
 {
-    this->setFileName(RModel::write(fileName,writeLinkFile));
+    this->clearLoadedSourceBinding();
+    const QString logicalPath = RModel::write(fileName,writeLinkFile);
+    this->setFileName(logicalPath);
+    this->clearNativeReadNormalization();
 }
 
 void Model::loadViewFactorMatrix()
@@ -3315,7 +3386,10 @@ void Model::consolidate(int consolidateActionMask)
             !cacheIsValid(Model::ConsolidateSurfaceNeighbors))
         {
             this->setSurfaceNeighbors(this->findSurfaceNeighbors());
+            const QByteArray connectivityBefore = surfaceConnectivityHash(*this);
             this->syncSurfaceNormals();
+            if (surfaceConnectivityHash(*this) != connectivityBefore)
+                this->nativeReadNormalization = true;
             this->validConsolidationCacheMask |= Model::ConsolidateSurfaceNeighbors;
             this->invalidateConsolidationCache(Model::ConsolidateEdgeElements |
                                                Model::ConsolidateHoleElements |

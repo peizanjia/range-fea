@@ -30,7 +30,6 @@ ECManagerTree::ECManagerTree(QObject *parent) :
     QObject::connect(Application::instance()->getSession(),&Session::modelSelectionChanged,this,&ECManagerTree::onModelSelectionChanged);
     QObject::connect(this,&ECManagerTree::itemChanged,this,&ECManagerTree::onItemChanged);
     QObject::connect(this,&ECManagerTree::itemSelectionChanged,this,&ECManagerTree::onItemSelectionChanged);
-    QObject::connect(this,&ECManagerTree::ecSelected,this,&ECManagerTree::onEcSelected);
 }
 
 void ECManagerTree::populate()
@@ -191,21 +190,28 @@ void ECManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
     Qt::CheckState checkState = item->checkState(column);
     REnvironmentConditionType ecType = (REnvironmentConditionType) item->data(EC_TREE_COLUMN_NAME,Qt::UserRole).toInt();
     QList<SessionEntityID> entityIDs = Application::instance()->getSession()->getSelectedEntityIDs();
+    QList<uint> changedModelIDs;
 
     for (int i=0;i<entityIDs.size();i++)
     {
         Model *pModel = Application::instance()->getSession()->getModelPtr(entityIDs[i].getMid());
+        bool changed = false;
         if (entityIDs[i].getType() == R_ENTITY_GROUP_POINT)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getPoint(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                if (!pModel->getPoint(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
+                {
+                    pModel->getPoint(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getPoint(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
                 {
                     pModel->getPoint(entityIDs[i].getEid()).removeEnvironmentCondition(ecType);
+                    changed = true;
                 }
             }
         }
@@ -213,13 +219,18 @@ void ECManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getLine(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                if (!pModel->getLine(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
+                {
+                    pModel->getLine(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getLine(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
                 {
                     pModel->getLine(entityIDs[i].getEid()).removeEnvironmentCondition(ecType);
+                    changed = true;
                 }
             }
         }
@@ -227,13 +238,18 @@ void ECManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getSurface(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                if (!pModel->getSurface(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
+                {
+                    pModel->getSurface(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getSurface(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
                 {
                     pModel->getSurface(entityIDs[i].getEid()).removeEnvironmentCondition(ecType);
+                    changed = true;
                 }
             }
         }
@@ -241,16 +257,37 @@ void ECManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getVolume(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                if (!pModel->getVolume(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
+                {
+                    pModel->getVolume(entityIDs[i].getEid()).addEnvironmentCondition(REnvironmentCondition(ecType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getVolume(entityIDs[i].getEid()).hasEnvironmentCondition(ecType))
                 {
                     pModel->getVolume(entityIDs[i].getEid()).removeEnvironmentCondition(ecType);
+                    changed = true;
                 }
             }
         }
+
+        if (changed && !changedModelIDs.contains(entityIDs[i].getMid()))
+        {
+            changedModelIDs.append(entityIDs[i].getMid());
+        }
+    }
+
+    if (!changedModelIDs.isEmpty())
+    {
+        bool previousDoNotPopulate = this->doNotPopulate;
+        this->doNotPopulate = true;
+        for (int i=0;i<changedModelIDs.size();i++)
+        {
+            Application::instance()->getSession()->setProblemChanged(changedModelIDs[i]);
+        }
+        this->doNotPopulate = previousDoNotPopulate;
     }
 
     if (item->isSelected())
@@ -277,11 +314,5 @@ void ECManagerTree::onItemSelectionChanged()
 
 void ECManagerTree::onEcSelected()
 {
-    this->doNotPopulate = true;
-    QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
-    for (int i=0;i<modelIDs.size();i++)
-    {
-        Application::instance()->getSession()->setProblemChanged(modelIDs[i]);
-    }
-    this->doNotPopulate = false;
+    // Selection signals only refresh the condition editor.
 }

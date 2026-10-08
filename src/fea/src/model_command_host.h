@@ -29,6 +29,8 @@ public:
     //! Audit a completed legacy GUI mutation and retire its old command identity.
     bool recordExternalChange(uint modelID, const QString &reason, QString *error = nullptr);
     QString journalPath() const;
+    //! Runtime session namespace. Persistent project/document identities are separate.
+    QString sessionEpoch() const;
     static bool isBusy();
     static bool isMutationBlocked();
 

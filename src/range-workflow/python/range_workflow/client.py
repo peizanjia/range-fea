@@ -136,6 +136,15 @@ class WorkflowClient:
         return self.request("telemetry.query", {"jobId": job_id, "afterSeq": after_seq,
                                                "limit": limit, "mode": mode})
 
+    def project_catalog(self, persistent_document_id=None):
+        """Read the linked host project; this does not select a workflow model."""
+        parameters = {} if persistent_document_id is None else {"persistentDocumentId": persistent_document_id}
+        return self.request("project.catalog.query", parameters)
+
+    def project_snapshot(self, persistent_document_id):
+        """Resolve and verify immutable native snapshot bytes before use."""
+        return self.request("project.snapshot.query", {"persistentDocumentId": persistent_document_id})
+
     def close(self):
         if self._closed:
             return

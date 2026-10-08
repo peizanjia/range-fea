@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <memory>
+#include <rproject_catalog.h>
 
 #include "application_settings.h"
 #include <rbl_job.h>
@@ -58,10 +59,12 @@ class ModelIO : public RJob
         static void save(Model &rModel, const QString &fileName, bool writeLinkFile = true);
 
         //! Open model.
-        static void open(Model &rModel, const QString &fileName);
+        static void open(Model &rModel, const QString &fileName,
+                         RProjectCatalog::SourceBinding *validatedSource = nullptr);
 
         //! Update model from file.
-        static void update(Model &rModel, const QString &fileName);
+        static void update(Model &rModel, const QString &fileName,
+                           RProjectCatalog::SourceBinding *validatedSource = nullptr);
 
         //! Export model to MSH.
         static void exportMsh(Model &rModel, const QString &fileName);

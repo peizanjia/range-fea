@@ -40,7 +40,8 @@
     ],
     "range-application-lib": [
       "tst_model_command_session",
-      "tst_model_command_cli"
+      "tst_model_command_cli",
+      "tst_project_catalog"
     ],
     "range-solver-lib": [
       "tst_scales",
@@ -114,12 +115,14 @@
       "tst_solver_snapshot",
       "tst_extension_widget",
       "tst_agent_event_view",
-      "tst_agent_conversation_widget"
+      "tst_agent_conversation_widget",
+      "tst_project_session"
     ],
     "range-workflow": [
       "tst_workflow_native",
       "tst_workflow_runtime",
       "tst_workflow_telemetry",
+      "tst_workflow_project_catalog",
       "tst_workflow_extensions",
       "tst_private_python_packaging"
     ],

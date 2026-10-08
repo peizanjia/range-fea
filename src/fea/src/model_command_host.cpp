@@ -306,6 +306,7 @@ ModelCommandHost::~ModelCommandHost()
             RLogger::error("Model session %s closed with incomplete audit.\n", identity.toUtf8().constData());
 }
 QString ModelCommandHost::journalPath() const { return state->journal; }
+QString ModelCommandHost::sessionEpoch() const { return state->sessionEpoch; }
 
 bool ModelCommandHost::isBusy()
 {
@@ -490,13 +491,42 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             {QStringLiteral("availability"), historyAvailable ? QStringLiteral("live") : QStringLiteral("unknown")},
             {QStringLiteral("canUndo"), historyAvailable ? QJsonValue(canUndo) : QJsonValue(QJsonValue::Null)},
             {QStringLiteral("canRedo"), historyAvailable ? QJsonValue(canRedo) : QJsonValue(QJsonValue::Null)}});
+        const QJsonObject project = session->documentProjectContext(modelID);
+        snapshot.insert(QStringLiteral("project"), project);
+        if (liveRead)
+        {
+            if (project.value(QStringLiteral("draft")).isObject())
+                snapshot.insert(QStringLiteral("draft"), project.value(QStringLiteral("draft")));
+            if (project.value(QStringLiteral("unsaved")).isObject())
+                snapshot.insert(QStringLiteral("unsaved"), project.value(QStringLiteral("unsaved")));
+        }
         return snapshot;
     };
+
+    if (operation == QStringLiteral("project.query"))
+    {
+        if (!parameters.isEmpty()) return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("project.query takes no parameters."));
+        return ok(session->projectContext());
+    }
+    if (operation == QStringLiteral("document.project.query"))
+    {
+        QString documentId, epoch;
+        if (!exactKeys(parameters, {QStringLiteral("target")}) || !targetFieldsValid(&documentId, &epoch))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("A runtime document target is required."));
+        if (epoch != state->sessionEpoch)
+            return invalid(QStringLiteral("STALE_SESSION"), tr("The document belongs to a different session."));
+        const uint modelID = session->findModelByCommandIdentity(documentId);
+        if (modelID == RConstants::eod)
+            return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The document is no longer open."));
+        return ok(session->documentProjectContext(modelID));
+    }
 
     if (operation == QStringLiteral("capabilities.query"))
     {
         if (!parameters.isEmpty()) return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("capabilities.query takes an empty parameters object."));
         const QJsonArray operations{
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("project.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("document.project.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("context.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("capabilities.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("events.read")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
@@ -508,7 +538,17 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         return ok({{QStringLiteral("sessionEpoch"), state->sessionEpoch},
                    {QStringLiteral("identityPersistence"), QStringLiteral("host-session")},
                    {QStringLiteral("capabilityCatalogVersion"), 1},
-                   {QStringLiteral("supportedOperations"), operations}});
+                   {QStringLiteral("supportedOperations"), operations},
+                   {QStringLiteral("editingScope"), QJsonObject{
+                        {QStringLiteral("version"), 1},
+                        {QStringLiteral("models"), QStringLiteral("open native documents with a structural modal task")},
+                        {QStringLiteral("elements"), QStringLiteral("configuration preserves existing elements; no element creation or numerical acceptance")},
+                        {QStringLiteral("analyses"), QJsonArray{QStringLiteral("structural.modal.configuration")}},
+                        {QStringLiteral("units"), QJsonObject{{QStringLiteral("modal.parameters"), QStringLiteral("1")}}},
+                        {QStringLiteral("refusals"), QJsonArray{QStringLiteral("unknown command version or fields"),
+                            QStringLiteral("non-modal analysis for modal configuration"), QStringLiteral("invalid parameter ranges or units"),
+                            QStringLiteral("stale or closed document instance"), QStringLiteral("pending known drafts or project conflicts")}}}},
+                   {QStringLiteral("project"), session->projectContext()}});
     }
 
     if (operation == QStringLiteral("events.read"))
@@ -711,6 +751,9 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         if (isMutationBlocked()) return invalid(QStringLiteral("MODEL_BUSY"), tr("The target model is in use by a task that has not detached its model."));
         uint modelID = session->findModelByCommandIdentity(documentId);
         if (modelID == RConstants::eod) return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+        QString projectFailure;
+        if (!session->canMutateDocument(modelID, &projectFailure))
+            return invalid(session->hasDocumentDraft(modelID) ? QStringLiteral("DRAFT_CONFLICT") : QStringLiteral("PROJECT_CONFLICT"), projectFailure);
         auto stamp = session->modelCommandStamp(modelID);
         if (stamp.first != documentId || stamp.second != expectedRevision)
             return invalid(QStringLiteral("STALE_REVISION"), tr("Query the current document revision and create a new preview."));
@@ -851,6 +894,9 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         if (isMutationBlocked()) return invalid(QStringLiteral("MODEL_BUSY"), tr("The target model is in use by a task that has not detached its model."));
         uint modelID = session->findModelByCommandIdentity(preview.documentId);
         if (modelID == RConstants::eod) return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+        QString projectFailure;
+        if (!session->canMutateDocument(modelID, &projectFailure))
+            return invalid(session->hasDocumentDraft(modelID) ? QStringLiteral("DRAFT_CONFLICT") : QStringLiteral("PROJECT_CONFLICT"), projectFailure);
         auto stamp = session->modelCommandStamp(modelID);
         if (stamp.first != preview.documentId || stamp.second != preview.stampGeneration)
             return invalid(QStringLiteral("STALE_REVISION"), tr("The document changed after this preview. Query and preview the command again."));
@@ -961,6 +1007,7 @@ bool ModelCommandHost::approvePreview(const QString &previewId)
     if (!guard.ownsLock() || isMutationBlocked()) return false;
     modelID = session->findModelByCommandIdentity(found->second.documentId);
     if (modelID == RConstants::eod) return false;
+    if (!session->canMutateDocument(modelID)) return false;
     const auto stamp = session->modelCommandStamp(modelID);
     if (stamp.first != found->second.documentId || stamp.second != found->second.stampGeneration) return false;
     if (found->second.command == QStringLiteral("analysis.modal.configure"))
@@ -989,6 +1036,11 @@ bool ModelCommandHost::configureModal(const QList<uint> &modelIDs, const RModalS
     if (QThread::currentThread() != thread()) return fail(tr("Model commands require the GUI thread."));
     if (isMutationBlocked()) return fail(tr("Wait for active model tasks to finish before changing modal settings."));
     if (modelIDs.isEmpty()) return fail(tr("No model is selected."));
+    for (const uint id : modelIDs)
+    {
+        QString projectFailure;
+        if (!session->canMutateDocument(id, &projectFailure)) return fail(projectFailure);
+    }
     QList<QJsonObject> commands;
     QList<State::Entry *> entries;
     {

@@ -2,6 +2,7 @@
 #define PROBLEM_TREE_H
 
 #include <QTreeWidget>
+#include <QHash>
 
 #include <rml_problem.h>
 
@@ -11,6 +12,15 @@ class ProblemTree : public QTreeWidget
 {
 
     Q_OBJECT
+
+    protected:
+
+        //! Pending editor text is intentionally kept only in this GUI instance.
+        QHash<QString, QString> numericDraftText;
+
+        QString numericDraftKey(const QString &runtimeDocumentId, const QString &scope,
+                                const QString &field) const;
+        void clearDraftCacheForRuntimeDocument(const QString &runtimeDocumentId);
 
     public:
 
@@ -30,6 +40,9 @@ class ProblemTree : public QTreeWidget
 
         //! Model selection has changed.
         void onModelSelectionChanged(uint);
+
+        //! Numeric modal editor draft changed.
+        void onModalDraftStateChanged(const QString &field, const QString &state, const QString &text);
 
         //! Time solver has changed.
         void onTimeSolverChanged(const RTimeSolver &timeSolver);

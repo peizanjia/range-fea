@@ -29,6 +29,9 @@ class ModalSetupWidget : public QWidget
         //! Modal setup has changed.
         void changed(const RModalSetup &modalSetup);
 
+        //! Numeric editor draft state, with no accepted value or raw persistence.
+        void draftStateChanged(const QString &field, const QString &state, const QString &text);
+
     private slots:
 
         void onModalMethodChanged(int index);
@@ -38,6 +41,8 @@ class ModalSetupWidget : public QWidget
         void onNModesExtractChanged(int nModes);
 
         void onConvergenceValueChanged(double convergenceValue);
+
+        void onConvergenceDraftChanged(const QString &state, const QString &text);
 
 };
 

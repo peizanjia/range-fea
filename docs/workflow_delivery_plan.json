@@ -15,8 +15,8 @@
     {
       "id": "WF-01",
       "title": "Project identity and contracts",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "按2026-10-08授权实施项目身份/快照/契约；先共享项目目录，再GUI与进程接口接线。",
       "priority": "P0",
       "effort": "S",
       "dependsOn": [],
@@ -48,7 +48,9 @@
       "statusReason": "",
       "priority": "P0",
       "effort": "L",
-      "dependsOn": ["WF-01"],
+      "dependsOn": [
+        "WF-01"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-02-A01",
@@ -82,7 +84,9 @@
       "statusReason": "",
       "priority": "P0",
       "effort": "L",
-      "dependsOn": ["WF-02"],
+      "dependsOn": [
+        "WF-02"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-03-A01",
@@ -110,7 +114,9 @@
       "statusReason": "",
       "priority": "P0",
       "effort": "M",
-      "dependsOn": ["WF-02"],
+      "dependsOn": [
+        "WF-02"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-04-A01",
@@ -137,7 +143,10 @@
       "statusReason": "",
       "priority": "P0",
       "effort": "XL",
-      "dependsOn": ["WF-02", "WF-04"],
+      "dependsOn": [
+        "WF-02",
+        "WF-04"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-05-A01",
@@ -170,7 +179,9 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "M",
-      "dependsOn": ["WF-01"],
+      "dependsOn": [
+        "WF-01"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-06-A01",
@@ -198,7 +209,10 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "L",
-      "dependsOn": ["WF-05", "WF-06"],
+      "dependsOn": [
+        "WF-05",
+        "WF-06"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-07-A01",
@@ -228,7 +242,11 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "L",
-      "dependsOn": ["WF-04", "WF-05", "WF-07"],
+      "dependsOn": [
+        "WF-04",
+        "WF-05",
+        "WF-07"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-08-A01",
@@ -258,7 +276,10 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "XL",
-      "dependsOn": ["WF-03", "WF-05"],
+      "dependsOn": [
+        "WF-03",
+        "WF-05"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-09-A01",
@@ -289,7 +310,10 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "L",
-      "dependsOn": ["WF-03", "WF-04"],
+      "dependsOn": [
+        "WF-03",
+        "WF-04"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-10-A01",
@@ -318,7 +342,10 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "XL",
-      "dependsOn": ["WF-04", "WF-08"],
+      "dependsOn": [
+        "WF-04",
+        "WF-08"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-11-A01",
@@ -348,7 +375,10 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "XL",
-      "dependsOn": ["WF-05", "WF-11"],
+      "dependsOn": [
+        "WF-05",
+        "WF-11"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-12-A01",
@@ -420,7 +450,10 @@
       "statusReason": "",
       "priority": "P1",
       "effort": "XL",
-      "dependsOn": ["WF-02", "WF-05"],
+      "dependsOn": [
+        "WF-02",
+        "WF-05"
+      ],
       "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
       "acceptanceIds": [
         "WF-14-A01",

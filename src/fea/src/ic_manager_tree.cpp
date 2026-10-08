@@ -31,7 +31,6 @@ ICManagerTree::ICManagerTree(QObject *parent) :
     QObject::connect(Application::instance()->getSession(),&Session::modelSelectionChanged,this,&ICManagerTree::onModelSelectionChanged);
     QObject::connect(this,&ICManagerTree::itemChanged,this,&ICManagerTree::onItemChanged);
     QObject::connect(this,&ICManagerTree::itemSelectionChanged,this,&ICManagerTree::onItemSelectionChanged);
-    QObject::connect(this,&ICManagerTree::icSelected,this,&ICManagerTree::onIcSelected);
 }
 
 void ICManagerTree::populate()
@@ -193,21 +192,28 @@ void ICManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
     Qt::CheckState checkState = item->checkState(column);
     RInitialConditionType icType = (RInitialConditionType) item->data(IC_TREE_COLUMN_NAME,Qt::UserRole).toInt();
     QList<SessionEntityID> entityIDs = Application::instance()->getSession()->getSelectedEntityIDs();
+    QList<uint> changedModelIDs;
 
     for (int i=0;i<entityIDs.size();i++)
     {
         Model *pModel = Application::instance()->getSession()->getModelPtr(entityIDs[i].getMid());
+        bool changed = false;
         if (entityIDs[i].getType() == R_ENTITY_GROUP_POINT)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getPoint(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                if (!pModel->getPoint(entityIDs[i].getEid()).hasInitialCondition(icType))
+                {
+                    pModel->getPoint(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getPoint(entityIDs[i].getEid()).hasInitialCondition(icType))
                 {
                     pModel->getPoint(entityIDs[i].getEid()).removeInitialCondition(icType);
+                    changed = true;
                 }
             }
         }
@@ -215,13 +221,18 @@ void ICManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getLine(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                if (!pModel->getLine(entityIDs[i].getEid()).hasInitialCondition(icType))
+                {
+                    pModel->getLine(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getLine(entityIDs[i].getEid()).hasInitialCondition(icType))
                 {
                     pModel->getLine(entityIDs[i].getEid()).removeInitialCondition(icType);
+                    changed = true;
                 }
             }
         }
@@ -229,13 +240,18 @@ void ICManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getSurface(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                if (!pModel->getSurface(entityIDs[i].getEid()).hasInitialCondition(icType))
+                {
+                    pModel->getSurface(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getSurface(entityIDs[i].getEid()).hasInitialCondition(icType))
                 {
                     pModel->getSurface(entityIDs[i].getEid()).removeInitialCondition(icType);
+                    changed = true;
                 }
             }
         }
@@ -243,16 +259,37 @@ void ICManagerTree::onItemChanged(QTreeWidgetItem *item, int column)
         {
             if (checkState == Qt::Checked)
             {
-                pModel->getVolume(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                if (!pModel->getVolume(entityIDs[i].getEid()).hasInitialCondition(icType))
+                {
+                    pModel->getVolume(entityIDs[i].getEid()).addInitialCondition(RInitialCondition(icType));
+                    changed = true;
+                }
             }
             else
             {
                 if (pModel->getVolume(entityIDs[i].getEid()).hasInitialCondition(icType))
                 {
                     pModel->getVolume(entityIDs[i].getEid()).removeInitialCondition(icType);
+                    changed = true;
                 }
             }
         }
+
+        if (changed && !changedModelIDs.contains(entityIDs[i].getMid()))
+        {
+            changedModelIDs.append(entityIDs[i].getMid());
+        }
+    }
+
+    if (!changedModelIDs.isEmpty())
+    {
+        bool previousDoNotPopulate = this->doNotPopulate;
+        this->doNotPopulate = true;
+        for (int i=0;i<changedModelIDs.size();i++)
+        {
+            Application::instance()->getSession()->setProblemChanged(changedModelIDs[i]);
+        }
+        this->doNotPopulate = previousDoNotPopulate;
     }
 
     if (item->isSelected())
@@ -279,11 +316,5 @@ void ICManagerTree::onItemSelectionChanged()
 
 void ICManagerTree::onIcSelected()
 {
-    this->doNotPopulate = true;
-    QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
-    for (int i=0;i<modelIDs.size();i++)
-    {
-        Application::instance()->getSession()->setProblemChanged(modelIDs[i]);
-    }
-    this->doNotPopulate = false;
+    // Selection signals only refresh the condition editor.
 }

@@ -46,6 +46,14 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_workflow_telemetry COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_telemetry.py" -v)
     set_tests_properties(tst_workflow_telemetry PROPERTIES TIMEOUT 60)
+    add_test(NAME tst_workflow_project_catalog COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_project_catalog.py"
+        --catalog-cli "$<TARGET_FILE:range-project>" -v)
+    set_tests_properties(tst_workflow_project_catalog PROPERTIES TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(tst_workflow_project_catalog PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME tst_private_python_packaging COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/../scripts/packaging/test_private_python.py" -v)
     if(WIN32)

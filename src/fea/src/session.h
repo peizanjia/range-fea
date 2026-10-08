@@ -3,6 +3,12 @@
 
 #include <QObject>
 #include <QList>
+#include <QHash>
+#include <QJsonObject>
+#include <QMap>
+#include <QSet>
+#include <QStringList>
+#include <memory>
 
 #include "draw_engine.h"
 #include "pick_list.h"
@@ -10,12 +16,18 @@
 #include "session_entity_id.h"
 #include "session_node_id.h"
 
+#include <rproject_catalog.h>
+
 class ModelCommandHost;
 
 class Session : public QObject
 {
 
     Q_OBJECT
+
+    public:
+
+        using ProjectPublicationLease = RProjectCatalog::PublicationLeasePtr;
 
     protected:
 
@@ -35,11 +47,56 @@ class Session : public QObject
         mutable QMutex commandStampMutex;
         QList<QPair<QString, quint64>> commandStamps;
         ModelCommandHost *commandHost;
+        struct ProjectDocumentBinding
+        {
+            QString persistentDocumentId;
+            QString label;
+            QString sourcePath;
+            QString originDocumentId;
+            QString sourceConflictPath;
+            QString sourceConflictMessage;
+            QString persistenceMessage;
+            QString lastCatalogErrorCode;
+            QString unverifiedSourcePath;
+            QString acceptedSourceRevision;
+            QString acceptedSavedArtifactHash;
+            QString acceptedModelSha256;
+            QJsonArray acceptedSourceArtifacts;
+            QJsonArray orphanSnapshots;
+            std::optional<RProjectCatalog::SourceBinding> sourceAtLoad;
+            RProjectCatalog::DocumentInstanceLeasePtr instanceLease;
+            ProjectPublicationLease publicationLease;
+            QString publicationSourceRevision;
+            QString publicationLogicalPath;
+            QStringList publicationPaths;
+            bool sourceConflict = false;
+            bool catalogRevisionConflict = false;
+            bool persistenceUnavailable = false;
+            bool sourceVerificationUnavailable = false;
+            bool draftMetadataPending = false;
+            bool pendingDraftDirty = false;
+            bool reopenedSavedSource = false;
+            bool acceptedDirty = false;
+            bool sourceUnverified = false;
+            bool detachedFromChangedSource = false;
+            QString sourceLinkStatus;
+            bool publishing = false;
+            quint64 catalogAcceptedRuntimeRevision = 0;
+            QMap<QString, QMap<QString, QString>> drafts;
+            QSet<QString> knownDraftScopes;
+        };
+        std::unique_ptr<RProjectCatalog> projectCatalog;
+        QString projectOpenError;
+        QHash<QString, ProjectDocumentBinding> projectDocuments;
+        mutable QMutex pendingProjectUpdatesMutex;
+        QHash<QString, quint64> pendingProjectUpdates;
+        bool projectRetryScheduled = false;
 
     public:
 
         //! Constructor.
         Session(QObject *parent = nullptr);
+        ~Session() override;
 
         ModelCommandHost *getModelCommandHost() const;
         QPair<QString, quint64> modelCommandStamp(uint modelID) const;
@@ -47,6 +104,47 @@ class Session : public QObject
         void invalidateModelCommands(uint modelID);
         //! Called on the GUI thread after a successful native save.
         bool recordModelSaved(uint modelID, const QString &path, QString *error = nullptr);
+        bool recordModelSaved(uint modelID, const QString &path,
+                              const RProjectCatalog::SourceBinding &expectedWrittenBinding,
+                              QString *error = nullptr);
+        bool recordModelSaved(uint modelID, const QString &path,
+                              const ProjectPublicationLease &lease, QString *error = nullptr);
+        bool recordModelSaved(uint modelID, const QString &path,
+                              const RProjectCatalog::SourceBinding &expectedWrittenBinding,
+                              const ProjectPublicationLease &lease, QString *error = nullptr);
+        bool recordModelSaved(uint modelID, const QString &path,
+                              const ProjectPublicationLease &lease,
+                              const QPair<QString, quint64> &expectedStamp,
+                              QString *error = nullptr);
+        bool recordModelSaved(uint modelID, const QString &path,
+                              const RProjectCatalog::SourceBinding &expectedWrittenBinding,
+                              const ProjectPublicationLease &lease,
+                              const QPair<QString, quint64> &expectedStamp,
+                              QString *error = nullptr);
+        void abortModelSave(const QString &runtimeDocumentId,
+                            const ProjectPublicationLease &lease,
+                            const QString &reason = QString());
+        bool canSaveModel(uint modelID, const QString &path, QString *error = nullptr);
+        bool canSaveModel(uint modelID, const QString &path, const QStringList &actualWritePaths,
+                          QString *error = nullptr);
+        ProjectPublicationLease reserveModelSave(uint modelID, const QString &logicalPath,
+                                                  const QStringList &actualWritePaths,
+                                                  QString *error = nullptr);
+        bool recordModelReloaded(uint modelID, const QString &path, QString *error = nullptr);
+        bool recordModelReloaded(uint modelID, const RProjectCatalog::SourceBinding &sourceBinding,
+                                 QString *error = nullptr);
+        bool validateReloadSource(uint modelID, const RProjectCatalog::SourceBinding &sourceBinding,
+                                  QString *error = nullptr);
+        bool openProject(const QString &workspace, QString *error = nullptr);
+        QString projectWorkspace() const;
+        QJsonObject projectContext() const;
+        QJsonObject documentProjectContext(uint modelID) const;
+        QJsonObject createDocumentSnapshot(uint modelID, QString *error = nullptr);
+        bool canMutateDocument(uint modelID, QString *error = nullptr);
+        bool hasDocumentDraft(uint modelID) const;
+        void setNumericDraft(uint modelID, const QString &scope, const QString &field,
+                             const QString &state, const QString &text);
+        void clearNumericDraft(uint modelID, const QString &scope, const QString &field);
         //! GUI-thread publication. A stale source is left untouched; its result
         //! remains available at artifactPath and is announced as detached.
         bool acceptSolverResult(const QPair<QString, quint64> &sourceStamp,
@@ -91,6 +189,7 @@ class Session : public QObject
 
         //! Add model to the list.
         void addModel(const Model &model);
+        void addModel(const Model &model, const RProjectCatalog::SourceBinding &sourceBinding);
 
         //! Set model to the list at given position.
         void setModel(uint position, const Model &model);
@@ -273,6 +372,8 @@ class Session : public QObject
         //! Accepted/legacy document invalidation, separate from selection and view state.
         //! May be emitted by a legacy worker; consumers must honor QObject affinity.
         void documentRevisionChanged(const QString &documentId, quint64 revision);
+        void runtimeDocumentRemoved(const QString &documentId);
+        void documentDraftsCleared(const QString &documentId);
         void solverResultAvailable(const QString &documentId, quint64 sourceRevision,
                                    const QString &artifactPath, bool applied);
 
@@ -382,6 +483,23 @@ class Session : public QObject
 
         //! Catch file saved signal for software update file.
         void onSoftwareUpdateFileSaved(uint downloadID, const QString &fileName);
+
+    protected:
+
+        void addModelInternal(const Model &model,
+                              const std::optional<RProjectCatalog::SourceBinding> &sourceBinding);
+        void attachProjectDocument(uint modelID, const QString &runtimeIdentity,
+                                   const std::optional<RProjectCatalog::SourceBinding> &sourceBinding,
+                                   const QString &unverifiedSourcePath);
+        void flushProjectCatalogUpdates();
+        bool advanceModelCommandStamp(uint modelID, const QPair<QString, quint64> *expected,
+                                      QPair<QString, quint64> *changed);
+        void queueProjectRevisionUpdate(const QPair<QString, quint64> &changed);
+        bool refreshProjectSourceConflict(const QString &runtimeIdentity);
+        bool retryProjectDocumentRegistration(const QString &runtimeIdentity);
+        void scheduleProjectCatalogRetry();
+        QJsonObject projectDraftMetadata(const ProjectDocumentBinding &binding) const;
+        QString projectDocumentLabel(const QString &baseName) const;
 
     protected slots:
 

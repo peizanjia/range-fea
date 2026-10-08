@@ -8,6 +8,8 @@
 #include <QScrollBar>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QFileDialog>
+#include <QMessageBox>
 
 #include <rbl_error.h>
 #include <rbl_job_manager.h>
@@ -325,6 +327,27 @@ void MainWindow::createMenus()
 
     QMenu *menuFile = new QMenu(menuBar);
     menuFile->setTitle(tr("File"));
+    QMenu *menuProject = menuFile->addMenu(tr("Project"));
+    auto *openProject = menuProject->addAction(tr("Open project workspace…"));
+    openProject->setObjectName(QStringLiteral("openProjectWorkspace"));
+    connect(openProject, &QAction::triggered, this, [this] {
+        const QString directory = QFileDialog::getExistingDirectory(this, tr("Open project workspace"), session->projectWorkspace());
+        if (directory.isEmpty()) return;
+        QString error;
+        if (!session->openProject(directory, &error)) QMessageBox::warning(this, tr("Project"), error);
+        else statusBar()->showMessage(tr("Project workspace opened."), 5000);
+    });
+    auto *freezeDocument = menuProject->addAction(tr("Freeze selected document snapshot"));
+    freezeDocument->setObjectName(QStringLiteral("freezeDocumentSnapshot"));
+    connect(freezeDocument, &QAction::triggered, this, [this] {
+        const QList<uint> selected = session->getSelectedModelIDs();
+        if (selected.size() != 1)
+        { QMessageBox::information(this, tr("Project"), tr("Select one document to create its immutable snapshot.")); return; }
+        QString error;
+        const QJsonObject snapshot = session->createDocumentSnapshot(selected.first(), &error);
+        if (snapshot.isEmpty()) QMessageBox::warning(this, tr("Project snapshot"), error);
+        else statusBar()->showMessage(tr("Document snapshot saved in the project workspace."), 5000);
+    });
     QMenu *menuFileSession = new QMenu(menuFile);
     menuFileSession->setTitle(tr("Session"));
     menuFileSession->setIcon(QIcon(":/icons/file/pixmaps/range-session->svg"));

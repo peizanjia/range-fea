@@ -94,8 +94,11 @@ private slots:
         QCOMPARE(document.value(QStringLiteral("acceptedState")).toObject().value(QStringLiteral("scope")).toString(), QStringLiteral("analysis.modal"));
         QCOMPARE(document.value(QStringLiteral("acceptedState")).toObject().value(QStringLiteral("modal")).toObject()
                      .value(QStringLiteral("iterations")).toInt(), 12);
-        QCOMPARE(document.value(QStringLiteral("draft")).toObject().value(QStringLiteral("status")).toString(), QStringLiteral("unknown"));
-        QCOMPARE(document.value(QStringLiteral("unsaved")).toObject().value(QStringLiteral("status")).toString(), QStringLiteral("unknown"));
+        QCOMPARE(document.value(QStringLiteral("draft")).toObject().value(QStringLiteral("status")).toString(), QStringLiteral("none"));
+        QCOMPARE(document.value(QStringLiteral("draft")).toObject().value(QStringLiteral("scope")).toString(), QStringLiteral("analysis.modal"));
+        QCOMPARE(document.value(QStringLiteral("draft")).toObject().value(QStringLiteral("otherScopesStatus")).toString(), QStringLiteral("unknown"));
+        QCOMPARE(document.value(QStringLiteral("unsaved")).toObject().value(QStringLiteral("status")).toString(), QStringLiteral("unsaved"));
+        QVERIFY(document.value(QStringLiteral("unsaved")).toObject().value(QStringLiteral("dirty")).toBool());
     }
 
     void approvedModalCommandIsVersionBoundAndIdempotent()

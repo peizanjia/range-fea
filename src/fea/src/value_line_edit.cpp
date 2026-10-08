@@ -1,13 +1,13 @@
 #include <cmath>
 #include <cfloat>
 #include <QLocale>
+#include <QSignalBlocker>
 
 #include "value_line_edit.h"
 
 ValueLineEdit::ValueLineEdit(QWidget *parent)
     : QLineEdit(parent)
 {
-    this->createTimer();
     this->setDoubleValidator();
     QObject::connect(this,&QLineEdit::textChanged,this,&ValueLineEdit::onTextChaged);
 }
@@ -15,7 +15,6 @@ ValueLineEdit::ValueLineEdit(QWidget *parent)
 ValueLineEdit::ValueLineEdit(double min, double max, QWidget *parent)
     : QLineEdit(parent)
 {
-    this->createTimer();
     this->setValidator(new QDoubleValidator(min,max,1000,this));
     QObject::connect(this,&QLineEdit::textChanged,this,&ValueLineEdit::onTextChaged);
 }
@@ -23,7 +22,6 @@ ValueLineEdit::ValueLineEdit(double min, double max, QWidget *parent)
 ValueLineEdit::ValueLineEdit(int min, int max, QWidget *parent)
     : QLineEdit(parent)
 {
-    this->createTimer();
     this->setValidator(new QIntValidator(min,max,this));
     QObject::connect(this,&QLineEdit::textChanged,this,&ValueLineEdit::onTextChaged);
 }
@@ -82,62 +80,33 @@ void ValueLineEdit::setValue(uint value)
     this->setText(QLocale().toString(value));
 }
 
-QValidator::State ValueLineEdit::getValidatorState() const
+void ValueLineEdit::restoreDraftText(const QString &text)
 {
-    QString strContent = this->text();
-
-    bool intermediateFound = false;
-
-    for (int i=0;i<strContent.length();i++)
-    {
-        switch (this->validator()->validate(strContent,i))
-        {
-            case QValidator::Invalid:
-                return QValidator::Invalid;
-            case QValidator::Intermediate:
-                intermediateFound = true;
-                break;
-            case QValidator::Acceptable:
-            default:
-                break;
-        }
-    }
-
-    if (intermediateFound)
-    {
-        return QValidator::Intermediate;
-    }
-
-    return QValidator::Acceptable;
+    const QSignalBlocker blocker(this);
+    this->setText(text);
+    this->paintBackground();
 }
 
-void ValueLineEdit::createTimer()
+QValidator::State ValueLineEdit::getValidatorState() const
 {
-    this->timer = new QTimer(this);
-    QObject::connect(this->timer,
-                     &QTimer::timeout,
-                     this,
-                     &ValueLineEdit::onTimeout);
+    if (!this->validator()) return QValidator::Acceptable;
+    QString content = this->text();
+    int position = content.size();
+    return this->validator()->validate(content, position);
 }
 
 void ValueLineEdit::paintBackground()
 {
-    if (this->timer->isActive())
-    {
-        this->timer->stop();
-    }
     switch (this->getValidatorState())
     {
         case QValidator::Invalid:
         {
             this->setStyleSheet("QLineEdit{background: red;}");
-            this->timer->start(2000);
             break;
         }
         case QValidator::Intermediate:
         {
             this->setStyleSheet("QLineEdit{background: rgb(255, 200, 200);}");
-            this->timer->start(2000);
             break;
         }
         case QValidator::Acceptable:
@@ -152,12 +121,24 @@ void ValueLineEdit::paintBackground()
 void ValueLineEdit::onTextChaged(QString text)
 {
     this->paintBackground();
-    emit this->valueChanged(QLocale().toDouble(text));
-}
-
-void ValueLineEdit::onTimeout()
-{
-    QString newText = this->text();
-    newText.remove(newText.length()-1,1);
-    this->setText(newText);
+    const QValidator::State state = this->getValidatorState();
+    if (state == QValidator::Invalid)
+    {
+        emit this->draftStateChanged(QStringLiteral("invalid"), text);
+        return;
+    }
+    if (state == QValidator::Intermediate)
+    {
+        emit this->draftStateChanged(QStringLiteral("intermediate"), text);
+        return;
+    }
+    bool ok = false;
+    const double value = QLocale().toDouble(text, &ok);
+    if (!ok || !std::isfinite(value))
+    {
+        emit this->draftStateChanged(QStringLiteral("invalid"), text);
+        return;
+    }
+    emit this->draftStateChanged(QStringLiteral("none"), {});
+    emit this->valueChanged(value);
 }
