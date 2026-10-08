@@ -155,6 +155,8 @@ Native GUI job 目前报告 `queued`、`running`、`cancelling`、`succeeded`、
 
 ## 6. 明确拒绝范围与后续边界
 
+`document.inputs.query`/文件 `context` 的 `configuration.structuralControl` 只读返回原生接受态的 enabled、controlProtocolVersion、controllerId、deterministicSeed；seed 使用十进制字符串保留 uint64 精度。`conditioningPage` 有界返回 actuatorId、delaySteps、holdSteps、noiseAmplitudeN。上下文的同一 page offset/limit/cursor 分别作用于群组和 conditioning 两个目录；labelQuery 分别过滤群组标签和 actuatorId。每个目录报告自身 total/hasMore/nextCursor，游标绑定相同 source/revision，最多 200 项。原生配置校验失败时 available=false 并报告诊断，不宣称可用，也不生成控制器运行态或传感器/执行器物理映射；这些仍由对应控制服务验证。
+
 边界命令的 null 轴在命令和预览中表示禁用该全局分量。为保留 InteractionRecord v1 的严格 payload 约束，含 null 轴的审计参数采用 `parameters={"json":"<完整规范化参数JSON>"}`、`selectionSnapshot.parametersEncoding="json-text/v1"`，文本最多 4096 字节；日志读取者须解码后比较参数。禁用轴与零值轴不会混淆，原命令响应和候选指纹保持原参数语义。
 
 Host/Core 必须拒绝 unknown operation/version/fields、非 SI 或不匹配单位、未公开命令、无效/重复 group ID、错误实体类型、label 代替 target ID、过期游标、关闭文档、sessionEpoch/revision 不符、已知 pending draft/Project Catalog 冲突、busy/model task、过期/已消费 preview、缺少可信审批、job source 不匹配、terminal job cancel 和未验证结果 hash。被拒绝的编辑不能改变模型/输出。`OBSERVED_MODIFIED_UNLOGGED` 表示 GUI 模型已改变、但对应 audit 未完成；响应中的 `outcome=observed_modified_unlogged` / `modelModified=true` 是已发生变更的证据，不能笼统称为正常 accepted。CLI `journal_failure` 可能发生在发布前或发布后，必须同时检查 `status` 和是否已发布。失败、取消请求和结果验证状态都按返回事实报告。

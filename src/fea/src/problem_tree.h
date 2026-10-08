@@ -3,6 +3,7 @@
 
 #include <QTreeWidget>
 #include <QHash>
+#include <QSet>
 
 #include <rml_problem.h>
 
@@ -17,6 +18,8 @@ class ProblemTree : public QTreeWidget
 
         //! Pending editor text is intentionally kept only in this GUI instance.
         QHash<QString, QString> numericDraftText;
+        //! Document identities represented by the currently rendered rows.
+        QSet<QString> renderedSelectedDocumentIds;
 
         QString numericDraftKey(const QString &runtimeDocumentId, const QString &scope,
                                 const QString &field) const;

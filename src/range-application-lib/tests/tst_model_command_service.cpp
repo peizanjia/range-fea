@@ -5,6 +5,7 @@
 
 #include <rmodel_command_service.h>
 #include <rmodel_command_session.h>
+#include <rml_structural_control_setup.h>
 
 namespace
 {
@@ -113,6 +114,8 @@ private slots:
     void materialRejectsTabulatedReplacementWithoutMutation();
     void boundarySetUsesGlobalXYZAndStrictUnits();
     void targetPagesBindCursorsAndDisambiguateLabels();
+    void contextReportsStructuralControlAndPaginatesConditioning();
+    void contextMarksInvalidStructuralControlUnavailable();
     void duplicatePhysicalIdsRejectTargetQueries();
     void sessionAcceptUndoRedoAndIdempotencyUseSharedService();
 };
@@ -340,6 +343,172 @@ void TestModelCommandService::targetPagesBindCursorsAndDisambiguateLabels()
     QVERIFY(stable.candidate.findElementGroupByPhysicalId(id, &type, &index));
     QCOMPARE(type, R_ENTITY_GROUP_POINT);
     QCOMPARE(stable.candidate.getPoint(index).getMaterial().getName(), QStringLiteral("Steel"));
+}
+
+void TestModelCommandService::contextReportsStructuralControlAndPaginatesConditioning()
+{
+    RModel model = stressLineModel();
+    RStructuralControlSetup &control = model.getProblemSetup().getStructuralControlSetup();
+    control.enabled = true;
+    control.controllerId = QStringLiteral("pid-controller-07");
+    control.deterministicSeed = std::numeric_limits<quint64>::max();
+    for (uint i = 0; i < 205; ++i)
+    {
+        RStructuralControlChannelConditioning channel;
+        channel.actuatorId = QStringLiteral("actuator-%1").arg(i, 4, 10, QLatin1Char('0'));
+        channel.delaySteps = i == 0 ? 7u : i % 7u;
+        channel.holdSteps = i == 0 ? 5u : i + 1u;
+        channel.noiseAmplitude = i == 0 ? 0.25 : static_cast<double>(i) * 0.001;
+        control.channelConditioning.push_back(channel);
+    }
+    const RStructuralControlSetup expected = control;
+
+    const QJsonObject first = RModelCommandService::context(model, QStringLiteral("doc-A"),
+        QStringLiteral("r1"), {{QStringLiteral("limit"), 200}});
+    QCOMPARE(first.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+    const QJsonObject configuration = first.value(QStringLiteral("configuration")).toObject();
+    const QJsonObject reported = configuration.value(QStringLiteral("structuralControl")).toObject();
+    QVERIFY(reported.value(QStringLiteral("available")).toBool());
+    QCOMPARE(reported.value(QStringLiteral("enabled")).toBool(), expected.enabled);
+    QCOMPARE(reported.value(QStringLiteral("controlProtocolVersion")).toInt(),
+             static_cast<int>(expected.controlProtocolVersion));
+    QCOMPARE(reported.value(QStringLiteral("controllerId")).toString(), expected.controllerId);
+    QCOMPARE(reported.value(QStringLiteral("deterministicSeed")).toString(),
+             QString::number(static_cast<qulonglong>(expected.deterministicSeed)));
+
+    const QJsonObject firstPage = reported.value(QStringLiteral("conditioningPage")).toObject();
+    QCOMPARE(firstPage.value(QStringLiteral("total")).toInt(), 205);
+    QCOMPARE(firstPage.value(QStringLiteral("offset")).toInt(), 0);
+    QCOMPARE(firstPage.value(QStringLiteral("limit")).toInt(), 200);
+    QVERIFY(firstPage.value(QStringLiteral("hasMore")).toBool());
+    const QJsonArray firstChannels = firstPage.value(QStringLiteral("channels")).toArray();
+    QCOMPARE(firstChannels.size(), 200);
+    const QJsonObject firstChannel = firstChannels.first().toObject();
+    QCOMPARE(firstChannel.value(QStringLiteral("actuatorId")).toString(), QStringLiteral("actuator-0000"));
+    QCOMPARE(firstChannel.value(QStringLiteral("delaySteps")).toInt(), 7);
+    QCOMPARE(firstChannel.value(QStringLiteral("holdSteps")).toInt(), 5);
+    QCOMPARE(firstChannel.value(QStringLiteral("noiseAmplitudeN")).toDouble(), 0.25);
+    QVERIFY(firstPage.value(QStringLiteral("nextCursor")).isString());
+    QCOMPARE(first.value(QStringLiteral("targetPage")).toObject().value(QStringLiteral("total")).toInt(), 1);
+
+    const QString cursor = firstPage.value(QStringLiteral("nextCursor")).toString();
+    const QJsonObject second = RModelCommandService::context(model, QStringLiteral("doc-A"),
+        QStringLiteral("r1"), {{QStringLiteral("cursor"), cursor}});
+    const QJsonObject secondControl = second.value(QStringLiteral("configuration")).toObject()
+        .value(QStringLiteral("structuralControl")).toObject();
+    const QJsonObject secondPage = secondControl.value(QStringLiteral("conditioningPage")).toObject();
+    QCOMPARE(secondPage.value(QStringLiteral("offset")).toInt(), 200);
+    QCOMPARE(secondPage.value(QStringLiteral("total")).toInt(), 205);
+    QCOMPARE(secondPage.value(QStringLiteral("channels")).toArray().size(), 5);
+    QVERIFY(!secondPage.value(QStringLiteral("hasMore")).toBool());
+    QVERIFY(!secondPage.contains(QStringLiteral("nextCursor")));
+    QCOMPARE(secondPage.value(QStringLiteral("channels")).toArray().last().toObject()
+                 .value(QStringLiteral("actuatorId")).toString(), QStringLiteral("actuator-0204"));
+    QCOMPARE(second.value(QStringLiteral("targetPage")).toObject().value(QStringLiteral("targets")).toArray().size(), 0);
+
+    QCOMPARE(RModelCommandService::context(model, QStringLiteral("doc-A"), QStringLiteral("r2"),
+        {{QStringLiteral("cursor"), cursor}}).value(QStringLiteral("code")).toString(),
+        QStringLiteral("stale_revision"));
+    QCOMPARE(RModelCommandService::context(model, QStringLiteral("doc-B"), QStringLiteral("r1"),
+        {{QStringLiteral("cursor"), cursor}}).value(QStringLiteral("code")).toString(),
+        QStringLiteral("stale_target_cursor"));
+
+    const QJsonObject actuatorQuery = RModelCommandService::context(model, QStringLiteral("doc-A"),
+        QStringLiteral("r1"), {{QStringLiteral("labelQuery"), QStringLiteral("actuator-020")}});
+    const QJsonObject actuatorControl = actuatorQuery.value(QStringLiteral("configuration")).toObject()
+        .value(QStringLiteral("structuralControl")).toObject();
+    QCOMPARE(actuatorQuery.value(QStringLiteral("targetPage")).toObject().value(QStringLiteral("total")).toInt(), 0);
+    QCOMPARE(actuatorControl.value(QStringLiteral("conditioningPage")).toObject()
+                 .value(QStringLiteral("total")).toInt(), 5);
+    const QJsonObject groupQuery = RModelCommandService::context(model, QStringLiteral("doc-A"),
+        QStringLiteral("r1"), {{QStringLiteral("labelQuery"), QStringLiteral("Truss")}});
+    QCOMPARE(groupQuery.value(QStringLiteral("targetPage")).toObject().value(QStringLiteral("total")).toInt(), 1);
+    QCOMPARE(groupQuery.value(QStringLiteral("configuration")).toObject()
+                 .value(QStringLiteral("structuralControl")).toObject()
+                 .value(QStringLiteral("conditioningPage")).toObject()
+                 .value(QStringLiteral("total")).toInt(), 0);
+
+    const QJsonObject maximumOffset = RModelCommandService::context(model, QStringLiteral("doc-A"),
+        QStringLiteral("r1"), {{QStringLiteral("offset"), std::numeric_limits<int>::max()},
+                                {QStringLiteral("limit"), 200}});
+    const QJsonObject maximumOffsetPage = maximumOffset.value(QStringLiteral("configuration")).toObject()
+        .value(QStringLiteral("structuralControl")).toObject()
+        .value(QStringLiteral("conditioningPage")).toObject();
+    QCOMPARE(maximumOffsetPage.value(QStringLiteral("offset")).toInt(), std::numeric_limits<int>::max());
+    QCOMPARE(maximumOffsetPage.value(QStringLiteral("channels")).toArray().size(), 0);
+    QVERIFY(!maximumOffsetPage.value(QStringLiteral("hasMore")).toBool());
+    QVERIFY(!maximumOffsetPage.contains(QStringLiteral("nextCursor")));
+
+    const RStructuralControlSetup &preserved = model.getProblemSetup().getStructuralControlSetup();
+    QCOMPARE(preserved.enabled, expected.enabled);
+    QCOMPARE(preserved.controlProtocolVersion, expected.controlProtocolVersion);
+    QCOMPARE(preserved.controllerId, expected.controllerId);
+    QCOMPARE(preserved.deterministicSeed, expected.deterministicSeed);
+    QCOMPARE(preserved.channelConditioning.size(), expected.channelConditioning.size());
+    for (std::size_t i = 0; i < expected.channelConditioning.size(); ++i)
+    {
+        QCOMPARE(preserved.channelConditioning[i].actuatorId, expected.channelConditioning[i].actuatorId);
+        QCOMPARE(preserved.channelConditioning[i].delaySteps, expected.channelConditioning[i].delaySteps);
+        QCOMPARE(preserved.channelConditioning[i].holdSteps, expected.channelConditioning[i].holdSteps);
+        QCOMPARE(preserved.channelConditioning[i].noiseAmplitude,
+                 expected.channelConditioning[i].noiseAmplitude);
+    }
+}
+
+void TestModelCommandService::contextMarksInvalidStructuralControlUnavailable()
+{
+    RModel model = stressPointModel();
+    RStructuralControlSetup &control = model.getProblemSetup().getStructuralControlSetup();
+    control.enabled = true;
+    control.controllerId = QStringLiteral("native-controller-09");
+    control.deterministicSeed = quint64(9007199254740993ULL);
+    control.channelConditioning.resize(4097);
+
+    const QJsonObject context = RModelCommandService::context(model, QStringLiteral("doc-A"), QStringLiteral("r1"));
+    QCOMPARE(context.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+    const QJsonObject reported = context.value(QStringLiteral("configuration")).toObject()
+        .value(QStringLiteral("structuralControl")).toObject();
+    QVERIFY(!reported.value(QStringLiteral("available")).toBool());
+    QCOMPARE(reported.value(QStringLiteral("enabled")).toBool(), true);
+    QCOMPARE(reported.value(QStringLiteral("controllerId")).toString(), control.controllerId);
+    QCOMPARE(reported.value(QStringLiteral("deterministicSeed")).toString(), QStringLiteral("9007199254740993"));
+    QVERIFY(!reported.contains(QStringLiteral("conditioningPage")));
+    const QJsonArray diagnostics = reported.value(QStringLiteral("diagnostics")).toArray();
+    QCOMPARE(diagnostics.size(), 1);
+    QCOMPARE(diagnostics.first().toObject().value(QStringLiteral("code")).toString(),
+             QStringLiteral("invalid_structural_control_setup"));
+    QVERIFY(diagnostics.first().toObject().value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("4096")));
+
+    const RStructuralControlSetup &preserved = model.getProblemSetup().getStructuralControlSetup();
+    QCOMPARE(preserved.enabled, true);
+    QCOMPARE(preserved.controllerId, QStringLiteral("native-controller-09"));
+    QCOMPARE(preserved.deterministicSeed, quint64(9007199254740993ULL));
+    QCOMPARE(preserved.channelConditioning.size(), size_t(4097));
+
+    RModel oversizedIdModel = stressPointModel();
+    RStructuralControlSetup &oversizedIdControl =
+        oversizedIdModel.getProblemSetup().getStructuralControlSetup();
+    oversizedIdControl.enabled = true;
+    oversizedIdControl.controlProtocolVersion = 7;
+    oversizedIdControl.controllerId = QString(129, QLatin1Char('x'));
+    oversizedIdControl.deterministicSeed = quint64(9007199254740993ULL);
+    const QJsonObject oversizedIdContext = RModelCommandService::context(
+        oversizedIdModel, QStringLiteral("doc-A"), QStringLiteral("r1"));
+    const QJsonObject oversizedIdReported = oversizedIdContext.value(QStringLiteral("configuration")).toObject()
+        .value(QStringLiteral("structuralControl")).toObject();
+    QVERIFY(!oversizedIdReported.value(QStringLiteral("available")).toBool());
+    QVERIFY(!oversizedIdReported.contains(QStringLiteral("controllerId")));
+    QCOMPARE(oversizedIdReported.value(QStringLiteral("enabled")).toBool(), true);
+    QCOMPARE(oversizedIdReported.value(QStringLiteral("controlProtocolVersion")).toInt(), 7);
+    QCOMPARE(oversizedIdReported.value(QStringLiteral("deterministicSeed")).toString(),
+             QStringLiteral("9007199254740993"));
+    QVERIFY(oversizedIdReported.value(QStringLiteral("diagnostics")).toArray().first().toObject()
+                .value(QStringLiteral("message")).toString().contains(QStringLiteral("128")));
+    const RStructuralControlSetup &oversizedIdPreserved =
+        oversizedIdModel.getProblemSetup().getStructuralControlSetup();
+    QCOMPARE(oversizedIdPreserved.controllerId, QString(129, QLatin1Char('x')));
+    QCOMPARE(oversizedIdPreserved.deterministicSeed, quint64(9007199254740993ULL));
 }
 
 void TestModelCommandService::duplicatePhysicalIdsRejectTargetQueries()

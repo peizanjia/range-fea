@@ -16,6 +16,7 @@
 #include <rbl_utils.h>
 #include <rbl_error.h>
 #include <rml_condition_component.h>
+#include <rml_structural_control_setup.h>
 #include <rml_variable.h>
 
 namespace
@@ -317,6 +318,82 @@ RElementGroup *findGroup(RModel &model, uint physicalId, REntityGroupType *typeO
 QJsonObject timeGridState(const RModel &model)
 {
     return timeSolverParameters(model.getTimeSolver());
+}
+
+QJsonObject encodedCursor(const QString &sourceId, const QString &revision,
+                          int offset, int limit, const QString &labelQuery);
+
+QJsonObject structuralControlState(const RStructuralControlSetup &setup,
+                                   const QString &sourceId, const QString &revision,
+                                   int offset, int limit, const QString &labelQuery)
+{
+    QJsonObject result{{QStringLiteral("available"), false},
+                       {QStringLiteral("enabled"), setup.enabled},
+                       {QStringLiteral("controlProtocolVersion"),
+                        static_cast<double>(setup.controlProtocolVersion)},
+                       {QStringLiteral("deterministicSeed"),
+                        QString::number(static_cast<qulonglong>(setup.deterministicSeed))}};
+    if (setup.controllerId.size() <= 128)
+        result.insert(QStringLiteral("controllerId"), setup.controllerId);
+    auto unavailable = [&result](const QString &message) {
+        result.insert(QStringLiteral("diagnostics"), QJsonArray{diagnostic(
+            QStringLiteral("invalid_structural_control_setup"), message,
+            QStringLiteral("/problemSetup/structuralControl"))});
+        return result;
+    };
+
+    if (setup.controllerId.size() > 128)
+        return unavailable(QStringLiteral("Structural controller ID exceeds the 128-character context limit."));
+
+    try
+    {
+        setup.validate();
+    }
+    catch (const RError &error)
+    {
+        return unavailable(error.getMessage());
+    }
+    catch (const std::exception &error)
+    {
+        return unavailable(QString::fromUtf8(error.what()));
+    }
+    catch (...)
+    {
+        return unavailable(QStringLiteral("Structural control settings failed native validation."));
+    }
+
+    QJsonArray channels;
+    int total = 0;
+    for (const RStructuralControlChannelConditioning &channel : setup.channelConditioning)
+    {
+        if (!labelQuery.isEmpty()
+            && !channel.actuatorId.contains(labelQuery, Qt::CaseInsensitive)) continue;
+        if (total >= offset && channels.size() < limit)
+        {
+            channels.append(QJsonObject{
+                {QStringLiteral("actuatorId"), channel.actuatorId},
+                {QStringLiteral("delaySteps"), static_cast<double>(channel.delaySteps)},
+                {QStringLiteral("holdSteps"), static_cast<double>(channel.holdSteps)},
+                {QStringLiteral("noiseAmplitudeN"), channel.noiseAmplitude}});
+        }
+        ++total;
+    }
+
+    const int pageCount = offset >= total ? 0 : std::min(limit, total - offset);
+    const int end = offset >= total ? total : offset + pageCount;
+    QJsonObject page{{QStringLiteral("offset"), offset},
+                     {QStringLiteral("limit"), limit},
+                     {QStringLiteral("total"), total},
+                     {QStringLiteral("channels"), channels},
+                     {QStringLiteral("hasMore"), end < total},
+                     {QStringLiteral("labelQuery"), labelQuery}};
+    if (end < total)
+        page.insert(QStringLiteral("nextCursor"), encodedCursor(sourceId, revision, end, limit, labelQuery)
+                    .value(QStringLiteral("cursor")));
+
+    result.insert(QStringLiteral("available"), true);
+    result.insert(QStringLiteral("conditioningPage"), page);
+    return result;
 }
 
 bool readStructuralDynamics(const QJsonObject &arguments, RStructuralDynamicsSetup &setup,
@@ -831,7 +908,12 @@ QJsonObject RModelCommandService::context(const RModel &model, const QString &so
                 {QStringLiteral("modal"), modalParameters(model.getProblemSetup().getModalSetup())},
                 {QStringLiteral("structuralDynamics"), structuralDynamicsParameters(
                     model.getProblemSetup().getStructuralDynamicsSetup())},
-                {QStringLiteral("timeSolverGrid"), timeGridState(model)}}},
+                {QStringLiteral("timeSolverGrid"), timeGridState(model)},
+                {QStringLiteral("structuralControl"), structuralControlState(
+                    model.getProblemSetup().getStructuralControlSetup(), sourceId, revision,
+                    page.value(QStringLiteral("offset")).toInt(),
+                    page.value(QStringLiteral("limit")).toInt(),
+                    page.value(QStringLiteral("labelQuery")).toString())}}},
             {QStringLiteral("capabilities"), capabilities(model)},
             {QStringLiteral("targetPage"), page}};
 }

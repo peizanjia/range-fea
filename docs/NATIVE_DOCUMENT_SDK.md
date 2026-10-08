@@ -70,4 +70,6 @@ The service returns session `modelId` and `revision` values for mutation request
 
 ## Scope and limits
 
+`context()` also returns the stored structural control configuration in `configuration.structuralControl`. Its seed is a decimal string, and its actuator conditioning rows use a bounded `conditioningPage`. The same context page independently pages element groups and conditioning; `labelQuery` matches group labels or actuator IDs respectively. Each directory has its own total and next cursor, bound to the same source/revision. This is read-only configuration, and does not establish a running controller or a physical sensor/actuator mapping. Invalid native configuration reports unavailable with diagnostics.
+
 This interface exposes only the capabilities returned by the shared application service. It does not expose arbitrary Qt calls, native object reflection, Python evaluation, shell execution, material-table conversion, boundary-condition families outside the advertised schema, or solver controls. A `preview` proves only that the current native service accepts the proposed configuration. A `published` response proves that a new native file was written; it does not prove numerical solvability, run a solver, or synchronize an already open GUI document. Solver process and job ownership remain with their host application.

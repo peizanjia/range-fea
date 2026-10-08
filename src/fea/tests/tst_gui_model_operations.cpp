@@ -25,6 +25,7 @@
 #include "model_command_host.h"
 #include "model_io.h"
 #include "problem_tree.h"
+#include "model_tree.h"
 #include "session.h"
 #include "solver_manager.h"
 #include "solver_task.h"
@@ -99,6 +100,14 @@ QJsonObject targetFor(const Session *session, const QString &documentId)
 {
     return {{QStringLiteral("documentId"), documentId},
             {QStringLiteral("sessionEpoch"), session->getModelCommandHost()->sessionEpoch()}};
+}
+
+ValueLineEdit *currentNamedEditor(ProblemTree *tree, const QString &name)
+{
+    for (int index = 0; index < tree->topLevelItemCount(); ++index)
+        if (auto *widget = tree->itemWidget(tree->topLevelItem(index), 0))
+            if (auto *editor = widget->findChild<ValueLineEdit *>(name)) return editor;
+    return nullptr;
 }
 
 QJsonObject commandPreview(Session *session, const QString &documentId,
@@ -286,20 +295,32 @@ private slots:
         ModelCommandHost *host = session->getModelCommandHost();
         SessionModelGuard models(session);
         const QString identity = models.add(modalFixture(QStringLiteral("Native GUI control fixture")));
+        const QString otherIdentity = models.add(modalFixture(QStringLiteral("Unrelated background document")));
         const uint modelID = session->findModelByCommandIdentity(identity);
+        session->setModelSelected(session->findModelByCommandIdentity(otherIdentity), false);
         session->setModelSelected(modelID, true);
         QCoreApplication::processEvents();
         auto *window = Application::instance()->getMainWindow();
+        auto *modelTree = window->findChild<ModelTree *>();
+        QVERIFY(modelTree);
+        QVERIFY(modelTree->topLevelItemCount() > int(modelID));
+        QTest::mouseClick(modelTree->viewport(), Qt::LeftButton, Qt::NoModifier,
+            modelTree->visualItemRect(modelTree->topLevelItem(int(modelID))).center());
+        QCoreApplication::processEvents();
+        QCOMPARE(session->getSelectedModelIDs(), QList<uint>{modelID});
         auto *tree = window->findChild<ProblemTree *>();
         QVERIFY(tree);
-        auto *tolerance = tree->findChild<ValueLineEdit *>(QStringLiteral("modalTolerance"));
+        auto *tolerance = currentNamedEditor(tree, QStringLiteral("modalTolerance"));
         QVERIFY(tolerance);
-        tolerance->setFocus(Qt::OtherFocusReason);
+        QVERIFY(tolerance->isVisible());
+        QTest::mouseClick(tolerance, Qt::LeftButton);
         QVERIFY(tolerance->hasFocus());
 
         const QJsonObject before = host->query(modelID);
         const quint64 revision = session->modelCommandStamp(modelID).second;
-        tolerance->setText(QStringLiteral("not-a-number"));
+        QTest::keyClick(tolerance, Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClick(tolerance, Qt::Key_Backspace);
+        QVERIFY(tolerance->text().isEmpty());
         QVERIFY(session->hasDocumentDraft(modelID));
         QCOMPARE(session->modelCommandStamp(modelID).second, revision);
         const auto rejectedDraft = commandPreview(session, identity, QStringLiteral("analysis.modal.configure"),
@@ -309,6 +330,49 @@ private slots:
         QVERIFY2(rejectedDraft.value(QStringLiteral("status")).toString() == QStringLiteral("rejected"),
                  qPrintable(QJsonDocument(rejectedDraft).toJson(QJsonDocument::Compact)));
         QCOMPARE(rejectedDraft.value(QStringLiteral("code")).toString(), QStringLiteral("DRAFT_CONFLICT"));
+        QVERIFY(tolerance->hasFocus());
+        const auto readonly = host->handle(hostRequest(QStringLiteral("document.inputs.query"),
+            {{QStringLiteral("target"), targetFor(session, identity)}}));
+        QCOMPARE(readonly.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QVERIFY(tolerance->hasFocus());
+        QVERIFY(tolerance->text().isEmpty());
+        const uint otherID = session->findModelByCommandIdentity(otherIdentity);
+        session->getModel(otherID).setDescription(QStringLiteral("Background accepted change"));
+        session->setModelChanged(otherID);
+        QCoreApplication::processEvents();
+        tolerance = currentNamedEditor(tree, QStringLiteral("modalTolerance"));
+        QVERIFY(tolerance);
+        QStringList selectedIds;
+        for (uint selectedID : session->getSelectedModelIDs())
+            selectedIds.append(session->modelCommandStamp(selectedID).first);
+        QWidget *actualFocus = QApplication::focusWidget();
+        if (!tolerance->hasFocus())
+            window->grab().save(QDir(nativeEvidenceDirectory).filePath(QStringLiteral("focus-diagnostic.png")));
+        QVERIFY2(tolerance->hasFocus(), qPrintable(QStringLiteral("focus=%1/%2 selected=%3 expected=%4 visible=%5 text=%6")
+            .arg(actualFocus ? QString::fromLatin1(actualFocus->metaObject()->className()) : QStringLiteral("null"),
+                 actualFocus ? actualFocus->objectName() : QStringLiteral("null"), selectedIds.join(QLatin1Char(',')), identity)
+            .arg(tolerance->isVisible()).arg(tolerance->text())));
+        QVERIFY(tolerance->text().isEmpty());
+        QVERIFY(QMetaObject::invokeMethod(tree, "populate", Qt::DirectConnection));
+        ValueLineEdit *rebuiltTolerance = currentNamedEditor(tree, QStringLiteral("modalTolerance"));
+        QVERIFY(rebuiltTolerance);
+        QCoreApplication::processEvents();
+        QVERIFY(rebuiltTolerance->hasFocus());
+        QVERIFY(rebuiltTolerance->text().isEmpty());
+        QCOMPARE(session->modelCommandStamp(modelID).second, revision);
+        tolerance = rebuiltTolerance;
+
+        tolerance->setText(QStringLiteral("1e-"));
+        tolerance->setSelection(3, -2);
+        QVERIFY(QMetaObject::invokeMethod(tree, "populate", Qt::DirectConnection));
+        tolerance = currentNamedEditor(tree, QStringLiteral("modalTolerance"));
+        QVERIFY(tolerance);
+        QCoreApplication::processEvents();
+        QVERIFY(tolerance->hasFocus());
+        QCOMPARE(tolerance->text(), QStringLiteral("1e-"));
+        QCOMPARE(tolerance->selectedText(), QStringLiteral("e-"));
+        QCOMPARE(tolerance->cursorPosition(), 1);
+        QCOMPARE(session->modelCommandStamp(modelID).second, revision);
 
         tolerance->setText(QStringLiteral("0.000001"));
         QVERIFY(!session->hasDocumentDraft(modelID));

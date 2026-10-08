@@ -9,6 +9,7 @@
 #include "value_line_edit.h"
 #include <QLayout>
 #include <QLabel>
+#include <QApplication>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
@@ -61,10 +62,91 @@ ProblemTree::ProblemTree(QWidget *parent) :
 
 void ProblemTree::populate()
 {
-    this->clear();
-
     auto *session = Application::instance()->getSession();
     QList<uint> modelIDs = session->getSelectedModelIDs();
+    QSet<QString> selectedDocumentIds;
+    for (const uint modelID : modelIDs)
+    {
+        const QString documentId = session->modelCommandStamp(modelID).first;
+        if (!documentId.isEmpty()) selectedDocumentIds.insert(documentId);
+    }
+
+    const bool sameSelectedDocuments = selectedDocumentIds == this->renderedSelectedDocumentIds;
+    QString focusedField;
+    int focusedCursorPosition = -1;
+    int focusedSelectionStart = -1;
+    int focusedSelectionLength = 0;
+    if (sameSelectedDocuments && QApplication::activeModalWidget() == nullptr)
+    {
+        auto *focusedLine = qobject_cast<ValueLineEdit *>(QApplication::focusWidget());
+        if (focusedLine && !focusedLine->objectName().isEmpty())
+        {
+            for (int i = 0; i < this->topLevelItemCount(); ++i)
+            {
+                QWidget *currentWidget = this->itemWidget(this->topLevelItem(i), PROBLEM_TREE_COLUMN_1);
+                if (currentWidget && (currentWidget == focusedLine || currentWidget->isAncestorOf(focusedLine)))
+                {
+                    focusedField = focusedLine->objectName();
+                    focusedCursorPosition = focusedLine->cursorPosition();
+                    focusedSelectionStart = focusedLine->selectionStart();
+                    focusedSelectionLength = focusedLine->selectedText().size();
+                    break;
+                }
+            }
+        }
+    }
+
+    this->renderedSelectedDocumentIds = selectedDocumentIds;
+    this->clear();
+
+    auto restoreEditorFocus = [this, selectedDocumentIds, sameSelectedDocuments, focusedField,
+                               focusedCursorPosition, focusedSelectionStart, focusedSelectionLength] {
+        if (!sameSelectedDocuments || focusedField.isEmpty()
+            || QApplication::activeModalWidget() != nullptr
+            || this->renderedSelectedDocumentIds != selectedDocumentIds)
+            return;
+
+        auto *currentSession = Application::instance()->getSession();
+        QSet<QString> currentSelectedDocumentIds;
+        for (const uint modelID : currentSession->getSelectedModelIDs())
+        {
+            const QString documentId = currentSession->modelCommandStamp(modelID).first;
+            if (!documentId.isEmpty()) currentSelectedDocumentIds.insert(documentId);
+        }
+        if (currentSelectedDocumentIds != selectedDocumentIds) return;
+
+        for (int i = 0; i < this->topLevelItemCount(); ++i)
+        {
+            QWidget *currentWidget = this->itemWidget(this->topLevelItem(i), PROBLEM_TREE_COLUMN_1);
+            if (!currentWidget || !currentWidget->isVisible() || !currentWidget->isEnabled()) continue;
+
+            // Search only the active item widget. Retired widgets may still be awaiting deleteLater().
+            auto *line = currentWidget->findChild<ValueLineEdit *>(focusedField, Qt::FindChildrenRecursively);
+            if (!line || !line->isVisible() || !line->isEnabled()) continue;
+
+            line->setFocus(Qt::OtherFocusReason);
+            const int textLength = line->text().size();
+            const int cursorPosition = qBound(0, focusedCursorPosition, textLength);
+            line->setCursorPosition(cursorPosition);
+            if (focusedSelectionStart >= 0 && focusedSelectionLength > 0)
+            {
+                const int selectionStart = qBound(0, focusedSelectionStart, textLength);
+                const int selectionEnd = qBound(selectionStart, focusedSelectionStart + focusedSelectionLength,
+                                                textLength);
+                const int selectionLength = selectionEnd - selectionStart;
+                if (selectionLength > 0)
+                {
+                    // Keep the selection anchor/cursor direction as well as the selected range.
+                    if (cursorPosition <= selectionStart)
+                        line->setSelection(selectionEnd, -selectionLength);
+                    else
+                        line->setSelection(selectionStart, selectionLength);
+                }
+            }
+            return;
+        }
+    };
+
     auto createModalEditor = [this, session, &modelIDs](const RModalSetup &setup) {
         QStringList recoveredDraftRuntimeIds;
         for (const uint modelID : modelIDs)
@@ -134,6 +216,7 @@ void ProblemTree::populate()
         QTreeWidgetItem *item = new QTreeWidgetItem(this);
         item->setText(PROBLEM_TREE_COLUMN_1,tr("No model is selected!"));
         item->setForeground(PROBLEM_TREE_COLUMN_1,QColor(Qt::red));
+        restoreEditorFocus();
         return;
     }
     else if (modelIDs.size() > 1)
@@ -151,6 +234,7 @@ void ProblemTree::populate()
             auto *editor = createModalEditor(session->getModel(modelIDs[0]).getProblemSetup().getModalSetup());
             this->setItemWidget(row, PROBLEM_TREE_COLUMN_1, editor);
         }
+        restoreEditorFocus();
         return;
     }
 
@@ -197,10 +281,27 @@ void ProblemTree::populate()
         this->setItemWidget(meshSetup,PROBLEM_TREE_COLUMN_1,meshSetupWidget);
         QObject::connect(meshSetupWidget,&MeshSetupWidget::changed,this,&ProblemTree::onMeshSetupChanged);
     }
+
+    restoreEditorFocus();
 }
 
-void ProblemTree::onModelChanged(uint)
+void ProblemTree::onModelChanged(uint modelID)
 {
+    auto *session = Application::instance()->getSession();
+    const QString changedDocumentId = session->modelCommandStamp(modelID).first;
+    if (changedDocumentId.isEmpty()) return;
+
+    bool selectedDocumentChanged = false;
+    for (const uint selectedModelID : session->getSelectedModelIDs())
+    {
+        if (session->modelCommandStamp(selectedModelID).first == changedDocumentId)
+        {
+            selectedDocumentChanged = true;
+            break;
+        }
+    }
+    if (!selectedDocumentChanged) return;
+
     this->populate();
 }
 
@@ -211,6 +312,15 @@ void ProblemTree::onProblemChanged(uint)
 
 void ProblemTree::onModelSelectionChanged(uint)
 {
+    auto *session = Application::instance()->getSession();
+    QSet<QString> selectedDocumentIds;
+    for (const uint modelID : session->getSelectedModelIDs())
+    {
+        const QString documentId = session->modelCommandStamp(modelID).first;
+        if (!documentId.isEmpty()) selectedDocumentIds.insert(documentId);
+    }
+    if (selectedDocumentIds == this->renderedSelectedDocumentIds) return;
+
     this->populate();
 }
 
