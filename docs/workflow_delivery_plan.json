@@ -15,8 +15,8 @@
     {
       "id": "WF-01",
       "title": "Project identity and contracts",
-      "status": "in_progress",
-      "statusReason": "按2026-10-08授权实施项目身份/快照/契约；先共享项目目录，再GUI与进程接口接线。",
+      "status": "done",
+      "statusReason": "WF-01 七项验收完成：共享目录/来源租约/快照/草稿与跨入口身份；完整110/110、原生窗口和安装私有SDK通过，Sol high实质问题闭合。",
       "priority": "P0",
       "effort": "S",
       "dependsOn": [],
@@ -39,7 +39,57 @@
         "src/fea/src/workflow_process.h",
         "src/range-workflow/python/range_workflow/service.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A01",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A02",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A03",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A04",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A05",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A06",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A07",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        }
+      ]
     },
     {
       "id": "WF-02",
