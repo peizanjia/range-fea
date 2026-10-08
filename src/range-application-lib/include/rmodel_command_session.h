@@ -7,6 +7,7 @@
 #include <QString>
 #include <memory>
 #include <rml_model.h>
+#include <rmodel_command_service.h>
 
 // Single-owner editing session with an optional durable interaction journal.
 // The input model is copied; callers publish the accepted model separately.
@@ -36,6 +37,9 @@ public:
 
     const RModel &model() const;
     QJsonObject query() const;
+    QJsonObject capabilities() const;
+    QJsonObject context(const QString &sourceId, const QJsonObject &pageRequest = {}) const;
+    QJsonObject targets(const QString &sourceId, const QJsonObject &pageRequest = {}) const;
     QJsonObject execute(const QJsonObject &request);
     // Trusted-host lifecycle transitions. A failed journal append returns false
     // without changing lifecycle. Repeating the current transition is a no-op.

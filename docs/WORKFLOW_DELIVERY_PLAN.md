@@ -1,6 +1,6 @@
 # 全工作流交付方案与验收标准
 
-更新：2026-10-08。规划基线：根 `15297a9`，AI 子模块 `21bbdc1`。本文定义后续开发范围、接口方向和验收条款；任务状态、依赖和证据索引的唯一来源是 [workflow_delivery_plan.json](workflow_delivery_plan.json)。当前任务全部为 `planned`，条款中的目标接口尚未实现，不得作为当前产品能力调用。
+更新：2026-10-08。规划基线：根 `15297a9`，AI 子模块 `21bbdc1`。本文定义后续开发范围、接口方向和验收条款；任务状态、依赖和证据索引的唯一来源是 [workflow_delivery_plan.json](workflow_delivery_plan.json)。WF-01 已验收，WF-02 正在实施；后续任务仍须分别交付和验收。条款描述目标范围，当前产品能力以运行时 capability/schema、已交付操作手册及任务证据为准。
 
 ## 读取入口与文档分工
 

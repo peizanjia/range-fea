@@ -4,11 +4,14 @@
 #include <QFileInfo>
 #include <QDirIterator>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMetaObject>
 #include <QMap>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QThread>
 #include <QUuid>
 
@@ -136,6 +139,18 @@ QByteArray sha256Directory(const QString &directoryName)
         hash.addData("\0", 1);
     }
     return hash.result();
+}
+
+QJsonObject sourceBindingJson(const RProjectCatalog::SourceBinding &sourceBinding)
+{
+    QJsonArray sourceArtifacts;
+    for (const auto &artifact : sourceBinding.sourceArtifacts)
+        sourceArtifacts.append(QJsonObject{{QStringLiteral("path"), artifact.path},
+                                           {QStringLiteral("sha256"), artifact.sha256}});
+    return {{QStringLiteral("logicalSourcePath"), sourceBinding.logicalSourcePath},
+            {QStringLiteral("resolvedSourcePath"), sourceBinding.resolvedSourcePath},
+            {QStringLiteral("savedArtifactHash"), sourceBinding.savedArtifactHash},
+            {QStringLiteral("sourceArtifacts"), sourceArtifacts}};
 }
 
 QString absoluteModelPath(const QString &fileName)
@@ -354,6 +369,8 @@ SolverTask::SolverTask(const ApplicationSettings *applicationSettings, uint mode
     this->logFileName = QDir(logDirectory).filePath(artifactBaseName + ".log");
     this->convergenceFileName = QDir(logDirectory).filePath(artifactBaseName + ".cvg");
     this->monitoringFileName = QDir(logDirectory).filePath(artifactBaseName + ".mon");
+    this->nativeProgressFileName = QDir(artifactDirectory)
+            .filePath(QStringLiteral("events/native-progress.ndjson"));
 
     this->solverArguments.append("--file=" + this->modelFileName);
     this->solverArguments.append("--log-file=" + this->logFileName);
@@ -366,18 +383,33 @@ SolverTask::SolverTask(const ApplicationSettings *applicationSettings, uint mode
 
 bool SolverTask::captureInputSnapshot(const Model &model,
                                       const QPair<QString, quint64> &sourceStamp,
-                                      uint currentModelID)
+                                      uint currentModelID,
+                                      const QString &inputDerivedFrom,
+                                      const QString &frozenSnapshotPath,
+                                      const QString &frozenSnapshotSha256)
 {
-    return this->captureInputSnapshot(std::make_unique<Model>(model), sourceStamp, currentModelID);
+    return this->captureInputSnapshot(std::make_unique<Model>(model), sourceStamp, currentModelID,
+                                     inputDerivedFrom, frozenSnapshotPath, frozenSnapshotSha256);
 }
 
 bool SolverTask::captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
                                       const QPair<QString, quint64> &sourceStamp,
-                                      uint currentModelID)
+                                      uint currentModelID,
+                                      const QString &inputDerivedFrom,
+                                      const QString &frozenSnapshotPath,
+                                      const QString &frozenSnapshotSha256)
 {
+    const QString derivedFrom = inputDerivedFrom.isEmpty()
+            ? QStringLiteral("live_unlinked") : inputDerivedFrom;
+    const bool frozenVerified = derivedFrom == QStringLiteral("frozen_project_snapshot") &&
+            !frozenSnapshotPath.isEmpty() &&
+            QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(frozenSnapshotSha256).hasMatch();
+    const bool validUnlinked = derivedFrom == QStringLiteral("live_unlinked") &&
+            frozenSnapshotPath.isEmpty() && frozenSnapshotSha256.isEmpty();
     if (QThread::currentThread() != this->thread() ||
         sourceStamp.first.isEmpty() || sourceStamp.first != this->sourceDocumentId ||
-        !this->sourceStamp.first.isEmpty() || !modelSnapshot)
+        !this->sourceStamp.first.isEmpty() || !modelSnapshot ||
+        (!frozenVerified && !validUnlinked))
     {
         return false;
     }
@@ -457,7 +489,39 @@ bool SolverTask::captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
 
     this->modelID = currentModelID;
     this->sourceStamp = sourceStamp;
+    this->inputDerivedFrom = derivedFrom;
+    this->frozenSnapshotPath = frozenVerified ? QFileInfo(frozenSnapshotPath).absoluteFilePath() : QString();
+    this->frozenSnapshotSha256 = frozenVerified ? frozenSnapshotSha256 : QString();
+    this->frozenSnapshotVerified = frozenVerified;
     return true;
+}
+
+std::unique_ptr<Model> SolverTask::copyCapturedInputForValidation() const
+{
+    if (QThread::currentThread() != this->thread() ||
+        this->performStarted.load(std::memory_order_acquire) || !this->inputSnapshot)
+        return {};
+    return std::make_unique<Model>(*this->inputSnapshot);
+}
+
+const QString &SolverTask::getInputDerivedFrom() const
+{
+    return this->inputDerivedFrom;
+}
+
+const QString &SolverTask::getFrozenSnapshotPath() const
+{
+    return this->frozenSnapshotPath;
+}
+
+const QString &SolverTask::getFrozenSnapshotSha256() const
+{
+    return this->frozenSnapshotSha256;
+}
+
+bool SolverTask::getFrozenSnapshotVerified() const
+{
+    return this->frozenSnapshotVerified;
 }
 
 const QString &SolverTask::getSourceDocumentId() const
@@ -495,9 +559,33 @@ const QString &SolverTask::getResultArtifactFileName() const
     return this->resultArtifactFileName;
 }
 
+const QString &SolverTask::getConvergenceFileName() const
+{
+    return this->convergenceFileName;
+}
+
+const QString &SolverTask::getMonitoringFileName() const
+{
+    return this->monitoringFileName;
+}
+
+const QString &SolverTask::getNativeProgressFileName() const
+{
+    return this->nativeProgressFileName;
+}
+
 uint SolverTask::getModelID() const
 {
     return this->modelID;
+}
+
+bool SolverTask::rebindModelIDForSubmit(uint currentModelID)
+{
+    if (QThread::currentThread() != this->thread() ||
+        this->performStarted.load(std::memory_order_acquire))
+        return false;
+    this->modelID = currentModelID;
+    return true;
 }
 
 const SolverTaskID &SolverTask::getTaskID() const
@@ -538,7 +626,270 @@ QString SolverTask::getCommandLine() const
 
 int SolverTask::perform()
 {
+    this->performStarted.store(true, std::memory_order_release);
     bool loggerIndented = false;
+    bool processStarted = false;
+    bool processExited = false;
+    bool resultReadbackComplete = false;
+    int processExitCode = -1;
+    QString resultArtifactPath;
+    QString resultArtifactSha256;
+    QJsonObject resultSourceBinding;
+    bool resultArtifactVerified = false;
+    const auto reportTerminal = [this, &processStarted, &processExited, &processExitCode,
+                                 &resultReadbackComplete, &resultArtifactPath,
+                                 &resultArtifactSha256, &resultArtifactVerified]
+                                (const QString &state, const QString &message)
+    {
+        emit this->terminalReported(this->taskID.toString(), state, processStarted,
+                                    processExited, processExitCode, resultReadbackComplete,
+                                    resultArtifactPath, resultArtifactSha256,
+                                    resultArtifactVerified, message);
+    };
+    QByteArray progressTail;
+    qint64 progressOffset = 0;
+    quint64 lastProgressSequence = 0;
+    quint64 lastProgressPhase = 0;
+    quint64 activeProgressPhase = 0;
+    QString activeProgressMessage;
+    bool progressFileObserved = false;
+    bool progressEventObserved = false;
+    bool progressUnavailableReported = false;
+    bool progressProtocolInvalid = false;
+    const auto progressDiagnostic = [this](const QString &message)
+    {
+        emit this->nativeProgressDiagnostic(this->taskID.toString(), message);
+    };
+    const auto progressUnavailable = [this, &progressUnavailableReported](const QString &message)
+    {
+        if (progressUnavailableReported) return;
+        progressUnavailableReported = true;
+        emit this->nativeProgressUnavailable(this->taskID.toString(), message);
+    };
+    const auto acceptProgressLine = [this, &lastProgressSequence, &lastProgressPhase,
+                                     &activeProgressPhase, &activeProgressMessage,
+                                     &progressEventObserved, &progressProtocolInvalid,
+                                     &progressDiagnostic, &progressUnavailable](QByteArray line)
+    {
+        if (progressProtocolInvalid) return;
+        if (line.endsWith('\r')) line.chop(1);
+        if (line.isEmpty()) return;
+        if (line.size() > 16384)
+        {
+            progressDiagnostic(QStringLiteral("Rejected native progress line exceeding 16 KiB."));
+            progressProtocolInvalid = true;
+            progressUnavailable(QStringLiteral("Native progress journal contains an oversized line."));
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        {
+            progressDiagnostic(QStringLiteral("Rejected malformed native progress JSON line."));
+            progressProtocolInvalid = true;
+            progressUnavailable(QStringLiteral("Native progress journal contains invalid JSON."));
+            return;
+        }
+        const QJsonObject event = document.object();
+        const QSet<QString> expectedKeys{QStringLiteral("protocolVersion"), QStringLiteral("jobId"),
+                                         QStringLiteral("seq"), QStringLiteral("phaseId"),
+                                         QStringLiteral("kind"), QStringLiteral("message"),
+                                         QStringLiteral("pulse"), QStringLiteral("fraction")};
+        bool exactSchema = event.size() == expectedKeys.size();
+        for (auto field = event.begin(); exactSchema && field != event.end(); ++field)
+            exactSchema = expectedKeys.contains(field.key());
+        if (!exactSchema ||
+            event.value(QStringLiteral("protocolVersion")).toString() != QStringLiteral("range.native-progress/v1") ||
+            event.value(QStringLiteral("jobId")).toString() != this->taskID.toString() ||
+            !event.value(QStringLiteral("message")).isString() ||
+            !event.value(QStringLiteral("pulse")).isBool())
+        {
+            progressDiagnostic(QStringLiteral("Rejected native progress record with a wrong job ID or schema."));
+            progressProtocolInvalid = true;
+            progressUnavailable(QStringLiteral("Native progress journal contains a record with an invalid job ID or schema."));
+            return;
+        }
+        const auto parsePositiveInteger = [](const QJsonValue &value, quint64 *number)
+        {
+            if (!value.isDouble()) return false;
+            const double raw = value.toDouble();
+            constexpr double maxExactJsonInteger = 9007199254740991.0;
+            if (!std::isfinite(raw) || raw < 1.0 || raw > maxExactJsonInteger || std::floor(raw) != raw)
+                return false;
+            if (number) *number = quint64(raw);
+            return true;
+        };
+        quint64 sequence = 0;
+        quint64 phase = 0;
+        if (!parsePositiveInteger(event.value(QStringLiteral("seq")), &sequence) ||
+            !parsePositiveInteger(event.value(QStringLiteral("phaseId")), &phase))
+        {
+            progressDiagnostic(QStringLiteral("Rejected native progress record with a non-positive sequence or phase ID."));
+            progressProtocolInvalid = true;
+            progressUnavailable(QStringLiteral("Native progress journal has an invalid sequence or phase ID."));
+            return;
+        }
+        const QString kind = event.value(QStringLiteral("kind")).toString();
+        if (kind != QStringLiteral("phase_started") && kind != QStringLiteral("fraction") &&
+            kind != QStringLiteral("phase_finished"))
+        {
+            progressDiagnostic(QStringLiteral("Rejected native progress record with an unknown event kind."));
+            progressProtocolInvalid = true;
+            progressUnavailable(QStringLiteral("Native progress journal has an unknown event kind."));
+            return;
+        }
+        const QJsonValue fractionValue = event.value(QStringLiteral("fraction"));
+        const bool pulse = event.value(QStringLiteral("pulse")).toBool();
+        double fraction = 0.0;
+        if (pulse)
+        {
+            if (!fractionValue.isNull())
+            {
+                progressDiagnostic(QStringLiteral("Rejected pulsed native progress record with a numeric fraction."));
+                progressProtocolInvalid = true;
+                progressUnavailable(QStringLiteral("Native progress journal violates the pulse/fraction schema."));
+                return;
+            }
+        }
+        else
+        {
+            if (!fractionValue.isDouble())
+            {
+                progressDiagnostic(QStringLiteral("Rejected determinate native progress record without a fraction."));
+                progressProtocolInvalid = true;
+                progressUnavailable(QStringLiteral("Native progress journal violates the pulse/fraction schema."));
+                return;
+            }
+            fraction = fractionValue.toDouble();
+            if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0)
+            {
+                progressDiagnostic(QStringLiteral("Rejected native progress fraction outside 0..1."));
+                progressProtocolInvalid = true;
+                progressUnavailable(QStringLiteral("Native progress journal contains a fraction outside 0..1."));
+                return;
+            }
+        }
+        if (sequence <= lastProgressSequence)
+        {
+            progressDiagnostic(QStringLiteral("Rejected duplicate or out-of-order native progress sequence."));
+            progressProtocolInvalid = true;
+            progressUnavailable(QStringLiteral("Native progress journal has a duplicate or out-of-order sequence."));
+            return;
+        }
+        if (sequence != lastProgressSequence + 1)
+            progressDiagnostic(QStringLiteral("Native progress sequence gap detected."));
+        if (kind == QStringLiteral("phase_started"))
+        {
+            if ((lastProgressPhase > 0 && phase <= lastProgressPhase) ||
+                (!pulse && fraction != 0.0))
+            {
+                progressDiagnostic(QStringLiteral("Rejected invalid native progress phase start."));
+                progressProtocolInvalid = true;
+                progressUnavailable(QStringLiteral("Native progress journal has an invalid phase start."));
+                return;
+            }
+            if (lastProgressPhase > 0 && phase != lastProgressPhase + 1)
+                progressDiagnostic(QStringLiteral("Native progress phase ID gap detected."));
+            activeProgressPhase = phase;
+            activeProgressMessage = event.value(QStringLiteral("message")).toString();
+            lastProgressPhase = phase;
+        }
+        else
+        {
+            // Print callbacks retain the current phase message. Finalize
+            // callbacks carry their own message (commonly "Done"), and a
+            // later Initialize starts a new superseding phase ID.
+            if (activeProgressPhase == 0 || phase != activeProgressPhase ||
+                (kind == QStringLiteral("fraction") &&
+                 event.value(QStringLiteral("message")).toString() != activeProgressMessage) ||
+                (kind == QStringLiteral("phase_finished") && !pulse && fraction != 1.0))
+            {
+                progressDiagnostic(QStringLiteral("Rejected native progress record outside its active phase."));
+                progressProtocolInvalid = true;
+                progressUnavailable(QStringLiteral("Native progress journal has an invalid phase transition."));
+                return;
+            }
+            if (kind == QStringLiteral("phase_finished")) activeProgressPhase = 0;
+        }
+        lastProgressSequence = sequence;
+        progressEventObserved = true;
+        emit this->nativeProgressReported(this->taskID.toString(), event);
+    };
+    const auto pollNativeProgress = [this, &progressTail, &progressOffset, &progressFileObserved,
+                                     &progressProtocolInvalid, &acceptProgressLine,
+                                     &progressDiagnostic, &progressUnavailable]()
+    {
+        if (progressProtocolInvalid) return;
+        const QFileInfo journalInfo(this->nativeProgressFileName);
+        if (!journalInfo.exists()) return;
+        progressFileObserved = true;
+        if (!journalInfo.isFile() || journalInfo.isSymLink())
+        {
+            progressUnavailable(QStringLiteral("Native progress journal is not a regular file."));
+            progressProtocolInvalid = true;
+            return;
+        }
+        constexpr qint64 maxJournalBytes = 16 * 1024 * 1024;
+        constexpr qint64 maxReadBytesPerPoll = 64 * 1024;
+        if (journalInfo.size() > maxJournalBytes)
+        {
+            progressUnavailable(QStringLiteral("Native progress journal exceeded its 16 MiB budget."));
+            progressProtocolInvalid = true;
+            return;
+        }
+        if (journalInfo.size() < progressOffset)
+        {
+            progressUnavailable(QStringLiteral("Native progress journal was truncated during the run."));
+            progressProtocolInvalid = true;
+            progressTail.clear();
+            progressOffset = journalInfo.size();
+            return;
+        }
+        QFile journal(this->nativeProgressFileName);
+        if (!journal.open(QIODevice::ReadOnly) || !journal.seek(progressOffset))
+        {
+            progressUnavailable(QStringLiteral("Native progress journal could not be read."));
+            progressProtocolInvalid = true;
+            return;
+        }
+        const QByteArray bytes = journal.read(maxReadBytesPerPoll);
+        if (journal.error() != QFile::NoError)
+        {
+            progressUnavailable(QStringLiteral("Native progress journal read failed."));
+            progressProtocolInvalid = true;
+            return;
+        }
+        progressOffset += bytes.size();
+        progressTail.append(bytes);
+        int newline = -1;
+        while ((newline = progressTail.indexOf('\n')) >= 0)
+        {
+            const QByteArray line = progressTail.left(newline);
+            progressTail.remove(0, newline + 1);
+            acceptProgressLine(line);
+            if (progressProtocolInvalid) return;
+        }
+        if (progressTail.size() > 16384)
+        {
+            progressDiagnostic(QStringLiteral("Discarded oversized partial native progress line."));
+            progressUnavailable(QStringLiteral("Native progress journal has an oversized partial line."));
+            progressProtocolInvalid = true;
+            progressTail.clear();
+        }
+    };
+    const auto drainNativeProgress = [this, &progressOffset, &progressProtocolInvalid,
+                                      &pollNativeProgress]()
+    {
+        constexpr int maxDrainPolls = 256; // 16 MiB at 64 KiB per poll.
+        for (int poll = 0; poll < maxDrainPolls && !progressProtocolInvalid; ++poll)
+        {
+            const QFileInfo journalInfo(this->nativeProgressFileName);
+            if (!journalInfo.exists() || journalInfo.size() <= progressOffset) return;
+            const qint64 previousOffset = progressOffset;
+            pollNativeProgress();
+            if (progressOffset == previousOffset) return;
+        }
+    };
     try
     {
         RLogger::info("Solver task (#%s) - Begin\n",this->taskID.toString().toUtf8().constData());
@@ -571,11 +922,17 @@ int SolverTask::perform()
         {
             const QString resultDirectory = QFileInfo(this->resultArtifactFileName).absolutePath();
             const QString logDirectory = QFileInfo(this->logFileName).absolutePath();
+            const QString progressDirectory = QFileInfo(this->nativeProgressFileName).absolutePath();
             if (!QDir().mkpath(resultDirectory) || !QDir().mkpath(logDirectory))
             {
                 throw RError(RError::Type::InvalidFileName, R_ERROR_REF,
                              "Failed to create solver run artifact directories under '%s'.",
                              resultDirectory.toUtf8().constData());
+            }
+            if (!QDir().mkpath(progressDirectory) || QFileInfo::exists(this->nativeProgressFileName))
+            {
+                throw RError(RError::Type::InvalidFileName, R_ERROR_REF,
+                             "Failed to prepare the private native progress journal directory.");
             }
             ModelIO::save(*this->resultSnapshot, this->resultArtifactFileName, false);
             QString historyError;
@@ -608,6 +965,11 @@ int SolverTask::perform()
         RLogger::info("Executing \'%s\'\n",cmdLine.toUtf8().constData());
 
         this->solverProcess = new QProcess;
+        QProcessEnvironment processEnvironment = QProcessEnvironment::systemEnvironment();
+        processEnvironment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"), this->taskID.toString());
+        processEnvironment.insert(QStringLiteral("RANGE_NATIVE_PROGRESS_PATH"),
+                                  QFileInfo(this->nativeProgressFileName).absoluteFilePath());
+        this->solverProcess->setProcessEnvironment(processEnvironment);
 
         QObject::connect(this->solverProcess,&QProcess::readyReadStandardOutput,this,&SolverTask::onProcessReadyReadStandardOutput,Qt::DirectConnection);
         QObject::connect(this->solverProcess,&QProcess::readyReadStandardError,this,&SolverTask::onProcessReadyReadStandardError,Qt::DirectConnection);
@@ -618,8 +980,12 @@ int SolverTask::perform()
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver process could not be started.");
         }
-        while (!this->solverProcess->waitForFinished(100))
+        processStarted = true;
+        for (;;)
         {
+            const bool processFinished = this->solverProcess->waitForFinished(100);
+            pollNativeProgress();
+            if (processFinished) break;
             if (this->killRequested.load(std::memory_order_acquire))
             {
                 if (this->solverProcess->state() != QProcess::NotRunning)
@@ -630,17 +996,31 @@ int SolverTask::perform()
                         RLogger::warning("Solver process did not exit promptly after cancellation.\n");
                     }
                 }
+                pollNativeProgress();
                 throw RError(RError::Type::Application, R_ERROR_REF, "Solver execution was cancelled.");
             }
             if (this->solverProcess->state() == QProcess::NotRunning) break;
         }
+        drainNativeProgress();
+        if (!progressTail.isEmpty())
+        {
+            progressDiagnostic(QStringLiteral("Discarded incomplete final native progress line."));
+            progressUnavailable(QStringLiteral("Native progress journal ended with an incomplete record."));
+            progressTail.clear();
+        }
+        if (!progressFileObserved || QFileInfo(this->nativeProgressFileName).size() == 0)
+            progressUnavailable(QStringLiteral("Native solver did not produce a readable progress journal."));
+        if (!progressEventObserved && !progressUnavailableReported)
+            progressUnavailable(QStringLiteral("Native solver produced no valid progress events."));
+        processExited = this->solverProcess->state() == QProcess::NotRunning;
+        if (processExited) processExitCode = this->solverProcess->exitCode();
         if (this->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver execution was cancelled.");
         }
-        if (this->solverProcess->exitCode() != 0)
+        if (!processExited || this->solverProcess->exitStatus() != QProcess::NormalExit || processExitCode != 0)
         {
-            RLogger::warning("Command \'%s\' failed with exit code = %d.\n",cmdLine.toUtf8().constData(),this->solverProcess->exitCode());
+            RLogger::warning("Command \'%s\' failed with exit code = %d.\n",cmdLine.toUtf8().constData(),processExitCode);
 
             throw RError(RError::Type::Application,R_ERROR_REF,"Solver execution failed.");
         }
@@ -652,20 +1032,72 @@ int SolverTask::perform()
 
         // Read the saved result back into the detached task model first. The
         // complete artifact remains at this path even if the source changed.
+        // Hash both sides of the readback so a replacement during parsing can
+        // never be registered as a verified native result.
+        QString sourceBeforeError;
+        const auto sourceBefore = RProjectCatalog::resolveSourceBinding(
+                    this->resultArtifactFileName, &sourceBeforeError);
+        if (!sourceBefore)
+        {
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "The native result source chain could not be resolved before readback: %s",
+                         sourceBeforeError.toUtf8().constData());
+        }
+        const QByteArray resultHashBeforeRead = sha256File(this->resultArtifactFileName);
+        if (resultHashBeforeRead.isEmpty())
+        {
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "The native result artifact could not be hashed before readback.");
+        }
+        RProjectCatalog::SourceBinding loadedSourceBinding;
         try
         {
-            ModelIO::update(*this->resultSnapshot, this->resultArtifactFileName);
+            ModelIO::update(*this->resultSnapshot, this->resultArtifactFileName, &loadedSourceBinding);
         }
         catch (const RError &error)
         {
             RLogger::error("%s File: '%s'\n",error.getMessage().toUtf8().constData(),this->resultArtifactFileName.toUtf8().constData());
             throw RError(RError::Type::Application,R_ERROR_REF,"Failed to finish the solver because its result artifact could not be opened.");
         }
+        QString sourceAfterError;
+        const auto sourceAfter = RProjectCatalog::resolveSourceBinding(
+                    this->resultArtifactFileName, &sourceAfterError);
+        if (!sourceAfter || loadedSourceBinding != *sourceBefore || loadedSourceBinding != *sourceAfter)
+        {
+            const QString reason = !sourceAfter ? sourceAfterError
+                    : QStringLiteral("The native result source chain changed while it was being read back.");
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "The native result source chain was not stable during readback: %s",
+                         reason.toUtf8().constData());
+        }
+        const QByteArray resultHashAfterRead = sha256File(this->resultArtifactFileName);
+        if (resultHashAfterRead.isEmpty() || resultHashAfterRead != resultHashBeforeRead)
+        {
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "The native result artifact changed while it was being read back.");
+        }
+        const QString rawLogicalSha256 = QString::fromLatin1(resultHashAfterRead.toHex());
+        if (loadedSourceBinding.logicalSourcePath.isEmpty() ||
+            loadedSourceBinding.resolvedSourcePath.isEmpty() ||
+            loadedSourceBinding.sourceArtifacts.isEmpty() ||
+            loadedSourceBinding.sourceArtifacts.constFirst().path != loadedSourceBinding.logicalSourcePath ||
+            loadedSourceBinding.sourceArtifacts.constFirst().sha256 != rawLogicalSha256 ||
+            loadedSourceBinding.sourceArtifacts.constLast().path != loadedSourceBinding.resolvedSourcePath ||
+            loadedSourceBinding.sourceArtifacts.constLast().sha256 != loadedSourceBinding.savedArtifactHash)
+        {
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "The native result source binding does not match its raw logical artifact hash.");
+        }
+        resultArtifactPath = QFileInfo(this->resultArtifactFileName).absoluteFilePath();
+        resultArtifactSha256 = rawLogicalSha256;
+        resultSourceBinding = sourceBindingJson(loadedSourceBinding);
+        resultArtifactVerified = true;
+        resultReadbackComplete = true;
         if (this->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver result publication was cancelled.");
         }
-        emit this->resultArtifactCreated(this->resultArtifactFileName);
+        emit this->resultArtifactCreated(resultArtifactPath, resultArtifactSha256, resultSourceBinding);
         if (this->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF,
@@ -719,6 +1151,12 @@ int SolverTask::perform()
         RLogger::unindent();
         loggerIndented = false;
         RLogger::info("Solver task (#%s) - End\n",this->taskID.toString().toUtf8().constData());
+        if (!processExited || !resultReadbackComplete)
+        {
+            throw RError(RError::Type::Application, R_ERROR_REF,
+                         "Solver completion evidence is incomplete; the result was not marked successful.");
+        }
+        reportTerminal(QStringLiteral("succeeded"), QString());
     }
     catch (const RError &error)
     {
@@ -730,13 +1168,35 @@ int SolverTask::perform()
                 if (!this->solverProcess->waitForFinished(5000))
                 {
                     RLogger::warning("Solver process did not exit promptly during task cleanup.\n");
+                    // A cancelled native process must be fully reaped before this task
+                    // reports a terminal state or releases its QProcess object.
+                    this->solverProcess->waitForFinished(-1);
                 }
+            }
+            processExited = processStarted && this->solverProcess->state() == QProcess::NotRunning;
+            if (processExited) processExitCode = this->solverProcess->exitCode();
+            if (processStarted)
+            {
+                drainNativeProgress();
+                if (!progressTail.isEmpty())
+                {
+                    progressDiagnostic(QStringLiteral("Discarded incomplete final native progress line."));
+                    progressUnavailable(QStringLiteral("Native progress journal ended with an incomplete record."));
+                    progressTail.clear();
+                }
+                if (!progressFileObserved || QFileInfo(this->nativeProgressFileName).size() == 0)
+                    progressUnavailable(QStringLiteral("Native solver did not produce a readable progress journal."));
+                if (!progressEventObserved && !progressUnavailableReported)
+                    progressUnavailable(QStringLiteral("Native solver produced no valid progress events."));
             }
             delete this->solverProcess;
             this->solverProcess = nullptr;
         }
         if (loggerIndented) RLogger::unindent();
         RLogger::error("Solver task (#%s) failed: %s\n",this->taskID.toString().toUtf8().constData(),error.getMessage().toUtf8().constData());
+        reportTerminal(this->killRequested.load(std::memory_order_acquire)
+                           ? QStringLiteral("cancelled") : QStringLiteral("failed"),
+                       error.getMessage());
         return 1;
     }
     return 0;
@@ -749,5 +1209,16 @@ void SolverTask::onProcessReadyReadStandardOutput()
 
 void SolverTask::onProcessReadyReadStandardError()
 {
-    emit this->readyReadStandardError(this->solverProcess->readAllStandardError());
+    const QString message = QString::fromLocal8Bit(this->solverProcess->readAllStandardError());
+    const QString marker = QStringLiteral("NativeProgressUnavailable:");
+    const qsizetype markerPosition = message.indexOf(marker);
+    if (markerPosition >= 0)
+    {
+        const QString reason = message.mid(markerPosition + marker.size()).trimmed();
+        emit this->nativeProgressUnavailable(this->taskID.toString(),
+                                             reason.isEmpty()
+                                                 ? QStringLiteral("Native progress writer reported an unavailable journal.")
+                                                 : reason.left(1024));
+    }
+    emit this->readyReadStandardError(message);
 }

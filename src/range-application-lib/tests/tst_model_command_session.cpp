@@ -41,6 +41,27 @@ QByteArray readBytes(const QString &path)
     if (!file.open(QIODevice::ReadOnly)) return {};
     return file.readAll();
 }
+bool rewriteFirstRecordAsLegacyModalHash(const QString &path, const QJsonObject &modal)
+{
+    QJsonParseError parseError;
+    QJsonDocument document = QJsonDocument::fromJson(readBytes(path), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) return false;
+    QJsonObject envelope = document.object();
+    QJsonArray records = envelope.value(QStringLiteral("records")).toArray();
+    if (records.isEmpty() || !records.first().isObject()) return false;
+    QJsonObject first = records.first().toObject();
+    QJsonObject selectionSnapshot = first.value(QStringLiteral("selectionSnapshot")).toObject();
+    selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("modal_configuration"));
+    selectionSnapshot.remove(QStringLiteral("stateHashScopeVersion"));
+    first.insert(QStringLiteral("selectionSnapshot"), selectionSnapshot);
+    const QString modalHash = QString::fromLatin1(QCryptographicHash::hash(
+        QJsonDocument(modal).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+    first.insert(QStringLiteral("preStateHash"), modalHash);
+    first.insert(QStringLiteral("postStateHash"), modalHash);
+    records[0] = first;
+    envelope.insert(QStringLiteral("records"), records);
+    return writeBytes(path, QJsonDocument(envelope).toJson(QJsonDocument::Compact) + '\n');
+}
 bool journalRecords(const QString &path, QVector<RInteractionRecordV1> &records, QString &error)
 {
     QJsonParseError parseError;
@@ -88,6 +109,7 @@ private slots:
     void externalChangesAuditActualStateAndInvalidate();
     void externalAuditFailureStillInvalidatesStaleIdentity();
     void publicationIntentFailureAndMismatchPreserveEvidence();
+    void nullableBoundaryAuditPreservesDisabledAxes();
 };
 
 void TestModelCommandSession::ownedModelPreviewAndReplay()
@@ -266,6 +288,7 @@ void TestModelCommandSession::durableRecordsPreserveRevisionsAndSanitizeRejectio
     command["dryRun"] = true;
     QCOMPARE(session.execute(command)["status"].toString(), QStringLiteral("preview"));
     QCOMPARE(session.query(), initial);
+    QVERIFY(rewriteFirstRecordAsLegacyModalHash(options.path, initial.value(QStringLiteral("modal")).toObject()));
     auto invalid = request(session);
     invalid["parameters"] = QJsonObject{{"apiKey", "do-not-copy-secret"}, {"invalid", QJsonValue(QJsonValue::Null)}};
     invalid["commandId"] = QStringLiteral("do-not-copy-secret");
@@ -301,7 +324,13 @@ void TestModelCommandSession::durableRecordsPreserveRevisionsAndSanitizeRejectio
     QCOMPARE(records[2].selectionSnapshot["postRevision"], accepted["revision"]);
     QCOMPARE(records[2].actorId, options.actorId);
     QCOMPARE(records[2].selectionSnapshot["sourceSha256"].toString(), options.sourceSha256);
-    QCOMPARE(records[2].selectionSnapshot["stateHashScope"].toString(), QStringLiteral("modal_configuration"));
+    QCOMPARE(records[0].selectionSnapshot["stateHashScope"].toString(), QStringLiteral("modal_configuration"));
+    QVERIFY(!records[0].selectionSnapshot.contains(QStringLiteral("stateHashScopeVersion")));
+    QCOMPARE(records[0].preStateHash, records[0].postStateHash);
+    QCOMPARE(records[1].selectionSnapshot["stateHashScope"].toString(), QStringLiteral("supported_model_state"));
+    QCOMPARE(records[1].selectionSnapshot["stateHashScopeVersion"].toInt(), 2);
+    QCOMPARE(records[2].selectionSnapshot["stateHashScope"].toString(), QStringLiteral("supported_model_state"));
+    QCOMPARE(records[2].selectionSnapshot["stateHashScopeVersion"].toInt(), 2);
     QCOMPARE(records[2].parameters, command["parameters"].toObject());
     QCOMPARE(records[3].resultStatus, QStringLiteral("running"));
     QVERIFY(!records[3].runId.isNull());
@@ -446,10 +475,8 @@ void TestModelCommandSession::externalChangesAuditActualStateAndInvalidate()
     QVERIFY(records[0].selectionSnapshot["identityInvalidated"].toBool());
     QVERIFY(records[0].preStateHash != records[0].postStateHash);
     QCOMPARE(records[0].selectionSnapshot["preRevision"], oldRequest["expectedRevision"]);
-    const QString afterHash = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(
-        RModelCommandSession::modalParameters(changed.getProblemSetup().getModalSetup())).toJson(QJsonDocument::Compact),
-        QCryptographicHash::Sha256).toHex());
-    QCOMPARE(records[0].postStateHash, afterHash);
+    QCOMPARE(records[0].preStateHash, RModelCommandService::stateFingerprint(original));
+    QCOMPARE(records[0].postStateHash, RModelCommandService::stateFingerprint(changed));
     RModelCommandSession reopened(changed, options);
     QCOMPARE(reopened.execute(oldRequest)["code"].toString(), QStringLiteral("wrong_model"));
 }
@@ -512,6 +539,46 @@ void TestModelCommandSession::publicationIntentFailureAndMismatchPreserveEvidenc
     const auto reconciled = RModelCommandSession::reconcilePublications(options);
     QCOMPARE(reconciled["status"].toString(), QStringLiteral("reconciled"));
     QVERIFY(reconciled["outcomes"].toArray().isEmpty());
+}
+
+void TestModelCommandSession::nullableBoundaryAuditPreservesDisabledAxes()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    RModel model = modalModel();
+    model.setNLines(1);
+    const QString target = QStringLiteral("g:%1").arg(model.getLine(0).getPhysicalId());
+    RModelCommandSession::JournalOptions options;
+    options.path = directory.filePath(QStringLiteral("nullable-boundary.json"));
+    RModelCommandSession session(model, options);
+    auto command = request(session, QStringLiteral("entity.boundary.set"));
+    command["parameters"] = QJsonObject{{"targetId", target}, {"kind", "displacement"},
+        {"values", QJsonArray{0.0, QJsonValue(QJsonValue::Null), 0.0}}, {"unit", "m"}};
+    command["dryRun"] = true;
+    const auto preview = session.execute(command);
+    QCOMPARE(preview["status"].toString(), QStringLiteral("preview"));
+    command["dryRun"] = false;
+    const auto accepted = session.execute(command);
+    QVERIFY2(accepted["status"].toString() == QStringLiteral("accepted"),
+             qPrintable(QJsonDocument(accepted).toJson(QJsonDocument::Compact)));
+    const QJsonObject normalized = accepted["normalizedParameters"].toObject();
+    QVector<RInteractionRecordV1> records;
+    QString error;
+    QVERIFY2(journalRecords(options.path, records, error), qPrintable(error));
+    QCOMPARE(records.size(), 2);
+    for (const auto &record : records)
+    {
+        QCOMPARE(record.commandId, QStringLiteral("entity.boundary.set"));
+        QCOMPARE(record.selectionSnapshot["parametersEncoding"].toString(), QStringLiteral("json-text/v1"));
+        const auto decoded = QJsonDocument::fromJson(record.parameters["json"].toString().toUtf8());
+        QVERIFY(decoded.isObject());
+        QCOMPARE(decoded.object(), normalized);
+        QVERIFY(decoded.object()["values"].toArray().at(1).isNull());
+        QVERIFY(record.validate(&error));
+    }
+    QCOMPARE(session.execute(command), accepted);
+    QVERIFY(journalRecords(options.path, records, error));
+    QCOMPARE(records.size(), 2);
 }
 
 QTEST_APPLESS_MAIN(TestModelCommandSession)

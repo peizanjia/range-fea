@@ -54,6 +54,8 @@ private:
     QJsonArray history, calls, completedActions;
     QSet<QString> allowedDocuments, completedCallIds;
     QHash<QString, quint64> automaticDocumentRevisions;
+    QHash<QString, QSet<quint64>> automaticDocumentRevisionLineage;
+    QHash<QString, QJsonObject> taskNativeJobSources;
     QJsonObject currentCall, proposal, proposedArguments;
     QString sessionEpoch, workflowWorkspace, providerRequestId, waitingRequest, waitingOperation;
     QString proposalOrigin, pendingProposalId, awaitedJob;
@@ -73,7 +75,8 @@ private:
     void finishTask(const QString &status, const QString &message);
     void workflowReply(const QString &id, const QString &operation, const QJsonObject &result);
     void submitWorkflow(const QString &operation, const QJsonObject &parameters = {});
-    void propose(const QString &origin, const QJsonObject &value);
+    void propose(const QString &origin, const QJsonObject &value,
+                 const QJsonObject &automaticSourceBinding = {});
     void scheduleWorkflowPoll(const QString &jobId);
     QString connectedWorkflowWorkspace() const;
 };

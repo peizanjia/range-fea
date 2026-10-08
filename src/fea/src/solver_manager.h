@@ -4,6 +4,11 @@
 #include <QObject>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QHash>
+#include <QJsonObject>
+#include <QPointer>
+#include <QStringList>
+#include <functional>
 
 #include <rbl_job_manager.h>
 #include "solver_task.h"
@@ -28,6 +33,12 @@ class SolverManager : public RJobManager
         QString lastLogFileName;
         //! Latest successfully produced task result artifact.
         QString lastResultArtifactFileName;
+        //! Native solver job records, owned and updated on the manager thread.
+        QHash<QString,QJsonObject> nativeJobs;
+        //! Stable insertion order for bounded job queries.
+        QStringList nativeJobOrder;
+        //! Live native task pointers, guarded by QObject lifetime tracking.
+        QHash<QString,QPointer<SolverTask>> nativeTasks;
 
     public:
 
@@ -42,6 +53,26 @@ class SolverManager : public RJobManager
 
         //! Add new solver task.
         void submit(SolverTask *solverTask);
+
+        //! Check native setup and return a detached validation report.
+        QJsonObject validateRun(uint modelID) const;
+
+        //! Validate, snapshot and enqueue a native solver task. The returned jobId is the task ID.
+        QString submitValidated(uint modelID, const QJsonObject &projectSnapshotRef,
+                                bool warningsAccepted, QString *error = nullptr);
+
+        //! Submit an already constructed task through the same validated registry path.
+        QString submitValidated(SolverTask *solverTask, const QJsonObject &projectSnapshotRef,
+                                bool warningsAccepted, QString *error = nullptr);
+
+        //! Return one native task record, or found=false when the task ID is unknown.
+        QJsonObject jobQuery(const QString &jobId) const;
+
+        //! Return a bounded page of native task records. Valid limits are 1 through 200.
+        QJsonObject jobsQuery(int offset = 0, int limit = 100) const;
+
+        //! Request cancellation for one native job ID.
+        bool cancelJob(const QString &jobId, QString *error = nullptr);
 
         //! Check if solver for given model ID is queued.
         bool isSolverQueued(const QString &sourceDocumentId) const;
@@ -84,6 +115,25 @@ class SolverManager : public RJobManager
 
         //! Solver has connected.
         void onSolverTaskNewConnection();
+
+    private:
+
+        bool invokeOnOwner(const std::function<void()> &callback) const;
+        QJsonObject validateRunOnOwner(uint modelID) const;
+        QString submitTaskOnOwner(SolverTask *solverTask, const QJsonObject &projectSnapshotRef,
+                                  bool warningsAccepted, QString *error);
+        QString validateProjectSnapshotRef(uint modelID, const QPair<QString,quint64> &sourceStamp,
+                                           const QJsonObject &projectSnapshotRef, QString *error) const;
+        QString resolveFrozenSnapshotPath(const QJsonObject &projectSnapshotRef, QString *error) const;
+        bool loadVerifiedFrozenSnapshot(const QJsonObject &projectSnapshotRef, RModel *frozenModel,
+                                        QString *frozenPath, QString *frozenSha256, QString *error) const;
+        void registerNativeTask(SolverTask *solverTask, const QString &jobId,
+                                const QJsonObject &projectSnapshotRef, const QString &projectLink,
+                                bool frozenSnapshotVerified, const QString &frozenSnapshotPath,
+                                const QString &frozenSnapshotSha256);
+        void updateNativeJob(const QString &jobId, const QJsonObject &fields);
+        void appendNativeJobLog(const QString &jobId, const QString &stream, const QString &message);
+        bool cancelJobOnOwner(const QString &jobId, QString *error);
 
 };
 

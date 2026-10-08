@@ -11,7 +11,7 @@
 #include <QUuid>
 #include <rbl_error.h>
 #include <rbl_logger.h>
-#include <rml_file_io.h>
+#include <rproject_catalog.h>
 #include <rmodel_command_session.h>
 #include <cstdio>
 #include <memory>
@@ -50,6 +50,35 @@ QByteArray hash(const QString &path)
     require(digest.addData(&file), "File hash failed.");
     return digest.result().toHex();
 }
+RProjectCatalog::SourceBinding sourceBinding(const QString &path)
+{
+    QString error;
+    const auto binding = RProjectCatalog::resolveSourceBinding(path, &error);
+    require(binding.has_value(), error.isEmpty() ? "Cannot resolve native source." : error.toUtf8().constData());
+    return *binding;
+}
+QJsonObject readJsonObject(const QString &path, const char *description, QByteArray *fileHash = nullptr)
+{
+    QFile file(path);
+    require(file.open(QIODevice::ReadOnly) && file.size() <= 65536, description);
+    const QByteArray bytes = file.readAll();
+    require(file.error() == QFileDevice::NoError && bytes.size() <= 65536, description);
+    if (fileHash) *fileHash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+    QJsonParseError error;
+    const auto document = QJsonDocument::fromJson(bytes, &error);
+    require(error.error == QJsonParseError::NoError && document.isObject(), "Expected a JSON object file.");
+    return document.object();
+}
+QString pageSourceId(const QString &canonicalPath, const QByteArray &sourceHash)
+{
+    const QString combined = canonicalPath + QLatin1Char('#') + QString::fromLatin1(sourceHash);
+    if (combined.size() <= 256) return combined;
+    QByteArray binding = canonicalPath.toUtf8();
+    binding.append('\0');
+    binding.append(sourceHash);
+    return QStringLiteral("source:")
+        + QString::fromLatin1(QCryptographicHash::hash(binding, QCryptographicHash::Sha256).toHex());
+}
 void print(const QJsonObject &object)
 {
     const auto bytes = QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n';
@@ -70,6 +99,11 @@ int main(int argc, char **argv)
         QCommandLineOption(QStringList{"p", "parameters"}, "JSON object containing sourceSha256 and parameters.", "file"),
         QCommandLineOption(QStringList{"o", "output"}, "Separate native output model; never overwrites the input.", "file"),
         QCommandLineOption("query", "Print the current modal settings and source hash without editing."),
+        QCommandLineOption("capabilities", "Print the shared application command capabilities."),
+        QCommandLineOption("context", "Print model context and one target page."),
+        QCommandLineOption("targets", "Print a target page."),
+        QCommandLineOption("page", "JSON object file containing target pagination fields.", "file"),
+        QCommandLineOption("command", "Execute one shared application command by ID; omitted means modal configure.", "command-id"),
         QCommandLineOption("dry-run", "Validate a configuration without publishing a model."),
         QCommandLineOption("reconcile", "Observe and journal unfinished publication intents; requires --journal only."),
         QCommandLineOption("journal", "Trusted-host InteractionRecord v1 journal file.", "file")});
@@ -118,7 +152,9 @@ int main(int argc, char **argv)
         if (parser.isSet("reconcile"))
         {
             require(parser.isSet("journal") && !parser.isSet("input") && !parser.isSet("parameters")
-                        && !parser.isSet("output") && !parser.isSet("query") && !parser.isSet("dry-run"),
+                        && !parser.isSet("output") && !parser.isSet("query") && !parser.isSet("dry-run")
+                        && !parser.isSet("capabilities") && !parser.isSet("context")
+                        && !parser.isSet("targets") && !parser.isSet("page") && !parser.isSet("command"),
                     "Reconcile requires --journal and cannot be combined with model commands.");
             RModelCommandSession::JournalOptions recovery;
             recovery.path = resolved(parser.value("journal"), true);
@@ -135,32 +171,71 @@ int main(int argc, char **argv)
             }
             return 0;
         }
-        const bool query = parser.isSet("query"), preview = parser.isSet("dry-run");
-        require(!query || (!preview && !parser.isSet("parameters") && !parser.isSet("output")),
-                "Query cannot be combined with editing options.");
+        const bool query = parser.isSet("query");
+        const bool capabilities = parser.isSet("capabilities");
+        const bool context = parser.isSet("context");
+        const bool targets = parser.isSet("targets");
+        const bool preview = parser.isSet("dry-run");
+        const bool explicitCommand = parser.isSet("command");
+        const bool hasEditInputs = parser.isSet("parameters") || parser.isSet("output") || preview;
+        const bool edit = explicitCommand || hasEditInputs;
+        const int readActions = int(query) + int(capabilities) + int(context) + int(targets);
+        require(readActions + int(edit) == 1, "Choose exactly one query, read, or command operation.");
+        require(!(context && targets), "Choose either --context or --targets.");
+        require(!parser.isSet("page") || context || targets, "--page requires --context or --targets.");
+        require(!parser.isSet("journal") || edit || query,
+                "--journal is available only for commands, query compatibility, or reconciliation.");
+        require(!query || (!preview && !parser.isSet("parameters") && !parser.isSet("output")
+                           && !explicitCommand && !parser.isSet("page")),
+                "Query cannot be combined with editing or paging options.");
         require(!preview || !parser.isSet("output"), "Preview must not specify an output.");
+        require(!edit || parser.isSet("parameters"), "A command requires --parameters.");
+        require(!edit || preview || parser.isSet("output"), "An executing command requires --output.");
+
         const QString input = resolved(parser.value("input"), true);
-        const QString output = (!query && !preview) ? resolved(parser.value("output"), false) : QString();
-        const QString parameterPath = query ? QString() : resolved(parser.value("parameters"), true);
+        const auto source = sourceBinding(input);
+        const QString modelPath = source.resolvedSourcePath;
+        const QString output = (edit && !preview) ? resolved(parser.value("output"), false) : QString();
+        const QString parameterPath = edit ? resolved(parser.value("parameters"), true) : QString();
+        const QString pagePath = parser.isSet("page") ? resolved(parser.value("page"), true) : QString();
         const QString journalPath = parser.isSet("journal") ? resolved(parser.value("journal"), false) : QString();
-        const QString extension = QFileInfo(input).suffix();
-        const bool ascii = extension == RModel::getDefaultFileExtension(false);
-        require(ascii || extension == RModel::getDefaultFileExtension(true), "Input must be a .ram/.rbm model.");
+        const QString extension = QFileInfo(modelPath).suffix();
+        require(extension == RModel::getDefaultFileExtension(false)
+                    || extension == RModel::getDefaultFileExtension(true),
+                "Input must resolve to a .ram/.rbm model.");
+        const QByteArray sourceHash = source.savedArtifactHash.toLatin1();
+        require(sourceHash.size() == 64, "Resolved native source has an invalid SHA256.");
+
+        auto conflictsWithSource = [&source](const QString &path) {
+            for (const auto &artifact : source.sourceArtifacts)
+                if (path.compare(artifact.path, Qt::CaseInsensitive) == 0) return true;
+            return false;
+        };
         if (!output.isEmpty())
         {
-            require(output.compare(input, Qt::CaseInsensitive) != 0
-                    && output.compare(parameterPath, Qt::CaseInsensitive) != 0, "Output must be distinct from inputs.");
+            require(!conflictsWithSource(output) && output.compare(parameterPath, Qt::CaseInsensitive) != 0
+                    && output.compare(pagePath, Qt::CaseInsensitive) != 0,
+                    "Output must be distinct from every source artifact and request file.");
             require(QFileInfo(output).suffix() == RModel::getDefaultFileExtension(false)
                     || QFileInfo(output).suffix() == RModel::getDefaultFileExtension(true), "Output must be .ram/.rbm.");
         }
+        require(parameterPath.isEmpty() || (!conflictsWithSource(parameterPath)
+                    && parameterPath.compare(pagePath, Qt::CaseInsensitive) != 0),
+                "Parameters must be distinct from the native source and page request.");
+        require(pagePath.isEmpty() || !conflictsWithSource(pagePath),
+                "Page request must be distinct from every native source artifact.");
         require(journalPath.isEmpty()
-                    || (journalPath.compare(input, Qt::CaseInsensitive) != 0
+                    || (!conflictsWithSource(journalPath)
                         && journalPath.compare(parameterPath, Qt::CaseInsensitive) != 0
+                        && journalPath.compare(pagePath, Qt::CaseInsensitive) != 0
                         && journalPath.compare(output, Qt::CaseInsensitive) != 0),
-                "Journal must be distinct from model and parameter files.");
-        QStringList paths{input};
+                "Journal must be distinct from model, request, and output files.");
+
+        QStringList paths;
+        for (const auto &artifact : source.sourceArtifacts) paths.append(artifact.path);
         if (!output.isEmpty()) paths.append(output);
         if (!parameterPath.isEmpty()) paths.append(parameterPath);
+        if (!pagePath.isEmpty()) paths.append(pagePath);
         paths.removeDuplicates();
         paths.sort(Qt::CaseInsensitive);
         std::vector<std::unique_ptr<QLockFile>> locks;
@@ -171,51 +246,60 @@ int main(int argc, char **argv)
             require(lock->tryLock(0), "An input/output file is busy.");
             locks.push_back(std::move(lock));
         }
-        const auto sourceHash = hash(input);
+        require(sourceBinding(input) == source, "Native source changed while acquiring its snapshot.");
         const bool existed = !output.isEmpty() && QFileInfo::exists(output);
         const auto outputHash = existed ? hash(output) : QByteArray();
-        RFile native(input, ascii ? RFile::ASCII : RFile::BINARY);
-        require(native.open(ascii ? QIODevice::ReadOnly | QIODevice::Text : QIODevice::ReadOnly), "Cannot open model.");
-        RFileHeader header;
-        if (ascii) RFileIO::readAscii(native, header); else RFileIO::readBinary(native, header);
-        require(header.getType() == R_FILE_TYPE_MODEL, "Model links are unsupported; supply the complete model.");
-        native.close();
         RModel model;
-        model.read(input);
-        require(hash(input) == sourceHash, "Source changed while reading.");
+        model.read(modelPath);
+        require(sourceBinding(input) == source, "Source changed while reading.");
         RModelCommandSession::JournalOptions journalOptions;
         journalOptions.path = journalPath;
         journalOptions.actorId = QStringLiteral("range-model-command");
-        journalOptions.sourcePath = input;
+        journalOptions.sourcePath = modelPath;
         journalOptions.sourceSha256 = QString::fromLatin1(sourceHash);
         RModelCommandSession session(model, journalOptions);
         if (query)
         {
             auto result = session.query();
             result["sourceSha256"] = QString::fromLatin1(sourceHash);
+            require(sourceBinding(input) == source, "Source changed during query.");
             print(result);
             return 0;
         }
-        QFile parametersFile(parameterPath);
-        require(parametersFile.open(QIODevice::ReadOnly) && parametersFile.size() <= 65536, "Parameters must be readable and at most 64 KiB.");
-        const auto parameterBytes = parametersFile.readAll();
-        parametersFile.close();
-        const auto parameterHash = QCryptographicHash::hash(parameterBytes, QCryptographicHash::Sha256).toHex();
-        QJsonParseError error;
-        const auto document = QJsonDocument::fromJson(parameterBytes, &error);
-        require(error.error == QJsonParseError::NoError && document.isObject(), "Invalid parameters JSON object.");
-        const auto object = document.object();
+
+        if (capabilities || context || targets)
+        {
+            QJsonObject pageRequest;
+            if (!pagePath.isEmpty()) pageRequest = readJsonObject(pagePath, "Page request must be readable and at most 64 KiB.");
+            const QString stableSourceId = pageSourceId(input, sourceHash);
+            const QString stableRevision = QString::fromLatin1(sourceHash);
+            QJsonObject result;
+            if (capabilities) result = RModelCommandService::capabilities(model);
+            else if (context) result = RModelCommandService::context(model, stableSourceId, stableRevision, pageRequest);
+            else result = RModelCommandService::targets(model, stableSourceId, stableRevision, pageRequest);
+            result.insert("sourceSha256", QString::fromLatin1(sourceHash));
+            require(sourceBinding(input) == source, "Source changed during read operation.");
+            print(result);
+            return result.value("status").toString() == QStringLiteral("rejected") ? 2 : 0;
+        }
+
+        QByteArray parameterHash;
+        const auto object = readJsonObject(parameterPath,
+            "Parameters must be readable and at most 64 KiB.", &parameterHash);
         require(object.size() == 2 && object.value("parameters").isObject()
                 && object.value("sourceSha256").isString(), "Expected sourceSha256 and parameters only.");
-        require(object.value("sourceSha256").toString().toLatin1() == sourceHash, "Stale source hash; query the source again.");
+        require(object.value("sourceSha256").toString().toLatin1() == sourceHash,
+                "Stale source hash; query the source again.");
+        const QString commandId = explicitCommand ? parser.value("command") : QStringLiteral("analysis.modal.configure");
         const auto current = session.query();
-        const QJsonObject command{{"apiVersion", "range.application/v1"}, {"commandId", "analysis.modal.configure"},
+        const QJsonObject command{{"apiVersion", "range.application/v1"}, {"commandId", commandId},
             {"commandVersion", 1}, {"modelId", current["modelId"]}, {"expectedRevision", current["revision"]},
             {"requestId", QUuid::createUuid().toString()}, {"idempotencyKey", QUuid::createUuid().toString()},
             {"parameters", object["parameters"]}, {"dryRun", preview}};
         auto response = session.execute(command);
-        if (response.value("status") == QJsonValue("rejected")) { print(response); return 2; }
+        require(sourceBinding(input) == source, "Source changed during command validation.");
         response["sourceSha256"] = QString::fromLatin1(sourceHash);
+        if (response.value("status") == QJsonValue("rejected")) { print(response); return 2; }
         if (preview) { print(response); return 0; }
         QTemporaryDir staging(QFileInfo(output).dir().filePath(".range-model-command-XXXXXX"));
         require(staging.isValid(), "Cannot create output staging directory.");
@@ -230,7 +314,7 @@ int main(int argc, char **argv)
             const auto bytes = staged.read(1024 * 1024);
             require(!bytes.isEmpty() && published.write(bytes) == bytes.size(), "Output copy failed.");
         }
-        require(resolved(parser.value("input"), true) == input && hash(input) == sourceHash
+        require(resolved(parser.value("input"), true) == input && sourceBinding(input) == source
                 && resolved(parser.value("parameters"), true) == parameterPath && hash(parameterPath) == parameterHash
                 && resolved(parser.value("output"), false) == output
                 && QFileInfo::exists(output) == existed && (!existed || hash(output) == outputHash),

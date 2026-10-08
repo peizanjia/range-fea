@@ -9,24 +9,33 @@
 #include <QScrollArea>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QMessageBox>
+#include <QJsonArray>
 
 #include "application.h"
+#include "session.h"
 #include "solver_manager.h"
-#include "solver_setup_checker.h"
 #include "solver_start_dialog.h"
 #include "solver_task.h"
 
 SolverStartDialog::SolverStartDialog(uint modelID, QWidget *parent)
     : QDialog(parent)
     , modelID(modelID)
+    , pSolverTask(nullptr)
 {
-    SolverSetupChecker solverSetupChecker(Application::instance()->getSession()->getModel(this->modelID));
-    solverSetupChecker.perform(this->warnings,this->errors);
+    const QJsonObject validation = SolverManager::getInstance().validateRun(this->modelID);
+    for (const QJsonValue &value : validation.value(QStringLiteral("warnings")).toArray())
+        this->warnings.append(value.toString());
+    for (const QJsonValue &value : validation.value(QStringLiteral("errors")).toArray())
+        this->errors.append(value.toString());
 
-    const Model &rModel = Application::instance()->getSession()->getModel(this->modelID);
-
-    this->pSolverTask = new SolverTask(Application::instance()->getApplicationSettings(),this->modelID);
-    this->pSolverTask->setBlocking(false);
+    const QString modelName = validation.value(QStringLiteral("modelName")).toString();
+    const bool modelReadable = validation.value(QStringLiteral("modelReadable")).toBool();
+    if (validation.value(QStringLiteral("valid")).toBool())
+    {
+        this->pSolverTask = new SolverTask(Application::instance()->getApplicationSettings(), this->modelID);
+        this->pSolverTask->setBlocking(false);
+    }
 
     this->setWindowTitle(tr("Start solver"));
 
@@ -37,7 +46,8 @@ SolverStartDialog::SolverStartDialog(uint modelID, QWidget *parent)
     this->setLayout (mainLayout);
 
     QLabel *messageLabel = new QLabel;
-    messageLabel->setText(tr("Start solver for model") + ": <b>" + rModel.getName() + "</b>");
+    messageLabel->setText(tr("Start solver for model") + ": <b>" +
+                          (modelName.isEmpty() ? tr("Model %1").arg(this->modelID) : modelName) + "</b>");
     mainLayout->addWidget(messageLabel);
 
     if (this->warnings.size() || this->errors.size())
@@ -90,13 +100,20 @@ SolverStartDialog::SolverStartDialog(uint modelID, QWidget *parent)
     scrollArea->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Maximum);
     mainLayout->addWidget(scrollArea);
 
-    QLabel *commandLineLabel = new QLabel(this->pSolverTask->getCommandLine());
+    QLabel *commandLineLabel = new QLabel(this->pSolverTask
+                                          ? this->pSolverTask->getCommandLine()
+                                          : tr("Solver command is unavailable until validation succeeds."));
     commandLineLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     commandLineLabel->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Maximum);
     scrollArea->setWidget(commandLineLabel);
 
     this->restartSolverCheck = new QCheckBox(tr("Restart solver / continue"));
-    if (Application::instance()->getSession()->getModel(this->modelID).getNVariables() == 0)
+    if (!modelReadable || !this->pSolverTask)
+    {
+        this->restartSolverCheck->setDisabled(true);
+        this->restartSolverCheck->setChecked(false);
+    }
+    else if (Application::instance()->getSession()->getModel(this->modelID).getNVariables() == 0)
     {
         this->restartSolverCheck->setDisabled(true);
         this->restartSolverCheck->setChecked(false);
@@ -104,7 +121,8 @@ SolverStartDialog::SolverStartDialog(uint modelID, QWidget *parent)
     else
     {
         this->restartSolverCheck->setEnabled(true);
-        this->restartSolverCheck->setChecked(rModel.getProblemSetup().getRestart());
+        this->restartSolverCheck->setChecked(Application::instance()->getSession()
+                                             ->getModel(this->modelID).getProblemSetup().getRestart());
     }
     mainLayout->addWidget(this->restartSolverCheck);
 
@@ -128,17 +146,38 @@ int SolverStartDialog::exec()
 
     if (retVal == QDialog::Accepted)
     {
-        Application::instance()->getSession()->storeCurentModelVersion(this->modelID, tr("Configure solver run"));
-        Application::instance()->getSession()->getModel(this->modelID).getProblemSetup().setRestart(this->restartSolverCheck->isChecked());
-        Application::instance()->getSession()->getModel(this->modelID).getTimeSolver().harmonizeTimesWithInput(this->restartSolverCheck->isChecked());
-        Application::instance()->getSession()->setProblemChanged(this->modelID);
+        const QJsonObject validation = SolverManager::getInstance().validateRun(this->modelID);
+        if (!this->pSolverTask || !validation.value(QStringLiteral("valid")).toBool())
+        {
+            const QJsonArray errors = validation.value(QStringLiteral("errors")).toArray();
+            QMessageBox::warning(this, tr("Solver not started"),
+                                 errors.isEmpty() ? tr("The solver validation is no longer valid.") : errors.first().toString());
+            if (this->pSolverTask) this->pSolverTask->deleteLater();
+            this->pSolverTask = nullptr;
+            return QDialog::Rejected;
+        }
+
+        Session *session = Application::instance()->getSession();
+        session->storeCurentModelVersion(this->modelID, tr("Configure solver run"));
+        session->getModel(this->modelID).getProblemSetup().setRestart(this->restartSolverCheck->isChecked());
+        session->getModel(this->modelID).getTimeSolver().harmonizeTimesWithInput(this->restartSolverCheck->isChecked());
+        session->setProblemChanged(this->modelID);
 
         // Start solver task
-        SolverManager::getInstance().submit(this->pSolverTask);
+        QString error;
+        const QString jobId = SolverManager::getInstance().submitValidated(
+                    this->pSolverTask, QJsonObject(), true, &error);
+        if (jobId.isEmpty())
+        {
+            QMessageBox::warning(this, tr("Solver not started"),
+                                 error.isEmpty() ? tr("The solver job could not be submitted.") : error);
+            retVal = QDialog::Rejected;
+        }
     }
     else
     {
-        this->pSolverTask->deleteLater();
+        if (this->pSolverTask) this->pSolverTask->deleteLater();
+        this->pSolverTask = nullptr;
     }
 
     return retVal;

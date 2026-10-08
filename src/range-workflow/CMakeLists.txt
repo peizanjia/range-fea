@@ -8,6 +8,7 @@ install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
     ${CMAKE_SOURCE_DIR}/../docs/CONTROL_WORKFLOW.md
     ${CMAKE_SOURCE_DIR}/../docs/AGENT_OPERATIONS.md
     ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_SDK.md
+    ${CMAKE_SOURCE_DIR}/../docs/NATIVE_DOCUMENT_SDK.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_INTERACTION_DESIGN.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_UX_ACCEPTANCE.md
     ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
@@ -56,6 +57,15 @@ if(RANGE_BUILD_TESTS)
     endif()
     add_test(NAME tst_private_python_packaging COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/../scripts/packaging/test_private_python.py" -v)
+    add_test(NAME tst_native_document_sdk COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_document_client.py"
+        --cli "$<TARGET_FILE:range-model-command>"
+        --source "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9/stage9_truss4.ram" -v)
+    set_tests_properties(tst_native_document_sdk PROPERTIES TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(tst_native_document_sdk PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     if(WIN32)
         set_tests_properties(tst_workflow_native tst_workflow_runtime PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

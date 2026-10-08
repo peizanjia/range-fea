@@ -29,6 +29,7 @@
 
 #include "execution_event_journal.h"
 #include "control_ndjson_transport.h"
+#include "native_progress_journal.h"
 #include "solver_task.h"
 
 namespace
@@ -306,6 +307,42 @@ void SolverTask::run(void)
         emit this->finished();
         return;
     }
+    const QString progressJobId = qEnvironmentVariable(
+        NativeProgressJournal::jobIdEnvironmentVariable);
+    const QString progressPath = qEnvironmentVariable(
+        NativeProgressJournal::pathEnvironmentVariable);
+    const bool progressRequested = !progressJobId.isEmpty() || !progressPath.isEmpty();
+    QString progressError;
+    std::unique_ptr<NativeProgressJournal> progressJournal =
+        NativeProgressJournal::createFromEnvironment(&progressError);
+    NativeProgressHandlerScope progressHandlerScope(progressJournal.get());
+    bool progressUnavailableReported = false;
+    auto reportProgressUnavailable = [&]()
+    {
+        if (!progressRequested || progressUnavailableReported)
+        {
+            return;
+        }
+        QString reason = progressError;
+        if (reason.isEmpty() && progressJournal)
+        {
+            reason = progressJournal->unavailableReason();
+        }
+        if (reason.isEmpty() && progressJournal && progressJournal->isAvailable())
+        {
+            return;
+        }
+        if (reason.isEmpty())
+        {
+            reason = QStringLiteral("Native progress sidechannel was not initialized");
+        }
+        RLogger::warning("NativeProgressUnavailable: %s\n",qPrintable(reason));
+        progressUnavailableReported = true;
+    };
+    if (progressRequested && !progressJournal)
+    {
+        reportProgressUnavailable();
+    }
     RModel model;
     QUuid runId;
     QString journalPath;
@@ -340,6 +377,7 @@ void SolverTask::run(void)
     };
     auto finishWithFailure = [&](const QString &message)
     {
+        reportProgressUnavailable();
         if (loggerIndented)
         {
             RLogger::unindent();
@@ -773,6 +811,7 @@ void SolverTask::run(void)
             });
         solverEntered = true;
         solver.run();
+        reportProgressUnavailable();
         RLogger::unindent();
         loggerIndented = false;
         RLogger::info("\n********** SOLVER - END **********\n\n");

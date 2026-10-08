@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <QByteArray>
+#include <QJsonObject>
 #include <QPair>
 #include <QProcess>
 
@@ -49,6 +50,8 @@ class SolverTask : public RJob
         QString convergenceFileName;
         //! Monitoring file name.
         QString monitoringFileName;
+        //! Native progress journal path inside this task's private run directory.
+        QString nativeProgressFileName;
         //! Detached model copy captured on the document thread at scheduling.
         std::unique_ptr<Model> inputSnapshot;
         //! Detached result copy owned and updated by the worker.
@@ -60,6 +63,13 @@ class SolverTask : public RJob
         QByteArray inputSnapshotSha256;
         //! SHA-256 of the immutable input package, including staged references and history.
         QByteArray inputPackageSha256;
+        //! Provenance assigned by the validated manager before queueing.
+        QString inputDerivedFrom;
+        QString frozenSnapshotPath;
+        QString frozenSnapshotSha256;
+        bool frozenSnapshotVerified = false;
+        //! Guards pre-queue validation copies from a task that has begun execution.
+        std::atomic_bool performStarted{false};
 
     public:
 
@@ -69,12 +79,27 @@ class SolverTask : public RJob
         //! Capture the input model and its source stamp before the job is queued.
         bool captureInputSnapshot(const Model &model,
                                   const QPair<QString, quint64> &sourceStamp,
-                                  uint currentModelID);
+                                  uint currentModelID,
+                                  const QString &inputDerivedFrom = QString(),
+                                  const QString &frozenSnapshotPath = QString(),
+                                  const QString &frozenSnapshotSha256 = QString());
 
         //! Capture an already detached model copy and source stamp.
         bool captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
                                   const QPair<QString, quint64> &sourceStamp,
-                                  uint currentModelID);
+                                  uint currentModelID,
+                                  const QString &inputDerivedFrom = QString(),
+                                  const QString &frozenSnapshotPath = QString(),
+                                  const QString &frozenSnapshotSha256 = QString());
+
+        //! Return a detached copy for pre-queue setup validation.
+        std::unique_ptr<Model> copyCapturedInputForValidation() const;
+
+        //! Provenance of the detached captured input.
+        const QString &getInputDerivedFrom() const;
+        const QString &getFrozenSnapshotPath() const;
+        const QString &getFrozenSnapshotSha256() const;
+        bool getFrozenSnapshotVerified() const;
 
         //! Return the stable source identity selected when this task was created.
         const QString &getSourceDocumentId() const;
@@ -97,8 +122,20 @@ class SolverTask : public RJob
         //! Return the retained result artifact path.
         const QString &getResultArtifactFileName() const;
 
+        //! Return the convergence log path.
+        const QString &getConvergenceFileName() const;
+
+        //! Return the monitoring log path.
+        const QString &getMonitoringFileName() const;
+
+        //! Return the private native progress journal path.
+        const QString &getNativeProgressFileName() const;
+
         //! Return model ID.
         uint getModelID() const;
+
+        //! Refresh the transient list index after verifying the stable source identity.
+        bool rebindModelIDForSubmit(uint currentModelID);
 
         //! Return const reference to solver task ID.
         const SolverTaskID & getTaskID() const;
@@ -140,7 +177,22 @@ class SolverTask : public RJob
         void readyReadStandardError(QString message);
 
         //! A complete task result artifact was read back successfully.
-        void resultArtifactCreated(QString fileName);
+        void resultArtifactCreated(QString fileName, QString sha256, QJsonObject sourceBinding);
+
+        //! Worker-reported terminal evidence copied for the manager thread.
+        void terminalReported(QString jobId, QString state, bool processStarted,
+                              bool processExited, int exitCode, bool resultReadbackComplete,
+                              QString resultArtifactPath, QString resultArtifactSha256,
+                              bool resultArtifactVerified, QString message);
+
+        //! A validated native progress event copied for the manager thread.
+        void nativeProgressReported(QString jobId, QJsonObject progressEvent);
+
+        //! Native progress journal could not provide trustworthy progress.
+        void nativeProgressUnavailable(QString jobId, QString reason);
+
+        //! A malformed, stale, or skipped native progress record was diagnosed.
+        void nativeProgressDiagnostic(QString jobId, QString message);
 
 };
 

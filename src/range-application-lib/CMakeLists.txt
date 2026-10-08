@@ -1,4 +1,6 @@
 qt_add_library(range-application-lib STATIC
+    src/rmodel_command_service.cpp
+    include/rmodel_command_service.h
     src/rmodel_command_session.cpp
     include/rmodel_command_session.h
     src/rproject_catalog.cpp
@@ -16,6 +18,7 @@ set_target_properties(range-project PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUN
 install(TARGETS range-project RUNTIME DESTINATION bin COMPONENT Application)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/APPLICATION_SERVICE.md DESTINATION doc COMPONENT Application)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/PROJECT_CATALOG.md DESTINATION doc COMPONENT Application)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/NATIVE_MODEL_OPERATIONS.md DESTINATION doc COMPONENT Application)
 
 if(RANGE_BUILD_TESTS)
     qt_add_executable(tst_model_command_cli tests/tst_model_command_cli.cpp)
@@ -39,6 +42,13 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_model_command_session COMMAND tst_model_command_session -o -,txt)
     if(WIN32)
         set_tests_properties(tst_model_command_session PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    qt_add_executable(tst_model_command_service tests/tst_model_command_service.cpp)
+    target_link_libraries(tst_model_command_service PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_model_command_service COMMAND tst_model_command_service -o -,txt)
+    if(WIN32)
+        set_tests_properties(tst_model_command_service PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 endif()

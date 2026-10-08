@@ -771,6 +771,8 @@ int runExtensionWidgetTests(int argc, char **argv);
 int runAgentEventViewTests(int argc, char **argv);
 int runAgentConversationWidgetTests(int argc, char **argv);
 int runProjectSessionTests(int argc, char **argv);
+int runNativeJobRegistryTests(int argc, char **argv);
+int runGuiModelOperationsTests(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
@@ -798,7 +800,9 @@ int main(int argc, char **argv)
     const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
     const bool agentConversation = argc > 1 && QByteArray(argv[1]) == "--agent-conversation";
     const bool projectSession = argc > 1 && QByteArray(argv[1]) == "--project-session";
-    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession)
+    const bool nativeJobs = argc > 1 && QByteArray(argv[1]) == "--native-jobs";
+    const bool modelOperations = argc > 1 && QByteArray(argv[1]) == "--model-operations";
+    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
@@ -809,7 +813,9 @@ int main(int argc, char **argv)
         : extensionWidget ? runExtensionWidgetTests(argc, argv)
         : agentEventView ? runAgentEventViewTests(argc, argv)
         : agentConversation ? runAgentConversationWidgetTests(argc, argv)
-        : projectSession ? runProjectSessionTests(argc, argv) : QTest::qExec(&test, argc, argv);
+        : projectSession ? runProjectSessionTests(argc, argv)
+        : nativeJobs ? runNativeJobRegistryTests(argc, argv)
+        : modelOperations ? runGuiModelOperationsTests(argc, argv) : QTest::qExec(&test, argc, argv);
     application.getSession()->clear();
     delete application.getMainWindow();
     SolverManager::getInstance().stopServer();

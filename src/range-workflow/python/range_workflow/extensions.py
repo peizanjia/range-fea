@@ -1288,7 +1288,8 @@ def _knowledge(query: str, extension_id: str | None, service) -> dict:
     documents = []
     package_path = Path(__file__).resolve()
     roots = (package_path.parents[3] / "doc", package_path.parents[4] / "docs")
-    for filename in ("AGENT_OPERATIONS.md", "WORKFLOW_CONTRACT.md", "EXTENSION_SDK.md"):
+    for filename in ("AGENT_OPERATIONS.md", "WORKFLOW_CONTRACT.md", "EXTENSION_SDK.md",
+                     "NATIVE_MODEL_OPERATIONS.md", "NATIVE_DOCUMENT_SDK.md", "PROJECT_CATALOG.md"):
         found = next((root / filename for root in roots if (root / filename).is_file() and not (root / filename).is_symlink()), None)
         if found is None or found.stat().st_size > 256 * 1024:
             continue

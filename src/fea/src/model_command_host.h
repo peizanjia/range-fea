@@ -43,6 +43,8 @@ private:
     std::unique_ptr<State> state;
     Session *session;
     void pruneClosedModels();
+    bool recordExternalChangeAfterNotification(uint modelID, const QString &reason,
+                                               QString *error = nullptr);
 };
 
 #endif

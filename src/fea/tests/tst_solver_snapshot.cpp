@@ -113,6 +113,10 @@ bool loadStage9Model(QTemporaryDir &directory, Model &model, QString &sourceFile
     // GUI SolverTask does not select an external controller executable, so use
     // its native dynamics model without that CLI-only controller requirement.
     model.getProblemSetup().setStructuralControlSetup(RStructuralControlSetup());
+    if (model.getNLines() == 0) return false;
+    for (uint index = 0; index < model.getNPoints(); ++index)
+        model.getPoint(index).setMaterial(model.getLine(0).getMaterial());
+    ModelIO::save(model, sourceFileName, false);
     return model.getNNodes() > 0 && model.getNElements() > 0;
 }
 
@@ -211,6 +215,7 @@ private slots:
         auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
         QVERIFY(!task->getSourceDocumentId().isEmpty());
         QVERIFY(QFileInfo::exists(Application::instance()->getApplicationSettings()->getSolverPath()));
+        QVERIFY(task->captureInputSnapshot(session->getModel(modelID), sourceStampBefore, modelID));
 
         auto gateStarted = std::make_shared<QSemaphore>();
         auto gateRelease = std::make_shared<QSemaphore>();
@@ -307,6 +312,7 @@ private slots:
         auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
         QSignalSpy taskFinished(task, &RJob::finished);
         QSignalSpy taskFailed(task, &RJob::failed);
+        QVERIFY(task->captureInputSnapshot(session->getModel(modelID), session->modelCommandStamp(modelID), modelID));
         auto gateStarted = std::make_shared<QSemaphore>();
         auto gateRelease = std::make_shared<QSemaphore>();
         GateReleaseGuard gateGuard{gateRelease};

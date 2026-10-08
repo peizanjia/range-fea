@@ -48,12 +48,6 @@ bool integer(const QJsonValue &value, double minimum, double maximum)
         && number >= minimum && number <= maximum;
 }
 
-QString modalHash(const QJsonObject &modal)
-{
-    return QString::fromLatin1(QCryptographicHash::hash(
-        QJsonDocument(modal).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
-}
-
 QJsonObject sourceSnapshot(const RModelCommandSession::JournalOptions &options)
 {
     QJsonObject snapshot;
@@ -248,8 +242,8 @@ struct RModelCommandSession::State
 
     RModel model;
     quint64 generation = 0;
-    QVector<RModalSetup> undo;
-    QVector<RModalSetup> redo;
+    QVector<RModelCommandService::Delta> undo;
+    QVector<RModelCommandService::Delta> redo;
     QMap<QString, QPair<QJsonObject, QJsonObject>> ledger;
     JournalOptions journal;
     Lifecycle lifecycle = Lifecycle::Ready;
@@ -278,17 +272,14 @@ QString RModelCommandSession::revision() const
 
 QJsonObject RModelCommandSession::modalParameters(const RModalSetup &setup)
 {
-    return {{QStringLiteral("method"), setup.getMethod() == R_MODAL_MULTIPLE_MODES
-                 ? QStringLiteral("multiple") : QStringLiteral("dominant")},
-            {QStringLiteral("iterations"), static_cast<int>(setup.getNIterations())},
-            {QStringLiteral("modes"), static_cast<int>(setup.getNModesToExtract())},
-            {QStringLiteral("tolerance"), setup.getConvergenceValue()},
-            {QStringLiteral("unit"), QStringLiteral("1")}};
+    return RModelCommandService::modalParameters(setup);
 }
 
 QJsonObject RModelCommandSession::query() const
 {
-    const bool supported = state->model.getProblemTaskTree().getProblemTypeMask() & R_PROBLEM_STRESS_MODAL;
+    const QJsonObject capabilities = RModelCommandService::capabilities(state->model);
+    const RProblemTypeMask taskMask = state->model.getProblemTaskTree().getProblemTypeMask();
+    const bool supported = taskMask & R_PROBLEM_STRESS_MODAL;
     QString lifecycle = QStringLiteral("ready");
     if (state->lifecycle == Lifecycle::Running) lifecycle = QStringLiteral("running");
     else if (state->lifecycle == Lifecycle::Closed) lifecycle = QStringLiteral("closed");
@@ -297,11 +288,30 @@ QJsonObject RModelCommandSession::query() const
             {QStringLiteral("revisionScope"), QStringLiteral("owned-session")},
             {QStringLiteral("modal"), modalParameters(state->model.getProblemSetup().getModalSetup())},
             {QStringLiteral("canConfigureModal"), supported},
+            {QStringLiteral("structuralDynamics"), RModelCommandService::structuralDynamicsParameters(
+                state->model.getProblemSetup().getStructuralDynamicsSetup())},
+            {QStringLiteral("capabilities"), capabilities},
+            {QStringLiteral("supportedStateFingerprint"), RModelCommandService::stateFingerprint(state->model)},
             {QStringLiteral("canUndo"), !state->undo.isEmpty()},
             {QStringLiteral("canRedo"), !state->redo.isEmpty()},
             {QStringLiteral("remainingCommands"), MaxCommands - state->ledger.size()},
             {QStringLiteral("lifecycle"), lifecycle},
             {QStringLiteral("busy"), state->lifecycle == Lifecycle::Running}};
+}
+
+QJsonObject RModelCommandSession::capabilities() const
+{
+    return RModelCommandService::capabilities(state->model);
+}
+
+QJsonObject RModelCommandSession::context(const QString &sourceId, const QJsonObject &pageRequest) const
+{
+    return RModelCommandService::context(state->model, sourceId, revision(), pageRequest);
+}
+
+QJsonObject RModelCommandSession::targets(const QString &sourceId, const QJsonObject &pageRequest) const
+{
+    return RModelCommandService::targets(state->model, sourceId, revision(), pageRequest);
 }
 
 bool RModelCommandSession::setRunning(bool running)
@@ -310,7 +320,7 @@ bool RModelCommandSession::setRunning(bool running)
     const Lifecycle next = running ? Lifecycle::Running : Lifecycle::Ready;
     if (state->lifecycle == next) return true;
     const QUuid runId = running ? QUuid::createUuid() : state->runId;
-    const QString currentHash = modalHash(modalParameters(state->model.getProblemSetup().getModalSetup()));
+    const QString currentHash = RModelCommandService::stateFingerprint(state->model);
     const QJsonObject snapshot{{QStringLiteral("runId"), runId.toString(QUuid::WithoutBraces)}};
     if (!appendJournalEvent(running ? QStringLiteral("model.run.started") : QStringLiteral("model.run.released"),
                             running ? QStringLiteral("running") : QStringLiteral("ready"),
@@ -325,7 +335,7 @@ bool RModelCommandSession::close()
 {
     if (QThread::currentThreadId() != ownerThread) return false;
     if (state->lifecycle == Lifecycle::Closed) return true;
-    const QString currentHash = modalHash(modalParameters(state->model.getProblemSetup().getModalSetup()));
+    const QString currentHash = RModelCommandService::stateFingerprint(state->model);
     if (!appendJournalEvent(QStringLiteral("model.session.close"), QStringLiteral("closed"),
                             revision(), currentHash, currentHash, QJsonObject{}, QJsonObject{},
                             QJsonArray{}, QJsonArray{})) return false;
@@ -393,9 +403,32 @@ bool RModelCommandSession::appendJournalEvent(const QString &commandId, const QS
     record.commandVersion = QStringLiteral("1.0.0");
     record.parameters = parameters;
     record.selectionSnapshot = selectionSnapshot;
+    // InteractionRecord v1 forbids null payload values. Preserve the exact
+    // nullable axis request as bounded JSON text, without changing that schema
+    // or substituting zero for an explicitly disabled component.
+    if (commandId == QStringLiteral("entity.boundary.set"))
+    {
+        const QJsonArray axes = parameters.value(QStringLiteral("values")).toArray();
+        bool nullableAxis = false;
+        for (const QJsonValue &axis : axes) nullableAxis |= axis.isNull();
+        if (nullableAxis)
+        {
+            const QByteArray encoded = QJsonDocument(parameters).toJson(QJsonDocument::Compact);
+            if (encoded.size() > 4096)
+            {
+                if (error) *error = QStringLiteral("Nullable axis parameters exceed the lossless audit encoding limit.");
+                return false;
+            }
+            record.parameters = {{QStringLiteral("json"), QString::fromUtf8(encoded)}};
+            record.selectionSnapshot.insert(QStringLiteral("parametersEncoding"), QStringLiteral("json-text/v1"));
+        }
+    }
     record.selectionSnapshot.insert(QStringLiteral("preRevision"), revision());
     record.selectionSnapshot.insert(QStringLiteral("postRevision"), modelRevision);
-    record.selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("modal_configuration"));
+    // Hash scope is versioned independently from the v1 interaction envelope.
+    // Existing records retain their original modal-only scope when appended.
+    record.selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("supported_model_state"));
+    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 2);
     if (!options.sourcePath.isEmpty())
         record.selectionSnapshot.insert(QStringLiteral("sourcePath"), options.sourcePath);
     if (!options.sourceSha256.isEmpty())
@@ -431,8 +464,8 @@ bool RModelCommandSession::recordExternalChange(const QString &reason, const RMo
         if (error) *error = QStringLiteral("Unsupported external change reason; the stale session was closed.");
         return false;
     }
-    const QString before = modalHash(modalParameters(state->model.getProblemSetup().getModalSetup()));
-    const QString after = modalHash(modalParameters(changedModel.getProblemSetup().getModalSetup()));
+    const QString before = RModelCommandService::stateFingerprint(state->model);
+    const QString after = RModelCommandService::stateFingerprint(changedModel);
     return appendJournalEvent(QStringLiteral("model.external.") + reason, QStringLiteral("external_changed"),
                               QStringLiteral("invalidated:") + previousRevision, before, after,
                               QJsonObject{}, QJsonObject{{QStringLiteral("reason"), reason},
@@ -468,7 +501,7 @@ bool RModelCommandSession::recordPublicationIntent(const QString &outputPath, co
                              {QStringLiteral("expectedOutputSha256"), stagedSha256},
                              {QStringLiteral("previousOutputExisted"), existed},
                              {QStringLiteral("previousOutputSha256"), previousSha256}};
-    const QString currentHash = modalHash(modalParameters(state->model.getProblemSetup().getModalSetup()));
+    const QString currentHash = RModelCommandService::stateFingerprint(state->model);
     if (!appendJournalEvent(QStringLiteral("model.artifact.publish_intent"), QStringLiteral("publication_pending"),
                             revision(), currentHash, currentHash, QJsonObject{}, intent,
                             QJsonArray{}, QJsonArray{}, error)) return false;
@@ -664,7 +697,7 @@ bool RModelCommandSession::recordArtifactPublished(const QString &outputPath,
     }
     const QJsonArray artifactRefs{QJsonObject{{QStringLiteral("artifactId"), QStringLiteral("model-output")},
                                                {QStringLiteral("sha256"), sha256}}};
-    const QString currentStateHash = modalHash(modalParameters(state->model.getProblemSetup().getModalSetup()));
+    const QString currentStateHash = RModelCommandService::stateFingerprint(state->model);
     const bool written = appendJournalEvent(QStringLiteral("model.artifact.published"),
                                             QStringLiteral("published"), revision(), currentStateHash,
                                             currentStateHash, QJsonObject{}, snapshot, artifactRefs,
@@ -697,7 +730,7 @@ QJsonObject RModelCommandSession::execute(const QJsonObject &request)
         if (rawCommand == QStringLiteral("analysis.modal.configure")
             || rawCommand == QStringLiteral("model.undo") || rawCommand == QStringLiteral("model.redo"))
             safeCommand = rawCommand;
-        const QString currentHash = modalHash(modalParameters(state->model.getProblemSetup().getModalSetup()));
+        const QString currentHash = RModelCommandService::stateFingerprint(state->model);
         const QJsonArray diagnostics{QJsonObject{{QStringLiteral("code"), code},
                                                   {QStringLiteral("severity"), QStringLiteral("warning")},
                                                   {QStringLiteral("message"), message}}};
@@ -755,57 +788,52 @@ QJsonObject RModelCommandSession::execute(const QJsonObject &request)
 
     const QString command = request.value(QStringLiteral("commandId")).toString();
     const auto parameters = request.value(QStringLiteral("parameters")).toObject();
-    RModalSetup proposed = state->model.getProblemSetup().getModalSetup();
-    if (command == QStringLiteral("analysis.modal.configure"))
-    {
-        if (!(state->model.getProblemTaskTree().getProblemTypeMask() & R_PROBLEM_STRESS_MODAL))
-            return rejected(QStringLiteral("unsupported_analysis"), QStringLiteral("The model has no structural modal task."));
-        if (!exactKeys(parameters, {QStringLiteral("method"), QStringLiteral("iterations"),
-                                    QStringLiteral("modes"), QStringLiteral("tolerance"), QStringLiteral("unit")})
-            || (parameters.value(QStringLiteral("method")) != QJsonValue(QStringLiteral("dominant"))
-                && parameters.value(QStringLiteral("method")) != QJsonValue(QStringLiteral("multiple")))
-            || parameters.value(QStringLiteral("unit")) != QJsonValue(QStringLiteral("1"))
-            || !integer(parameters.value(QStringLiteral("iterations")), R_MODAL_ITERATIONS_MIN_NUMBER, R_MODAL_ITERATIONS_MAX_NUMBER)
-            || !integer(parameters.value(QStringLiteral("modes")), R_MODAL_MODES_MIN_NUMBER, R_MODAL_MODES_MAX_NUMBER)
-            || !parameters.value(QStringLiteral("tolerance")).isDouble()
-            || !std::isfinite(parameters.value(QStringLiteral("tolerance")).toDouble())
-            || parameters.value(QStringLiteral("tolerance")).toDouble() <= 0.0
-            || parameters.value(QStringLiteral("tolerance")).toDouble() > R_MODAL_CONVERGENCE_MAX_VALUE)
-            return rejected(QStringLiteral("invalid_parameters"), QStringLiteral("Invalid modal settings or dimensionless unit."));
-        proposed.setMethod(parameters.value(QStringLiteral("method")).toString() == QStringLiteral("multiple")
-                               ? R_MODAL_MULTIPLE_MODES : R_MODAL_DOMINANT_MODE);
-        proposed.setNIterations(parameters.value(QStringLiteral("iterations")).toInt());
-        proposed.setNModesToExtract(parameters.value(QStringLiteral("modes")).toInt());
-        proposed.setConvergenceValue(parameters.value(QStringLiteral("tolerance")).toDouble());
-    }
-    else if (command == QStringLiteral("model.undo") || command == QStringLiteral("model.redo"))
+    const bool undoCommand = command == QStringLiteral("model.undo");
+    const bool redoCommand = command == QStringLiteral("model.redo");
+    RModelCommandService::PreviewResult operation;
+    if (undoCommand || redoCommand)
     {
         if (!parameters.isEmpty())
             return rejected(QStringLiteral("invalid_parameters"), QStringLiteral("Undo and redo take empty parameters."));
-        const auto &history = command == QStringLiteral("model.undo") ? state->undo : state->redo;
+        const auto &history = undoCommand ? state->undo : state->redo;
         if (history.isEmpty())
             return rejected(QStringLiteral("empty_history"), QStringLiteral("No accepted edit is available."));
-        proposed = history.last();
+        operation = RModelCommandService::applyDelta(state->model, history.last(), redoCommand);
     }
     else
-        return rejected(QStringLiteral("unknown_command"), QStringLiteral("This command is not supported by the editing session."));
+    {
+        operation = RModelCommandService::preview(state->model, command, parameters, identity, revision());
+    }
+    if (!operation.valid) return rejected(operation.code, operation.message);
 
-    const auto currentModal = modalParameters(state->model.getProblemSetup().getModalSetup());
-    const auto proposedModal = modalParameters(proposed);
-    const QString currentHash = modalHash(currentModal);
-    const QString proposedHash = modalHash(proposedModal);
+    const QString currentHash = RModelCommandService::stateFingerprint(state->model);
+    const QString proposedHash = RModelCommandService::stateFingerprint(operation.candidate);
     QJsonObject response{{QStringLiteral("apiVersion"), QStringLiteral("range.application/v1")},
         {QStringLiteral("status"), QStringLiteral("preview")},
         {QStringLiteral("requestId"), request.value(QStringLiteral("requestId"))},
         {QStringLiteral("modelId"), identity}, {QStringLiteral("preRevision"), revision()},
-        {QStringLiteral("revision"), revision()}, {QStringLiteral("modal"), proposedModal}};
+        {QStringLiteral("revision"), revision()}};
+    const bool legacyModal = command == QStringLiteral("analysis.modal.configure")
+        || ((undoCommand || redoCommand) && operation.delta.kind == RModelCommandService::Delta::Kind::Modal);
+    if (legacyModal)
+        response.insert(QStringLiteral("modal"), modalParameters(operation.candidate.getProblemSetup().getModalSetup()));
+    else
+    {
+        response.insert(QStringLiteral("normalizedParameters"), operation.normalizedArguments);
+        response.insert(QStringLiteral("before"), operation.before);
+        response.insert(QStringLiteral("after"), operation.after);
+        response.insert(QStringLiteral("changedPaths"), operation.changedPaths);
+        response.insert(QStringLiteral("fingerprint"), operation.fingerprint);
+        response.insert(QStringLiteral("diagnostics"), operation.diagnostics);
+    }
     if (dryRun)
     {
+        const QJsonObject journalParameters = (undoCommand || redoCommand) ? QJsonObject{}
+            : command == QStringLiteral("analysis.modal.configure") ? parameters : operation.normalizedArguments;
         QString journalError;
         if (!appendJournalEvent(command, QStringLiteral("preview"), revision(), currentHash,
-                                proposedHash, command == QStringLiteral("analysis.modal.configure")
-                                    ? parameters : QJsonObject{}, requestSnapshot,
-                                QJsonArray{}, QJsonArray{}, &journalError))
+                                proposedHash, journalParameters, requestSnapshot,
+                                QJsonArray{}, operation.diagnostics, &journalError))
             return makeResponse(QStringLiteral("journal_failure"),
                                 QStringLiteral("The interaction journal could not be updated; session state was not changed."));
         return response;
@@ -813,31 +841,36 @@ QJsonObject RModelCommandSession::execute(const QJsonObject &request)
     if (state->ledger.size() >= MaxCommands)
         return rejected(QStringLiteral("session_limit"), QStringLiteral("Publish or discard this session before opening a new one."));
 
-    // Allocate/copy the complete candidate (including ledger/history) before
-    // publication. The accepted journal record is durable before state swaps.
+    // Construct the complete accepted state and all history before writing the
+    // journal. Only the final pointer swap publishes the candidate model.
     auto candidate = std::make_unique<State>(*state);
-    const auto previous = candidate->model.getProblemSetup().getModalSetup();
-    if (command == QStringLiteral("model.undo"))
+    if (undoCommand)
     {
-        candidate->undo.removeLast();
-        candidate->redo.append(previous);
+        const auto delta = candidate->undo.takeLast();
+        candidate->redo.append(delta);
+    }
+    else if (redoCommand)
+    {
+        const auto delta = candidate->redo.takeLast();
+        candidate->undo.append(delta);
     }
     else
     {
-        candidate->undo.append(previous);
-        if (command == QStringLiteral("model.redo")) candidate->redo.removeLast();
-        else candidate->redo.clear();
+        if (operation.delta.kind != RModelCommandService::Delta::Kind::None)
+            candidate->undo.append(operation.delta);
+        candidate->redo.clear();
     }
-    candidate->model.getProblemSetup().setModalSetup(proposed);
+    candidate->model = operation.candidate;
     ++candidate->generation;
     response[QStringLiteral("status")] = QStringLiteral("accepted");
     response[QStringLiteral("revision")] = identity + QStringLiteral(":") + QString::number(candidate->generation);
     candidate->ledger.insert(key, {request, response});
+    const QJsonObject journalParameters = (undoCommand || redoCommand) ? QJsonObject{}
+        : command == QStringLiteral("analysis.modal.configure") ? parameters : operation.normalizedArguments;
     QString journalError;
     if (!appendJournalEvent(command, QStringLiteral("accepted"), response.value(QStringLiteral("revision")).toString(),
-                            currentHash, proposedHash,
-                            command == QStringLiteral("analysis.modal.configure") ? parameters : QJsonObject{},
-                            requestSnapshot, QJsonArray{}, QJsonArray{}, &journalError))
+                            currentHash, proposedHash, journalParameters,
+                            requestSnapshot, QJsonArray{}, operation.diagnostics, &journalError))
         return makeResponse(QStringLiteral("journal_failure"),
                             QStringLiteral("The interaction journal could not be updated; session state was not changed."));
     state.swap(candidate);

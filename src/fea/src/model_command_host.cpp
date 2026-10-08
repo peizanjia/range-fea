@@ -1,13 +1,17 @@
 #include "model_command_host.h"
 
 #include "application.h"
+#include "model_io.h"
 #include "session.h"
 #include "solver_manager.h"
+#include <rmodel_command_service.h>
 #include <rmodel_command_session.h>
+#include <rproject_catalog.h>
 #include <rml_file_header.h>
 #include <rml_file_io.h>
 #include <rml_file_utils.h>
 #include <QCryptographicHash>
+#include <QApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QDir>
@@ -21,6 +25,7 @@
 #include <QThread>
 #include <QUuid>
 #include <cmath>
+#include <limits>
 #include <map>
 
 namespace
@@ -61,15 +66,6 @@ QJsonObject rejected(const QString &code, const QString &message)
     return {{"apiVersion", "range.application/v1"}, {"status", "rejected"}, {"code", code}, {"message", message}};
 }
 
-QJsonObject modalRequest(const QJsonObject &current, const RModalSetup &setup, bool dryRun)
-{
-    return {{"apiVersion", "range.application/v1"}, {"commandId", "analysis.modal.configure"}, {"commandVersion", 1},
-        {"modelId", current["modelId"]}, {"expectedRevision", current["revision"]},
-        {"requestId", QUuid::createUuid().toString(QUuid::WithoutBraces)},
-        {"idempotencyKey", QUuid::createUuid().toString(QUuid::WithoutBraces)},
-        {"parameters", RModelCommandSession::modalParameters(setup)}, {"dryRun", dryRun}};
-}
-
 bool exactKeys(const QJsonObject &object, const QSet<QString> &keys)
 {
     if (object.size() != keys.size()) return false;
@@ -102,6 +98,122 @@ bool unsignedInteger(const QJsonValue &value, quint64 *result)
 QString uuid()
 {
     return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+bool isCoreEditCommand(const QString &command)
+{
+    return command == QStringLiteral("analysis.modal.configure")
+        || command == QStringLiteral("analysis.structural_dynamics.configure")
+        || command == QStringLiteral("entity.material.set")
+        || command == QStringLiteral("entity.boundary.set");
+}
+
+RElementGroup *mutableElementGroup(RModel &model, uint physicalId)
+{
+    REntityGroupType type = R_ENTITY_GROUP_NONE;
+    uint index = RConstants::eod;
+    if (!model.findElementGroupByPhysicalId(physicalId, &type, &index)) return nullptr;
+    switch (type)
+    {
+        case R_ENTITY_GROUP_POINT: return &model.getPoint(index);
+        case R_ENTITY_GROUP_LINE: return &model.getLine(index);
+        case R_ENTITY_GROUP_SURFACE: return &model.getSurface(index);
+        case R_ENTITY_GROUP_VOLUME: return &model.getVolume(index);
+        default: return nullptr;
+    }
+}
+
+const RElementGroup *constElementGroup(const RModel &model, uint physicalId)
+{
+    REntityGroupType type = R_ENTITY_GROUP_NONE;
+    uint index = RConstants::eod;
+    if (!model.findElementGroupByPhysicalId(physicalId, &type, &index)) return nullptr;
+    switch (type)
+    {
+        case R_ENTITY_GROUP_POINT: return &model.getPoint(index);
+        case R_ENTITY_GROUP_LINE: return &model.getLine(index);
+        case R_ENTITY_GROUP_SURFACE: return &model.getSurface(index);
+        case R_ENTITY_GROUP_VOLUME: return &model.getVolume(index);
+        default: return nullptr;
+    }
+}
+
+bool commitSupportedCandidate(RModel &liveModel, const RModel &candidate,
+                             const RModelCommandService::Delta &delta,
+                             QString *error = nullptr)
+{
+    switch (delta.kind)
+    {
+        case RModelCommandService::Delta::Kind::Modal:
+            liveModel.getProblemSetup().setModalSetup(
+                candidate.getProblemSetup().getModalSetup());
+            return true;
+        case RModelCommandService::Delta::Kind::StructuralDynamics:
+            liveModel.getProblemSetup().setStructuralDynamicsSetup(
+                candidate.getProblemSetup().getStructuralDynamicsSetup());
+            liveModel.setTimeSolver(candidate.getTimeSolver());
+            return true;
+        case RModelCommandService::Delta::Kind::Material:
+        case RModelCommandService::Delta::Kind::Boundary:
+        {
+            RElementGroup *liveGroup = mutableElementGroup(liveModel, delta.physicalId);
+            const RElementGroup *candidateGroup = constElementGroup(candidate, delta.physicalId);
+            if (!liveGroup || !candidateGroup)
+            {
+                if (error) *error = QObject::tr("The approved physical target no longer exists.");
+                return false;
+            }
+            if (delta.kind == RModelCommandService::Delta::Kind::Material)
+            {
+                liveGroup->setMaterial(candidateGroup->getMaterial());
+                return true;
+            }
+            const bool candidateHas = candidateGroup->hasBoundaryCondition(delta.boundaryType);
+            if (candidateHas)
+                liveGroup->addBoundaryCondition(candidateGroup->getBoundaryCondition(delta.boundaryType));
+            else if (liveGroup->hasBoundaryCondition(delta.boundaryType))
+                liveGroup->removeBoundaryCondition(delta.boundaryType);
+            return true;
+        }
+        case RModelCommandService::Delta::Kind::None:
+            break;
+    }
+    if (error) *error = QObject::tr("The approved command did not contain a supported model change.");
+    return false;
+}
+
+bool commitSupportedDelta(RModel &liveModel, const RModelCommandService::Delta &delta,
+                          QString *error = nullptr)
+{
+    const auto evaluated = RModelCommandService::applyDelta(liveModel, delta, true);
+    if (!evaluated.valid)
+    {
+        if (error) *error = evaluated.message;
+        return false;
+    }
+    return commitSupportedCandidate(liveModel, evaluated.candidate, delta, error);
+}
+
+bool activeModalInteraction()
+{
+    return QApplication::activeModalWidget() != nullptr;
+}
+
+QJsonObject sourceStampJson(const QPair<QString, quint64> &stamp, const QString &sessionEpoch)
+{
+    return {{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("revision"), QString::number(stamp.second)},
+            {QStringLiteral("sessionEpoch"), sessionEpoch}};
+}
+
+QJsonObject nativeSourceBindingJson(const RProjectCatalog::SourceBinding &binding)
+{
+    QJsonArray artifacts;
+    for (const auto &artifact : binding.sourceArtifacts) artifacts.append(artifact.toJson());
+    return {{QStringLiteral("logicalSourcePath"), binding.logicalSourcePath},
+            {QStringLiteral("resolvedSourcePath"), binding.resolvedSourcePath},
+            {QStringLiteral("savedArtifactHash"), binding.savedArtifactHash},
+            {QStringLiteral("sourceArtifacts"), artifacts}};
 }
 
 QJsonObject hostResponse(const QJsonValue &requestId, const QString &status, const QString &code,
@@ -145,16 +257,40 @@ struct ModelCommandHost::State
         QString documentId;
         QString sessionEpoch;
         QString command;
-        QString nativeModelId;
         QString nativeRevision;
-        QString nativeRequestId;
-        QString nativeIdempotencyKey;
         QString digest;
         quint64 stampGeneration = 0;
         QJsonObject arguments;
         QJsonObject nativePreview;
+        QJsonArray readSet;
+        RModelCommandService::Delta delta;
+        bool hasSupportedDelta = false;
+        QString inputFingerprint;
+        QString readSetHash;
+        QString jobId;
+        QString jobSourceDocumentId;
+        QString jobSourceRevision;
+        QJsonObject projectSnapshotRef;
+        QJsonObject validation;
         bool approved = false;
         bool consumed = false;
+    };
+
+    struct JobSource
+    {
+        QString documentId;
+        QString sessionEpoch;
+        QString revision;
+        QJsonObject projectSnapshotRef;
+    };
+
+    struct ResultDocument
+    {
+        QString documentId;
+        QString artifactPath;
+        QString artifactSha256;
+        quint64 openedAtRevision = 0;
+        bool normalizedAtOpen = false;
     };
 
     struct IdempotentResult
@@ -173,6 +309,9 @@ struct ModelCommandHost::State
     std::map<QString, Preview> previews;
     std::map<QString, QJsonObject> operations;
     std::map<QString, IdempotentResult> idempotency;
+    std::map<QString, JobSource> jobSources;
+    std::map<QString, ResultDocument> resultDocuments;
+    std::map<QString, QJsonObject> resultDescriptors;
     QList<QString> previewOrder;
     QList<QString> operationOrder;
     QList<QString> idempotencyOrder;
@@ -316,8 +455,44 @@ bool ModelCommandHost::isBusy()
 
 bool ModelCommandHost::isMutationBlocked()
 {
-    return RJobManager::getInstance().getNRunning() || RJobManager::getInstance().getNWaiting()
-        || SolverManager::getInstance().hasLiveModelTasks();
+    SolverManager &manager = SolverManager::getInstance();
+    if (RJobManager::getInstance().getNRunning() || RJobManager::getInstance().getNWaiting()
+        || manager.hasLiveModelTasks()) return true;
+
+    // Native jobs own frozen source snapshots, so they do not hold the live
+    // Session models. Keep legacy SolverManager jobs blocked, while allowing
+    // independent edits and reads to proceed during detached native runs.
+    const int managerJobs = int(manager.getNRunning() + manager.getNWaiting());
+    if (managerJobs == 0) return false;
+    int registeredNativeJobs = 0;
+    int offset = 0;
+    while (true)
+    {
+        const QJsonObject page = manager.jobsQuery(offset, 200);
+        if (!page.value(QStringLiteral("error")).toString().isEmpty()) return true;
+        const QJsonArray jobs = page.value(QStringLiteral("jobs")).toArray();
+        for (const QJsonValue &value : jobs)
+        {
+            const QJsonObject job = value.toObject();
+            const QString state = job.value(QStringLiteral("state")).toString();
+            if (state != QStringLiteral("queued") && state != QStringLiteral("running")
+                && state != QStringLiteral("cancelling")) continue;
+            const QJsonObject sourceStamp = job.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+            const QString snapshotPath = job.value(QStringLiteral("inputSnapshotRef")).toString();
+            const QString snapshotHash = job.value(QStringLiteral("inputSnapshotSha256")).toString();
+            const QString packagePath = job.value(QStringLiteral("inputPackageRef")).toString();
+            const QString packageHash = job.value(QStringLiteral("inputPackageSha256")).toString();
+            static const QRegularExpression digestGrammar(QStringLiteral("^[0-9a-f]{64}$"));
+            const bool frozenInput = !sourceStamp.value(QStringLiteral("documentId")).toString().isEmpty()
+                && !sourceStamp.value(QStringLiteral("revision")).toString().isEmpty()
+                && QFileInfo(snapshotPath).isFile() && digestGrammar.match(snapshotHash).hasMatch()
+                && QFileInfo(packagePath).isDir() && digestGrammar.match(packageHash).hasMatch();
+            if (frozenInput) ++registeredNativeJobs;
+        }
+        offset += jobs.size();
+        if (jobs.isEmpty() || offset >= page.value(QStringLiteral("total")).toInt()) break;
+    }
+    return managerJobs > registeredNativeJobs;
 }
 
 void ModelCommandHost::pruneClosedModels()
@@ -358,7 +533,8 @@ QJsonObject ModelCommandHost::execute(uint modelID, const QJsonObject &request)
 {
     if (QThread::currentThread() != thread()) return rejected("wrong_thread", tr("Model commands require the GUI thread."));
     pruneClosedModels();
-    if (isMutationBlocked()) return rejected("model_busy", tr("Wait for active model tasks to finish."));
+    if (isMutationBlocked() || activeModalInteraction())
+        return rejected("model_busy", tr("Wait for active document interaction and model tasks to finish."));
     QJsonObject result;
     {
         QMutexLocker guard(session->getMutex());
@@ -410,6 +586,23 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         *documentId = target.value(QStringLiteral("documentId")).toString();
         *sessionEpoch = target.value(QStringLiteral("sessionEpoch")).toString();
         return true;
+    };
+    auto describeResultView = [&](const QString &documentId, const QPair<QString, quint64> &stamp) {
+        const auto found = state->resultDescriptors.find(documentId);
+        if (found == state->resultDescriptors.end()) return QJsonObject{};
+        QJsonObject descriptor = found->second;
+        const QJsonObject openedStamp = descriptor.value(QStringLiteral("openedAtRuntimeStamp")).toObject();
+        const bool modified = openedStamp.value(QStringLiteral("documentId")).toString() != stamp.first
+            || openedStamp.value(QStringLiteral("sessionEpoch")).toString() != state->sessionEpoch
+            || openedStamp.value(QStringLiteral("revision")).toString() != QString::number(stamp.second);
+        const bool normalized = descriptor.value(QStringLiteral("normalizedAtOpen")).toBool();
+        descriptor.insert(QStringLiteral("modifiedSinceOpen"), modified);
+        descriptor.insert(QStringLiteral("dirtyStatus"), modified ? QStringLiteral("edited_after_open")
+            : normalized ? QStringLiteral("normalized_at_open") : QStringLiteral("unchanged_since_open"));
+        descriptor.insert(QStringLiteral("documentAvailability"), modified
+            ? QStringLiteral("live_edited_session_state") : QStringLiteral("live_session_state"));
+        descriptor.insert(QStringLiteral("currentRuntimeStamp"), sourceStampJson(stamp, state->sessionEpoch));
+        return descriptor;
     };
     auto makeDocumentSnapshot = [&](const QString &documentId, uint modelID, bool liveRead,
                                     const QJsonObject &cachedState = QJsonObject{}) {
@@ -491,8 +684,16 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             {QStringLiteral("availability"), historyAvailable ? QStringLiteral("live") : QStringLiteral("unknown")},
             {QStringLiteral("canUndo"), historyAvailable ? QJsonValue(canUndo) : QJsonValue(QJsonValue::Null)},
             {QStringLiteral("canRedo"), historyAvailable ? QJsonValue(canRedo) : QJsonValue(QJsonValue::Null)}});
+        snapshot.insert(QStringLiteral("runtimeStamp"), QJsonObject{
+            {QStringLiteral("documentId"), documentId},
+            {QStringLiteral("sessionEpoch"), state->sessionEpoch},
+            {QStringLiteral("revision"), QString::number(stamp.second)},
+            {QStringLiteral("revisionScope"), QStringLiteral("session-command-invalidation-stamp")}});
         const QJsonObject project = session->documentProjectContext(modelID);
         snapshot.insert(QStringLiteral("project"), project);
+        snapshot.insert(QStringLiteral("persistentProject"), project);
+        const QJsonObject resultDescriptor = describeResultView(documentId, stamp);
+        if (!resultDescriptor.isEmpty()) snapshot.insert(QStringLiteral("resultView"), resultDescriptor);
         if (liveRead)
         {
             if (project.value(QStringLiteral("draft")).isObject())
@@ -502,6 +703,414 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         }
         return snapshot;
     };
+
+    auto readFixedDocument = [&](const QString &documentId, RModel *model,
+                                 QPair<QString, quint64> *stamp, uint *modelID,
+                                 bool *liveRead, QString *message) {
+        uint current = session->findModelByCommandIdentity(documentId);
+        if (current == RConstants::eod)
+        {
+            if (message) *message = tr("The target document is no longer open.");
+            return false;
+        }
+        QPair<QString, quint64> currentStamp = session->modelCommandStamp(current);
+        if (currentStamp.first != documentId)
+        {
+            if (message) *message = tr("The target document identity changed while it was being read.");
+            return false;
+        }
+        TrySessionLock guard(session);
+        if (guard.ownsLock())
+        {
+            current = session->findModelByCommandIdentity(documentId);
+            if (current == RConstants::eod)
+            {
+                if (message) *message = tr("The target document was closed while it was being read.");
+                return false;
+            }
+            currentStamp = session->modelCommandStamp(current);
+            if (currentStamp.first != documentId) return false;
+            *model = session->getModel(current);
+            if (session->modelCommandStamp(current) != currentStamp)
+            {
+                if (message) *message = tr("The target document changed while it was being read.");
+                return false;
+            }
+            guard.unlock();
+            *stamp = currentStamp;
+            *modelID = current;
+            *liveRead = true;
+            return true;
+        }
+        const auto entry = state->entries.find(documentId);
+        if (entry == state->entries.end() || !entry->second.editing
+            || entry->second.generation != currentStamp.second)
+        {
+            if (message) *message = tr("The live document is busy and no current cached snapshot is available.");
+            return false;
+        }
+        *model = entry->second.editing->model();
+        *stamp = currentStamp;
+        *modelID = current;
+        *liveRead = false;
+        return true;
+    };
+
+    const QJsonArray hostCommands{
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("analysis.run")},
+            {QStringLiteral("version"), 1}, {QStringLiteral("requiresPreview"), true},
+            {QStringLiteral("requiresHostApproval"), true},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("warningsAccepted"), QStringLiteral("boolean")}}},
+            {QStringLiteral("history"), QStringLiteral("none")},
+            {QStringLiteral("sideEffect"), QStringLiteral("submit_native_solver_job")}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("analysis.cancel")},
+            {QStringLiteral("version"), 1}, {QStringLiteral("requiresPreview"), true},
+            {QStringLiteral("requiresHostApproval"), true},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("jobId"), QStringLiteral("registered native job ID")}}},
+            {QStringLiteral("history"), QStringLiteral("none")},
+            {QStringLiteral("sideEffect"), QStringLiteral("cancel_specific_native_job")}}};
+
+    auto nativeJob = [&](const QString &jobId) {
+        return SolverManager::getInstance().jobQuery(jobId);
+    };
+    auto addHostJobSource = [&](QJsonObject *job, const QString &jobId) {
+        const QString jobState = job->value(QStringLiteral("state")).toString();
+        job->insert(QStringLiteral("progressState"), job->value(QStringLiteral("progressStatus")));
+        job->insert(QStringLiteral("cancellationState"),
+            jobState == QStringLiteral("queued") || jobState == QStringLiteral("running")
+                ? QStringLiteral("cancellable_by_jobId")
+                : jobState == QStringLiteral("cancelling") ? QStringLiteral("cancellation_requested")
+                                                            : QStringLiteral("not_cancellable_terminal"));
+        const QJsonObject immutableStamp = job->value(QStringLiteral("sourceRuntimeStamp")).toObject();
+        const auto source = state->jobSources.find(jobId);
+        if (source != state->jobSources.end())
+        {
+            if (source->second.documentId != immutableStamp.value(QStringLiteral("documentId")).toString()
+                || source->second.revision != immutableStamp.value(QStringLiteral("revision")).toString()
+                || (!immutableStamp.value(QStringLiteral("sessionEpoch")).toString().isEmpty()
+                    && source->second.sessionEpoch != immutableStamp.value(QStringLiteral("sessionEpoch")).toString())) return;
+            job->insert(QStringLiteral("hostSource"), QJsonObject{
+                {QStringLiteral("documentId"), source->second.documentId},
+                {QStringLiteral("sessionEpoch"), source->second.sessionEpoch},
+                {QStringLiteral("revision"), source->second.revision}});
+            return;
+        }
+        const QString immutableEpoch = immutableStamp.value(QStringLiteral("sessionEpoch")).toString();
+        if (immutableEpoch == state->sessionEpoch)
+            job->insert(QStringLiteral("hostSource"), QJsonObject{
+                {QStringLiteral("documentId"), immutableStamp.value(QStringLiteral("documentId"))},
+                {QStringLiteral("sessionEpoch"), immutableEpoch},
+                {QStringLiteral("revision"), immutableStamp.value(QStringLiteral("revision"))}});
+    };
+
+    if (operation == QStringLiteral("document.targets.query")
+        || operation == QStringLiteral("document.inputs.query"))
+    {
+        const bool hasPage = parameters.contains(QStringLiteral("page"));
+        if ((!exactKeys(parameters, {QStringLiteral("target")})
+             && !exactKeys(parameters, {QStringLiteral("target"), QStringLiteral("page")}))
+            || (hasPage && !parameters.value(QStringLiteral("page")).isObject()))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("A fixed document target and optional page object are required."));
+        QString documentId, epoch;
+        if (!targetFieldsValid(&documentId, &epoch))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("A runtime document target is required."));
+        if (epoch != state->sessionEpoch)
+            return invalid(QStringLiteral("STALE_SESSION"), tr("The target belongs to a different host session."));
+        RModel model;
+        QPair<QString, quint64> stamp;
+        uint modelID = RConstants::eod;
+        bool liveRead = false;
+        QString readError;
+        if (!readFixedDocument(documentId, &model, &stamp, &modelID, &liveRead, &readError))
+            return invalid(QStringLiteral("DOCUMENT_UNAVAILABLE"), readError);
+        const QJsonObject page = parameters.value(QStringLiteral("page")).toObject();
+        QJsonObject result = operation == QStringLiteral("document.targets.query")
+            ? RModelCommandService::targets(model, documentId, QString::number(stamp.second), page)
+            : RModelCommandService::context(model, documentId, QString::number(stamp.second), page);
+        if (result.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("ok")))
+            return invalid(result.value(QStringLiteral("code")).toString().toUpper(),
+                           result.value(QStringLiteral("message")).toString());
+        result.insert(QStringLiteral("target"), QJsonObject{
+            {QStringLiteral("documentId"), documentId},
+            {QStringLiteral("sessionEpoch"), state->sessionEpoch}});
+        result.insert(QStringLiteral("runtimeStamp"), sourceStampJson(stamp, state->sessionEpoch));
+        result.insert(QStringLiteral("stateAvailability"), liveRead ? QStringLiteral("live") : QStringLiteral("cached"));
+        result.insert(QStringLiteral("stateFreshness"), liveRead ? QStringLiteral("locked-live") : QStringLiteral("last-known-only"));
+        result.insert(QStringLiteral("persistentProject"), session->documentProjectContext(modelID));
+        result.insert(QStringLiteral("hostCommands"), hostCommands);
+        const QJsonObject descriptor = describeResultView(documentId, stamp);
+        if (!descriptor.isEmpty()) result.insert(QStringLiteral("resultView"), descriptor);
+        return ok(result);
+    }
+
+    if (operation == QStringLiteral("native.jobs.query"))
+    {
+        if (!exactKeys(parameters, {QStringLiteral("offset"), QStringLiteral("limit")}))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("native.jobs.query requires offset and limit."));
+        quint64 offset = 0, limit = 0;
+        if (!unsignedInteger(parameters.value(QStringLiteral("offset")), &offset)
+            || !unsignedInteger(parameters.value(QStringLiteral("limit")), &limit)
+            || offset > quint64(std::numeric_limits<int>::max()) || limit < 1 || limit > 200)
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("Job pagination requires offset >= 0 and limit from 1 through 200."));
+        QJsonObject result = SolverManager::getInstance().jobsQuery(int(offset), int(limit));
+        if (!result.value(QStringLiteral("error")).toString().isEmpty())
+            return invalid(result.value(QStringLiteral("error")).toString().toUpper(),
+                           tr("The native job page could not be read."));
+        QJsonArray jobs = result.value(QStringLiteral("jobs")).toArray();
+        for (qsizetype i = 0; i < jobs.size(); ++i)
+        {
+            QJsonObject job = jobs.at(i).toObject();
+            addHostJobSource(&job, job.value(QStringLiteral("jobId")).toString());
+            jobs.replace(i, job);
+        }
+        result.insert(QStringLiteral("jobs"), jobs);
+        return ok(result);
+    }
+
+    if (operation == QStringLiteral("native.job.query"))
+    {
+        if (!exactKeys(parameters, {QStringLiteral("jobId")})
+            || !validToken(parameters.value(QStringLiteral("jobId"))))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("native.job.query requires a jobId."));
+        const QString jobId = parameters.value(QStringLiteral("jobId")).toString();
+        QJsonObject job = nativeJob(jobId);
+        if (!job.value(QStringLiteral("found")).toBool())
+            return invalid(QStringLiteral("JOB_NOT_FOUND"), tr("No native job with this ID is registered."));
+        addHostJobSource(&job, jobId);
+        return ok({{QStringLiteral("job"), job}});
+    }
+
+    if (operation == QStringLiteral("native.result.open"))
+    {
+        if (activeModalInteraction())
+            return invalid(QStringLiteral("INTERACTION_BLOCKED"), tr("Close the active modal interaction before opening a solver result document."));
+        if (isMutationBlocked())
+            return invalid(QStringLiteral("MODEL_BUSY"), tr("A live model task is using Session storage; wait before opening a result document."));
+        if (!exactKeys(parameters, {QStringLiteral("jobId"), QStringLiteral("expectedSHA")})
+            || !validToken(parameters.value(QStringLiteral("jobId")))
+            || !parameters.value(QStringLiteral("expectedSHA")).isString())
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("native.result.open requires jobId and expectedSHA."));
+        const QString jobId = parameters.value(QStringLiteral("jobId")).toString();
+        const QString expectedSha = parameters.value(QStringLiteral("expectedSHA")).toString();
+        static const QRegularExpression shaGrammar(QStringLiteral("^[0-9a-f]{64}$"));
+        if (!shaGrammar.match(expectedSha).hasMatch())
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("expectedSHA must be a lowercase SHA-256 digest."));
+        QJsonObject job = nativeJob(jobId);
+        if (!job.value(QStringLiteral("found")).toBool())
+            return invalid(QStringLiteral("JOB_NOT_FOUND"), tr("No native job with this ID is registered."));
+        addHostJobSource(&job, jobId);
+        if (job.value(QStringLiteral("state")).toString() != QStringLiteral("succeeded")
+            || !job.value(QStringLiteral("resultReadbackComplete")).toBool()
+            || !job.value(QStringLiteral("resultArtifactVerified")).toBool())
+            return invalid(QStringLiteral("RESULT_UNAVAILABLE"), tr("The native job has no verified terminal result artifact."));
+        const QString registeredPath = job.value(QStringLiteral("resultArtifactRef")).toString();
+        const QString registeredSha = job.value(QStringLiteral("resultArtifactSha256")).toString();
+        if (registeredPath.isEmpty() || registeredSha != expectedSha)
+            return invalid(QStringLiteral("ARTIFACT_IDENTITY_MISMATCH"), tr("The expected SHA does not match the immutable registered result identity."));
+        QString sourceError;
+        const auto beforeBinding = RProjectCatalog::resolveSourceBinding(registeredPath, &sourceError);
+        const QJsonObject registeredBinding = job.value(QStringLiteral("resultSourceBinding")).toObject();
+        if (!beforeBinding || beforeBinding->sourceArtifacts.isEmpty()
+            || beforeBinding->sourceArtifacts.first().sha256 != expectedSha
+            || nativeSourceBindingJson(*beforeBinding) != registeredBinding)
+            return invalid(QStringLiteral("ARTIFACT_CHANGED"), sourceError.isEmpty()
+                ? tr("The native result source chain no longer matches its immutable registered identity.") : sourceError);
+
+        QString resultDocumentId;
+        bool reused = false;
+        bool normalizedAtOpen = false;
+        quint64 openedAtRevision = 0;
+        if (!session->trylock(0))
+            return invalid(QStringLiteral("MODEL_BUSY"), tr("The session is busy and cannot open a result document now."));
+        if (isMutationBlocked())
+        {
+            session->unlock();
+            return invalid(QStringLiteral("MODEL_BUSY"), tr("A live model task is using Session storage; wait before opening a result document."));
+        }
+        QSet<QString> knownOpenDocuments;
+        for (uint i = 0; i < session->getNModels(); ++i)
+        {
+            const auto stamp = session->modelCommandStamp(i);
+            if (!stamp.first.isEmpty()) knownOpenDocuments.insert(stamp.first);
+        }
+        // Reuse only a result document whose current Session revision still
+        // equals the revision captured when this host opened it.
+        for (const auto &[knownJobId, recorded] : state->resultDocuments)
+        {
+            Q_UNUSED(knownJobId)
+            if (recorded.artifactPath != beforeBinding->logicalSourcePath
+                || recorded.artifactSha256 != expectedSha) continue;
+            const uint currentID = session->findModelByCommandIdentity(recorded.documentId);
+            if (currentID == RConstants::eod) continue;
+            const auto currentStamp = session->modelCommandStamp(currentID);
+            if (currentStamp.second == recorded.openedAtRevision)
+            {
+                resultDocumentId = recorded.documentId;
+                openedAtRevision = recorded.openedAtRevision;
+                normalizedAtOpen = recorded.normalizedAtOpen;
+                reused = true;
+                break;
+            }
+        }
+        // An unchanged native document opened outside this host is reusable
+        // only while it is still at its initial runtime revision.
+        if (resultDocumentId.isEmpty())
+        {
+            for (uint i = 0; i < session->getNModels(); ++i)
+            {
+                const auto stamp = session->modelCommandStamp(i);
+                if (stamp.first.isEmpty() || state->resultDescriptors.find(stamp.first) != state->resultDescriptors.end())
+                    continue;
+                const Model &existing = session->getModel(i);
+                const auto &binding = existing.getLoadedSourceBinding();
+                if (stamp.second == 0 && binding && *binding == *beforeBinding
+                    && !existing.hasNativeReadNormalization())
+                {
+                    resultDocumentId = stamp.first;
+                    openedAtRevision = stamp.second;
+                    reused = true;
+                    break;
+                }
+            }
+        }
+        const uint appendModelIndex = session->getNModels();
+        session->unlock();
+
+        if (resultDocumentId.isEmpty())
+        {
+            Model model;
+            RProjectCatalog::SourceBinding loadedBinding;
+            try
+            {
+                ModelIO::open(model, registeredPath, &loadedBinding);
+            }
+            catch (const RError &failure)
+            {
+                return invalid(QStringLiteral("RESULT_OPEN_FAILED"), failure.getMessage());
+            }
+            normalizedAtOpen = model.hasNativeReadNormalization();
+            QString afterError;
+            const auto afterBinding = RProjectCatalog::resolveSourceBinding(registeredPath, &afterError);
+            if (!afterBinding || *afterBinding != *beforeBinding || loadedBinding != *beforeBinding
+                || nativeSourceBindingJson(*afterBinding) != registeredBinding)
+                return invalid(QStringLiteral("ARTIFACT_CHANGED"), afterError.isEmpty()
+                    ? tr("The terminal native artifact changed while the result was being loaded.") : afterError);
+
+            if (!session->trylock(0))
+                return invalid(QStringLiteral("MODEL_BUSY"), tr("The session became busy before the result document could be attached."));
+            const bool attachBlocked = isMutationBlocked();
+            session->unlock();
+            if (attachBlocked)
+                return invalid(QStringLiteral("MODEL_BUSY"), tr("A live model task started before the result document could be attached."));
+
+            // addModel is synchronous on the GUI thread. Capture the runtime
+            // identity for the slot appended by this call. Project catalog
+            // registration can detach a duplicate source as an independent
+            // copy and clear its loaded-source binding, so binding equality
+            // is not a reliable way to discover the document that was just
+            // created.
+            auto onModelAdded = connect(session, &Session::modelAdded, this, [&](uint modelID) {
+                if (modelID != appendModelIndex) return;
+                const auto stamp = session->modelCommandStamp(modelID);
+                if (stamp.first.isEmpty()) return;
+                if (!knownOpenDocuments.contains(stamp.first))
+                    resultDocumentId = stamp.first;
+            });
+            session->addModel(model, loadedBinding);
+            disconnect(onModelAdded);
+            if (resultDocumentId.isEmpty())
+            {
+                if (!session->trylock(0))
+                    return invalid(QStringLiteral("RESULT_OPEN_PENDING"), tr("The result was queued for session opening but its runtime document identity is not available yet."));
+                if (session->getNModels() > appendModelIndex)
+                {
+                    const auto stamp = session->modelCommandStamp(appendModelIndex);
+                    if (!stamp.first.isEmpty() && !knownOpenDocuments.contains(stamp.first))
+                        resultDocumentId = stamp.first;
+                }
+                session->unlock();
+            }
+            if (resultDocumentId.isEmpty())
+                return invalid(QStringLiteral("RESULT_OPEN_FAILED"), tr("The result artifact was loaded but no independent GUI document was created."));
+        }
+
+        const uint resultModelID = session->findModelByCommandIdentity(resultDocumentId);
+        if (resultModelID == RConstants::eod)
+            return invalid(QStringLiteral("RESULT_DOCUMENT_CLOSED"), tr("The result document closed before its open response was built."));
+        const QPair<QString, quint64> resultStamp = session->modelCommandStamp(resultModelID);
+        if (reused && resultStamp.second != openedAtRevision)
+            return invalid(QStringLiteral("RESULT_DOCUMENT_CHANGED"), tr("The result document changed while its reuse response was being built."));
+        if (!reused)
+        {
+            openedAtRevision = resultStamp.second;
+            normalizedAtOpen = normalizedAtOpen || openedAtRevision != 0;
+        }
+        const QJsonObject displayDescriptor{{QStringLiteral("kind"), QStringLiteral("native_solver_result")},
+            {QStringLiteral("displayLabel"), tr("Solver result %1").arg(jobId.left(8))},
+            {QStringLiteral("sourceJobId"), jobId},
+            {QStringLiteral("artifactRef"), registeredPath},
+            {QStringLiteral("artifactSHA256"), expectedSha},
+            {QStringLiteral("artifactBytesVerifiedAtOpen"), true},
+            {QStringLiteral("openedAtRuntimeStamp"), QJsonObject{
+                {QStringLiteral("documentId"), resultDocumentId},
+                {QStringLiteral("sessionEpoch"), state->sessionEpoch},
+                {QStringLiteral("revision"), QString::number(openedAtRevision)}}},
+            {QStringLiteral("normalizedAtOpen"), normalizedAtOpen},
+            {QStringLiteral("documentStateAtOpen"), normalizedAtOpen
+                ? QStringLiteral("normalized_during_open") : QStringLiteral("decoded_from_verified_artifact")},
+            {QStringLiteral("artifactModelEquivalence"), normalizedAtOpen
+                ? QStringLiteral("not_asserted_after_normalization") : QStringLiteral("verified_source_load")},
+            {QStringLiteral("dirtyStatus"), normalizedAtOpen
+                ? QStringLiteral("normalized_at_open") : QStringLiteral("unchanged_since_open")},
+            {QStringLiteral("modifiedSinceOpen"), false}};
+        state->resultDocuments[jobId] = State::ResultDocument{resultDocumentId,
+            beforeBinding->logicalSourcePath, expectedSha, openedAtRevision, normalizedAtOpen};
+        state->resultDescriptors[resultDocumentId] = displayDescriptor;
+        const QJsonObject project = session->documentProjectContext(resultModelID);
+        const QJsonObject source = job.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+        QJsonObject inputProvenance;
+        for (const QString &field : {QStringLiteral("inputDerivedFrom"),
+                                     QStringLiteral("frozenSnapshotVerified"),
+                                     QStringLiteral("frozenSnapshotPath"),
+                                     QStringLiteral("frozenSnapshotSha256")})
+            if (!job.value(field).isUndefined()) inputProvenance.insert(field, job.value(field));
+        for (const QString &field : {QStringLiteral("inputSnapshotRef"),
+                                     QStringLiteral("inputSnapshotSha256"),
+                                     QStringLiteral("inputPackageRef"),
+                                     QStringLiteral("inputPackageSha256")})
+            if (!job.value(field).isUndefined()) inputProvenance.insert(QStringLiteral("solver_") + field, job.value(field));
+        const QJsonObject result{{QStringLiteral("target"), QJsonObject{
+                {QStringLiteral("documentId"), resultDocumentId},
+                {QStringLiteral("sessionEpoch"), state->sessionEpoch}}},
+            {QStringLiteral("documentId"), resultDocumentId},
+            {QStringLiteral("sessionEpoch"), state->sessionEpoch},
+            {QStringLiteral("runtimeStamp"), sourceStampJson(resultStamp, state->sessionEpoch)},
+            {QStringLiteral("persistentDocumentId"), project.value(QStringLiteral("persistentDocumentId"))},
+            {QStringLiteral("projectId"), project.value(QStringLiteral("projectId"))},
+            {QStringLiteral("persistentProject"), project},
+            {QStringLiteral("displayDescriptor"), displayDescriptor},
+            {QStringLiteral("sourceJob"), QJsonObject{{QStringLiteral("jobId"), jobId},
+                {QStringLiteral("sourceRuntimeStamp"), source},
+                {QStringLiteral("hostSource"), job.value(QStringLiteral("hostSource"))},
+                {QStringLiteral("projectSnapshotRef"), job.value(QStringLiteral("projectSnapshotRef"))},
+                {QStringLiteral("inputProvenance"), inputProvenance},
+                {QStringLiteral("artifactRef"), registeredPath},
+                {QStringLiteral("artifactSHA256"), expectedSha}}},
+            {QStringLiteral("openResult"), reused ? QStringLiteral("reused") : QStringLiteral("created")},
+            {QStringLiteral("resultViewCreated"), !reused},
+            {QStringLiteral("message"), reused ? tr("Reused the open independent solver result view.")
+                                                : tr("Created a new independent solver result view; the source model and solver state are unchanged.")},
+            {QStringLiteral("sourceAndSolverUnchanged"), true}};
+        if (!reused)
+        {
+            QJsonObject event = state->appendEvent(QStringLiteral("document.result_opened"), resultDocumentId,
+                {{QStringLiteral("sourceJobId"), jobId},
+                 {QStringLiteral("artifactSHA256"), expectedSha},
+                 {QStringLiteral("sessionEpoch"), state->sessionEpoch}});
+            emit eventPublished(event);
+        }
+        return ok(result, QStringLiteral("accepted"));
+    }
 
     if (operation == QStringLiteral("project.query"))
     {
@@ -533,18 +1142,32 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QJsonObject{{QStringLiteral("id"), QStringLiteral("command.preview")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("command.execute")}, {QStringLiteral("version"), 1}, {QStringLiteral("requiresHostApproval"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("operation.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("document.targets.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("document.inputs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("native.jobs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("native.job.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("native.result.open")}, {QStringLiteral("version"), 1},
+                {QStringLiteral("readOnly"), true}, {QStringLiteral("createsIndependentResultDocument"), true},
+                {QStringLiteral("requiresRegisteredArtifactSHA"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.undo")}, {QStringLiteral("version"), 1}, {QStringLiteral("requiresHostApproval"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.redo")}, {QStringLiteral("version"), 1}, {QStringLiteral("requiresHostApproval"), true}}};
         return ok({{QStringLiteral("sessionEpoch"), state->sessionEpoch},
                    {QStringLiteral("identityPersistence"), QStringLiteral("host-session")},
                    {QStringLiteral("capabilityCatalogVersion"), 1},
                    {QStringLiteral("supportedOperations"), operations},
+                   {QStringLiteral("hostCommands"), hostCommands},
                    {QStringLiteral("editingScope"), QJsonObject{
                         {QStringLiteral("version"), 1},
-                        {QStringLiteral("models"), QStringLiteral("open native documents with a structural modal task")},
-                        {QStringLiteral("elements"), QStringLiteral("configuration preserves existing elements; no element creation or numerical acceptance")},
-                        {QStringLiteral("analyses"), QJsonArray{QStringLiteral("structural.modal.configuration")}},
-                        {QStringLiteral("units"), QJsonObject{{QStringLiteral("modal.parameters"), QStringLiteral("1")}}},
+                        {QStringLiteral("models"), QStringLiteral("open native documents with supported structural analysis tasks")},
+                        {QStringLiteral("elements"), QStringLiteral("physical group edits preserve other model fields; labels are read-only target candidates")},
+                        {QStringLiteral("analyses"), QJsonArray{QStringLiteral("structural.modal.configuration"),
+                            QStringLiteral("structural.dynamics.configuration"), QStringLiteral("native.solver.run"),
+                            QStringLiteral("native.solver.cancel")}},
+                        {QStringLiteral("units"), QJsonObject{{QStringLiteral("modal.parameters"), QStringLiteral("1")},
+                            {QStringLiteral("material.modulus"), QStringLiteral("Pa")},
+                            {QStringLiteral("material.density"), QStringLiteral("kg/m^3")},
+                            {QStringLiteral("boundary.displacement"), QStringLiteral("m")},
+                            {QStringLiteral("boundary.force"), QStringLiteral("N")}}},
                         {QStringLiteral("refusals"), QJsonArray{QStringLiteral("unknown command version or fields"),
                             QStringLiteral("non-modal analysis for modal configuration"), QStringLiteral("invalid parameter ranges or units"),
                             QStringLiteral("stale or closed document instance"), QStringLiteral("pending known drafts or project conflicts")}}}},
@@ -597,14 +1220,14 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             return invalid(QStringLiteral("STALE_SESSION"), tr("The target belongs to a different host session."));
 
         const bool taskBusy = isBusy();
-        bool editingBlocked = isMutationBlocked();
+        bool editingBlocked = isMutationBlocked() || activeModalInteraction();
         QList<uint> selectedModels;
         QList<SessionEntityID> selectedEntities;
         QStringList documentIds;
         bool selectionLive = false;
         if (!editingBlocked && session->trylock(0))
         {
-            if (!isMutationBlocked())
+            if (!isMutationBlocked() && !activeModalInteraction())
             {
                 selectionLive = true;
                 if (hasTarget)
@@ -696,7 +1319,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                     documents.append(makeDocumentSnapshot(documentId, modelID, false));
                     continue;
                 }
-                if (isMutationBlocked())
+                if (isMutationBlocked() || activeModalInteraction())
                 {
                     documents.append(makeDocumentSnapshot(documentId, modelID, false));
                     session->unlock();
@@ -726,31 +1349,150 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
 
     if (operation == QStringLiteral("command.preview"))
     {
-        if (!exactKeys(parameters, {QStringLiteral("target"), QStringLiteral("expectedDocumentRevision"),
-                                    QStringLiteral("command"), QStringLiteral("commandVersion"),
-                                    QStringLiteral("arguments")}))
+        if (!parameters.value(QStringLiteral("command")).isString()
+            || parameters.value(QStringLiteral("commandVersion")).toInt(-1) != 1
+            || !parameters.value(QStringLiteral("arguments")).isObject())
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("The command and versioned arguments are required."));
+        const QString command = parameters.value(QStringLiteral("command")).toString();
+        const QJsonObject arguments = parameters.value(QStringLiteral("arguments")).toObject();
+        const bool cancelCommand = command == QStringLiteral("analysis.cancel");
+        const bool hasTarget = parameters.contains(QStringLiteral("target"));
+        const QSet<QString> standardKeys{QStringLiteral("target"), QStringLiteral("expectedDocumentRevision"),
+            QStringLiteral("command"), QStringLiteral("commandVersion"), QStringLiteral("arguments")};
+        const QSet<QString> detachedCancelKeys{QStringLiteral("command"), QStringLiteral("commandVersion"),
+            QStringLiteral("arguments")};
+        if (cancelCommand)
+        {
+            if ((!hasTarget && !exactKeys(parameters, detachedCancelKeys))
+                || (hasTarget && !exactKeys(parameters, standardKeys))
+                || !exactKeys(arguments, {QStringLiteral("jobId")})
+                || !validToken(arguments.value(QStringLiteral("jobId"))))
+                return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("analysis.cancel requires only a registered jobId and may include its original runtime target."));
+            if (activeModalInteraction())
+                return invalid(QStringLiteral("INTERACTION_BLOCKED"), tr("Close the active modal interaction before cancelling a solver job."));
+            const QString jobId = arguments.value(QStringLiteral("jobId")).toString();
+            const QJsonObject job = nativeJob(jobId);
+            if (!job.value(QStringLiteral("found")).toBool())
+                return invalid(QStringLiteral("JOB_NOT_FOUND"), tr("No native job with this ID is registered."));
+            const QString jobState = job.value(QStringLiteral("state")).toString();
+            if (jobState != QStringLiteral("queued") && jobState != QStringLiteral("running")
+                && jobState != QStringLiteral("cancelling"))
+                return invalid(QStringLiteral("JOB_TERMINAL"), tr("The selected native job is already terminal."));
+            const QJsonObject jobStamp = job.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+            const QString sourceDocumentId = jobStamp.value(QStringLiteral("documentId")).toString();
+            const QString sourceRevision = jobStamp.value(QStringLiteral("revision")).toString();
+            if (sourceDocumentId.isEmpty() || sourceRevision.isEmpty())
+                return invalid(QStringLiteral("JOB_SOURCE_UNAVAILABLE"), tr("The job has no immutable source document identity."));
+            QString sourceEpoch;
+            const auto ownedSource = state->jobSources.find(jobId);
+            if (ownedSource != state->jobSources.end())
+            {
+                if (ownedSource->second.documentId != sourceDocumentId || ownedSource->second.revision != sourceRevision)
+                    return invalid(QStringLiteral("JOB_SOURCE_MISMATCH"), tr("The registered job source differs from its host-owned immutable source."));
+                const QString managerEpoch = jobStamp.value(QStringLiteral("sessionEpoch")).toString();
+                if (!managerEpoch.isEmpty() && managerEpoch != ownedSource->second.sessionEpoch)
+                    return invalid(QStringLiteral("JOB_SOURCE_MISMATCH"), tr("The registered job session epoch differs from its host-owned immutable source."));
+                sourceEpoch = ownedSource->second.sessionEpoch;
+            }
+            else
+            {
+                sourceEpoch = jobStamp.value(QStringLiteral("sessionEpoch")).toString();
+                if (sourceEpoch.isEmpty()) sourceEpoch = job.value(QStringLiteral("projectSnapshotRef")).toObject()
+                                  .value(QStringLiteral("instanceRef")).toObject()
+                                  .value(QStringLiteral("sessionEpoch")).toString();
+                if (sourceEpoch.isEmpty())
+                {
+                    const uint currentId = session->findModelByCommandIdentity(sourceDocumentId);
+                    if (currentId != RConstants::eod
+                        && QString::number(session->modelCommandStamp(currentId).second) == sourceRevision)
+                        sourceEpoch = state->sessionEpoch;
+                }
+            }
+            if (sourceEpoch != state->sessionEpoch)
+                return invalid(QStringLiteral("STALE_SESSION"), tr("The job belongs to a different host session."));
+            if (ownedSource == state->jobSources.end())
+                state->jobSources[jobId] = State::JobSource{sourceDocumentId, sourceEpoch, sourceRevision,
+                    job.value(QStringLiteral("projectSnapshotRef")).toObject()};
+            if (hasTarget)
+            {
+                QString targetDocument, targetEpoch;
+                quint64 expectedRevision = 0;
+                if (!targetFieldsValid(&targetDocument, &targetEpoch)
+                    || !unsignedInteger(parameters.value(QStringLiteral("expectedDocumentRevision")), &expectedRevision)
+                    || targetDocument != sourceDocumentId || targetEpoch != sourceEpoch
+                    || QString::number(expectedRevision) != sourceRevision)
+                    return invalid(QStringLiteral("JOB_SOURCE_MISMATCH"), tr("The supplied target does not match the job's immutable source."));
+            }
+            State::Preview preview;
+            preview.id = uuid();
+            preview.documentId = sourceDocumentId;
+            preview.sessionEpoch = sourceEpoch;
+            preview.command = command;
+            preview.jobId = jobId;
+            preview.jobSourceDocumentId = sourceDocumentId;
+            preview.jobSourceRevision = sourceRevision;
+            preview.arguments = arguments;
+            preview.nativePreview = job;
+            const QJsonObject readSetObject{{QStringLiteral("jobId"), jobId},
+                {QStringLiteral("sourceRuntimeStamp"), jobStamp},
+                {QStringLiteral("sessionEpoch"), sourceEpoch}};
+            preview.readSetHash = QString::fromLatin1(QCryptographicHash::hash(
+                QJsonDocument(readSetObject).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+            QJsonObject digestInput{{QStringLiteral("command"), command},
+                {QStringLiteral("commandVersion"), 1}, {QStringLiteral("arguments"), arguments},
+                {QStringLiteral("job"), jobStamp}, {QStringLiteral("sessionEpoch"), sourceEpoch},
+                {QStringLiteral("readSetHash"), preview.readSetHash}};
+            preview.digest = QString::fromLatin1(QCryptographicHash::hash(
+                QJsonDocument(digestInput).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+            QJsonObject result{{QStringLiteral("command"), command}, {QStringLiteral("commandVersion"), 1},
+                {QStringLiteral("arguments"), arguments},
+                {QStringLiteral("before"), QJsonObject{{QStringLiteral("jobState"), jobState},
+                    {QStringLiteral("sourceRuntimeStamp"), jobStamp}}},
+                {QStringLiteral("after"), QJsonObject{{QStringLiteral("cancellationRequested"), true},
+                    {QStringLiteral("terminalStateDeterminedBySolver"), true}}},
+                {QStringLiteral("changedPaths"), QJsonArray{}},
+                {QStringLiteral("readSet"), QJsonArray{QStringLiteral("native.job:%1").arg(jobId),
+                    QStringLiteral("native.job.sourceRuntimeStamp"), QStringLiteral("host.sessionEpoch")}},
+                {QStringLiteral("readSetHash"), preview.readSetHash},
+                {QStringLiteral("previewId"), preview.id}, {QStringLiteral("digest"), preview.digest},
+                {QStringLiteral("requiresHostApproval"), true},
+                {QStringLiteral("history"), QStringLiteral("none")},
+                {QStringLiteral("irreversible"), true}};
+            if (state->previewOrder.size() >= 128)
+            {
+                const QString expired = state->previewOrder.takeFirst();
+                state->previews.erase(expired);
+            }
+            state->previewOrder.append(preview.id);
+            state->previews.emplace(preview.id, preview);
+            return ok(result, QStringLiteral("preview"));
+        }
+
+        if (!exactKeys(parameters, standardKeys))
             return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("command.preview requires target, expectedDocumentRevision, command, commandVersion and arguments."));
         QString documentId;
         QString targetEpoch;
         quint64 expectedRevision = 0;
         if (!targetFieldsValid(&documentId, &targetEpoch)
             || targetEpoch != state->sessionEpoch
-            || !unsignedInteger(parameters.value(QStringLiteral("expectedDocumentRevision")), &expectedRevision)
-            || !parameters.value(QStringLiteral("command")).isString()
-            || parameters.value(QStringLiteral("commandVersion")).toInt(-1) != 1
-            || !parameters.value(QStringLiteral("arguments")).isObject())
-            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("The target and command version are malformed or belong to another host session."));
-        const QString command = parameters.value(QStringLiteral("command")).toString();
-        const auto arguments = parameters.value(QStringLiteral("arguments")).toObject();
-        if (command != QStringLiteral("analysis.modal.configure")
-            && command != QStringLiteral("document.undo") && command != QStringLiteral("document.redo"))
-            return invalid(QStringLiteral("UNSUPPORTED_CAPABILITY"), tr("This host supports modal configuration and the existing document history only."));
-        if ((command == QStringLiteral("analysis.modal.configure") && arguments.isEmpty())
-            || ((command == QStringLiteral("document.undo") || command == QStringLiteral("document.redo")) && !arguments.isEmpty()))
+            || !unsignedInteger(parameters.value(QStringLiteral("expectedDocumentRevision")), &expectedRevision))
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("The target revision is malformed or belongs to another host session."));
+        const bool runCommand = command == QStringLiteral("analysis.run");
+        const bool historyCommand = command == QStringLiteral("document.undo") || command == QStringLiteral("document.redo");
+        if (!isCoreEditCommand(command) && !runCommand && !historyCommand)
+            return invalid(QStringLiteral("UNSUPPORTED_CAPABILITY"), tr("This host does not support the requested versioned command."));
+        if ((historyCommand && !arguments.isEmpty())
+            || (runCommand && (!exactKeys(arguments, {QStringLiteral("warningsAccepted")})
+                               || !arguments.value(QStringLiteral("warningsAccepted")).isBool()))
+            || (isCoreEditCommand(command) && arguments.isEmpty()))
             return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("The command arguments do not match the selected operation."));
-        if (isMutationBlocked()) return invalid(QStringLiteral("MODEL_BUSY"), tr("The target model is in use by a task that has not detached its model."));
+        if (activeModalInteraction())
+            return invalid(QStringLiteral("INTERACTION_BLOCKED"), tr("Close the active modal interaction before previewing a write or solver command."));
+        if (isMutationBlocked())
+            return invalid(QStringLiteral("MODEL_BUSY"), tr("The target model is held by an active legacy task."));
         uint modelID = session->findModelByCommandIdentity(documentId);
-        if (modelID == RConstants::eod) return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+        if (modelID == RConstants::eod)
+            return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
         QString projectFailure;
         if (!session->canMutateDocument(modelID, &projectFailure))
             return invalid(session->hasDocumentDraft(modelID) ? QStringLiteral("DRAFT_CONFLICT") : QStringLiteral("PROJECT_CONFLICT"), projectFailure);
@@ -758,89 +1500,185 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         if (stamp.first != documentId || stamp.second != expectedRevision)
             return invalid(QStringLiteral("STALE_REVISION"), tr("Query the current document revision and create a new preview."));
 
-        QJsonObject nativeQuery;
-        QJsonObject nativePreview;
+        // SolverManager performs its own non-blocking Session lock while it
+        // validates a live model. Do not call it from the host's locked model
+        // read below: QMutex is not recursive, so that would make a valid
+        // source look stale simply because the host already owns the mutex.
+        QJsonObject runValidation;
+        if (runCommand)
+        {
+            runValidation = SolverManager::getInstance().validateRun(modelID);
+            if (runValidation.value(QStringLiteral("sourceStamp")).toObject()
+                != sourceStampJson(stamp, state->sessionEpoch))
+                return invalid(QStringLiteral("STALE_REVISION"), tr("The solver validation source changed during preview."));
+            if (!runValidation.value(QStringLiteral("valid")).toBool()
+                || !runValidation.value(QStringLiteral("errors")).toArray().isEmpty())
+            {
+                QJsonObject response = invalid(QStringLiteral("SOLVER_VALIDATION_FAILED"),
+                    tr("The native solver rejected this model during preview."));
+                response.insert(QStringLiteral("validation"), runValidation);
+                return response;
+            }
+            if (!runValidation.value(QStringLiteral("warnings")).toArray().isEmpty()
+                && !arguments.value(QStringLiteral("warningsAccepted")).toBool())
+            {
+                QJsonObject response = invalid(QStringLiteral("WARNINGS_NOT_ACCEPTED"),
+                    tr("Explicit warningsAccepted=true is required before this solver run can be approved."));
+                response.insert(QStringLiteral("warnings"), runValidation.value(QStringLiteral("warnings")));
+                return response;
+            }
+        }
+
         State::Preview preview;
+        QJsonObject nativePreview;
+        QJsonObject before;
+        QJsonObject after;
+        QJsonArray changedPaths;
+        QJsonArray readSet{QStringLiteral("/document/revision")};
+        QString candidateFingerprint;
+        QString inputFingerprint;
+        QString nativeRevision;
         {
             TrySessionLock guard(session);
-            if (!guard.ownsLock() || isMutationBlocked())
-                return invalid(QStringLiteral("MODEL_BUSY"), tr("The model could not be read without waiting for an active task."));
+            if (!guard.ownsLock() || isMutationBlocked() || activeModalInteraction())
+                return invalid(QStringLiteral("MODEL_BUSY"), tr("The model could not be read safely for preview."));
             modelID = session->findModelByCommandIdentity(documentId);
-            if (modelID == RConstants::eod) return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+            if (modelID == RConstants::eod)
+                return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
             stamp = session->modelCommandStamp(modelID);
             if (stamp.first != documentId || stamp.second != expectedRevision)
                 return invalid(QStringLiteral("STALE_REVISION"), tr("The document changed while the preview was being prepared."));
+            QString currentProjectFailure;
+            if (!session->canMutateDocument(modelID, &currentProjectFailure))
+                return invalid(session->hasDocumentDraft(modelID) ? QStringLiteral("DRAFT_CONFLICT") : QStringLiteral("PROJECT_CONFLICT"),
+                    currentProjectFailure);
+            if (runCommand
+                && runValidation.value(QStringLiteral("sourceStamp")).toObject()
+                    != sourceStampJson(stamp, state->sessionEpoch))
+                return invalid(QStringLiteral("STALE_REVISION"), tr("The solver validation source changed while the preview was being prepared."));
+            const Model &model = session->getModel(modelID);
             auto *entry = state->ensure(session, modelID);
             if (!entry) return invalid(QStringLiteral("SESSION_UNAVAILABLE"), state->failure);
             if (!entry->editing->setRunning(false))
                 return invalid(QStringLiteral("JOURNAL_UNAVAILABLE"), tr("Cannot record model availability."));
-            nativeQuery = entry->editing->query();
+            const QJsonObject nativeQuery = entry->editing->query();
+            nativeRevision = nativeQuery.value(QStringLiteral("revision")).toString();
+            inputFingerprint = RModelCommandService::stateFingerprint(model);
+
+            if (isCoreEditCommand(command))
+            {
+                const auto core = RModelCommandService::preview(model, command, arguments,
+                    documentId, QString::number(stamp.second));
+                if (!core.valid)
+                    return invalid(core.code.toUpper(), core.message);
+                preview.delta = core.delta;
+                preview.hasSupportedDelta = true;
+                preview.arguments = core.normalizedArguments;
+                before = core.before;
+                after = core.after;
+                changedPaths = command == QStringLiteral("analysis.modal.configure")
+                    ? QJsonArray{QStringLiteral("analysis.modal")}
+                    : (core.changedPaths.isEmpty() ? QJsonArray{core.delta.changedPath} : core.changedPaths);
+                candidateFingerprint = core.fingerprint;
+                readSet.append(QStringLiteral("/analysis/taskTree"));
+                readSet.append(QStringLiteral("/problemSetup"));
+                if (core.delta.physicalId)
+                    readSet.append(QStringLiteral("/entityGroups/g:%1").arg(core.delta.physicalId));
+                for (const QJsonValue &path : changedPaths) readSet.append(path);
+                nativePreview = {{QStringLiteral("status"), QStringLiteral("preview")},
+                    {QStringLiteral("normalizedArguments"), core.normalizedArguments},
+                    {QStringLiteral("before"), core.before}, {QStringLiteral("after"), core.after},
+                    {QStringLiteral("changedPaths"), changedPaths},
+                    {QStringLiteral("candidateFingerprint"), core.fingerprint},
+                    {QStringLiteral("diagnostics"), core.diagnostics}};
+            }
+            else if (runCommand)
+            {
+                const bool warningsAccepted = arguments.value(QStringLiteral("warningsAccepted")).toBool();
+                preview.arguments = arguments;
+                preview.validation = runValidation;
+                preview.projectSnapshotRef = session->documentProjectContext(modelID);
+                before = {{QStringLiteral("sourceRuntimeStamp"), sourceStampJson(stamp, state->sessionEpoch)},
+                          {QStringLiteral("validation"), runValidation}};
+                after = {{QStringLiteral("jobState"), QStringLiteral("queued")},
+                         {QStringLiteral("warningsAccepted"), warningsAccepted},
+                         {QStringLiteral("modelRevisionChanged"), false}};
+                readSet.append(QStringLiteral("/solver.validation"));
+                readSet.append(QStringLiteral("/project.persistentDocument"));
+                nativePreview = {{QStringLiteral("status"), QStringLiteral("preview")},
+                    {QStringLiteral("validation"), runValidation},
+                    {QStringLiteral("warningsAccepted"), warningsAccepted}};
+            }
+            else
+            {
+                const bool undo = command == QStringLiteral("document.undo");
+                const bool available = undo ? model.getUndoStackSize() > 0 : model.getRedoStackSize() > 0;
+                if (!available)
+                    return invalid(QStringLiteral("EMPTY_HISTORY"), tr("No matching operation is available in the document history."));
+                nativePreview = {{QStringLiteral("status"), QStringLiteral("preview")},
+                    {QStringLiteral("historyAction"), undo ? model.getUndoActionMessage() : model.getRedoActionMessage()},
+                    {QStringLiteral("historyDepth"), double(undo ? model.getUndoStackSize() : model.getRedoStackSize())}};
+                before = {{QStringLiteral("historyAction"), nativePreview.value(QStringLiteral("historyAction"))},
+                          {QStringLiteral("historyDepth"), nativePreview.value(QStringLiteral("historyDepth"))}};
+                after = {{QStringLiteral("historyState"), QStringLiteral("computed_on_commit")}};
+                changedPaths = QJsonArray{QStringLiteral("document.history")};
+                readSet.append(QStringLiteral("/document/history"));
+            }
             preview.id = uuid();
             preview.documentId = documentId;
             preview.sessionEpoch = state->sessionEpoch;
             preview.command = command;
             preview.stampGeneration = stamp.second;
-            preview.arguments = arguments;
-            preview.nativeModelId = nativeQuery.value(QStringLiteral("modelId")).toString();
-            preview.nativeRevision = nativeQuery.value(QStringLiteral("revision")).toString();
-            preview.nativeRequestId = uuid();
-            preview.nativeIdempotencyKey = uuid();
-            if (command == QStringLiteral("analysis.modal.configure"))
-            {
-                QJsonObject nativeRequest{{QStringLiteral("apiVersion"), QStringLiteral("range.application/v1")},
-                    {QStringLiteral("commandId"), command}, {QStringLiteral("commandVersion"), 1},
-                    {QStringLiteral("modelId"), nativeQuery.value(QStringLiteral("modelId"))},
-                    {QStringLiteral("expectedRevision"), preview.nativeRevision},
-                    {QStringLiteral("requestId"), preview.nativeRequestId},
-                    {QStringLiteral("idempotencyKey"), preview.nativeIdempotencyKey},
-                    {QStringLiteral("parameters"), arguments}, {QStringLiteral("dryRun"), true}};
-                nativePreview = entry->editing->execute(nativeRequest);
-                if (nativePreview.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("preview")))
-                    return invalid(QStringLiteral("PREVIEW_REJECTED"), nativePreview.value(QStringLiteral("message")).toString());
-                preview.arguments = nativePreview.value(QStringLiteral("modal")).toObject();
-            }
-            else
-            {
-                const auto &model = session->getModel(modelID);
-                const bool available = command == QStringLiteral("document.undo")
-                    ? model.getUndoStackSize() > 0 : model.getRedoStackSize() > 0;
-                if (!available) return invalid(QStringLiteral("EMPTY_HISTORY"), tr("No matching operation is available in the document history."));
-                nativePreview = {{QStringLiteral("status"), QStringLiteral("preview")},
-                    {QStringLiteral("historyAction"), command == QStringLiteral("document.undo")
-                        ? model.getUndoActionMessage() : model.getRedoActionMessage()},
-                    {QStringLiteral("historyDepth"), double(command == QStringLiteral("document.undo")
-                        ? model.getUndoStackSize() : model.getRedoStackSize())}};
-            }
+            preview.nativeRevision = nativeRevision;
+            if (!isCoreEditCommand(command) && !runCommand) preview.arguments = arguments;
         }
         preview.nativePreview = nativePreview;
+        preview.inputFingerprint = inputFingerprint;
+        preview.readSet = readSet;
+        QJsonObject readSetSource{{QStringLiteral("documentId"), documentId},
+            {QStringLiteral("sessionEpoch"), state->sessionEpoch},
+            {QStringLiteral("revision"), QString::number(expectedRevision)},
+            {QStringLiteral("inputStateFingerprint"), inputFingerprint},
+            {QStringLiteral("readSet"), readSet}};
+        preview.readSetHash = QString::fromLatin1(QCryptographicHash::hash(
+            QJsonDocument(readSetSource).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
         QJsonObject digestInput{{QStringLiteral("documentId"), documentId},
             {QStringLiteral("sessionEpoch"), state->sessionEpoch},
             {QStringLiteral("expectedDocumentRevision"), double(expectedRevision)},
             {QStringLiteral("command"), command}, {QStringLiteral("commandVersion"), 1},
-            {QStringLiteral("arguments"), preview.arguments},
-            {QStringLiteral("nativeRevision"), preview.nativeRevision}};
+            {QStringLiteral("submittedArguments"), arguments},
+            {QStringLiteral("normalizedArguments"), preview.arguments},
+            {QStringLiteral("before"), before}, {QStringLiteral("after"), after},
+            {QStringLiteral("changedPaths"), changedPaths},
+            {QStringLiteral("candidateFingerprint"), candidateFingerprint},
+            {QStringLiteral("inputStateFingerprint"), inputFingerprint},
+            {QStringLiteral("readSetHash"), preview.readSetHash},
+            {QStringLiteral("nativeRevision"), nativeRevision}};
         preview.digest = QString::fromLatin1(QCryptographicHash::hash(
             QJsonDocument(digestInput).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
-        const QJsonObject before = command == QStringLiteral("analysis.modal.configure")
-            ? nativeQuery.value(QStringLiteral("modal")).toObject()
-            : QJsonObject{{QStringLiteral("historyAction"), nativePreview.value(QStringLiteral("historyAction"))},
-                          {QStringLiteral("historyDepth"), nativePreview.value(QStringLiteral("historyDepth"))}};
-        const QJsonObject after = command == QStringLiteral("analysis.modal.configure")
-            ? nativePreview.value(QStringLiteral("modal")).toObject()
-            : QJsonObject{{QStringLiteral("historyState"), QStringLiteral("computed_on_commit")}};
-        const QJsonArray changedPaths{command == QStringLiteral("analysis.modal.configure")
-            ? QStringLiteral("analysis.modal") : QStringLiteral("document.history")};
         QJsonObject result{{QStringLiteral("target"), QJsonObject{{QStringLiteral("documentId"), documentId},
                                                                    {QStringLiteral("sessionEpoch"), state->sessionEpoch}}},
+            {QStringLiteral("runtimeStamp"), sourceStampJson(stamp, state->sessionEpoch)},
             {QStringLiteral("expectedDocumentRevision"), double(expectedRevision)},
             {QStringLiteral("command"), command}, {QStringLiteral("commandVersion"), 1},
-            {QStringLiteral("arguments"), preview.arguments}, {QStringLiteral("before"), before},
+            {QStringLiteral("arguments"), preview.arguments},
+            {QStringLiteral("normalizedArguments"), preview.arguments},
+            {QStringLiteral("submittedArguments"), arguments}, {QStringLiteral("before"), before},
             {QStringLiteral("after"), after}, {QStringLiteral("changedPaths"), changedPaths},
-            {QStringLiteral("readSet"), QJsonArray{command == QStringLiteral("analysis.modal.configure")
-                ? QStringLiteral("analysis.modal") : QStringLiteral("document.history"), QStringLiteral("document.revision")}},
+            {QStringLiteral("readSet"), readSet}, {QStringLiteral("readSetHash"), preview.readSetHash},
+            {QStringLiteral("inputStateFingerprint"), inputFingerprint},
+            {QStringLiteral("candidateFingerprint"), candidateFingerprint},
             {QStringLiteral("invalidatedResultsAvailability"), QStringLiteral("unknown_not_exposed")},
             {QStringLiteral("previewId"), preview.id}, {QStringLiteral("digest"), preview.digest},
             {QStringLiteral("nativeModalSessionRevision"), preview.nativeRevision}};
+        if (runCommand)
+        {
+            result.insert(QStringLiteral("validation"), preview.validation);
+            result.insert(QStringLiteral("requiresHostApproval"), true);
+            result.insert(QStringLiteral("history"), QStringLiteral("none"));
+            result.insert(QStringLiteral("sideEffect"), QStringLiteral("submit_native_solver_job"));
+            result.insert(QStringLiteral("irreversible"), true);
+        }
         if (state->previewOrder.size() >= 128)
         {
             const QString expired = state->previewOrder.takeFirst();
@@ -891,72 +1729,367 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         if (preview.consumed) return invalid(QStringLiteral("PREVIEW_ALREADY_EXECUTED"), tr("This preview has already been used."));
         if (preview.sessionEpoch != state->sessionEpoch)
             return invalid(QStringLiteral("STALE_SESSION"), tr("The preview belongs to a different host session."));
-        if (isMutationBlocked()) return invalid(QStringLiteral("MODEL_BUSY"), tr("The target model is in use by a task that has not detached its model."));
+        const QString operationId = uuid();
+        const QString previousActiveOperation = state->activeOperationId;
+        const QJsonArray previousChangedPaths = state->activeChangedPaths;
+        auto finishCompleted = [&](const QJsonObject &operationResult, const QString &status,
+                                   const QString &code, const QString &message) {
+            QJsonObject response = hostResponse(requestId, status, code, operationResult);
+            if (!message.isEmpty()) response.insert(QStringLiteral("message"), message);
+            preview.consumed = true;
+            if (state->operationOrder.size() >= 256)
+            {
+                const QString expired = state->operationOrder.takeFirst();
+                state->operations.erase(expired);
+            }
+            state->operationOrder.append(operationId);
+            state->operations.emplace(operationId, operationResult);
+            if (state->idempotencyOrder.size() >= 256)
+            {
+                const QString expired = state->idempotencyOrder.takeFirst();
+                state->idempotency.erase(expired);
+            }
+            state->idempotencyOrder.append(idempotencyKey);
+            state->idempotency.emplace(idempotencyKey,
+                State::IdempotentResult{requestDigest, preview.documentId, response});
+            return response;
+        };
+        auto finishAccepted = [&](const QJsonObject &operationResult) {
+            return finishCompleted(operationResult, QStringLiteral("accepted"), QStringLiteral("OK"), QString());
+        };
+        auto finishModifiedUnlogged = [&](const QJsonObject &operationResult, const QString &message) {
+            return finishCompleted(operationResult, QStringLiteral("error"),
+                                   QStringLiteral("OBSERVED_MODIFIED_UNLOGGED"), message);
+        };
+
+        if (preview.command == QStringLiteral("analysis.cancel"))
+        {
+            if (activeModalInteraction())
+                return invalid(QStringLiteral("INTERACTION_BLOCKED"), tr("Close the active modal interaction before cancelling a solver job."));
+            const auto owned = state->jobSources.find(preview.jobId);
+            const QJsonObject currentJob = SolverManager::getInstance().jobQuery(preview.jobId);
+            const QJsonObject currentSource = currentJob.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+            const QString jobState = currentJob.value(QStringLiteral("state")).toString();
+            if (!currentJob.value(QStringLiteral("found")).toBool()
+                || owned == state->jobSources.end()
+                || owned->second.documentId != preview.jobSourceDocumentId
+                || owned->second.sessionEpoch != preview.sessionEpoch
+                || owned->second.revision != preview.jobSourceRevision
+                || currentSource.value(QStringLiteral("documentId")).toString() != preview.jobSourceDocumentId
+                || currentSource.value(QStringLiteral("revision")).toString() != preview.jobSourceRevision
+                || (!currentSource.value(QStringLiteral("sessionEpoch")).toString().isEmpty()
+                    && currentSource.value(QStringLiteral("sessionEpoch")).toString() != preview.sessionEpoch))
+                return invalid(QStringLiteral("JOB_SOURCE_MISMATCH"), tr("The job no longer matches its host-owned immutable source."));
+            if (jobState != QStringLiteral("queued") && jobState != QStringLiteral("running")
+                && jobState != QStringLiteral("cancelling"))
+                return invalid(QStringLiteral("JOB_TERMINAL"), tr("The selected native job is already terminal."));
+            QString cancelError;
+            if (!SolverManager::getInstance().cancelJob(preview.jobId, &cancelError))
+                return invalid(QStringLiteral("CANCEL_REJECTED"), cancelError);
+            QJsonObject afterJob = SolverManager::getInstance().jobQuery(preview.jobId);
+            addHostJobSource(&afterJob, preview.jobId);
+            QJsonObject event = state->appendEvent(QStringLiteral("analysis.job_cancellation_requested"),
+                preview.jobSourceDocumentId, {{QStringLiteral("jobId"), preview.jobId},
+                    {QStringLiteral("sourceRevision"), preview.jobSourceRevision},
+                    {QStringLiteral("cancellationRequested"), true}});
+            emit eventPublished(event);
+            QJsonObject operationResult{{QStringLiteral("operationId"), operationId},
+                {QStringLiteral("command"), preview.command}, {QStringLiteral("jobId"), preview.jobId},
+                {QStringLiteral("sourceDocumentId"), preview.jobSourceDocumentId},
+                {QStringLiteral("sourceSessionEpoch"), preview.sessionEpoch},
+                {QStringLiteral("sourceRevision"), preview.jobSourceRevision},
+                {QStringLiteral("job"), afterJob},
+                {QStringLiteral("cancellationState"), afterJob.value(QStringLiteral("state"))},
+                {QStringLiteral("cancellationRequested"), true},
+                {QStringLiteral("terminalStateDeterminedBySolver"), true},
+                {QStringLiteral("sideEffect"), QStringLiteral("cancel_specific_native_job")},
+                {QStringLiteral("irreversible"), true},
+                {QStringLiteral("history"), QStringLiteral("none")},
+                {QStringLiteral("eventSeq"), double(state->nextEventSeq - 1)}};
+            state->activeOperationId = previousActiveOperation;
+            state->activeChangedPaths = previousChangedPaths;
+            return finishAccepted(operationResult);
+        }
+
+        if (preview.command == QStringLiteral("analysis.run"))
+        {
+            if (activeModalInteraction())
+                return invalid(QStringLiteral("INTERACTION_BLOCKED"), tr("Close the active modal interaction before starting a solver job."));
+            if (isMutationBlocked())
+                return invalid(QStringLiteral("MODEL_BUSY"), tr("The source model is held by an active legacy task."));
+            uint modelID = session->findModelByCommandIdentity(preview.documentId);
+            if (modelID == RConstants::eod)
+                return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+            QString projectFailure;
+            if (!session->canMutateDocument(modelID, &projectFailure))
+                return invalid(session->hasDocumentDraft(modelID) ? QStringLiteral("DRAFT_CONFLICT") : QStringLiteral("PROJECT_CONFLICT"), projectFailure);
+            auto stamp = session->modelCommandStamp(modelID);
+            if (stamp.first != preview.documentId || stamp.second != preview.stampGeneration)
+                return invalid(QStringLiteral("STALE_REVISION"), tr("The document changed after this preview. Query and preview the command again."));
+            QJsonObject validation = SolverManager::getInstance().validateRun(modelID);
+            if (!validation.value(QStringLiteral("valid")).toBool()
+                || !validation.value(QStringLiteral("errors")).toArray().isEmpty()
+                || validation.value(QStringLiteral("sourceStamp")).toObject() != sourceStampJson(stamp, state->sessionEpoch))
+                return invalid(QStringLiteral("SOLVER_VALIDATION_FAILED"), tr("The native solver no longer accepts the approved source state."));
+            const bool warningsAccepted = preview.arguments.value(QStringLiteral("warningsAccepted")).toBool();
+            if (!validation.value(QStringLiteral("warnings")).toArray().isEmpty() && !warningsAccepted)
+                return invalid(QStringLiteral("WARNINGS_NOT_ACCEPTED"), tr("The approved command did not accept the current solver warnings."));
+
+            // Snapshot capture acquires/releases the Session mutex internally.
+            QString snapshotError;
+            const QJsonObject projectSnapshotRef = session->createDocumentSnapshot(modelID, &snapshotError);
+            if (projectSnapshotRef.isEmpty())
+                return invalid(QStringLiteral("SOURCE_SNAPSHOT_FAILED"), snapshotError);
+            const QJsonObject instanceRef = projectSnapshotRef.value(QStringLiteral("instanceRef")).toObject();
+            if (instanceRef.value(QStringLiteral("documentId")).toString() != preview.documentId
+                || instanceRef.value(QStringLiteral("sessionEpoch")).toString() != preview.sessionEpoch
+                || instanceRef.value(QStringLiteral("documentRevision")).toDouble(-1.0) != double(preview.stampGeneration)
+                || session->modelCommandStamp(modelID) != stamp)
+                return invalid(QStringLiteral("STALE_REVISION"), tr("The source changed while its project snapshot was being captured."));
+            const QJsonObject approvedProject = preview.projectSnapshotRef;
+            const QJsonObject currentProject = session->documentProjectContext(modelID);
+            for (const QString &field : {QStringLiteral("projectId"), QStringLiteral("persistentDocumentId"),
+                                         QStringLiteral("sourceRevision")})
+                if (approvedProject.value(field) != currentProject.value(field))
+                    return invalid(QStringLiteral("PROJECT_CONFLICT"), tr("The persistent project identity changed after preview."));
+            if (!approvedProject.value(QStringLiteral("modelSha256")).toString().isEmpty()
+                && approvedProject.value(QStringLiteral("modelSha256")) != currentProject.value(QStringLiteral("modelSha256")))
+                return invalid(QStringLiteral("PROJECT_CONFLICT"), tr("The accepted project model hash changed after preview."));
+
+            QString submitError;
+            const QString jobId = SolverManager::getInstance().submitValidated(
+                modelID, projectSnapshotRef, warningsAccepted, &submitError);
+            if (jobId.isEmpty())
+                return invalid(QStringLiteral("SUBMISSION_REJECTED"), submitError);
+            state->jobSources[jobId] = State::JobSource{preview.documentId, preview.sessionEpoch,
+                QString::number(preview.stampGeneration), projectSnapshotRef};
+            QJsonObject job = SolverManager::getInstance().jobQuery(jobId);
+            addHostJobSource(&job, jobId);
+            QJsonObject event = state->appendEvent(QStringLiteral("analysis.job_submitted"), preview.documentId,
+                {{QStringLiteral("jobId"), jobId},
+                 {QStringLiteral("sourceRevision"), QString::number(preview.stampGeneration)},
+                 {QStringLiteral("sourceSnapshotRef"), projectSnapshotRef}});
+            emit eventPublished(event);
+            QJsonObject operationResult{{QStringLiteral("operationId"), operationId},
+                {QStringLiteral("command"), preview.command}, {QStringLiteral("jobId"), jobId},
+                {QStringLiteral("sourceDocumentId"), preview.documentId},
+                {QStringLiteral("sourceSessionEpoch"), preview.sessionEpoch},
+                {QStringLiteral("sourceRevision"), QString::number(preview.stampGeneration)},
+                {QStringLiteral("sourceSnapshotRef"), projectSnapshotRef},
+                {QStringLiteral("job"), job},
+                {QStringLiteral("progress"), job.value(QStringLiteral("progress"))},
+                {QStringLiteral("progressStatus"), job.value(QStringLiteral("progressStatus"))},
+                {QStringLiteral("cancellationState"), job.value(QStringLiteral("cancellationState"))},
+                {QStringLiteral("sideEffect"), QStringLiteral("submit_native_solver_job")},
+                {QStringLiteral("irreversible"), true},
+                {QStringLiteral("history"), QStringLiteral("none")},
+                {QStringLiteral("sourceRevisionChanged"), false},
+                {QStringLiteral("eventSeq"), double(state->nextEventSeq - 1)}};
+            state->activeOperationId = previousActiveOperation;
+            state->activeChangedPaths = previousChangedPaths;
+            return finishAccepted(operationResult);
+        }
+
+        if (activeModalInteraction())
+            return invalid(QStringLiteral("INTERACTION_BLOCKED"), tr("Close the active modal interaction before changing document state."));
+        if (isMutationBlocked())
+            return invalid(QStringLiteral("MODEL_BUSY"), tr("The target model is held by an active legacy task."));
         uint modelID = session->findModelByCommandIdentity(preview.documentId);
-        if (modelID == RConstants::eod) return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+        if (modelID == RConstants::eod)
+            return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
         QString projectFailure;
         if (!session->canMutateDocument(modelID, &projectFailure))
             return invalid(session->hasDocumentDraft(modelID) ? QStringLiteral("DRAFT_CONFLICT") : QStringLiteral("PROJECT_CONFLICT"), projectFailure);
         auto stamp = session->modelCommandStamp(modelID);
         if (stamp.first != preview.documentId || stamp.second != preview.stampGeneration)
             return invalid(QStringLiteral("STALE_REVISION"), tr("The document changed after this preview. Query and preview the command again."));
-
-        const QString operationId = uuid();
-        const QString previousActiveOperation = state->activeOperationId;
-        const QJsonArray previousChangedPaths = state->activeChangedPaths;
-        const QJsonArray changedPaths{preview.command == QStringLiteral("analysis.modal.configure")
-            ? QStringLiteral("analysis.modal") : QStringLiteral("document.history")};
-        QJsonObject nativeResult;
+        const QJsonArray changedPaths = preview.hasSupportedDelta
+            ? preview.nativePreview.value(QStringLiteral("changedPaths")).toArray()
+            : QJsonArray{QStringLiteral("document.history")};
         bool auditRecorded = true;
-        if (preview.command == QStringLiteral("analysis.modal.configure"))
-        {
-            QJsonObject nativeRequest{{QStringLiteral("apiVersion"), QStringLiteral("range.application/v1")},
-                {QStringLiteral("commandId"), preview.command}, {QStringLiteral("commandVersion"), 1},
-                {QStringLiteral("modelId"), preview.nativeModelId},
-                {QStringLiteral("expectedRevision"), preview.nativeRevision},
-                {QStringLiteral("requestId"), preview.nativeRequestId},
-                {QStringLiteral("idempotencyKey"), preview.nativeIdempotencyKey},
-                {QStringLiteral("parameters"), preview.arguments}, {QStringLiteral("dryRun"), false}};
-            state->activeOperationId = operationId;
-            state->activeChangedPaths = changedPaths;
-            nativeResult = execute(modelID, nativeRequest);
-            state->activeOperationId = previousActiveOperation;
-            state->activeChangedPaths = previousChangedPaths;
-            if (nativeResult.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("accepted")))
-                return invalid(QStringLiteral("COMMAND_REJECTED"), nativeResult.value(QStringLiteral("message")).toString());
-        }
-        else
+        QString historyAction;
+        QString corePreStateHash;
+        QString corePostStateHash;
+        QString coreJournalRevision;
+        QString coreJournalRequestId;
+        QString coreJournalIdempotencyKey;
+        QString auditCommandId;
+        QString preStateHash;
+        QString postStateHash;
+        QString auditError;
+        bool auditReconciled = false;
+        REntityGroupType changedGroupType = R_ENTITY_GROUP_NONE;
+        uint changedGroupIndex = RConstants::eod;
+        const bool coreEdit = preview.hasSupportedDelta;
+        const bool undo = preview.command == QStringLiteral("document.undo");
         {
             TrySessionLock guard(session);
-            if (!guard.ownsLock() || isMutationBlocked())
-                return invalid(QStringLiteral("MODEL_BUSY"), tr("The document history could not be changed safely."));
+            if (!guard.ownsLock() || isMutationBlocked() || activeModalInteraction())
+                return invalid(QStringLiteral("MODEL_BUSY"), tr("The document could not be changed safely."));
             modelID = session->findModelByCommandIdentity(preview.documentId);
-            if (modelID == RConstants::eod) return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
+            if (modelID == RConstants::eod)
+                return invalid(QStringLiteral("DOCUMENT_CLOSED"), tr("The target document is no longer open."));
             stamp = session->modelCommandStamp(modelID);
             if (stamp.first != preview.documentId || stamp.second != preview.stampGeneration)
                 return invalid(QStringLiteral("STALE_REVISION"), tr("The document changed after this preview."));
             auto &model = session->getModel(modelID);
-            const bool undo = preview.command == QStringLiteral("document.undo");
-            const uint depth = undo ? model.getUndoStackSize() : model.getRedoStackSize();
-            const QString action = undo ? model.getUndoActionMessage() : model.getRedoActionMessage();
-            if (depth == 0 || action != preview.nativePreview.value(QStringLiteral("historyAction")).toString())
-                return invalid(QStringLiteral("STALE_PREVIEW"), tr("The selected GUI history item is no longer current."));
-            state->activeOperationId = operationId;
-            state->activeChangedPaths = changedPaths;
-            session->getPickList().removeItems(modelID);
-            if (undo) model.undo(0); else model.redo(0);
-            guard.unlock();
-            QString auditError;
-            auditRecorded = recordExternalChange(modelID, undo ? QStringLiteral("undo") : QStringLiteral("redo"), &auditError);
-            session->setModelChanged(modelID);
-            state->activeOperationId = previousActiveOperation;
-            state->activeChangedPaths = previousChangedPaths;
-            nativeResult = {{QStringLiteral("status"), QStringLiteral("accepted")},
-                            {QStringLiteral("historyAction"), action},
-                            {QStringLiteral("auditRecorded"), auditRecorded}};
-        }
+            preStateHash = RModelCommandService::stateFingerprint(model);
+            if (coreEdit)
+            {
+                const QString currentFingerprint = RModelCommandService::stateFingerprint(model);
+                preStateHash = currentFingerprint;
+                QJsonObject currentReadSetSource{{QStringLiteral("documentId"), preview.documentId},
+                    {QStringLiteral("sessionEpoch"), preview.sessionEpoch},
+                    {QStringLiteral("revision"), QString::number(stamp.second)},
+                    {QStringLiteral("inputStateFingerprint"), currentFingerprint},
+                    {QStringLiteral("readSet"), preview.readSet}};
+                const QString currentReadSetHash = QString::fromLatin1(QCryptographicHash::hash(
+                    QJsonDocument(currentReadSetSource).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+                if (currentFingerprint != preview.inputFingerprint || currentReadSetHash != preview.readSetHash)
+                    return invalid(QStringLiteral("STALE_READ_SET"), tr("The approved model read set changed after preview."));
+                const auto currentCandidate = RModelCommandService::preview(model, preview.command,
+                    preview.arguments, preview.documentId, QString::number(stamp.second));
+                if (!currentCandidate.valid
+                    || currentCandidate.fingerprint != preview.nativePreview.value(QStringLiteral("candidateFingerprint")).toString())
+                    return invalid(QStringLiteral("STALE_PREVIEW"), tr("The current model no longer produces the approved candidate fingerprint."));
+                auto entry = state->entries.find(preview.documentId);
+                if (entry == state->entries.end() || !entry->second.editing
+                    || entry->second.generation != stamp.second)
+                    return invalid(QStringLiteral("SESSION_UNAVAILABLE"), tr("The accepted command session is no longer current."));
+                const QJsonObject editingQuery = entry->second.editing->query();
+                if (editingQuery.value(QStringLiteral("revision")).toString() != preview.nativeRevision
+                    || RModelCommandService::stateFingerprint(entry->second.editing->model()) != currentFingerprint)
+                    return invalid(QStringLiteral("STALE_REVISION"), tr("The accepted command session no longer matches the approved live model."));
 
-        const auto afterStamp = session->modelCommandStamp(session->findModelByCommandIdentity(preview.documentId));
+                coreJournalRequestId = uuid();
+                coreJournalIdempotencyKey = uuid();
+                QJsonObject nativeRequest{{QStringLiteral("apiVersion"), QStringLiteral("range.application/v1")},
+                    {QStringLiteral("commandId"), preview.command}, {QStringLiteral("commandVersion"), 1},
+                    {QStringLiteral("modelId"), editingQuery.value(QStringLiteral("modelId"))},
+                    {QStringLiteral("expectedRevision"), preview.nativeRevision},
+                    {QStringLiteral("requestId"), coreJournalRequestId},
+                    {QStringLiteral("idempotencyKey"), coreJournalIdempotencyKey},
+                    {QStringLiteral("parameters"), preview.arguments}, {QStringLiteral("dryRun"), false}};
+                const QJsonObject acceptedCore = entry->second.editing->execute(nativeRequest);
+                if (acceptedCore.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("accepted")))
+                {
+                    const QString coreCode = acceptedCore.value(QStringLiteral("code")).toString();
+                    return invalid(coreCode == QStringLiteral("journal_failure")
+                                       ? QStringLiteral("COMMAND_JOURNAL_FAILURE")
+                                       : coreCode.isEmpty() ? QStringLiteral("COMMAND_REJECTED") : coreCode.toUpper(),
+                                   acceptedCore.value(QStringLiteral("message")).toString());
+                }
+                coreJournalRevision = acceptedCore.value(QStringLiteral("revision")).toString();
+                auditCommandId = preview.command;
+                corePreStateHash = currentFingerprint;
+                corePostStateHash = RModelCommandService::stateFingerprint(currentCandidate.candidate);
+                if (entry->second.editing->query().value(QStringLiteral("revision")).toString() != coreJournalRevision
+                    || RModelCommandService::stateFingerprint(entry->second.editing->model()) != corePostStateHash)
+                {
+                    QString reconcileError;
+                    const bool reconciled = entry->second.editing->recordExternalChange(
+                        QStringLiteral("external_edit"), model, &reconcileError);
+                    entry->second.editing.reset();
+                    return invalid(QStringLiteral("COMMAND_AUDIT_DIVERGED"), reconciled
+                        ? tr("The core journal accepted a candidate that did not match the live model; the session was reconciled without changing the GUI model.")
+                        : tr("The core journal accepted a candidate that did not match the live model, and reconciliation failed: %1").arg(reconcileError));
+                }
+                QString applyError;
+                if (!RModelCommandService::applyDelta(model, preview.delta, true).valid)
+                    return invalid(QStringLiteral("STALE_PREVIEW"), tr("The approved command no longer matches the current model fields."));
+                QString undoMessage;
+                if (preview.command == QStringLiteral("analysis.modal.configure")) undoMessage = tr("Configure modal analysis");
+                else if (preview.command == QStringLiteral("analysis.structural_dynamics.configure")) undoMessage = tr("Configure structural dynamics");
+                else if (preview.command == QStringLiteral("entity.material.set")) undoMessage = tr("Set material properties");
+                else undoMessage = tr("Set boundary condition");
+                if (preview.delta.physicalId
+                    && !model.findElementGroupByPhysicalId(preview.delta.physicalId, &changedGroupType, &changedGroupIndex))
+                    return invalid(QStringLiteral("STALE_TARGET"), tr("The physical target no longer exists."));
+                session->storeCurentModelVersion(modelID, undoMessage);
+                if (!commitSupportedDelta(model, preview.delta, &applyError))
+                {
+                    QString reconcileError;
+                    const bool reconciled = entry->second.editing->recordExternalChange(
+                        QStringLiteral("external_edit"), model, &reconcileError);
+                    entry->second.editing.reset();
+                    return invalid(QStringLiteral("COMMAND_COMMIT_DIVERGED"), reconciled
+                        ? tr("The core journal accepted the command, but GUI publication failed before changing the model: %1").arg(applyError)
+                        : tr("GUI publication failed and core audit reconciliation also failed: %1").arg(reconcileError));
+                }
+                if (RModelCommandService::stateFingerprint(model) != corePostStateHash)
+                {
+                    QString reconcileError;
+                    const bool reconciled = entry->second.editing->recordExternalChange(
+                        QStringLiteral("external_edit"), model, &reconcileError);
+                    entry->second.editing.reset();
+                    return invalid(QStringLiteral("COMMAND_COMMIT_DIVERGED"), reconciled
+                        ? tr("The published model did not match its accepted core audit state.")
+                        : tr("The published model differed from its core audit state and reconciliation failed: %1").arg(reconcileError));
+                }
+                postStateHash = corePostStateHash;
+            }
+            else
+            {
+                const uint depth = undo ? model.getUndoStackSize() : model.getRedoStackSize();
+                historyAction = undo ? model.getUndoActionMessage() : model.getRedoActionMessage();
+                if (depth == 0 || historyAction != preview.nativePreview.value(QStringLiteral("historyAction")).toString())
+                    return invalid(QStringLiteral("STALE_PREVIEW"), tr("The selected GUI history item is no longer current."));
+                session->getPickList().removeItems(modelID);
+                if (undo) model.undo(0); else model.redo(0);
+                postStateHash = RModelCommandService::stateFingerprint(model);
+            }
+            guard.unlock();
+        }
+        state->activeOperationId = operationId;
+        state->activeChangedPaths = changedPaths;
+        if (coreEdit && (preview.delta.kind == RModelCommandService::Delta::Kind::Material
+                         || preview.delta.kind == RModelCommandService::Delta::Kind::Boundary))
+        {
+            if (preview.delta.kind == RModelCommandService::Delta::Kind::Material)
+                session->setMaterialChanged(modelID, changedGroupType, changedGroupIndex);
+            else
+                session->setBoundaryConditionChanged(modelID, changedGroupType, changedGroupIndex);
+        }
+        else if (coreEdit)
+        {
+            session->setProblemChanged(modelID);
+        }
+        else
+        {
+            session->setModelChanged(modelID);
+        }
+        const QPair<QString, quint64> afterStamp = session->modelCommandStamp(
+            session->findModelByCommandIdentity(preview.documentId));
+        if (coreEdit)
+        {
+            auto entry = state->entries.find(preview.documentId);
+            if (entry != state->entries.end() && entry->second.editing
+                && entry->second.editing->query().value(QStringLiteral("revision")).toString() == coreJournalRevision
+                && RModelCommandService::stateFingerprint(entry->second.editing->model())
+                    == RModelCommandService::stateFingerprint(session->getModel(modelID)))
+            {
+                entry->second.generation = afterStamp.second;
+                auditCommandId = preview.command;
+            }
+            else
+            {
+                auditError = tr("The model changed, but its accepted command journal state did not match the published GUI model.");
+                auditRecorded = recordExternalChangeAfterNotification(
+                    modelID, QStringLiteral("external_edit"), &auditError);
+                auditReconciled = auditRecorded;
+                if (auditRecorded) auditCommandId = QStringLiteral("model.external.external_edit");
+            }
+        }
+        else
+        {
+            const QString externalReason = undo ? QStringLiteral("undo") : QStringLiteral("redo");
+            auditRecorded = recordExternalChangeAfterNotification(modelID, externalReason, &auditError);
+            auditCommandId = QStringLiteral("model.external.") + externalReason;
+        }
+        if (!auditRecorded)
+            RLogger::error("The GUI model changed but its audit could not be completed: %s\n", auditError.toUtf8().constData());
+        state->activeOperationId = previousActiveOperation;
+        state->activeChangedPaths = previousChangedPaths;
         QJsonObject operationResult{{QStringLiteral("operationId"), operationId},
             {QStringLiteral("documentId"), preview.documentId},
             {QStringLiteral("sessionEpoch"), state->sessionEpoch},
@@ -967,29 +2100,33 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             {QStringLiteral("eventSeq"), double(state->nextEventSeq - 1)},
             {QStringLiteral("persistence"), QStringLiteral("memory_only")},
             {QStringLiteral("fileSaveRequired"), true},
-            {QStringLiteral("auditRecorded"), auditRecorded}};
-        if (preview.command == QStringLiteral("analysis.modal.configure"))
-            operationResult.insert(QStringLiteral("acceptedStateRevision"), nativeResult.value(QStringLiteral("revision")));
+            {QStringLiteral("auditRecorded"), auditRecorded},
+            {QStringLiteral("auditCommandId"), auditCommandId},
+            {QStringLiteral("preStateHash"), preStateHash},
+            {QStringLiteral("postStateHash"), postStateHash},
+            {QStringLiteral("auditReconciled"), auditReconciled},
+            {QStringLiteral("history"), QStringLiteral("one_gui_undo_group")},
+            {QStringLiteral("candidateFingerprint"), preview.nativePreview.value(QStringLiteral("candidateFingerprint"))}};
+        if (coreEdit)
+        {
+            operationResult.insert(QStringLiteral("acceptedStateRevision"), QString::number(afterStamp.second));
+            operationResult.insert(QStringLiteral("coreJournalRevision"), coreJournalRevision);
+            operationResult.insert(QStringLiteral("coreJournalRequestId"), coreJournalRequestId);
+            operationResult.insert(QStringLiteral("coreJournalIdempotencyKey"), coreJournalIdempotencyKey);
+            operationResult.insert(QStringLiteral("coreJournalRecorded"), !coreJournalRevision.isEmpty());
+        }
         else
-            operationResult.insert(QStringLiteral("historyAction"), nativeResult.value(QStringLiteral("historyAction")));
-        const QJsonObject response = hostResponse(requestId, QStringLiteral("accepted"), QStringLiteral("OK"), operationResult);
-        preview.consumed = true;
-
-        if (state->operationOrder.size() >= 256)
+            operationResult.insert(QStringLiteral("historyAction"), historyAction);
+        if (!auditRecorded)
         {
-            const QString expired = state->operationOrder.takeFirst();
-            state->operations.erase(expired);
+            operationResult.insert(QStringLiteral("outcome"), QStringLiteral("observed_modified_unlogged"));
+            operationResult.insert(QStringLiteral("auditError"), auditError);
+            operationResult.insert(QStringLiteral("modelModified"), true);
+            return finishModifiedUnlogged(operationResult,
+                tr("The GUI model was changed, but its audit record could not be completed: %1").arg(auditError));
         }
-        state->operationOrder.append(operationId);
-        state->operations.emplace(operationId, operationResult);
-        if (state->idempotencyOrder.size() >= 256)
-        {
-            const QString expired = state->idempotencyOrder.takeFirst();
-            state->idempotency.erase(expired);
-        }
-        state->idempotencyOrder.append(idempotencyKey);
-        state->idempotency.emplace(idempotencyKey, State::IdempotentResult{requestDigest, preview.documentId, response});
-        return response;
+        operationResult.insert(QStringLiteral("outcome"), QStringLiteral("accepted_and_audited"));
+        return finishAccepted(operationResult);
     }
 
     return invalid(QStringLiteral("UNSUPPORTED_OPERATION"), tr("This range.host/v1 operation is not implemented by the GUI host."));
@@ -997,10 +2134,103 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
 
 bool ModelCommandHost::approvePreview(const QString &previewId)
 {
-    if (QThread::currentThread() != thread() || isMutationBlocked()) return false;
+    if (QThread::currentThread() != thread() || activeModalInteraction()) return false;
     auto found = state->previews.find(previewId);
     if (found == state->previews.end() || found->second.approved || found->second.consumed
         || found->second.sessionEpoch != state->sessionEpoch) return false;
+    if (found->second.command == QStringLiteral("analysis.cancel"))
+    {
+        const QJsonObject job = SolverManager::getInstance().jobQuery(found->second.jobId);
+        const QString jobState = job.value(QStringLiteral("state")).toString();
+        const QJsonObject source = job.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+        const auto owned = state->jobSources.find(found->second.jobId);
+        if (!job.value(QStringLiteral("found")).toBool()
+            || (jobState != QStringLiteral("queued") && jobState != QStringLiteral("running")
+                && jobState != QStringLiteral("cancelling"))
+            || source.value(QStringLiteral("documentId")).toString() != found->second.jobSourceDocumentId
+            || source.value(QStringLiteral("revision")).toString() != found->second.jobSourceRevision
+            || (!source.value(QStringLiteral("sessionEpoch")).toString().isEmpty()
+                && source.value(QStringLiteral("sessionEpoch")).toString() != found->second.sessionEpoch)
+            || owned == state->jobSources.end()
+            || owned->second.documentId != found->second.jobSourceDocumentId
+            || owned->second.sessionEpoch != found->second.sessionEpoch
+            || owned->second.revision != found->second.jobSourceRevision)
+            return false;
+        found->second.approved = true;
+        return true;
+    }
+    if (found->second.command == QStringLiteral("analysis.run"))
+    {
+        if (isMutationBlocked()) return false;
+        const QString sourceDocumentId = found->second.documentId;
+        const QString sourceEpoch = found->second.sessionEpoch;
+        const quint64 expectedRevision = found->second.stampGeneration;
+        const bool warningsAccepted = found->second.arguments.value(QStringLiteral("warningsAccepted")).toBool();
+        uint modelID = session->findModelByCommandIdentity(sourceDocumentId);
+        if (modelID == RConstants::eod) return false;
+        QPair<QString, quint64> sourceStamp;
+        QJsonObject approvedProject;
+        {
+            TrySessionLock guard(session);
+            if (!guard.ownsLock() || isMutationBlocked() || activeModalInteraction()) return false;
+            modelID = session->findModelByCommandIdentity(sourceDocumentId);
+            if (modelID == RConstants::eod || !session->canMutateDocument(modelID)) return false;
+            sourceStamp = session->modelCommandStamp(modelID);
+            if (sourceStamp.first != sourceDocumentId || sourceStamp.second != expectedRevision)
+                return false;
+            approvedProject = found->second.projectSnapshotRef;
+            const QJsonObject currentProject = session->documentProjectContext(modelID);
+            for (const QString &field : {QStringLiteral("projectId"),
+                                         QStringLiteral("persistentDocumentId"),
+                                         QStringLiteral("sourceRevision")})
+                if (approvedProject.value(field) != currentProject.value(field)) return false;
+            if (!approvedProject.value(QStringLiteral("modelSha256")).toString().isEmpty()
+                && approvedProject.value(QStringLiteral("modelSha256"))
+                    != currentProject.value(QStringLiteral("modelSha256")))
+                return false;
+        }
+
+        // validateRun also takes the Session mutex. It must run after the
+        // host-owned read lock above has been released.
+        const QJsonObject validation = SolverManager::getInstance().validateRun(modelID);
+        if (!validation.value(QStringLiteral("valid")).toBool()
+            || !validation.value(QStringLiteral("errors")).toArray().isEmpty()
+            || validation.value(QStringLiteral("sourceStamp")).toObject()
+                != sourceStampJson(sourceStamp, sourceEpoch))
+            return false;
+        if (!validation.value(QStringLiteral("warnings")).toArray().isEmpty()
+            && !warningsAccepted)
+            return false;
+
+        // Recheck all live GUI gates after validation so that an intervening
+        // edit, draft, project change, or legacy task invalidates approval.
+        if (isMutationBlocked() || activeModalInteraction()) return false;
+        {
+            TrySessionLock guard(session);
+            if (!guard.ownsLock() || isMutationBlocked() || activeModalInteraction()) return false;
+            modelID = session->findModelByCommandIdentity(sourceDocumentId);
+            if (modelID == RConstants::eod || !session->canMutateDocument(modelID)) return false;
+            if (session->modelCommandStamp(modelID) != sourceStamp) return false;
+            const QJsonObject currentProject = session->documentProjectContext(modelID);
+            for (const QString &field : {QStringLiteral("projectId"),
+                                         QStringLiteral("persistentDocumentId"),
+                                         QStringLiteral("sourceRevision")})
+                if (approvedProject.value(field) != currentProject.value(field)) return false;
+            if (!approvedProject.value(QStringLiteral("modelSha256")).toString().isEmpty()
+                && approvedProject.value(QStringLiteral("modelSha256"))
+                    != currentProject.value(QStringLiteral("modelSha256")))
+                return false;
+        }
+        found = state->previews.find(previewId);
+        if (found == state->previews.end() || found->second.approved || found->second.consumed
+            || found->second.sessionEpoch != state->sessionEpoch || found->second.sessionEpoch != sourceEpoch
+            || found->second.documentId != sourceDocumentId
+            || found->second.stampGeneration != sourceStamp.second)
+            return false;
+        found->second.approved = true;
+        return true;
+    }
+    if (isMutationBlocked()) return false;
     uint modelID = session->findModelByCommandIdentity(found->second.documentId);
     if (modelID == RConstants::eod) return false;
     TrySessionLock guard(session);
@@ -1010,7 +2240,7 @@ bool ModelCommandHost::approvePreview(const QString &previewId)
     if (!session->canMutateDocument(modelID)) return false;
     const auto stamp = session->modelCommandStamp(modelID);
     if (stamp.first != found->second.documentId || stamp.second != found->second.stampGeneration) return false;
-    if (found->second.command == QStringLiteral("analysis.modal.configure"))
+    if (isCoreEditCommand(found->second.command))
     {
         const auto entry = state->entries.find(found->second.documentId);
         if (entry == state->entries.end() || !entry->second.editing
@@ -1033,55 +2263,147 @@ bool ModelCommandHost::approvePreview(const QString &previewId)
 bool ModelCommandHost::configureModal(const QList<uint> &modelIDs, const RModalSetup &setup, QString *error)
 {
     auto fail = [&](const QString &message) { if (error) *error = message; emit commandRejected(message); return false; };
+    if (error) error->clear();
     if (QThread::currentThread() != thread()) return fail(tr("Model commands require the GUI thread."));
-    if (isMutationBlocked()) return fail(tr("Wait for active model tasks to finish before changing modal settings."));
+    if (isMutationBlocked() || activeModalInteraction()) return fail(tr("Wait until document interaction and live model tasks finish before changing modal settings."));
     if (modelIDs.isEmpty()) return fail(tr("No model is selected."));
-    for (const uint id : modelIDs)
-    {
-        QString projectFailure;
-        if (!session->canMutateDocument(id, &projectFailure)) return fail(projectFailure);
-    }
-    QList<QJsonObject> commands;
+    QList<RModelCommandService::Delta> deltas;
+    QList<QPair<QString, quint64>> stamps;
     QList<State::Entry *> entries;
+    QList<QJsonObject> nativeRequests;
+    QList<QJsonObject> acceptedCommands;
+    const QJsonObject arguments = RModelCommandService::modalParameters(setup);
     {
         QMutexLocker guard(session->getMutex());
         QSet<uint> unique;
-        // Validate every candidate without publishing any live model change.
+        // Validate all current live models and their journal sessions first.
         for (const uint id : modelIDs)
         {
             if (unique.contains(id)) return fail(tr("A model was selected more than once."));
             unique.insert(id);
+            QString projectFailure;
+            if (!session->canMutateDocument(id, &projectFailure)) return fail(projectFailure);
             auto *entry = state->ensure(session, id);
             if (!entry) return fail(state->failure);
             if (!entry->editing->setRunning(false)) return fail(tr("Cannot record model availability."));
-            auto command = modalRequest(entry->editing->query(), setup, true);
-            const auto preview = entry->editing->execute(command);
-            if (preview.value("status") != QJsonValue("preview")) return fail(preview.value("message").toString());
-            command["dryRun"] = false;
-            commands.append(command);
+            const auto stamp = session->modelCommandStamp(id);
+            const auto candidate = RModelCommandService::preview(session->getModel(id),
+                QStringLiteral("analysis.modal.configure"), arguments, stamp.first,
+                QString::number(stamp.second));
+            if (!candidate.valid) return fail(candidate.message);
+            const QJsonObject query = entry->editing->query();
+            if (RModelCommandService::stateFingerprint(entry->editing->model())
+                != RModelCommandService::stateFingerprint(session->getModel(id)))
+                return fail(tr("The command journal snapshot does not match the live model."));
+            nativeRequests.append(QJsonObject{
+                {QStringLiteral("apiVersion"), QStringLiteral("range.application/v1")},
+                {QStringLiteral("commandId"), QStringLiteral("analysis.modal.configure")},
+                {QStringLiteral("commandVersion"), 1},
+                {QStringLiteral("modelId"), query.value(QStringLiteral("modelId"))},
+                {QStringLiteral("expectedRevision"), query.value(QStringLiteral("revision"))},
+                {QStringLiteral("requestId"), uuid()},
+                {QStringLiteral("idempotencyKey"), uuid()},
+                {QStringLiteral("parameters"), candidate.normalizedArguments},
+                {QStringLiteral("dryRun"), false}});
+            deltas.append(candidate.delta);
+            stamps.append(stamp);
             entries.append(entry);
         }
-        for (qsizetype i = 0; i < entries.size(); ++i)
-        {
-            const auto result = entries[i]->editing->execute(commands[i]);
-            if (result.value("status") != QJsonValue("accepted"))
-            {
-                // Accepted native candidates remain unpublished. Rotate them so
-                // a subsequent request cannot observe a partially accepted batch.
-                for (const uint id : modelIDs) session->invalidateModelCommands(id);
-                return fail(result.value("message").toString());
-            }
-        }
+
+        // Journal every candidate before publishing any GUI model. If a later
+        // journal append fails, close/reconcile the earlier shadow sessions;
+        // no live model has changed yet.
         for (qsizetype i = 0; i < modelIDs.size(); ++i)
         {
+            if (session->modelCommandStamp(modelIDs[i]) != stamps[i])
+                return fail(tr("A model changed while modal candidates were being validated."));
+            if (entries[i]->editing->query().value(QStringLiteral("revision")).toString()
+                != nativeRequests[i].value(QStringLiteral("expectedRevision")).toString())
+                return fail(tr("A model command journal changed while modal candidates were being validated."));
+            const QJsonObject accepted = entries[i]->editing->execute(nativeRequests[i]);
+            if (accepted.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("accepted")))
+            {
+                QStringList reconciliationErrors;
+                for (qsizetype previous = 0; previous < i; ++previous)
+                {
+                    QString reconciliationError;
+                    if (!entries[previous]->editing->recordExternalChange(
+                            QStringLiteral("external_edit"), session->getModel(modelIDs[previous]),
+                            &reconciliationError))
+                        reconciliationErrors.append(reconciliationError);
+                    entries[previous]->editing.reset();
+                }
+                const QString message = tr("The modal command journal rejected the operation; no GUI model was changed. %1")
+                    .arg(accepted.value(QStringLiteral("message")).toString());
+                if (!reconciliationErrors.isEmpty())
+                    return fail(message + tr(" Earlier journal candidates were reconciled with errors: %1")
+                        .arg(reconciliationErrors.join(QStringLiteral("; "))));
+                return fail(message);
+            }
+            acceptedCommands.append(accepted);
+        }
+
+        for (qsizetype i = 0; i < modelIDs.size(); ++i)
+        {
+            if (session->modelCommandStamp(modelIDs[i]) != stamps[i])
+            {
+                QStringList reconciliationErrors;
+                for (qsizetype prior = 0; prior < entries.size(); ++prior)
+                {
+                    QString reconciliationError;
+                    if (!entries[prior]->editing->recordExternalChange(
+                            QStringLiteral("external_edit"), session->getModel(modelIDs[prior]),
+                            &reconciliationError))
+                        reconciliationErrors.append(reconciliationError);
+                    entries[prior]->editing.reset();
+                }
+                return fail(tr("A model changed after modal commands were journaled; no GUI model was changed. %1")
+                    .arg(reconciliationErrors.join(QStringLiteral("; "))));
+            }
+            QString applyError;
             session->storeCurentModelVersion(modelIDs[i], tr("Configure modal analysis"));
-            session->getModel(modelIDs[i]).getProblemSetup().setModalSetup(entries[i]->editing->model().getProblemSetup().getModalSetup());
-            ++entries[i]->generation;
+            if (!commitSupportedDelta(session->getModel(modelIDs[i]), deltas[i], &applyError))
+            {
+                QStringList reconciliationErrors;
+                for (qsizetype prior = 0; prior < entries.size(); ++prior)
+                {
+                    QString reconciliationError;
+                    if (!entries[prior]->editing->recordExternalChange(
+                            QStringLiteral("external_edit"), session->getModel(modelIDs[prior]),
+                            &reconciliationError))
+                        reconciliationErrors.append(reconciliationError);
+                    entries[prior]->editing.reset();
+                }
+                return fail(tr("A journaled modal command could not be published to the GUI model: %1 %2")
+                    .arg(applyError, reconciliationErrors.join(QStringLiteral("; "))));
+            }
         }
     }
     for (qsizetype i = 0; i < modelIDs.size(); ++i)
     {
         session->setProblemChanged(modelIDs[i]);
+        const QPair<QString, quint64> stamp = session->modelCommandStamp(modelIDs[i]);
+        const QJsonObject accepted = acceptedCommands[i];
+        if (!entries[i]->editing
+            || entries[i]->editing->query().value(QStringLiteral("revision")).toString()
+                != accepted.value(QStringLiteral("revision")).toString()
+            || RModelCommandService::stateFingerprint(entries[i]->editing->model())
+                != RModelCommandService::stateFingerprint(session->getModel(modelIDs[i])))
+        {
+            QString auditError;
+            const bool reconciled = recordExternalChangeAfterNotification(
+                modelIDs[i], QStringLiteral("external_edit"), &auditError);
+            if (!reconciled)
+            {
+                const QString message = tr("Modal settings were applied, but their durable command state could not be synchronized: %1")
+                    .arg(auditError);
+                if (error) *error = message;
+                emit commandRejected(message);
+                return false;
+            }
+            continue;
+        }
+        entries[i]->generation = stamp.second;
     }
     return true;
 }
@@ -1121,6 +2443,41 @@ bool ModelCommandHost::recordExternalChange(uint modelID, const QString &reason,
         const auto stamp = session->modelCommandStamp(modelID);
         auto found = state->entries.find(stamp.first);
         if (found != state->entries.end() && found->second.editing)
+        {
+            recorded = found->second.editing->recordExternalChange(reason, session->getModel(modelID), &failure);
+            found->second.editing.reset();
+        }
+    }
+    if (!recorded)
+    {
+        const QString message = tr("The model changed, but its audit record could not be saved: %1").arg(failure);
+        if (error) *error = message;
+        RLogger::error("%s\n", message.toUtf8().constData());
+        emit commandRejected(message);
+    }
+    return recorded;
+}
+
+bool ModelCommandHost::recordExternalChangeAfterNotification(uint modelID, const QString &reason,
+                                                              QString *error)
+{
+    if (QThread::currentThread() != thread())
+    {
+        if (error) *error = tr("External changes require the GUI thread.");
+        return false;
+    }
+    QString failure;
+    bool recorded = true;
+    {
+        QMutexLocker guard(session->getMutex());
+        const auto stamp = session->modelCommandStamp(modelID);
+        auto found = state->entries.find(stamp.first);
+        if (found == state->entries.end() || !found->second.editing)
+        {
+            recorded = false;
+            failure = tr("No open command session was available to journal the published model change.");
+        }
+        else
         {
             recorded = found->second.editing->recordExternalChange(reason, session->getModel(modelID), &failure);
             found->second.editing.reset();

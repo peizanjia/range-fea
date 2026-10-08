@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonDocument>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUuid>
@@ -36,6 +37,13 @@ Model modalFixture()
     modal.setMethod(R_MODAL_MULTIPLE_MODES);
     modal.setNIterations(12);
     modal.setNModesToExtract(2);
+    return model;
+}
+
+Model stressFixture()
+{
+    Model model = modalFixture();
+    model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS));
     return model;
 }
 
@@ -87,6 +95,16 @@ QJsonObject modalProposalArguments()
     return {{QStringLiteral("method"), QStringLiteral("multiple")},
             {QStringLiteral("iterations"), 31}, {QStringLiteral("modes"), 2},
             {QStringLiteral("tolerance"), 1e-6}, {QStringLiteral("unit"), QStringLiteral("1")}};
+}
+
+QJsonObject structuralDynamicsArguments()
+{
+    return {{QStringLiteral("enabled"), true}, {QStringLiteral("method"), QStringLiteral("newmark")},
+        {QStringLiteral("timeStep"), 0.01}, {QStringLiteral("unitSI"), true},
+        {QStringLiteral("steps"), 10}, {QStringLiteral("outputFrequency"), 1},
+        {QStringLiteral("rayleighAlpha"), 0.0}, {QStringLiteral("rayleighBeta"), 0.0},
+        {QStringLiteral("rhoInfinity"), 1.0}, {QStringLiteral("newmarkGamma"), 0.5},
+        {QStringLiteral("newmarkBeta"), 0.25}, {QStringLiteral("modalDampingRatios"), QJsonArray{}}};
 }
 
 QJsonObject documentProposal(const QString &documentId, quint64 revision)
@@ -222,9 +240,19 @@ private slots:
         QVERIFY(!requestBody.isEmpty());
         bool hasAskUser = false;
         bool hasTelemetry = false;
+        QStringList hostTools;
+        QJsonArray documentCommands;
         for (const QJsonValue &toolValue : requested.first().at(2).toJsonArray())
         {
             const QJsonObject function = toolValue.toObject().value(QStringLiteral("function")).toObject();
+            const QString toolName = function.value(QStringLiteral("name")).toString();
+            if (toolName == QStringLiteral("document_inputs") || toolName == QStringLiteral("document_targets")
+                || toolName == QStringLiteral("native_jobs") || toolName == QStringLiteral("native_job")
+                || toolName == QStringLiteral("native_result_open")) hostTools.append(toolName);
+            if (toolName == QStringLiteral("document_propose"))
+                documentCommands = function.value(QStringLiteral("parameters")).toObject()
+                    .value(QStringLiteral("properties")).toObject().value(QStringLiteral("command")).toObject()
+                    .value(QStringLiteral("enum")).toArray();
             if (function.value(QStringLiteral("name")) == QJsonValue(QStringLiteral("ask_user")))
             {
                 hasAskUser = true;
@@ -237,6 +265,13 @@ private slots:
         }
         QVERIFY(hasAskUser);
         QVERIFY(hasTelemetry);
+        for (const QString &toolName : {QStringLiteral("document_inputs"), QStringLiteral("document_targets"),
+             QStringLiteral("native_jobs"), QStringLiteral("native_job"), QStringLiteral("native_result_open")})
+            QVERIFY(hostTools.contains(toolName));
+        for (const QString &command : {QStringLiteral("analysis.structural_dynamics.configure"),
+             QStringLiteral("entity.material.set"), QStringLiteral("entity.boundary.set"),
+             QStringLiteral("analysis.run"), QStringLiteral("analysis.cancel")})
+            QVERIFY(documentCommands.contains(QJsonValue(command)));
 
         const auto turn = parseProviderBody(providerBody(QStringLiteral("No documents are open.")));
         QCOMPARE(turn.value(QStringLiteral("text")).toString(), QStringLiteral("No documents are open."));
@@ -245,6 +280,202 @@ private slots:
         runner.receiveTurn(requestId, turn);
         QCOMPARE(finished.size(), 1);
         QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void guiDocumentQueriesAndStructuralDynamicsUseTheVersionedHost()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(stressFixture());
+        session->setModelSelected(0, true);
+        const QJsonObject document = documentContext(host).value(QStringLiteral("documents")).toArray().first().toObject();
+        const QString documentId = document.value(QStringLiteral("documentId")).toString();
+        const quint64 revision = quint64(document.value(QStringLiteral("documentRevision")).toDouble());
+        QVERIFY(!documentId.isEmpty());
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy applied(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Inspect this GUI model and configure structural dynamics."));
+        const QJsonArray queries{
+            providerCall(QStringLiteral("inputs-read"), QStringLiteral("document_inputs"),
+                {{QStringLiteral("documentId"), documentId}}),
+            providerCall(QStringLiteral("targets-read"), QStringLiteral("document_targets"),
+                {{QStringLiteral("documentId"), documentId},
+                 {QStringLiteral("page"), QJsonObject{{QStringLiteral("offset"), 0}, {QStringLiteral("limit"), 20}}}})};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(), queries)));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+
+        QJsonObject inputsResult, targetsResult;
+        for (const QJsonValue &messageValue : requested.last().at(1).toJsonArray())
+        {
+            const QJsonObject message = messageValue.toObject();
+            if (message.value(QStringLiteral("role")) != QJsonValue(QStringLiteral("tool"))) continue;
+            const QJsonObject result = QJsonDocument::fromJson(message.value(QStringLiteral("content")).toString().toUtf8()).object();
+            if (message.value(QStringLiteral("tool_call_id")) == QJsonValue(QStringLiteral("inputs-read"))) inputsResult = result;
+            if (message.value(QStringLiteral("tool_call_id")) == QJsonValue(QStringLiteral("targets-read"))) targetsResult = result;
+        }
+        QCOMPARE(inputsResult.value(QStringLiteral("apiVersion")).toString(), QStringLiteral("range.host/v1"));
+        QCOMPARE(inputsResult.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QVERIFY(inputsResult.value(QStringLiteral("result")).toObject().contains(QStringLiteral("configuration")));
+        QCOMPARE(targetsResult.value(QStringLiteral("apiVersion")).toString(), QStringLiteral("range.host/v1"));
+        QCOMPARE(targetsResult.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QCOMPARE(targetsResult.value(QStringLiteral("result")).toObject().value(QStringLiteral("runtimeStamp"))
+                     .toObject().value(QStringLiteral("documentId")).toString(), documentId);
+
+        const QJsonObject proposal{{QStringLiteral("documentId"), documentId},
+            {QStringLiteral("documentRevision"), double(revision)},
+            {QStringLiteral("command"), QStringLiteral("analysis.structural_dynamics.configure")},
+            {QStringLiteral("arguments"), structuralDynamicsArguments()}};
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall(QStringLiteral("dynamics-preview"), QStringLiteral("document_propose"), proposal)})));
+        QCOMPARE(ready.size(), 1);
+        QCOMPARE(ready.first().at(2).toJsonObject().value(QStringLiteral("command")).toString(),
+                 QStringLiteral("analysis.structural_dynamics.configure"));
+        QCOMPARE(ready.first().at(2).toJsonObject().value(QStringLiteral("arguments")).toObject()
+                     .value(QStringLiteral("unitSI")).toBool(), true);
+        runner.authorizePending(ready.first().at(1).toString(), true);
+        QCOMPARE(applied.size(), 1);
+        QCOMPARE(applied.first().at(1).toJsonObject().value(QStringLiteral("command")).toString(),
+                 QStringLiteral("analysis.structural_dynamics.configure"));
+        QCOMPARE(session->getModel(0).getProblemSetup().getStructuralDynamicsSetup().getNSteps(), 10u);
+
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 1000);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The host reads and approved structural dynamics command completed."))));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void newCoreCommandArgumentsRejectExtraFieldsWrongUnitsAndUnstableTargets()
+    {
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        WorkflowProcess workflow;
+        auto rejected = [&](const QString &callId, const QString &command, const QJsonObject &arguments) {
+            AgentTaskRunner runner(host, &workflow);
+            QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+            QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+            runner.startTask(QStringLiteral("Validate one GUI command."));
+            const QJsonObject call{{QStringLiteral("documentId"), QStringLiteral("doc-test")},
+                {QStringLiteral("documentRevision"), 0}, {QStringLiteral("command"), command},
+                {QStringLiteral("arguments"), arguments}};
+            runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+                QJsonArray{providerCall(callId, QStringLiteral("document_propose"), call)})));
+            QCOMPARE(finished.size(), 1);
+            QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
+            QCOMPARE(ready.size(), 0);
+        };
+
+        QJsonObject dynamics = structuralDynamicsArguments();
+        dynamics.insert(QStringLiteral("timeUnit"), QStringLiteral("ms"));
+        rejected(QStringLiteral("extra-field"), QStringLiteral("analysis.structural_dynamics.configure"), dynamics);
+        rejected(QStringLiteral("wrong-boundary-unit"), QStringLiteral("entity.boundary.set"),
+            {{QStringLiteral("targetId"), QStringLiteral("g:1")},
+             {QStringLiteral("kind"), QStringLiteral("displacement")},
+             {QStringLiteral("values"), QJsonArray{0.0, QJsonValue(QJsonValue::Null), QJsonValue(QJsonValue::Null)}},
+             {QStringLiteral("unit"), QStringLiteral("mm")}});
+        rejected(QStringLiteral("unstable-target"), QStringLiteral("entity.material.set"),
+            {{QStringLiteral("targetId"), QStringLiteral("label:fixed-end")},
+             {QStringLiteral("name"), QStringLiteral("Steel")},
+             {QStringLiteral("youngModulusPa"), 2.0e11}, {QStringLiteral("densityKgM3"), 7800.0},
+             {QStringLiteral("poissonRatio"), 0.3}, {QStringLiteral("thermalExpansionPerK"), 1.2e-5}});
+
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Do not route native jobs through the workflow workspace."));
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall(QStringLiteral("wrong-workflow-route"), QStringLiteral("workflow_propose"),
+                {{QStringLiteral("command"), QStringLiteral("analysis.run")},
+                 {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("warningsAccepted"), true}}}})})));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
+        QCOMPARE(ready.size(), 0);
+    }
+
+    void automaticDocumentRevisionAdvancesThroughItsOwnAcceptedCommand()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(stressFixture());
+        session->setModelSelected(0, true);
+        const QJsonObject document = documentContext(host).value(QStringLiteral("documents")).toArray().first().toObject();
+        const QString documentId = document.value(QStringLiteral("documentId")).toString();
+        const quint64 initialRevision = quint64(document.value(QStringLiteral("documentRevision")).toDouble());
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy applied(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Configure structural dynamics in two accepted steps."), true);
+        auto proposal = [&](quint64 revision, QJsonObject arguments, const QString &callId) {
+            return providerCall(callId, QStringLiteral("document_propose"),
+                {{QStringLiteral("documentId"), documentId}, {QStringLiteral("documentRevision"), double(revision)},
+                 {QStringLiteral("command"), QStringLiteral("analysis.structural_dynamics.configure")},
+                 {QStringLiteral("arguments"), arguments}});
+        };
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{proposal(initialRevision, structuralDynamicsArguments(), QStringLiteral("first-dynamics-edit"))})));
+        QCOMPARE(ready.size(), 1);
+        QCOMPARE(applied.size(), 1);
+        const quint64 acceptedRevision = quint64(applied.first().at(1).toJsonObject()
+            .value(QStringLiteral("afterRevision")).toDouble());
+        QVERIFY(acceptedRevision > initialRevision);
+
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        QJsonObject secondArguments = structuralDynamicsArguments();
+        secondArguments.insert(QStringLiteral("timeStep"), 0.02);
+        secondArguments.insert(QStringLiteral("steps"), 20);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{proposal(acceptedRevision, secondArguments, QStringLiteral("second-dynamics-edit"))})));
+        QCOMPARE(ready.size(), 2);
+        QCOMPARE(applied.size(), 2);
+        QCOMPARE(session->getModel(0).getProblemSetup().getStructuralDynamicsSetup().getNSteps(), 20u);
+
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 1000);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("Both accepted commands are complete."))));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void staleNativeRunRevisionNeverProducesAnApprovalProposal()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(stressFixture());
+        session->setModelSelected(0, true);
+        const QJsonObject document = documentContext(host).value(QStringLiteral("documents")).toArray().first().toObject();
+        const QString documentId = document.value(QStringLiteral("documentId")).toString();
+        const quint64 initialRevision = quint64(document.value(QStringLiteral("documentRevision")).toDouble());
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Start the selected native analysis when its source is current."), true);
+        session->getModel(0).getProblemSetup().getStructuralDynamicsSetup().setNSteps(20);
+        session->setProblemChanged(0);
+        const QJsonObject proposal{{QStringLiteral("documentId"), documentId},
+            {QStringLiteral("documentRevision"), double(initialRevision)},
+            {QStringLiteral("command"), QStringLiteral("analysis.run")},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("warningsAccepted"), true}}}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall(QStringLiteral("stale-run"), QStringLiteral("document_propose"), proposal)})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        QCOMPARE(ready.size(), 0);
+        QVERIFY(requested.last().at(1).toJsonArray().last().toObject().value(QStringLiteral("content")).toString()
+                    .contains(QStringLiteral("STALE_REVISION")));
+        QCOMPARE(session->getModel(0).getProblemSetup().getStructuralDynamicsSetup().getNSteps(), 20u);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The stale source was not submitted."))));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
     }
 
     void followupRetainsToolOutcomesAndUsesFreshHostContext()

@@ -663,7 +663,8 @@ if(RANGE_BUILD_TESTS)
     qt_add_executable(tst_gui_model_lifecycle
         tests/tst_gui_model_lifecycle.cpp tests/tst_gui_host_context.cpp
         tests/tst_agent_task_runner.cpp tests/tst_solver_snapshot.cpp tests/tst_extension_widget.cpp
-        tests/tst_agent_event_view.cpp tests/tst_agent_conversation_widget.cpp tests/tst_project_session.cpp ${_fea_lifecycle_sources})
+        tests/tst_agent_event_view.cpp tests/tst_agent_conversation_widget.cpp tests/tst_project_session.cpp
+        tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp ${_fea_lifecycle_sources})
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
     set_source_files_properties(tests/tst_project_session.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_PROJECT_TEST_CLI=\"$<TARGET_FILE:range-project>\";RANGE_PROJECT_TEST_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_PROJECT_TEST_NATIVE=\"$<TARGET_FILE:range-workflow-native>\"")
@@ -685,11 +686,13 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_agent_event_view COMMAND tst_gui_model_lifecycle --agent-event-view -o -,txt)
     add_test(NAME tst_agent_conversation_widget COMMAND tst_gui_model_lifecycle --agent-conversation -o -,txt)
     add_test(NAME tst_project_session COMMAND tst_gui_model_lifecycle --project-session -o -,txt)
-    set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session PROPERTIES
+    add_test(NAME tst_native_job_registry COMMAND tst_gui_model_lifecycle --native-jobs -o -,txt)
+    add_test(NAME tst_gui_model_operations COMMAND tst_gui_model_lifecycle --model-operations -o -,txt)
+    set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session tst_native_job_registry tst_gui_model_operations PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1"
         TIMEOUT 120)
     if(WIN32)
-        set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session PROPERTIES
+        set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session tst_native_job_registry tst_gui_model_operations PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
     qt_add_executable(tst_modal_command_widget

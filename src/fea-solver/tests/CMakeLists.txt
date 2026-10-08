@@ -1,5 +1,15 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+qt_add_executable(tst_native_progress_journal
+    tst_native_progress_journal.cpp ../src/native_progress_journal.cpp)
+target_include_directories(tst_native_progress_journal PRIVATE ../src)
+target_link_libraries(tst_native_progress_journal PRIVATE range-base-lib Qt6::Test)
+add_test(NAME tst_native_progress_journal COMMAND tst_native_progress_journal)
+if(WIN32)
+    set_tests_properties(tst_native_progress_journal PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 if(WIN32 AND CMAKE_VERSION VERSION_LESS 3.22)
     message(FATAL_ERROR "Windows QTest execution requires CMake 3.22 or newer for ENVIRONMENT_MODIFICATION")
 endif()

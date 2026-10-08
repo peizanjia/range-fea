@@ -94,8 +94,8 @@
     {
       "id": "WF-02",
       "title": "Native context, commands, and solve",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "实施共享模型操作/群组持久physicalId与原生文档逐作业求解；GUI/CLI/SDK/Agent共用验证，WF03等待本任务验收后启动。",
       "priority": "P0",
       "effort": "L",
       "dependsOn": [
