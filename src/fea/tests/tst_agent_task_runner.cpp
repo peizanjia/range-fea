@@ -1315,6 +1315,108 @@ private slots:
         QVERIFY(runner.isActive());
     }
 
+    void toolActivityIsBoundedAndCannotAdvanceAfterSynchronousSteering()
+    {
+        auto *session = Application::instance()->getSession();
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy activity(&runner, &AgentTaskRunner::toolActivity);
+        runner.startTask(QStringLiteral("Read the current context."));
+        auto first = parseProviderBody(providerBody({}, QJsonArray{
+            providerCall(QStringLiteral("first-read"), QStringLiteral("context_query"), {})}));
+        runner.receiveTurn(requested.last().at(0).toString(), first);
+        QCOMPARE(activity.size(), 2);
+        const QString firstTask = activity.first().at(0).toString();
+        QVERIFY(!firstTask.isEmpty());
+        QCOMPARE(activity.first().at(1).toString(), QStringLiteral("first-read"));
+        QCOMPARE(activity.first().at(3).toString(), QStringLiteral("reading"));
+        QCOMPARE(activity.last().at(0).toString(), firstTask);
+        QCOMPARE(activity.last().at(3).toString(), QStringLiteral("completed"));
+        QVERIFY(!activity.last().at(5).toJsonObject().contains(QStringLiteral("arguments")));
+        runner.cancel();
+        runner.startTask(QStringLiteral("Start a second read."));
+        bool steered = false;
+        connect(&runner, &AgentTaskRunner::toolActivity, &runner,
+            [&](const QString &, const QString &, const QString &, const QString &phase,
+                const QString &, const QJsonObject &) {
+                if (!steered && phase == QStringLiteral("reading"))
+                {
+                    steered = true;
+                    runner.submitMessage(QStringLiteral("New task after activity signal."));
+                }
+            });
+        QSignalSpy lateActivity(&runner, &AgentTaskRunner::toolActivity);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({}, QJsonArray{
+            providerCall(QStringLiteral("second-read"), QStringLiteral("context_query"), {})})));
+        QVERIFY(steered);
+        QCOMPARE(activity.size(), 3);
+        QCOMPARE(lateActivity.size(), 1);
+        QCOMPARE(lateActivity.first().at(0).toString(), activity.last().at(0).toString());
+        QVERIFY(activity.last().at(0).toString() != firstTask);
+        const int requestCount = requested.size();
+        QTest::qWait(30);
+        QCOMPARE(requested.size(), requestCount);
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The new task completed."))));
+        QVERIFY(!runner.isActive());
+    }
+
+    void synchronousActivityAuthorizationAndSteeringPreserveTheNewProposal()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(modalFixture());
+        const auto initial = documentContext(host).value("documents").toArray().first().toObject();
+        const QString identity = initial.value("documentId").toString();
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy accepted(&runner, &AgentTaskRunner::actionCompleted);
+        bool recursiveAuthorization = false, steered = false;
+        runner.startTask(QStringLiteral("Propose the first edit."));
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({}, QJsonArray{
+            providerCall("first-proposal", "document_propose", documentProposal(identity,
+                quint64(initial.value("documentRevision").toDouble())))})));
+        QCOMPARE(ready.size(), 1);
+        const QString firstProposal = ready.first().at(1).toString();
+        connect(&runner, &AgentTaskRunner::toolActivity, &runner,
+            [&](const QString &, const QString &call, const QString &, const QString &phase,
+                const QString &, const QJsonObject &) {
+                if (call != "first-proposal") return;
+                if (phase == "executing" && !recursiveAuthorization)
+                {
+                    recursiveAuthorization = true;
+                    runner.authorizePending(firstProposal, true);
+                    runner.authorizePending(firstProposal, false);
+                }
+                if (phase == "completed" && !steered)
+                {
+                    steered = true;
+                    runner.submitMessage(QStringLiteral("Keep the new proposal awaiting approval."));
+                    const auto current = documentContext(host).value("documents").toArray().first().toObject();
+                    auto followup = documentProposal(identity, quint64(current.value("documentRevision").toDouble()));
+                    auto parameters = followup.value("arguments").toObject();
+                    parameters["iterations"] = 33;
+                    followup["arguments"] = parameters;
+                    runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({}, QJsonArray{
+                        providerCall("second-proposal", "document_propose", followup)})));
+                }
+            });
+        runner.authorizePending(firstProposal, true);
+        QVERIFY(recursiveAuthorization);
+        QVERIFY(steered);
+        QCOMPARE(ready.size(), 2);
+        QCOMPARE(accepted.size(), 0); // The old action fact was retained before steering.
+        QVERIFY(!runner.pendingProposal().isEmpty());
+        QVERIFY(ready.last().at(1).toString() != firstProposal);
+        runner.authorizePending(ready.last().at(1).toString(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(requested.size() >= 3, 1000);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(QStringLiteral("Finished."))));
+        QVERIFY(!runner.isActive());
+    }
+
     void deniedProposalIsReportedAndDoesNotMutate()
     {
         auto *session = Application::instance()->getSession();

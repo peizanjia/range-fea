@@ -6,6 +6,7 @@
 #include <QJsonParseError>
 #include <QRegularExpression>
 #include <QUuid>
+#include <QScopeGuard>
 
 #include <cmath>
 #include <limits>
@@ -337,6 +338,10 @@ bool validDocumentCommandArguments(const QString &command, const QJsonObject &ar
         return exactKeys(arguments, {"warningsAccepted"}) && arguments.value("warningsAccepted").isBool();
     if (command == "analysis.cancel")
         return exactKeys(arguments, {"jobId"}) && validIdentifier(arguments.value("jobId"));
+    if (command == "analysis.recover")
+        return exactKeys(arguments, {"jobId", "checkpointSha256", "remainingSteps"})
+            && validIdentifier(arguments.value("jobId")) && validSha256(arguments.value("checkpointSha256"))
+            && integerInRange(arguments.value("remainingSteps"), 1, 5000);
     if (command == "document.undo" || command == "document.redo") return arguments.isEmpty();
     return false;
 }
@@ -389,6 +394,9 @@ bool validWorkflowArguments(const QString &command, const QJsonObject &arguments
             && validIdentifier(arguments.value("jobId"))
             && integerInRange(arguments.value("additionalSteps"), 1, 5000);
     }
+    if (command == "workflow.recover")
+        return exactKeys(arguments, {"jobId", "qualificationSha256"})
+            && validIdentifier(arguments.value("jobId")) && validSha256(arguments.value("qualificationSha256"));
     return false;
 }
 
@@ -458,7 +466,7 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
         return exactKeys(arguments, {"offset", "limit"})
             && integerInRange(arguments.value("offset"), 0, std::numeric_limits<int>::max())
             && integerInRange(arguments.value("limit"), 1, 200);
-    if (name == "native_job")
+    if (name == "native_job" || name == "native_job_recovery" || name == "workflow_recovery")
         return exactKeys(arguments, {"jobId"}) && validIdentifier(arguments.value("jobId"));
     if (name == "native_result_open")
         return exactKeys(arguments, {"jobId", "expectedSHA"})
@@ -471,7 +479,7 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
     {
         if (!arguments.value("command").isString() || !arguments.value("arguments").isObject()) return false;
         const QString command = arguments.value("command").toString();
-        const bool detachedCancel = command == "analysis.cancel" && exactKeys(arguments, {"command", "arguments"});
+        const bool detachedCancel = (command == "analysis.cancel" || command == "analysis.recover") && exactKeys(arguments, {"command", "arguments"});
         const bool targeted = exactKeys(arguments, {"documentId", "documentRevision", "command", "arguments"})
             && validIdentifier(arguments.value("documentId"))
             && unsignedInteger(arguments.value("documentRevision"));
@@ -531,7 +539,7 @@ bool knownToolName(const QString &name)
         QStringLiteral("workflow_jobs"), QStringLiteral("workflow_telemetry"),
         QStringLiteral("document_propose"), QStringLiteral("document_inputs"),
         QStringLiteral("document_targets"), QStringLiteral("native_jobs"),
-        QStringLiteral("native_job"), QStringLiteral("native_result_open"),
+        QStringLiteral("native_job"), QStringLiteral("native_job_recovery"), QStringLiteral("workflow_recovery"), QStringLiteral("native_result_open"),
         QStringLiteral("native_result_query"), QStringLiteral("workflow_native_result"), QStringLiteral("workflow_sources"),
         QStringLiteral("native_result_display"),
         QStringLiteral("ask_user"),
@@ -672,7 +680,7 @@ QJsonArray AgentTaskRunner::toolDefinitions()
         {"mode", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"active", "passive"}}}}};
     const QJsonObject documentCommandSchema{{"type", "string"},
         {"enum", QJsonArray{"analysis.modal.configure", "analysis.structural_dynamics.configure",
-            "entity.material.set", "entity.boundary.set", "analysis.run", "analysis.cancel",
+            "entity.material.set", "entity.boundary.set", "analysis.run", "analysis.cancel", "analysis.recover",
             "document.undo", "document.redo"}}};
     const QJsonObject documentRevisionSchema{{"type", "integer"}, {"minimum", 0}};
     const QJsonObject documentProposeProperties{{"documentId", string}, {"documentRevision", documentRevisionSchema},
@@ -691,7 +699,7 @@ QJsonArray AgentTaskRunner::toolDefinitions()
                     {"question", "options"})),
         tool("host_capabilities", "Read the trusted GUI host's supported operations and approval boundaries. This tool never approves or executes a command.", schema({}, {})),
         tool("context_query", "Read current GUI document identities, revisions, supported modal operations and selection. Cached or unknown state must not be described as current accepted values.", schema({}, {})),
-        tool("document_propose", "Propose one exact supported GUI command: analysis.modal.configure, analysis.structural_dynamics.configure, entity.material.set, entity.boundary.set, analysis.run, analysis.cancel, document.undo or document.redo. Every command except analysis.cancel requires documentId and documentRevision. Modal arguments are exactly method,iterations,modes,tolerance,unit. Dynamics arguments are exactly enabled,method,timeStep,unitSI=true,steps,outputFrequency,rayleighAlpha,rayleighBeta,rhoInfinity,newmarkGamma,newmarkBeta,modalDampingRatios. Material arguments require targetId,name,youngModulusPa,densityKgM3,poissonRatio,thermalExpansionPerK and may include referenceTemperatureK (default 293.15 K; Solid material). Boundary arguments require targetId,kind,values,unit and may include timeS (default 0); values are three global XYZ numbers or nulls, unit is m for displacement or N for force. analysis.run arguments are exactly warningsAccepted:boolean. analysis.cancel arguments are exactly jobId and may optionally include its exact source documentId/revision. Every command argument object rejects extra fields. The host previews every command; only explicit task authorization or the trusted user approval control can apply it. Use SI values and stable targetId values from document_targets.",
+        tool("document_propose", "Propose one exact supported GUI command: analysis.modal.configure, analysis.structural_dynamics.configure, entity.material.set, entity.boundary.set, analysis.run, analysis.cancel, analysis.recover, document.undo or document.redo. Every command except analysis.cancel and analysis.recover requires documentId and documentRevision. Modal arguments are exactly method,iterations,modes,tolerance,unit. Dynamics arguments are exactly enabled,method,timeStep,unitSI=true,steps,outputFrequency,rayleighAlpha,rayleighBeta,rhoInfinity,newmarkGamma,newmarkBeta,modalDampingRatios. Material arguments require targetId,name,youngModulusPa,densityKgM3,poissonRatio,thermalExpansionPerK and may include referenceTemperatureK (default 293.15 K; Solid material). Boundary arguments require targetId,kind,values,unit and may include timeS (default 0); values are three global XYZ numbers or nulls, unit is m for displacement or N for force. analysis.run arguments are exactly warningsAccepted:boolean. analysis.cancel arguments are exactly jobId and may optionally include its exact source documentId/revision. analysis.recover arguments are exactly jobId,checkpointSha256,remainingSteps from native_job_recovery; it creates a separate interrupted-job attempt and always needs fresh manual approval. Every command argument object rejects extra fields. The host previews every command; only explicit task authorization or the trusted user approval control can apply it. Use SI values and stable targetId values from document_targets.",
              schema(documentProposeProperties, {"command", "arguments"})),
         tool("document_inputs", "Read accepted analysis/configuration state and one bounded target page from the GUI host. Provide a documentId from host context; optional page supports limit/offset or cursor and labelQuery.",
              schema({{"documentId", string}, {"page", pageSchema}}, {"documentId"})),
@@ -701,6 +709,10 @@ QJsonArray AgentTaskRunner::toolDefinitions()
              schema({{"offset", QJsonObject{{"type", "integer"}, {"minimum", 0}}},
                      {"limit", QJsonObject{{"type", "integer"}, {"minimum", 1}, {"maximum", 200}}}}, {"offset", "limit"})),
         tool("native_job", "Read one registered native solver job and its immutable host source binding, if available.",
+             schema({{"jobId", string}}, {"jobId"})),
+        tool("native_job_recovery", "Check interrupted native job recovery eligibility and verified accepted checkpoint proof. This does not execute or approve a continuation.",
+             schema({{"jobId", string}}, {"jobId"})),
+        tool("workflow_recovery", "Check interrupted workflow recovery eligibility, original attempt, target range and qualification hash. Use only the returned fresh hash in workflow.recover preview.",
              schema({{"jobId", string}}, {"jobId"})),
         tool("native_result_query", "Read catalog, channels, bounded series or summary from a registered ordinary GUI solver job. Supply opaque job/artifact/channel IDs, never paths. Live data includes only complete accepted output frames; terminal data verifies every manifest frame.",
              schema(resultProperties, {"jobId", "operation"})),
@@ -716,8 +728,8 @@ QJsonArray AgentTaskRunner::toolDefinitions()
         tool("workflow_jobs", "Read the states of workflow jobs. Only succeeded jobs have accepted results.", schema({}, {})),
         tool("workflow_telemetry", "Read bounded live accepted-step telemetry for a submitted workflow job. This is read-only and does not change or resume the calculation.",
              schema(telemetryParameters, {"jobId"})),
-        tool("workflow_propose", "Propose workflow.configure, workflow.run or workflow.resume. The host supplies current revision and handles authorization. Configuration uses model=four-rod|cantilever-beam, dt(seconds),steps,targetDamping. Run uses mode=active|passive|both,independentReference=true. Resume uses jobId,additionalSteps.",
-             schema({{"command", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"workflow.configure", "workflow.run", "workflow.resume"}}}},
+        tool("workflow_propose", "Propose workflow.configure, workflow.run, workflow.resume or workflow.recover. The host supplies current revision and handles fresh authorization. Configuration uses model=four-rod|cantilever-beam, dt(seconds),steps,targetDamping. Run uses mode=active|passive|both,independentReference=true. Resume uses jobId,additionalSteps. Recover uses jobId and fresh qualificationSha256 from workflow_recovery; old approval cannot be reused.",
+             schema({{"command", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"workflow.configure", "workflow.run", "workflow.resume", "workflow.recover"}}}},
                      {"arguments", object}}, {"command", "arguments"})),
         tool("workflow_wait", "Wait asynchronously for one workflow job to finish and return its verified result. Does not spend more model calls polling progress.", schema({{"jobId", string}}, {"jobId"})),
         tool("workflow_result", "Read an accepted workflow result including independent-reference error and source hashes.", schema({{"jobId", string}}, {"jobId"})),
@@ -792,6 +804,8 @@ void AgentTaskRunner::beginTask(const QString &goal, bool executeRequestedAction
                                 const QJsonArray &priorConversation)
 {
     ++taskGeneration;
+    activityTaskId = uuid();
+    authorizationInProgress = false;
     active = true; automatic = executeRequestedActions; providerPending = false;
     turns = toolCount = nextCall = 0;
     history = {}; calls = {}; completedActions = {}; currentCall = {}; proposal = {}; proposedArguments = {};
@@ -1165,6 +1179,7 @@ void AgentTaskRunner::nextTool()
     currentCall = calls.at(nextCall++).toObject();
     const QString name = currentCall.value("name").toString();
     const QJsonObject arguments = currentCall.value("arguments").toObject();
+    if (!publishToolActivity(name.endsWith("propose") ? "preparing" : "reading")) return;
     if (name == "ask_user")
     {
         const QString questionId = uuid();
@@ -1193,6 +1208,7 @@ void AgentTaskRunner::nextTool()
     }
     if (name == "native_jobs") { finishTool(hostRequest("native.jobs.query", arguments)); return; }
     if (name == "native_job") { finishTool(hostRequest("native.job.query", arguments)); return; }
+    if (name == "native_job_recovery") { finishTool(hostRequest("native.job.recovery.query", arguments)); return; }
     if (name == "native_result_query")
     {
         QJsonObject parameters = arguments;
@@ -1228,7 +1244,7 @@ void AgentTaskRunner::nextTool()
                 parameters.insert("expectedDocumentRevision", arguments.value("documentRevision"));
             }
         }
-        else
+        else if (command != "analysis.recover")
         {
             parameters.insert("target", QJsonObject{{"documentId", arguments.value("documentId")},
                 {"sessionEpoch", sessionEpoch}});
@@ -1254,6 +1270,7 @@ void AgentTaskRunner::nextTool()
     if (name == "workflow_status") { submitWorkflow("project.query"); return; }
     if (name == "workflow_capabilities") { submitWorkflow("capabilities.query"); return; }
     if (name == "workflow_jobs") { submitWorkflow("jobs.query"); return; }
+    if (name == "workflow_recovery") { submitWorkflow("job.recovery.query", arguments); return; }
     if (name == "workflow_result") { submitWorkflow("results.query", arguments); return; }
     if (name == "workflow_wait")
     {
@@ -1339,8 +1356,9 @@ void AgentTaskRunner::workflowReply(const QString &id, const QString &operation,
             {QStringLiteral("result"), boundedText(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)), 8192)}});
         proposal = {}; pendingProposalId.clear();
         proposalOrigin.clear();
+        const quint64 completedGeneration = taskGeneration;
         finishTool(result);
-        emit actionCompleted(origin, result);
+        if (active && taskGeneration == completedGeneration) emit actionCompleted(origin, result);
         return;
     }
     if (operation == "extension.candidate.get")
@@ -1398,6 +1416,8 @@ void AgentTaskRunner::propose(const QString &origin, const QJsonObject &value,
     pendingProposalId = uuid();
     const QString proposalId = pendingProposalId;
     const quint64 proposalGeneration = taskGeneration;
+    if (!publishToolActivity("awaiting_authorization", {{"proposalId", proposalId}})) return;
+    if (proposal.isEmpty() || pendingProposalId != proposalId) return;
     emit proposalReady(origin, proposalId, value);
     if (!active || taskGeneration != proposalGeneration || proposal.isEmpty()
         || pendingProposalId != proposalId || !waitingRequest.isEmpty()) return;
@@ -1457,7 +1477,12 @@ void AgentTaskRunner::propose(const QString &origin, const QJsonObject &value,
 
 void AgentTaskRunner::authorizePending(const QString &proposalId, bool accepted)
 {
-    if (!active || proposal.isEmpty() || pendingProposalId.isEmpty() || proposalId != pendingProposalId || !waitingRequest.isEmpty()) return;
+    if (!active || authorizationInProgress || proposal.isEmpty() || pendingProposalId.isEmpty() || proposalId != pendingProposalId || !waitingRequest.isEmpty()) return;
+    authorizationInProgress = true;
+    const quint64 authorizationGeneration = taskGeneration;
+    const auto clearAuthorization = qScopeGuard([this, authorizationGeneration] {
+        if (taskGeneration == authorizationGeneration) authorizationInProgress = false;
+    });
     if (!accepted)
     {
         proposal = {}; pendingProposalId.clear();
@@ -1465,6 +1490,7 @@ void AgentTaskRunner::authorizePending(const QString &proposalId, bool accepted)
         failTool("DECLINED", tr("The user declined this proposal."));
         return;
     }
+    if (!publishToolActivity("executing", {{"proposalId", proposalId}})) return;
     if (proposalOrigin == "document")
     {
         const QString approvedCommand = proposal.value("command").toString();
@@ -1515,8 +1541,9 @@ void AgentTaskRunner::authorizePending(const QString &proposalId, bool accepted)
             }
         }
         proposalOrigin.clear();
+        const quint64 completedGeneration = taskGeneration;
         finishTool(response);
-        if (actionAccepted) emit actionCompleted("document", acceptedResult);
+        if (actionAccepted && active && taskGeneration == completedGeneration) emit actionCompleted("document", acceptedResult);
         return;
     }
     if (proposalOrigin == "workflow" || proposalOrigin == "extension")
@@ -1549,10 +1576,32 @@ void AgentTaskRunner::finishTool(const QJsonObject &result)
         return;
     }
     history = candidate;
+    const auto observed = result.value("result").isObject() ? result.value("result").toObject() : result;
+    QJsonObject facts;
+    for (const QString &key : {QStringLiteral("status"), QStringLiteral("code"), QStringLiteral("jobId")})
+        if (result.value(key).isString()) facts.insert(key, result.value(key).toString().left(128));
+        else if (observed.value(key).isString()) facts.insert(key, observed.value(key).toString().left(128));
+    const QString code = facts.value("code").toString();
+    const bool failure = facts.value("status") == QJsonValue("error") || facts.value("status") == QJsonValue("rejected");
+    if (!publishToolActivity(code == "DECLINED" ? "rejected" : failure ? "failed" : "completed",
+                             facts, observed.value("operationId").toString().left(128))) return;
     const quint64 generation = taskGeneration;
     QTimer::singleShot(0, this, [this, generation] {
         if (active && generation == taskGeneration) nextTool();
     });
+}
+
+bool AgentTaskRunner::publishToolActivity(const QString &phase, const QJsonObject &facts,
+                                         const QString &operationId)
+{
+    if (!active || currentCall.isEmpty()) return false;
+    const quint64 generation = taskGeneration;
+    const QString callId = currentCall.value("id").toString();
+    const QString taskId = activityTaskId;
+    const QString toolName = currentCall.value("name").toString();
+    emit toolActivity(taskId, callId, toolName, phase,
+                      operationId, facts);
+    return active && taskGeneration == generation && currentCall.value("id").toString() == callId;
 }
 
 void AgentTaskRunner::failTool(const QString &code, const QString &message)

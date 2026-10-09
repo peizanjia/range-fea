@@ -4,11 +4,13 @@
 #include <QObject>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QLockFile>
 #include <QHash>
 #include <QJsonObject>
 #include <QPointer>
 #include <QStringList>
 #include <functional>
+#include <memory>
 
 #include <rbl_job_manager.h>
 #include "solver_task.h"
@@ -39,8 +41,17 @@ class SolverManager : public RJobManager
         QStringList nativeJobOrder;
         //! Live native task pointers, guarded by QObject lifetime tracking.
         QHash<QString,QPointer<SolverTask>> nativeTasks;
+        //! Recovery lineage leases retained until each terminal record is durably committed.
+        QHash<QString,std::shared_ptr<QLockFile>> nativeRecoveryLogicalLocks;
         //! Immutable copied broker descriptors, kept out of paginated job status.
         QHash<QString,QJsonObject> nativeResultDescriptors;
+        //! Durable registry location and per-record compare-before-replace hashes.
+        QString nativeJobRegistryRoot;
+        QString nativeJobOwnerInstanceId;
+        std::unique_ptr<QLockFile> nativeJobOwnerLock;
+        QHash<QString,QString> nativeJobRecordPaths;
+        QHash<QString,QString> nativeJobRecordHashes;
+        QHash<QString,QJsonObject> nativeJobDiagnostics;
 
     public:
 
@@ -49,6 +60,9 @@ class SolverManager : public RJobManager
 
         //! Return static instance of the manager.
         static SolverManager & getInstance();
+
+        //! Advance a generated task ID until it is unused by this manager or persisted projects.
+        bool ensureUniqueNativeTaskId(SolverTaskID *taskId) const;
 
         //! Return task server name.
         const QString &getTaskServerName() const;
@@ -72,6 +86,19 @@ class SolverManager : public RJobManager
 
         //! Return a bounded page of native task records. Valid limits are 1 through 200.
         QJsonObject jobsQuery(int offset = 0, int limit = 100) const;
+
+        //! Read-only recovery qualification for a persisted native job.
+        //! eligibility is one of recoverable, recompute_required, reconcile_required, conflict.
+        QJsonObject nativeJobRecoveryQuery(const QString &jobId) const;
+
+        //! Queue a new detached recovery attempt after rechecking the selected accepted checkpoint.
+        //! A caller must bind a fresh GUI preview and approval to this call.
+        QString submitNativeRecovery(const QString &jobId, const QString &checkpointSha256,
+                                     uint remainingSteps, QString *error = nullptr);
+
+        //! Pause a queued checkpoint-enabled Newmark job at its next accepted-step boundary.
+        bool requestNativeAcceptedBoundaryPause(const QString &jobId, uint acceptedSequence,
+                                                QString *error = nullptr);
 
         //! Query only registered native artifacts or accepted live frame snapshots.
         //! Optional arguments.artifactId binds the request to the registry identity.
@@ -106,6 +133,9 @@ class SolverManager : public RJobManager
 
     signals:
 
+        //! Emitted after a durable native job record update commits.
+        void nativeJobUpdated(const QString &jobId, const QJsonObject &fields);
+
         //! Message on standard output is availabe.
         void readyReadStandardOutput(const QString &message);
 
@@ -131,18 +161,30 @@ class SolverManager : public RJobManager
         QJsonObject validateRunOnOwner(uint modelID) const;
         QString submitTaskOnOwner(SolverTask *solverTask, const QJsonObject &projectSnapshotRef,
                                   bool warningsAccepted, QString *error);
+        QString submitNativeRecoveryOnOwner(const QString &jobId, const QString &checkpointSha256,
+                                            uint remainingSteps, QString *error);
+        bool requestNativeAcceptedBoundaryPauseOnOwner(const QString &jobId, uint acceptedSequence,
+                                                       QString *error);
         QString validateProjectSnapshotRef(uint modelID, const QPair<QString,quint64> &sourceStamp,
                                            const QJsonObject &projectSnapshotRef, QString *error) const;
         QString resolveFrozenSnapshotPath(const QJsonObject &projectSnapshotRef, QString *error) const;
         bool loadVerifiedFrozenSnapshot(const QJsonObject &projectSnapshotRef, RModel *frozenModel,
                                         QString *frozenPath, QString *frozenSha256, QString *error) const;
-        void registerNativeTask(SolverTask *solverTask, const QString &jobId,
+        bool registerNativeTask(SolverTask *solverTask, const QString &jobId,
                                 const QJsonObject &projectSnapshotRef, const QString &projectLink,
                                 bool frozenSnapshotVerified, const QString &frozenSnapshotPath,
-                                const QString &frozenSnapshotSha256);
-        void updateNativeJob(const QString &jobId, const QJsonObject &fields);
+                                const QString &frozenSnapshotSha256, QString *error = nullptr);
+        bool updateNativeJob(const QString &jobId, const QJsonObject &fields);
         void appendNativeJobLog(const QString &jobId, const QString &stream, const QString &message);
         bool cancelJobOnOwner(const QString &jobId, QString *error);
+        void loadNativeJobsFromDiskOnOwner();
+        bool persistNativeJobRecord(const QString &jobId, QJsonObject *record,
+                                    bool createOnly, QString *error);
+        bool validateNativeJobRecordOnDisk(const QString &jobId, QString *error) const;
+        bool revalidateNativeTerminalArtifactsOnOwner(const QString &jobId, QString *error);
+        QJsonObject nativeJobRecoveryQueryOnOwner(const QString &jobId,
+                                                  bool logicalRecoveryLockHeldByCaller = false);
+        bool nativeJobIdExistsOnDiskOnOwner(const QString &jobId) const;
 
 };
 

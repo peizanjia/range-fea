@@ -45,8 +45,19 @@ RProjectCatalog::SourceBinding resolveNativeSource(const QString &path)
     return *binding;
 }
 
-bool copyFileAtomically(const QString &sourcePath, const QString &targetPath, QString &error)
+template <typename Function> void onSessionThread(Function function)
 {
+    auto *session = Application::instance()->getSession();
+    if (QThread::currentThread() == session->thread()) function();
+    else QMetaObject::invokeMethod(session, std::move(function), Qt::BlockingQueuedConnection);
+}
+}
+
+bool ModelIOPrivate::copyFileAtomically(const QString &sourcePath, const QString &targetPath,
+                                        const ModelIOPrivate::PublicationTargetValidator &validateBeforeCommit,
+                                        QString &error)
+{
+    error.clear();
     QFile source(sourcePath);
     if (!source.open(QIODevice::ReadOnly))
     {
@@ -87,20 +98,23 @@ bool copyFileAtomically(const QString &sourcePath, const QString &targetPath, QS
         error = QStringLiteral("Staged native file '%1' could not be read completely.").arg(sourcePath);
         return false;
     }
+    QString validationError;
+    if (!validateBeforeCommit || !validateBeforeCommit(validationError))
+    {
+        target.cancelWriting();
+        error = validationError.isEmpty()
+                    ? QStringLiteral("The native publication target could not be revalidated.")
+                    : validationError;
+        return false;
+    }
+    // This check immediately precedes the atomic rename. Without OS-level
+    // exclusion, a non-cooperating writer can still race between this check and commit.
     if (!target.commit())
     {
         error = QStringLiteral("Could not commit native publication target '%1'.").arg(targetPath);
         return false;
     }
     return true;
-}
-
-template <typename Function> void onSessionThread(Function function)
-{
-    auto *session = Application::instance()->getSession();
-    if (QThread::currentThread() == session->thread()) function();
-    else QMetaObject::invokeMethod(session, std::move(function), Qt::BlockingQueuedConnection);
-}
 }
 
 ModelIO::ModelIO(ModelIOType type, const QString &fileName, Model *pModel)
@@ -496,15 +510,35 @@ int ModelIO::perform()
                 artifact.path = mapStagedPath(artifact.path);
             const QString publicLogicalPath = mapStagedPath(stagedLogicalPath);
 
+            bool intentBound = false;
+            onSessionThread([this, &expectedWrittenBinding, &publicationLease, &publicationError, &intentBound] {
+                intentBound = Application::instance()->getSession()->bindModelSaveArtifacts(
+                    this->modelStamp.first, expectedWrittenBinding, publicationLease, &publicationError);
+            });
+            if (!intentBound)
+                throw RError(RError::Type::WriteFile, R_ERROR_REF,
+                             "Native save intent could not bind its staged bytes before publication: %s",
+                             publicationError.toUtf8().constData());
+
             qsizetype publishedFiles = 0;
             for (qsizetype i = 0; i < stagedWritePaths.size(); ++i)
             {
                 QString copyError;
-                if (!copyFileAtomically(stagedWritePaths.at(i), actualWritePaths.at(i), copyError))
+                const QString publicTargetPath = actualWritePaths.at(i);
+                const auto validateTarget = [this, &publicationLease, &publicTargetPath](QString &error) {
+                    bool valid = false;
+                    onSessionThread([this, &publicationLease, &publicTargetPath, &error, &valid] {
+                        valid = Application::instance()->getSession()->validateModelSaveArtifactTarget(
+                            this->modelStamp.first, publicTargetPath, publicationLease, &error);
+                    });
+                    return valid;
+                };
+                if (!ModelIOPrivate::copyFileAtomically(stagedWritePaths.at(i), publicTargetPath,
+                                                        validateTarget, copyError))
                     throw RError(RError::Type::WriteFile, R_ERROR_REF,
                                  "Native save publication stopped after %u of %u files at '%s': %s. Earlier files may already be published.",
                                  uint(publishedFiles), uint(stagedWritePaths.size()),
-                                 actualWritePaths.at(i).toUtf8().constData(), copyError.toUtf8().constData());
+                                 publicTargetPath.toUtf8().constData(), copyError.toUtf8().constData());
                 ++publishedFiles;
             }
             const RProjectCatalog::SourceBinding publishedBinding = resolveNativeSource(publicLogicalPath);

@@ -21,9 +21,12 @@ MAX_READ_BYTES_PER_QUERY = 1024 * 1024
 MAX_EVENT_BYTES = 256 * 1024
 MAX_EVENTS = 65_536
 MAX_SAMPLES = 5_000
+MAX_ATTEMPTS = 64
 MAX_CHANNELS = 4_096
 MAX_CACHED_SAMPLE_BYTES = 16 * 1024 * 1024
 MAX_CACHED_JOURNALS = 8
+# A logical recovery history can contain 64 attempts for each of two modes.
+MAX_CACHED_RECOVERY_JOURNALS = MAX_ATTEMPTS * 2
 MAX_DIRECTORY_ENTRIES = 1_024
 MAX_TRAJECTORY_DIRECTORY_ENTRIES = 8_192  # Up to 5,000 actual numbered MODEL frames plus bounded journals/metadata.
 MAX_EXACT_INTEGER = (1 << 53) - 1
@@ -46,6 +49,7 @@ class _Journal:
     event_ids: set[str] = field(default_factory=set)
     samples: list[dict] = field(default_factory=list)
     sample_bytes: int = 0
+    cache_group: tuple[str, str] | None = None
     finished: bool = False
     failure: tuple[str, str] | None = None
 
@@ -56,7 +60,8 @@ class TelemetryReader:
     def __init__(self, workspace: Path):
         self.workspace = Path(workspace).resolve()
         self._lock = threading.RLock()
-        self._journals: OrderedDict[tuple[str, str], _Journal] = OrderedDict()
+        self._journals: OrderedDict[tuple[str, ...], _Journal] = OrderedDict()
+        self._recovery_signatures: OrderedDict[tuple[str, str], tuple] = OrderedDict()
         self._cached_sample_bytes = 0
 
     def query(self, job_id: str, job: dict, mode: str, after_seq: int, limit: int,
@@ -66,7 +71,7 @@ class TelemetryReader:
                 "source": SOURCE, "samples": [], "nextSeq": after_seq,
                 "hasMore": False, "availability": "waiting"}
 
-        if job.get("command") not in ("workflow.run", "workflow.resume"):
+        if job.get("command") not in ("workflow.run", "workflow.resume", "workflow.recover"):
             base.update(availability="unavailable",
                         message="This job does not produce native control telemetry.")
             return base
@@ -78,6 +83,9 @@ class TelemetryReader:
             base.update(availability="unavailable",
                         message="The requested trajectory mode was not part of this workflow.")
             return base
+
+        if job.get("command") == "workflow.recover":
+            return self._query_recovered(job_id, job, mode, after_seq, limit, scheduled_mode, base)
 
         directory, present = self._job_directory(job_id)
         if not present:
@@ -94,9 +102,10 @@ class TelemetryReader:
             key = (job_id, mode)
             journal = self._journals.get(key)
             if journal is None:
-                self._evict_for_new_journal()
+                self._evict_for_new_journal(key)
                 info = journal_path.stat()
                 journal = _Journal(journal_path, run_id, info.st_dev, info.st_ino)
+                journal.cache_group = (job_id, mode)
                 self._journals[key] = journal
             elif journal.path != journal_path or journal.run_id != run_id:
                 raise WorkflowError("TELEMETRY_CHANGED", "The solver journal changed during this job")
@@ -135,6 +144,276 @@ class TelemetryReader:
                 base["message"] = "Waiting for the first accepted control step."
         return base
 
+    def _query_recovered(self, job_id: str, job: dict, mode: str, after_seq: int, limit: int,
+                         scheduled_mode: str, base: dict) -> dict:
+        if mode == "passive":
+            base.update(availability="unavailable",
+                        message="Passive solves do not emit accepted control telemetry.")
+            return base
+
+        root, present = self._job_directory(job_id)
+        if not present:
+            self._set_missing_availability(base, job.get("state", "unknown"))
+            return base
+
+        attempts = self._recovery_attempts(job_id, root, job)
+        if attempts is None:
+            base.update(availability="waiting",
+                        message="The current recovery attempt has not published its accepted preparation yet.")
+            return base
+
+        mode_data: list[dict] = []
+        expected_dt = None
+        target_steps = None
+        for index, attempt in enumerate(attempts):
+            result = attempt.get("partialResult")
+            if not isinstance(result, dict):
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt has no persisted workflow facts")
+            attempt_mode = result.get("mode")
+            dt = _positive_number(result.get("dtSeconds"), "recovery dt")
+            steps = result.get("totalSteps")
+            if (attempt_mode != scheduled_mode or type(steps) is not int or
+                    not 1 <= steps <= MAX_SAMPLES):
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt workflow facts are inconsistent")
+            configuration = result.get("configuration")
+            configured_dt = configuration.get("dt") if isinstance(configuration, dict) else None
+            configured_dt = _positive_number(configured_dt, "configured recovery dt")
+            if not _aligned(configured_dt, dt, max(configured_dt, dt)):
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt timestep differs from its configuration")
+            if expected_dt is None:
+                expected_dt, target_steps = dt, steps
+            elif (not _aligned(dt, expected_dt, max(dt, expected_dt)) or steps != target_steps):
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt timestep or target changed")
+
+            lower = 0
+            if index:
+                selection = attempt.get("inheritedSelection")
+                selected = self._selected_variant(selection, mode, attempts[index - 1]["attemptId"], target_steps)
+                lower = selected
+            upper = target_steps
+            if index + 1 < len(attempts):
+                selection = attempts[index + 1].get("inheritedSelection")
+                upper = self._selected_variant(selection, mode, attempt["attemptId"], target_steps)
+            if upper < lower or upper > target_steps:
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt selection range is inconsistent")
+            mode_data.append({**attempt, "dt": dt, "lower": lower, "upper": upper})
+
+        with self._lock:
+            self._check_recovery_signature(job_id, mode, mode_data)
+            read_remaining = MAX_READ_BYTES_PER_QUERY
+            found_journal = False
+            pending_read = False
+            projected: dict[int, dict] = {}
+            for attempt in mode_data:
+                directory = attempt["path"]
+                journal_path, run_id = self._find_journal(directory, mode)
+                key = (job_id, mode, attempt["attemptId"])
+                if journal_path is None:
+                    if key in self._journals:
+                        raise WorkflowError("TELEMETRY_CHANGED", "A recovery attempt journal disappeared")
+                    if attempt is not mode_data[-1] and attempt["upper"] > attempt["lower"]:
+                        raise WorkflowError("TELEMETRY_PATH", "Selected recovery history has no event journal")
+                    continue
+                found_journal = True
+                journal = self._journal(key, (job_id, mode), journal_path, run_id)
+
+                if journal.failure:
+                    raise WorkflowError(*journal.failure)
+                try:
+                    used = self._read_available(journal, read_remaining)
+                except WorkflowError as error:
+                    if error.code in {"TELEMETRY_CORRUPT", "TELEMETRY_LIMIT", "TELEMETRY_CHANGED"}:
+                        journal.failure = (error.code, error.message)
+                    raise
+                read_remaining -= used
+                try:
+                    size = journal.path.stat().st_size
+                except OSError:
+                    raise WorkflowError("TELEMETRY_PATH", "A recovery event journal is unavailable") from None
+                pending_read = pending_read or journal.offset < size
+                base["runId"] = run_id
+
+                for sample in journal.samples:
+                    accepted_seq = _accepted_sequence(sample, attempt["dt"], target_steps)
+                    if accepted_seq <= attempt["lower"] or accepted_seq > attempt["upper"]:
+                        continue
+                    if accepted_seq in projected:
+                        raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempts contain duplicate accepted steps")
+                    projected[accepted_seq] = {
+                        **sample,
+                        "seq": accepted_seq,
+                        "originAttemptId": attempt["attemptId"],
+                        "runId": run_id,
+                        "nativeEventSeq": sample["seq"],
+                        "replay": attempt["attemptId"] != job.get("attemptId"),
+                    }
+
+            if len(projected) > MAX_SAMPLES:
+                raise WorkflowError("TELEMETRY_LIMIT", "Recovered accepted telemetry exceeds the sample limit")
+            ordered = [projected[key] for key in sorted(projected)]
+            selected = [sample for sample in ordered if sample["seq"] > after_seq]
+            page = selected[:limit]
+            base["samples"] = [dict(sample) for sample in page]
+            if page:
+                base["nextSeq"] = page[-1]["seq"]
+                base["runId"] = page[-1]["runId"]
+            base["hasMore"] = len(selected) > limit or pending_read
+
+            if ordered:
+                base["availability"] = "available"
+            elif found_journal:
+                journal_state = next((self._journals[(job_id, mode, item["attemptId"])]
+                                      for item in reversed(mode_data)
+                                      if (job_id, mode, item["attemptId"]) in self._journals), None)
+                if journal_state and (journal_state.finished or job.get("state") in {
+                        "succeeded", "failed", "cancelled", "interrupted"}):
+                    base.update(availability="unavailable",
+                                message="The solver run ended without accepted control samples.")
+                else:
+                    base.update(availability="waiting", message="Waiting for accepted control steps.")
+            else:
+                self._set_missing_availability(base, job.get("state", "unknown"))
+        return base
+
+    def _check_recovery_signature(self, job_id: str, mode: str, attempts: list[dict]):
+        signature = []
+        for attempt in attempts:
+            selection = attempt.get("inheritedSelection")
+            variant = selection.get("variants", {}).get(mode, {}) if isinstance(selection, dict) else {}
+            signature.append((
+                attempt["attemptId"],
+                os.path.normcase(os.path.abspath(attempt["path"])),
+                selection.get("attemptId") if isinstance(selection, dict) else None,
+                selection.get("sourceAttemptId") if isinstance(selection, dict) else None,
+                selection.get("qualificationSha256") if isinstance(selection, dict) else None,
+                variant.get("sourceAttemptId") if isinstance(variant, dict) else None,
+                variant.get("phase") if isinstance(variant, dict) else None,
+                variant.get("acceptedSeq") if isinstance(variant, dict) else None,
+                variant.get("checkpointSha256") if isinstance(variant, dict) else None,
+                variant.get("envelopeSha256") if isinstance(variant, dict) else None,
+            ))
+        key = (job_id, mode)
+        signature_tuple = tuple(signature)
+        previous = self._recovery_signatures.get(key)
+        if previous is not None and (len(signature_tuple) < len(previous) or
+                                     signature_tuple[:len(previous)] != previous):
+            raise WorkflowError("TELEMETRY_CHANGED", "Recovery attempt selection changed during this job")
+        self._recovery_signatures[key] = signature_tuple
+        self._recovery_signatures.move_to_end(key)
+        while len(self._recovery_signatures) > MAX_CACHED_RECOVERY_JOURNALS:
+            self._recovery_signatures.popitem(last=False)
+
+    def _recovery_attempts(self, job_id: str, root: Path, job: dict) -> list[dict] | None:
+        recovery = job.get("recovery")
+        attempts = recovery.get("attempts") if isinstance(recovery, dict) else None
+        current_id = job.get("attemptId")
+        if (not isinstance(recovery, dict) or recovery.get("schema") != "range.workflow-recovery/v1" or
+                not isinstance(attempts, list)):
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt ledger is malformed")
+        if len(attempts) > MAX_ATTEMPTS:
+            raise WorkflowError("TELEMETRY_LIMIT", "Recovery history exceeds the attempt limit")
+        if not attempts or not isinstance(current_id, str):
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt identity is unavailable")
+        latest = attempts[-1]
+        if not isinstance(latest, dict):
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt ledger is malformed")
+        if latest.get("attemptId") != current_id:
+            if job.get("state") in {"queued", "running"}:
+                return None
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Current recovery attempt is absent from its ledger")
+
+        seen: set[str] = set()
+        result = []
+        for index, entry in enumerate(attempts):
+            if not isinstance(entry, dict):
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt ledger is malformed")
+            attempt_id = _uuid(entry.get("attemptId"))
+            if attempt_id is None or attempt_id in seen:
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt identity is invalid")
+            if index == 0 and attempt_id != job_id:
+                raise WorkflowError("TELEMETRY_AMBIGUOUS", "Original recovery attempt identity is invalid")
+            seen.add(attempt_id)
+            if index:
+                selection = entry.get("inheritedSelection")
+                if not isinstance(selection, dict):
+                    raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt selection is unavailable")
+
+            path, present = self._attempt_directory(root, job_id, entry)
+            if not present and index + 1 < len(attempts):
+                raise WorkflowError("TELEMETRY_PATH", "A historical recovery attempt directory is unavailable")
+            result.append({**entry, "attemptId": attempt_id, "path": path})
+        return result
+
+    @staticmethod
+    def _selected_variant(selection: object, mode: str, expected_attempt_id: str,
+                          target_steps: int) -> int:
+        if not isinstance(selection, dict) or not isinstance(selection.get("variants"), dict):
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery checkpoint selection is unavailable")
+        variant = selection["variants"].get(mode)
+        if not isinstance(variant, dict):
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery checkpoint selection lacks this trajectory")
+        source_id = (variant.get("sourceAttemptId") or selection.get("attemptId") or
+                     selection.get("sourceAttemptId"))
+        if source_id != expected_attempt_id:
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery attempt lineage is discontinuous")
+        phase = variant.get("phase")
+        accepted_seq = variant.get("acceptedSeq")
+        selected_target = selection.get("targetSteps")
+        if (phase not in {"prepared", "checkpointed", "completed"} or
+                type(accepted_seq) is not int or not 0 <= accepted_seq <= min(target_steps, MAX_SAMPLES) or
+                type(selected_target) is not int or selected_target != target_steps or
+                (phase == "prepared" and accepted_seq != 0) or
+                (phase == "checkpointed" and accepted_seq == 0) or
+                (phase == "completed" and accepted_seq != target_steps)):
+            raise WorkflowError("TELEMETRY_AMBIGUOUS", "Recovery checkpoint sequence is invalid")
+        return accepted_seq
+
+    def _attempt_directory(self, root: Path, job_id: str, attempt: dict) -> tuple[Path, bool]:
+        attempt_id = attempt["attemptId"]
+        expected = root if attempt_id == job_id else root / "attempts" / attempt_id
+        stored = attempt.get("directory")
+        try:
+            if (not isinstance(stored, str) or
+                    os.path.normcase(os.path.abspath(stored)) != os.path.normcase(os.path.abspath(expected))):
+                raise ValueError
+            paths = [self.workspace / "jobs", root]
+            if expected != root:
+                paths.extend((root / "attempts", expected))
+            for path in paths:
+                try:
+                    info = path.lstat()
+                except FileNotFoundError:
+                    continue
+                if (_is_reparse(info) or not stat.S_ISDIR(info.st_mode) or
+                        not path.resolve(strict=True).is_relative_to(self.workspace)):
+                    raise ValueError
+            if not expected.resolve(strict=False).is_relative_to(root.resolve(strict=True)):
+                raise ValueError
+            if not expected.exists():
+                return expected, False
+            if not expected.resolve(strict=True).is_relative_to(root.resolve(strict=True)):
+                raise ValueError
+            return expected, True
+        except (OSError, RuntimeError, ValueError):
+            raise WorkflowError("TELEMETRY_PATH", "Recovery attempt directory escapes its managed job") from None
+
+    def _journal(self, key: tuple[str, ...], group: tuple[str, str], path: Path,
+                 run_id: str) -> _Journal:
+        journal = self._journals.get(key)
+        if journal is None:
+            self._evict_for_new_journal(key)
+            try:
+                info = path.stat()
+            except OSError:
+                raise WorkflowError("TELEMETRY_PATH", "Solver event journal is unavailable") from None
+            journal = _Journal(path, run_id, info.st_dev, info.st_ino, cache_group=group)
+            self._journals[key] = journal
+        elif journal.path != path or journal.run_id != run_id:
+            raise WorkflowError("TELEMETRY_CHANGED", "The solver journal changed during this job")
+        else:
+            self._journals.move_to_end(key)
+        return journal
+
     @staticmethod
     def _set_missing_availability(result: dict, state: str):
         if state in {"succeeded", "failed", "cancelled", "interrupted"}:
@@ -159,17 +438,18 @@ class TelemetryReader:
                 return directory, False
             except OSError:
                 raise WorkflowError("TELEMETRY_PATH", "Job directory is unavailable") from None
-            if path.is_symlink() or not path.resolve().is_relative_to(self.workspace):
+            if _is_reparse(info) or not path.resolve().is_relative_to(self.workspace):
                 raise WorkflowError("TELEMETRY_PATH", "Job directory escapes the workflow workspace")
-            if path == jobs and not path.is_dir():
-                raise WorkflowError("TELEMETRY_PATH", "Job directory is unavailable")
-            if path == directory and not path.is_dir():
+            if not stat.S_ISDIR(info.st_mode):
                 raise WorkflowError("TELEMETRY_PATH", "Job directory is unavailable")
         return directory, True
 
     def _find_journal(self, directory: Path, mode: str) -> tuple[Path | None, str | None]:
         candidates: list[tuple[Path, str]] = []
         try:
+            resolved_directory = directory.resolve(strict=True)
+            if not resolved_directory.is_relative_to(self.workspace):
+                raise WorkflowError("TELEMETRY_PATH", "Trajectory directory escapes the workflow workspace")
             locations = [directory]
             variant_directory = directory / mode
             try:
@@ -177,10 +457,9 @@ class TelemetryReader:
             except FileNotFoundError:
                 info = None
             if info is not None:
-                if (variant_directory.is_symlink() or
-                        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT or
+                if (_is_reparse(info) or
                         not stat.S_ISDIR(info.st_mode) or
-                        not variant_directory.resolve(strict=True).is_relative_to(directory.resolve())):
+                        not variant_directory.resolve(strict=True).is_relative_to(resolved_directory)):
                     raise WorkflowError("TELEMETRY_PATH", "Trajectory directory must be a regular managed directory")
                 locations.append(variant_directory)
             for location in locations:
@@ -191,51 +470,68 @@ class TelemetryReader:
                             raise WorkflowError("TELEMETRY_LIMIT", "Job directory contains too many entries")
                         match = _JOURNAL_NAME.fullmatch(entry.name)
                         if match and match.group(1) == mode:
+                            entry_info = entry.stat(follow_symlinks=False)
+                            if _is_reparse(entry_info) or not stat.S_ISREG(entry_info.st_mode):
+                                raise WorkflowError("TELEMETRY_PATH", "Solver journal must be a regular managed file")
                             candidates.append((Path(entry.path), match.group(2)))
                             if len(candidates) > 1:
                                 raise WorkflowError("TELEMETRY_AMBIGUOUS", "Multiple native event journals match this trajectory")
         except WorkflowError:
             raise
-        except OSError:
+        except (OSError, RuntimeError):
             raise WorkflowError("TELEMETRY_PATH", "Job directory is unavailable") from None
         if not candidates:
             return None, None
         path, run_id = candidates[0]
-        if path.is_symlink():
-            raise WorkflowError("TELEMETRY_PATH", "Symbolic links are not accepted as solver journals")
         try:
-            resolved = path.resolve(strict=True)
+            file_info = path.lstat()
         except OSError:
             raise WorkflowError("TELEMETRY_PATH", "Solver journal is unavailable") from None
-        if not resolved.is_relative_to(directory.resolve()) or not path.is_file():
+        if _is_reparse(file_info) or not stat.S_ISREG(file_info.st_mode):
+            raise WorkflowError("TELEMETRY_PATH", "Solver journal must be a regular managed file")
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise WorkflowError("TELEMETRY_PATH", "Solver journal is unavailable") from None
+        if not resolved.is_relative_to(resolved_directory):
             raise WorkflowError("TELEMETRY_PATH", "Solver journal escapes the job directory")
         return path, run_id
 
-    def _evict_for_new_journal(self):
-        while len(self._journals) >= MAX_CACHED_JOURNALS:
-            _, oldest = self._journals.popitem(last=False)
+    def _evict_for_new_journal(self, new_key: tuple[str, ...]):
+        is_recovery = len(new_key) == 3
+        limit = MAX_CACHED_RECOVERY_JOURNALS if is_recovery else MAX_CACHED_JOURNALS
+        matching = lambda key: (len(key) == 3) == is_recovery
+        while sum(1 for key in self._journals if matching(key)) >= limit:
+            oldest_key = next(key for key in self._journals if matching(key))
+            oldest = self._journals.pop(oldest_key)
             self._cached_sample_bytes -= oldest.sample_bytes
 
-    def _read_available(self, journal: _Journal):
+    def _read_available(self, journal: _Journal, max_bytes: int | None = None) -> int:
         try:
             current = journal.path.stat()
         except OSError:
             raise WorkflowError("TELEMETRY_PATH", "The solver event journal is unavailable") from None
-        if journal.path.is_symlink() or (current.st_dev, current.st_ino) != (journal.device, journal.inode):
+        try:
+            link_info = journal.path.lstat()
+        except OSError:
+            raise WorkflowError("TELEMETRY_PATH", "The solver event journal is unavailable") from None
+        if (_is_reparse(link_info) or not stat.S_ISREG(link_info.st_mode) or
+                (current.st_dev, current.st_ino) != (journal.device, journal.inode)):
             raise WorkflowError("TELEMETRY_CHANGED", "The solver journal changed during this job")
         if current.st_size < journal.offset:
             raise WorkflowError("TELEMETRY_CHANGED", "The solver journal was truncated during this job")
         if current.st_size > MAX_JOURNAL_BYTES:
             raise WorkflowError("TELEMETRY_LIMIT", "Solver event journal exceeds the size limit")
-        amount = min(current.st_size - journal.offset, MAX_READ_BYTES_PER_QUERY)
+        budget = MAX_READ_BYTES_PER_QUERY if max_bytes is None else max_bytes
+        amount = min(current.st_size - journal.offset, MAX_READ_BYTES_PER_QUERY, budget)
         if amount <= 0:
             if len(journal.pending) > MAX_EVENT_BYTES:
                 raise WorkflowError("TELEMETRY_LIMIT", "Solver event line exceeds the size limit")
-            return
+            return 0
         try:
             with journal.path.open("rb") as stream:
                 opened = os.fstat(stream.fileno())
-                if (journal.path.is_symlink() or
+                if (_is_reparse(journal.path.lstat()) or not stat.S_ISREG(opened.st_mode) or
                         (opened.st_dev, opened.st_ino) != (journal.device, journal.inode) or
                         not journal.path.resolve().is_relative_to(self.workspace)):
                     raise WorkflowError("TELEMETRY_CHANGED", "The solver journal changed while it was opened")
@@ -243,7 +539,7 @@ class TelemetryReader:
                 chunk = stream.read(amount)
         except WorkflowError:
             raise
-        except OSError:
+        except (OSError, RuntimeError):
             raise WorkflowError("TELEMETRY_PATH", "The solver event journal cannot be read") from None
         if len(chunk) != amount:
             raise WorkflowError("TELEMETRY_CHANGED", "The solver journal changed while it was read")
@@ -264,6 +560,7 @@ class TelemetryReader:
         journal.pending = data[start:]
         if len(journal.pending) > MAX_EVENT_BYTES:
             raise WorkflowError("TELEMETRY_LIMIT", "Solver event line exceeds the size limit")
+        return len(chunk)
 
     def _consume_event(self, journal: _Journal, line: bytes):
         if not line:
@@ -314,7 +611,8 @@ class TelemetryReader:
             # Switching between completed experiments must not exhaust the
             # shared cache merely because older traces remain cached.
             while self._cached_sample_bytes + sample_bytes > MAX_CACHED_SAMPLE_BYTES:
-                old_key = next((key for key, cached in self._journals.items() if cached is not journal), None)
+                old_key = next((key for key, cached in self._journals.items()
+                                if cached is not journal and cached.cache_group != journal.cache_group), None)
                 if old_key is None:
                     break
                 oldest = self._journals.pop(old_key)
@@ -444,3 +742,39 @@ def _control_sample(sequence: int, payload: dict) -> dict:
             "workJ": _number(actuator.get("cumulativeWorkJ"), "cumulativeWorkJ")})
     return {"seq": sequence, "timeS": accepted_time, "nextTimeS": next_time,
             "sensors": projected_sensors, "actuators": projected_actuators}
+
+
+def _is_reparse(info) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & reparse_flag)
+
+
+def _positive_number(value, label: str) -> float:
+    if type(value) not in (int, float):
+        raise WorkflowError("TELEMETRY_AMBIGUOUS", f"{label} is unavailable")
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        raise WorkflowError("TELEMETRY_AMBIGUOUS", f"{label} is unavailable") from None
+    if not math.isfinite(number) or number <= 0 or number > 1e100:
+        raise WorkflowError("TELEMETRY_AMBIGUOUS", f"{label} is invalid")
+    return number
+
+
+def _aligned(actual: float, expected: float, scale: float) -> bool:
+    tolerance = max(1e-12, abs(scale) * 1e-7, abs(expected) * 1e-12)
+    return math.isfinite(actual) and abs(actual - expected) <= tolerance
+
+
+def _accepted_sequence(sample: dict, dt: float, target_steps: int) -> int:
+    accepted_time = sample["timeS"]
+    next_time = sample["nextTimeS"]
+    sequence_value = next_time / dt
+    if not math.isfinite(sequence_value):
+        raise WorkflowError("TELEMETRY_CORRUPT", "Accepted control time cannot be aligned to the configured timestep")
+    accepted_seq = int(round(sequence_value))
+    if (not 1 <= accepted_seq <= min(target_steps, MAX_SAMPLES) or
+            not _aligned(next_time, accepted_seq * dt, dt) or
+            not _aligned(accepted_time, (accepted_seq - 1) * dt, dt)):
+        raise WorkflowError("TELEMETRY_CORRUPT", "Accepted control time cannot be aligned to the configured timestep")
+    return accepted_seq

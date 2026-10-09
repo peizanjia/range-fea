@@ -9,12 +9,16 @@
 #include <QMutexLocker>
 #include <QThread>
 #include <QScopeGuard>
+#include <QCryptographicHash>
+#include <QFile>
+#include <algorithm>
 #include <limits>
 
 #include <rbl_job_manager.h>
 
 #include <rml_file_io.h>
 #include <rproject_catalog.h>
+#include <rmodel_command_session.h>
 
 #include "session.h"
 #include "application.h"
@@ -55,6 +59,15 @@ QJsonArray sourceArtifactsJson(const QVector<RProjectCatalog::SourceArtifact> &a
     QJsonArray result;
     for (const auto &artifact : artifacts) result.append(artifact.toJson());
     return result;
+}
+
+QString publicationFileHash(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) return {};
+    return QString::fromLatin1(hash.result().toHex());
 }
 }
 
@@ -106,7 +119,12 @@ Session::Session(QObject *parent)
     R_LOG_TRACE_OUT;
 }
 
-Session::~Session() = default;
+Session::~Session()
+{
+    QString error;
+    if (this->commandHost && !this->commandHost->closeDurableSessions(&error))
+        RLogger::error("Persistent close bookkeeping remains pending: %s\n", qPrintable(error));
+}
 
 ModelCommandHost *Session::getModelCommandHost() const { return this->commandHost; }
 
@@ -292,6 +310,15 @@ bool Session::recordModelSaved(uint modelID, const QString &path,
 
     QString projectError;
     QString errorCode;
+    if (!binding->publicationOperationId.isEmpty())
+    {
+        if (!this->projectCatalog->reconcileSavePublication(binding->publicationOperationId, lease,
+                                                              &projectError, &errorCode))
+        {
+            if (error) *error = projectError;
+            return false;
+        }
+    }
     const bool projectSaved = this->projectCatalog->recordSave(binding->persistentDocumentId,
                                                                 expectedWrittenBinding, lease,
                                                                 binding->publicationSourceRevision,
@@ -356,16 +383,31 @@ bool Session::recordModelSaved(uint modelID, const QString &path,
     binding->persistenceMessage.clear();
     binding->lastCatalogErrorCode.clear();
 
+    if (!binding->publicationOperationId.isEmpty())
+    {
+        RProjectCatalog::OperationAssociation association;
+        association.acceptedRevision = binding->acceptedSourceRevision;
+        association.acceptedModelSha256 = binding->acceptedModelSha256;
+        if (!this->projectCatalog->advanceOperation(binding->publicationOperationId,
+                RProjectCatalog::OperationPhase::Observed, association, lease, &projectError, &errorCode))
+        {
+            binding->persistenceMessage = projectError;
+            if (error) *error = projectError;
+            return false;
+        }
+    }
+
     binding->publishing = false;
     binding->publicationLease.reset();
     binding->publicationSourceRevision.clear();
     binding->publicationLogicalPath.clear();
     binding->publicationPaths.clear();
+    binding->publicationOperationId.clear();
 
     QString hostError;
     const bool hostSaved = this->commandHost->recordArtifactPublished(modelID,
                                                                       expectedWrittenBinding.logicalSourcePath,
-                                                                      &hostError);
+                                                                      &hostError, lease);
     if (!hostSaved && error) *error = hostError;
     else if (binding->persistenceUnavailable && error) *error = binding->persistenceMessage;
     abortOnFailure.dismiss();
@@ -389,11 +431,23 @@ void Session::abortModelSave(const QString &runtimeDocumentId,
     if (lease && binding->publicationLease && binding->publicationLease != lease) return;
     if (!binding->publishing && !binding->publicationLease) return;
 
+    if (this->projectCatalog && !binding->publicationOperationId.isEmpty())
+    {
+        QString reconciliationError;
+        const auto heldLease = binding->publicationLease;
+        const bool reconciled = this->projectCatalog->reconcileSavePublication(
+            binding->publicationOperationId, heldLease, &reconciliationError);
+        auto operation = this->projectCatalog->queryOperation(binding->publicationOperationId, heldLease);
+        if (!reconciled && !reconciliationError.isEmpty())
+            binding->persistenceMessage = reconciliationError;
+    }
+
     binding->publishing = false;
     binding->publicationLease.reset();
     binding->publicationSourceRevision.clear();
     binding->publicationLogicalPath.clear();
     binding->publicationPaths.clear();
+    binding->publicationOperationId.clear();
     if (!reason.isEmpty() && !binding->sourceConflict && !binding->catalogRevisionConflict)
         binding->persistenceMessage = reason;
 
@@ -435,6 +489,36 @@ bool Session::openProject(const QString &workspace, QString *error)
         this->projectOpenError = localError;
         if (error) *error = localError;
         return false;
+    }
+    if (!catalog->markUnfinishedOperationsUnknown({}, &localError))
+    {
+        this->projectOpenError = localError;
+        if (error) *error = localError;
+        return false;
+    }
+    const auto retries = catalog->pendingCloseRetries({}, &localError);
+    if (!localError.isEmpty())
+    {
+        if (error) *error = localError;
+        return false;
+    }
+    for (const auto &retry : retries)
+    {
+        QString replayError;
+        if (RModelCommandSession::replayCloseRetry(retry.payload, &replayError))
+        {
+            RProjectCatalog::OperationAssociation observation;
+            observation.observation = {{"status", "ok"}, {"code", "OK"},
+                {"result", QJsonObject{{"operationId", retry.operationId}, {"command", "model.session.close"},
+                    {"editingSessionId", retry.payload.value("record").toObject().value("sessionId")},
+                    {"recordId", retry.payload.value("record").toObject().value("recordId")}, {"persistence", "durable"}}}};
+            if (catalog->advanceOperation(retry.operationId, RProjectCatalog::OperationPhase::Observed,
+                                          observation, {}, &replayError))
+                catalog->completeCloseRetry(retry.retryId, {}, &replayError);
+        }
+        if (!replayError.isEmpty())
+            RLogger::error("Persistent close retry %s requires reconciliation: %s\n",
+                           qPrintable(retry.retryId), qPrintable(replayError));
     }
     {
         QMutexLocker guard(&this->pendingProjectUpdatesMutex);
@@ -1056,6 +1140,13 @@ QJsonObject Session::documentProjectContext(uint modelID) const
                                                                                 : binding->persistenceMessage},
                             {QStringLiteral("catalogRevisionConflict"), binding->catalogRevisionConflict},
                             {QStringLiteral("metadataSynchronized"), metadataSynchronized}};
+    const bool acceptedSnapshotProtected = document && metadataSynchronized
+        && !anyDraftPending && !binding->sourceConflict && !binding->catalogRevisionConflict
+        && !document->snapshotRelativePath.isEmpty()
+        && document->snapshotSourceRevision == binding->acceptedSourceRevision;
+    persistence.insert(QStringLiteral("recoveryProtection"), acceptedSnapshotProtected
+        ? QStringLiteral("accepted_snapshot") : binding->acceptedDirty
+            ? QStringLiteral("memory_only_or_pending") : QStringLiteral("saved_source"));
     return {{QStringLiteral("projectId"), this->projectCatalog->projectId()},
             {QStringLiteral("availability"), persistenceStatus == QStringLiteral("available")
                                                        || persistenceStatus == QStringLiteral("publishing")
@@ -1463,8 +1554,175 @@ Session::ProjectPublicationLease Session::reserveModelSave(uint modelID, const Q
     binding->publicationSourceRevision = binding->acceptedSourceRevision;
     binding->publicationLogicalPath = logicalPath;
     binding->publicationPaths = reservedPaths;
+    QVector<RProjectCatalog::OperationArtifactIntent> intents;
+    for (const QString &path : reservedPaths)
+    {
+        QFileInfo targetInfo(path);
+        targetInfo.setCaching(false);
+        RProjectCatalog::OperationArtifactIntent intent;
+        intent.path = normalizedPath(path);
+        if (targetInfo.isSymLink())
+        {
+            if (error) *error = tr("A native save target cannot be a symbolic link.");
+            binding->publicationLease.reset();
+            return {};
+        }
+        intent.expectedPriorExists = targetInfo.exists();
+        if (intent.expectedPriorExists)
+        {
+            if (!targetInfo.isFile())
+            {
+                if (error) *error = tr("The prior native save target is not a regular file.");
+                binding->publicationLease.reset();
+                return {};
+            }
+            intent.expectedPriorSha256 = publicationFileHash(path);
+            if (intent.expectedPriorSha256.isEmpty())
+            {
+                if (error) *error = tr("The prior native save target could not be verified.");
+                binding->publicationLease.reset();
+                return {};
+            }
+        }
+        intents.append(intent);
+    }
+    const auto operation = this->projectCatalog->beginSavePublication(binding->persistentDocumentId,
+        QUuid::createUuid().toString(QUuid::WithoutBraces),
+        {{QStringLiteral("command"), QStringLiteral("document.save")},
+         {QStringLiteral("documentId"), binding->persistentDocumentId},
+         {QStringLiteral("sourceRevision"), binding->acceptedSourceRevision},
+         {QStringLiteral("logicalPath"), normalizedPath(logicalPath)}},
+        binding->acceptedSourceRevision, intents, lease, {}, &localError, &errorCode);
+    if (operation.operation.operationId.isEmpty()
+        || operation.disposition == RProjectCatalog::OperationDisposition::Conflict)
+    {
+        if (error) *error = localError;
+        binding->publicationLease.reset();
+        return {};
+    }
+    binding->publicationOperationId = operation.operation.operationId;
+    RProjectCatalog::OperationAssociation acceptedSave;
+    acceptedSave.acceptedRevision = binding->acceptedSourceRevision;
+    if (!this->projectCatalog->advanceOperation(binding->publicationOperationId,
+            RProjectCatalog::OperationPhase::Accepted, acceptedSave, lease, &localError, &errorCode))
+    {
+        if (error) *error = localError;
+        binding->publicationOperationId.clear();
+        binding->publicationLease.reset();
+        return {};
+    }
     binding->publishing = true;
     return lease;
+}
+
+bool Session::bindModelSaveArtifacts(const QString &runtimeDocumentId,
+                                    const RProjectCatalog::SourceBinding &stagedBinding,
+                                    const ProjectPublicationLease &lease, QString *error)
+{
+    if (QThread::currentThread() != thread())
+    {
+        if (error) *error = tr("Save intent binding requires the document thread.");
+        return false;
+    }
+    auto binding = this->projectDocuments.find(runtimeDocumentId);
+    if (!this->projectCatalog || binding == this->projectDocuments.end()
+        || !binding->publishing || binding->publicationLease != lease
+        || binding->publicationOperationId.isEmpty())
+    {
+        if (error) *error = tr("The native save intent is no longer current.");
+        return false;
+    }
+    for (const auto &artifact : stagedBinding.sourceArtifacts)
+        if (!this->projectCatalog->bindSaveArtifactHash(binding->publicationOperationId,
+                artifact.path, artifact.sha256, lease, error)) return false;
+    const auto operation = this->projectCatalog->queryOperation(binding->publicationOperationId, lease, error);
+    if (!operation) return false;
+    if (operation->phase != RProjectCatalog::OperationPhase::Intent) return true;
+    return this->projectCatalog->advanceOperation(binding->publicationOperationId,
+        RProjectCatalog::OperationPhase::Accepted, {}, lease, error);
+}
+
+bool Session::validateModelSaveArtifactTarget(const QString &runtimeDocumentId,
+                                              const QString &targetPath,
+                                              const ProjectPublicationLease &lease,
+                                              QString *error)
+{
+    if (error) error->clear();
+    if (QThread::currentThread() != thread())
+    {
+        if (error) *error = tr("Save target revalidation requires the document thread.");
+        return false;
+    }
+    auto binding = this->projectDocuments.find(runtimeDocumentId);
+    if (!this->projectCatalog || binding == this->projectDocuments.end()
+        || !binding->publishing || binding->publicationLease != lease
+        || binding->publicationOperationId.isEmpty())
+    {
+        if (error) *error = tr("The native save intent is no longer current.");
+        return false;
+    }
+
+    QString operationError;
+    const auto operation = this->projectCatalog->queryOperation(
+        binding->publicationOperationId, lease, &operationError);
+    if (!operation)
+    {
+        if (error) *error = operationError.isEmpty()
+                                ? tr("The durable native save intent could not be read.")
+                                : operationError;
+        return false;
+    }
+    if (operation->phase != RProjectCatalog::OperationPhase::Accepted)
+    {
+        if (error) *error = tr("The durable native save intent is no longer publishable.");
+        return false;
+    }
+
+    QFileInfo targetInfo(targetPath);
+    targetInfo.setCaching(false);
+    if (targetInfo.isSymLink())
+    {
+        if (error) *error = tr("The native save target became a symbolic link after reservation.");
+        return false;
+    }
+    const QString canonicalParent = targetInfo.absoluteDir().canonicalPath();
+    if (canonicalParent.isEmpty())
+    {
+        if (error) *error = tr("The native save target directory could not be resolved.");
+        return false;
+    }
+    const QString canonicalTarget = QDir::cleanPath(QDir::fromNativeSeparators(
+        QDir(canonicalParent).filePath(targetInfo.fileName())));
+    const auto artifact = std::find_if(operation->artifacts.cbegin(), operation->artifacts.cend(),
+        [&canonicalTarget](const RProjectCatalog::OperationArtifactIntent &candidate) {
+            return samePath(candidate.path, canonicalTarget);
+        });
+    if (artifact == operation->artifacts.cend() || artifact->intendedSha256.isEmpty())
+    {
+        if (error) *error = tr("The native save target has no frozen artifact intent.");
+        return false;
+    }
+
+    if (targetInfo.exists() != artifact->expectedPriorExists)
+    {
+        if (error) *error = tr("The native save target changed after reservation.");
+        return false;
+    }
+    if (artifact->expectedPriorExists)
+    {
+        if (!targetInfo.isFile())
+        {
+            if (error) *error = tr("The prior native save target is no longer a regular file.");
+            return false;
+        }
+        const QString actualPriorSha256 = publicationFileHash(targetPath);
+        if (actualPriorSha256.isEmpty() || actualPriorSha256 != artifact->expectedPriorSha256)
+        {
+            if (error) *error = tr("The prior native save target bytes changed after reservation.");
+            return false;
+        }
+    }
+    return true;
 }
 
 bool Session::recordModelReloaded(uint modelID, const QString &path, QString *error)

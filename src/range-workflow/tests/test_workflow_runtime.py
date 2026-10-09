@@ -134,6 +134,40 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(request(self.service, "jobs.query", {"jobId": jid})["job"]["state"], "interrupted")
         self.assertCode("RESULT_UNAVAILABLE", request, self.service, "results.query", {"jobId": jid})
 
+    def test_approval_is_ephemeral_and_v1_migration_expires_tokens(self):
+        action = approved(self.service, "workflow.configure", {"dt": .005, "steps": 20, "targetDamping": .1})
+        state_path = self.workspace / "workflow-state.json"
+        persisted = state_path.read_bytes()
+        self.assertNotIn(action["approvalToken"].encode(), persisted)
+        self.assertNotIn(b'"approvalToken"', persisted)
+        preview = self.service.state_snapshot()["previews"][action["previewId"]]
+        again = request(self.service, "host.approve", {"previewId": action["previewId"], "previewHash": preview["previewHash"]})
+        self.assertEqual(again["approvalToken"], action["approvalToken"])
+        self.service.close()
+        legacy = json.loads(state_path.read_bytes())
+        legacy["storageVersion"] = 1
+        legacy["previews"][action["previewId"]]["approvalToken"] = action["approvalToken"]
+        state_path.write_text(json.dumps(legacy), encoding="utf-8")
+        self.service = self.open()
+        self.assertEqual(json.loads(state_path.read_bytes())["storageVersion"], 2)
+        self.assertNotIn(action["approvalToken"].encode(), state_path.read_bytes())
+        self.assertCode("STALE_REVISION", request, self.service, "command.execute", action)
+        self.assertCode("STALE_REVISION", request, self.service, "host.approve",
+                        {"previewId": action["previewId"], "previewHash": preview["previewHash"]})
+        fresh = approved(self.service, "workflow.configure", {"dt": .005, "steps": 20, "targetDamping": .1})
+        self.assertNotEqual(action["approvalToken"], fresh["approvalToken"])
+        self.assertEqual(wait(self.service, request(self.service, "command.execute", fresh)["jobId"])["state"], "succeeded")
+
+    def test_failed_approval_commit_does_not_grant_authorization(self):
+        preview = request(self.service, "command.preview", {"command": "workflow.configure",
+                          "parameters": {"dt": .005, "steps": 20, "targetDamping": .1},
+                          "expectedRevision": self.service.project_snapshot()["revision"]})
+        with mock.patch("range_workflow.service.os.replace", side_effect=OSError("disk")):
+            self.assertCode("PERSISTENCE_ERROR", request, self.service, "host.approve",
+                            {"previewId": preview["previewId"], "previewHash": preview["previewHash"]})
+        self.assertEqual(self.service._approval_tokens, {})
+        self.assertNotIn("approvalState", self.service.state_snapshot()["previews"][preview["previewId"]])
+
     def test_async_cancel_failure_and_process_bounds(self):
         def execute(service, job, directory, cancel):
             service.runner.run([sys.executable, "-c", "import time; time.sleep(120)"], directory, "sleep", cancel)

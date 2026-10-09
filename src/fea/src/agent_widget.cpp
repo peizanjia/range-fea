@@ -17,6 +17,7 @@
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QScrollArea>
 #include <QSettings>
@@ -24,12 +25,16 @@
 #include <QThread>
 #include <QTextBrowser>
 #include <QTextCursor>
-#include <QTextDocumentFragment>
 #include <QTextList>
+#include <QTextDocumentFragment>
 #include <QToolButton>
 #include <QUuid>
 #include <QVBoxLayout>
 #include <QUrl>
+#include <QSharedPointer>
+#include <QNetworkRequest>
+#include <QTextBlockFormat>
+#include <QTextCharFormat>
 
 #include "application.h"
 #include "application_settings_dialog.h"
@@ -37,6 +42,7 @@
 #include "main_window.h"
 #include "model_command_host.h"
 #include <rai_agent.h>
+#include <rai_tool_stream.h>
 
 namespace
 {
@@ -54,6 +60,9 @@ const QString endpointKey = QStringLiteral("aiAgent/endpoint");
 const QString modelKey = QStringLiteral("aiAgent/model");
 const QString effortKey = QStringLiteral("aiAgent/effort");
 const QString automaticChangesKey = QStringLiteral("aiAgent/automaticChanges");
+const QString streamingResponsesKey = QStringLiteral("aiAgent/streamingResponses");
+constexpr qsizetype MaxProviderResponseBytes = 1024 * 1024;
+constexpr int MaxActivityCards = 64;
 
 AgentWidget *activeAgentWidget()
 {
@@ -74,6 +83,11 @@ bool isValidAgentEndpoint(const QString &endpoint)
     return url.isValid() && url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0
         && !url.host().isEmpty() && !url.authority().contains(QLatin1Char('@'))
         && !url.hasQuery() && !url.hasFragment();
+}
+
+bool providerSupportsStreaming(RAgentSettings::Type type)
+{
+    return type == RAgentSettings::Type::DeepSeek || type == RAgentSettings::Type::OpenAILegacy;
 }
 
 QString invalidEndpointMessage()
@@ -106,8 +120,10 @@ QString optionValue(const QJsonValue &option)
 }
 }
 
-AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent)
-    : QWidget(parent), runner(host, workflow, this), network(this), commandHost(host),
+AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent,
+                         QNetworkAccessManager *networkAccessManager)
+    : QWidget(parent), runner(host, workflow, this), defaultNetwork(this),
+      network(networkAccessManager ? networkAccessManager : &defaultNetwork), commandHost(host),
       providerSettings(RAgentSettings::Type::DeepSeek)
 {
     setObjectName(QStringLiteral("agentTaskWidget"));
@@ -169,6 +185,22 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     state->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     state->setToolTip(tr("Conversation status"));
     layout->addWidget(state);
+
+    activityScroll = new QScrollArea(this);
+    activityScroll->setObjectName(QStringLiteral("agentActivityHistory"));
+    activityScroll->setWidgetResizable(true);
+    activityScroll->setFrameShape(QFrame::NoFrame);
+    activityScroll->setMaximumHeight(150);
+    activityScroll->setAccessibleName(tr("Trusted tool activity history"));
+    activityCards = new QWidget(activityScroll);
+    activityCards->setObjectName(QStringLiteral("agentActivityCards"));
+    activityCardsLayout = new QVBoxLayout(activityCards);
+    activityCardsLayout->setContentsMargins(0, 0, 0, 0);
+    activityCardsLayout->setSpacing(4);
+    activityCardsLayout->addStretch(1);
+    activityScroll->setWidget(activityCards);
+    activityScroll->hide();
+    layout->addWidget(activityScroll);
 
     auto *eventToggle = new QToolButton;
     eventToggle->setObjectName(QStringLiteral("agentEventHistoryToggle"));
@@ -295,6 +327,13 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     updateEffortChoices();
     modelRow->addWidget(effortLabel);
     modelRow->addWidget(effort, 1);
+    streamResponses = new QCheckBox(tr("Stream"));
+    streamResponses->setObjectName(QStringLiteral("agentStreamResponses"));
+    streamResponses->setAccessibleName(tr("Show provider text as it arrives"));
+    streamResponses->setToolTip(tr("When enabled, supported Chat Completions providers stream text. Complete JSON responses remain available when streaming is off."));
+    if (QSettings *preferences = agentPreferences())
+        streamResponses->setChecked(preferences->value(streamingResponsesKey, false).toBool());
+    modelRow->addWidget(streamResponses);
     authorize = new QCheckBox(tr("Auto"));
     authorize->setObjectName(QStringLiteral("agentAutomaticChanges"));
     authorize->setAccessibleName(tr("Allow supported changes to run automatically"));
@@ -336,6 +375,14 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         if (runner.isActive()) return;
         runner.clearConversation();
         transcript->clear();
+        for (const QString &cardKey : activityCardOrder)
+        {
+            if (activityCardFrames.value(cardKey)) activityCardFrames.value(cardKey)->deleteLater();
+        }
+        activityCardFrames.clear();
+        activityCardLabels.clear();
+        activityCardOrder.clear();
+        activityScroll->hide();
         goal->clear();
         preview->clear();
         presentedProposalId.clear();
@@ -376,12 +423,14 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         selectedEffort = effort->currentData().toString();
         persistConversationPreferences();
     });
+    connect(streamResponses, &QCheckBox::toggled, this, [this] { persistConversationPreferences(); });
     connect(authorize, &QCheckBox::toggled, this, [this] { persistConversationPreferences(); });
 
     connect(&runner, &AgentTaskRunner::turnRequested, this, &AgentWidget::requestTurn);
     connect(&runner, &AgentTaskRunner::providerCancellationRequested, this, [this](const QString &id) {
-        if (reply && reply->property("agentRequestId").toString() == id) reply->abort();
+        retireProviderRequest(id);
     });
+    connect(&runner, &AgentTaskRunner::toolActivity, this, &AgentWidget::onToolActivity);
     connect(&runner, &AgentTaskRunner::stateChanged, this, [this](const QString &status, const QString &message) {
         const QMap<QString, QString> labels{{QStringLiteral("analyzing"), tr("Thinking")},
             {QStringLiteral("awaiting_input"), tr("Waiting for your answer")},
@@ -395,6 +444,14 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::assistantMessage, this, [this](const QString &message) {
+        if (finalizingStreamMessage && message == finalizingStreamText)
+        {
+            const QString requestId = liveStreamRequestId;
+            finalizingStreamMessage = false;
+            finalizingStreamText.clear();
+            finishStreamText(requestId, message, true);
+            return;
+        }
         if (!message.isEmpty()) appendText(tr("Assistant"), message, true);
     });
     connect(&runner, &AgentTaskRunner::userInputRequested, this,
@@ -469,8 +526,12 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::actionCompleted, this, [this](const QString &origin, const QJsonObject &value) {
-        appendText(origin == "document" ? tr("Document updated") : tr("Task submitted"),
-                   origin == "document" ? tr("The host accepted the change. The document views now reflect its current state.")
+        const bool nativeTask = origin == "document" && value.value("command").toString().startsWith("analysis.")
+            && (value.value("command") == QJsonValue("analysis.run") || value.value("command") == QJsonValue("analysis.recover")
+                || value.value("command") == QJsonValue("analysis.cancel"));
+        appendText(nativeTask ? tr("Native task action accepted") : origin == "document" ? tr("Document updated") : tr("Task submitted"),
+                   nativeTask ? tr("The host accepted the task action. Query its actual progress and terminal result in Document FE output.")
+                     : origin == "document" ? tr("The host accepted the change. The document views now reflect its current state.")
                                         : tr("Calculation task: %1. Progress and results are available in the workflow panel.").arg(value.value("jobId").toString()));
         presentedProposalId.clear();
         preview->clear();
@@ -490,6 +551,11 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     eventPollTimer.start();
     refreshHostEvents();
     updateAvailability();
+}
+
+AgentWidget::~AgentWidget()
+{
+    retireProviderRequest();
 }
 
 RAgentSettings AgentWidget::getProviderSettings() const
@@ -518,6 +584,7 @@ void AgentWidget::setProviderSettings(const RAgentSettings &settings)
     if (model && model->currentText() != settings.getModel()) model->setEditText(settings.getModel());
     updateEffortChoices();
     persistConversationPreferences();
+    updateAvailability();
 }
 
 void AgentWidget::updateEffortChoices()
@@ -555,6 +622,8 @@ void AgentWidget::startTask(const QString &text, bool authorized)
     }
     requestSettingsSnapshot = getProviderSettings();
     requestEffortSnapshot = selectedEffort;
+    requestStreamingSnapshot = streamResponses->isChecked()
+        && providerSupportsStreaming(requestSettingsSnapshot.getType());
     appendText(tr("You"), text);
     runner.startTask(text, authorized);
 }
@@ -576,6 +645,8 @@ void AgentWidget::submitDraft()
     }
     requestSettingsSnapshot = getProviderSettings();
     requestEffortSnapshot = selectedEffort;
+    requestStreamingSnapshot = streamResponses->isChecked()
+        && providerSupportsStreaming(requestSettingsSnapshot.getType());
     appendText(tr("You"), message);
     goal->clear();
     runner.submitMessage(message, authorize->isChecked());
@@ -594,6 +665,8 @@ void AgentWidget::answerQuestion(const QString &questionId, const QString &answe
 
 void AgentWidget::appendText(const QString &title, const QString &text, bool markdown)
 {
+    const bool followTail = transcriptFollowsTail();
+    const int previousScroll = transcript->verticalScrollBar()->value();
     if (markdown)
     {
         ConversationDocument message;
@@ -610,8 +683,7 @@ void AgentWidget::appendText(const QString &title, const QString &text, bool mar
         newParagraph();
         cursor.insertFragment(QTextDocumentFragment(&message));
         newParagraph();
-        transcript->setTextCursor(cursor);
-        transcript->ensureCursorVisible();
+        restoreTranscriptScroll(followTail, previousScroll);
         return;
     }
     QString escapedText = text.toHtmlEscaped();
@@ -621,9 +693,212 @@ void AgentWidget::appendText(const QString &title, const QString &text, bool mar
     const QString roleColor = title == tr("You")
         ? transcript->palette().color(QPalette::Link).name()
         : transcript->palette().color(QPalette::Text).name();
-    transcript->append(QStringLiteral("<p style='margin:9px 0 3px;color:%1'><b>%2</b></p>"
+    QTextCursor cursor(transcript->document());
+    cursor.movePosition(QTextCursor::End);
+    if (!transcript->document()->isEmpty())
+    {
+        cursor.insertBlock(QTextBlockFormat{}, QTextCharFormat{});
+        if (auto *list = cursor.currentList()) list->remove(cursor.block());
+    }
+    cursor.insertHtml(QStringLiteral("<p style='margin:9px 0 3px;color:%1'><b>%2</b></p>"
                                       "<p style='margin:0 0 7px;white-space:pre-wrap'>%3</p>")
                            .arg(roleColor, title.toHtmlEscaped(), escapedText));
+    restoreTranscriptScroll(followTail, previousScroll);
+}
+
+bool AgentWidget::transcriptFollowsTail() const
+{
+    const auto *scrollBar = transcript->verticalScrollBar();
+    return scrollBar->value() >= scrollBar->maximum() - 1;
+}
+
+void AgentWidget::restoreTranscriptScroll(bool followTail, int previousValue)
+{
+    auto *scrollBar = transcript->verticalScrollBar();
+    scrollBar->setValue(followTail ? scrollBar->maximum()
+                                   : qMin(previousValue, scrollBar->maximum()));
+}
+
+void AgentWidget::updateActivityCard(const QString &taskId, const QString &toolCallId,
+                                    const QString &toolName, const QString &phase,
+                                    const QString &operationId, const QJsonObject &facts)
+{
+    if (taskId.isEmpty() || taskId.size() > 128 || toolCallId.isEmpty() || toolCallId.size() > 256
+        || toolName.size() > 128 || operationId.size() > 128) return;
+    const QString cardKey = taskId + QLatin1Char('/') + toolCallId;
+    QPointer<QFrame> frame = activityCardFrames.value(cardKey);
+    QPointer<QLabel> label = activityCardLabels.value(cardKey);
+    auto *activityScrollBar = activityScroll->verticalScrollBar();
+    const bool followActivityTail = activityScrollBar->value() >= activityScrollBar->maximum() - 1;
+    if (!frame || !label)
+    {
+        frame = new QFrame(activityCards);
+        frame->setObjectName(QStringLiteral("agentActivityCard"));
+        frame->setFrameShape(QFrame::StyledPanel);
+        auto *cardLayout = new QVBoxLayout(frame);
+        cardLayout->setContentsMargins(7, 4, 7, 4);
+        label = new QLabel(frame);
+        label->setObjectName(QStringLiteral("agentActivityCardText"));
+        label->setTextFormat(Qt::PlainText);
+        label->setWordWrap(true);
+        label->setAccessibleName(tr("Trusted tool activity"));
+        cardLayout->addWidget(label);
+        const int stretchIndex = qMax(0, activityCardsLayout->count() - 1);
+        activityCardsLayout->insertWidget(stretchIndex, frame);
+        activityCardFrames.insert(cardKey, frame);
+        activityCardLabels.insert(cardKey, label);
+        activityCardOrder.append(cardKey);
+        while (activityCardOrder.size() > MaxActivityCards)
+        {
+            const QString oldest = activityCardOrder.takeFirst();
+            if (activityCardFrames.value(oldest)) activityCardFrames.value(oldest)->deleteLater();
+            activityCardFrames.remove(oldest);
+            activityCardLabels.remove(oldest);
+        }
+    }
+
+    const QMap<QString, QString> phaseLabels{
+        {QStringLiteral("reading"), tr("Reading")},
+        {QStringLiteral("preparing"), tr("Preparing")},
+        {QStringLiteral("awaiting_authorization"), tr("Waiting for approval")},
+        {QStringLiteral("executing"), tr("Executing")},
+        {QStringLiteral("completed"), tr("Host response validated")},
+        {QStringLiteral("rejected"), tr("Rejected")},
+        {QStringLiteral("failed"), tr("Failed")}};
+    QStringList lines{tr("Task %1 · tool %2").arg(taskId, toolCallId),
+                      tr("%1 — %2").arg(toolName, phaseLabels.value(phase, tr("Working")))};
+    if (!operationId.isEmpty()) lines.append(tr("Operation %1").arg(operationId));
+    for (const QString &factKey : {QStringLiteral("status"), QStringLiteral("code"),
+                                   QStringLiteral("proposalId"), QStringLiteral("jobId")})
+    {
+        const QString value = facts.value(factKey).toString().left(128);
+        if (!value.isEmpty()) lines.append(tr("%1: %2").arg(factKey, value));
+    }
+    label->setText(lines.join(QLatin1Char('\n')));
+    frame->setProperty("agentTaskId", taskId);
+    frame->setProperty("agentToolCallId", toolCallId);
+    frame->setProperty("agentOperationId", operationId);
+    frame->setProperty("agentActivityPhase", phase);
+    activityScroll->show();
+    if (followActivityTail) activityScrollBar->setValue(activityScrollBar->maximum());
+}
+
+void AgentWidget::onToolActivity(const QString &taskId, const QString &toolCallId,
+                                 const QString &toolName, const QString &phase,
+                                 const QString &operationId, const QJsonObject &facts)
+{
+    updateActivityCard(taskId, toolCallId, toolName, phase, operationId, facts);
+}
+
+void AgentWidget::appendStreamText(const QString &requestId, const QString &text)
+{
+    if (requestId.isEmpty() || text.isEmpty()) return;
+    if (!liveStreamRequestId.isEmpty() && liveStreamRequestId != requestId)
+        finishStreamText(liveStreamRequestId, liveStreamText, false);
+
+    const bool followTail = transcriptFollowsTail();
+    const int previousScroll = transcript->verticalScrollBar()->value();
+    if (liveStreamRequestId.isEmpty())
+    {
+        QTextCursor cursor(transcript->document());
+        cursor.movePosition(QTextCursor::End);
+        if (!transcript->document()->isEmpty()) cursor.insertBlock();
+        liveStreamStartPosition = cursor.position();
+        liveStreamTitleStartPosition = cursor.position();
+        QTextCharFormat titleFormat;
+        titleFormat.setFontWeight(QFont::Bold);
+        cursor.insertText(tr("Assistant"), titleFormat);
+        liveStreamTitleEndPosition = cursor.position();
+        cursor.insertBlock();
+        liveStreamContentStartPosition = cursor.position();
+        liveStreamEndPosition = cursor.position();
+        liveStreamRequestId = requestId;
+        liveStreamText.clear();
+    }
+
+    QTextCursor cursor(transcript->document());
+    cursor.setPosition(liveStreamEndPosition);
+    cursor.insertText(text);
+    liveStreamEndPosition = cursor.position();
+    liveStreamText.append(text);
+    restoreTranscriptScroll(followTail, previousScroll);
+}
+
+void AgentWidget::finishStreamText(const QString &requestId, const QString &text, bool accepted)
+{
+    if (requestId.isEmpty() || requestId != liveStreamRequestId) return;
+    const bool followTail = transcriptFollowsTail();
+    const int previousScroll = transcript->verticalScrollBar()->value();
+    if (accepted)
+    {
+        ConversationDocument message;
+        message.setMarkdown(text, QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub)
+                                      | QTextDocument::MarkdownNoHTML);
+        QTextCursor cursor(transcript->document());
+        cursor.setPosition(liveStreamContentStartPosition);
+        cursor.setPosition(liveStreamEndPosition, QTextCursor::KeepAnchor);
+        cursor.insertFragment(QTextDocumentFragment(&message));
+    }
+    else if (liveStreamTitleStartPosition >= 0 && liveStreamTitleEndPosition >= liveStreamTitleStartPosition)
+    {
+        QTextCursor title(transcript->document());
+        title.setPosition(liveStreamTitleStartPosition);
+        title.setPosition(liveStreamTitleEndPosition, QTextCursor::KeepAnchor);
+        title.insertText(tr("Assistant (incomplete)"));
+    }
+    liveStreamRequestId.clear();
+    liveStreamText.clear();
+    liveStreamStartPosition = -1;
+    liveStreamTitleStartPosition = -1;
+    liveStreamTitleEndPosition = -1;
+    liveStreamContentStartPosition = -1;
+    liveStreamEndPosition = -1;
+    restoreTranscriptScroll(followTail, previousScroll);
+}
+
+void AgentWidget::clearStreamText(const QString &requestId)
+{
+    if (requestId.isEmpty() || requestId != liveStreamRequestId) return;
+    const bool followTail = transcriptFollowsTail();
+    const int previousScroll = transcript->verticalScrollBar()->value();
+    if (liveStreamStartPosition >= 0 && liveStreamEndPosition >= liveStreamStartPosition)
+    {
+        QTextCursor cursor(transcript->document());
+        cursor.setPosition(liveStreamStartPosition);
+        cursor.setPosition(liveStreamEndPosition, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+    }
+    liveStreamRequestId.clear();
+    liveStreamText.clear();
+    liveStreamStartPosition = -1;
+    liveStreamTitleStartPosition = -1;
+    liveStreamTitleEndPosition = -1;
+    liveStreamContentStartPosition = -1;
+    liveStreamEndPosition = -1;
+    restoreTranscriptScroll(followTail, previousScroll);
+}
+
+bool AgentWidget::isCurrentProviderRequest(const QString &requestId, quint64 generation,
+                                          QNetworkReply *expectedReply) const
+{
+    return !requestId.isEmpty() && requestId == activeProviderRequestId
+        && generation == providerRequestGeneration && expectedReply && reply == expectedReply;
+}
+
+void AgentWidget::retireProviderRequest(const QString &requestId)
+{
+    if (!requestId.isEmpty() && requestId != activeProviderRequestId) return;
+    const QString retiringId = activeProviderRequestId;
+    const QPointer<QNetworkReply> previousReply = reply;
+    if (retiringId.isEmpty() && !previousReply) return;
+
+    // Invalidate before abort: some backends emit finished synchronously from abort().
+    activeProviderRequestId.clear();
+    reply.clear();
+    ++providerRequestGeneration;
+    if (!retiringId.isEmpty() && liveStreamRequestId == retiringId)
+        finishStreamText(retiringId, liveStreamText, false);
+    if (previousReply) previousReply->abort();
 }
 
 void AgentWidget::openSettings()
@@ -657,6 +932,7 @@ void AgentWidget::persistConversationPreferences()
     preferences->setValue(modelKey, providerSettings.getModel());
     preferences->setValue(effortKey, selectedEffort);
     preferences->setValue(automaticChangesKey, authorize && authorize->isChecked());
+    preferences->setValue(streamingResponsesKey, streamResponses && streamResponses->isChecked());
     // API keys are deliberately excluded from persistent settings.
 }
 
@@ -821,6 +1097,10 @@ void AgentWidget::updateAvailability()
     goal->setEnabled(true);
     model->setEnabled(true);
     effort->setEnabled(providerSettings.getType() == RAgentSettings::Type::DeepSeek);
+    streamResponses->setEnabled(providerSupportsStreaming(providerSettings.getType()));
+    streamResponses->setToolTip(providerSupportsStreaming(providerSettings.getType())
+        ? tr("When enabled, supported Chat Completions providers stream text. Complete JSON responses remain available when streaming is off.")
+        : tr("This provider does not support streaming Chat Completions."));
     authorize->setEnabled(true);
 
     const bool pendingProposal = busy && !runner.pendingProposal().isEmpty() && !presentedProposalId.isEmpty();
@@ -1035,53 +1315,140 @@ void AgentWidget::refreshHostEvents()
 
 void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messages, const QJsonArray &tools)
 {
-    if (reply) reply->abort();
+    retireProviderRequest();
+    const quint64 generation = ++providerRequestGeneration;
+    activeProviderRequestId = requestId;
     const RAgentSettings settings(requestSettingsSnapshot);
     const QString providerKeyValue = settings.getApiKey().trimmed();
     const QString endpointValue = settings.getApiUrl().trimmed();
     const QUrl url(endpointValue);
+    const auto failBeforeRequest = [this, &requestId](const QString &message) {
+        retireProviderRequest(requestId);
+        runner.providerFailed(requestId, message);
+    };
     if (!isValidAgentEndpoint(endpointValue))
-    { runner.providerFailed(requestId, invalidEndpointMessage()); return; }
+    { failBeforeRequest(invalidEndpointMessage()); return; }
     if (providerKeyValue.isEmpty())
-    { runner.providerFailed(requestId, tr("Add an API key in assistant settings.")); return; }
+    { failBeforeRequest(tr("Add an API key in assistant settings.")); return; }
+    if (!network)
+    { failBeforeRequest(tr("Assistant networking is unavailable.")); return; }
     const bool deepSeek = settings.getType() == RAgentSettings::Type::DeepSeek;
+    const bool streamEnabled = requestStreamingSnapshot && providerSupportsStreaming(settings.getType());
     const bool thinkingDisabled = deepSeek && requestEffortSnapshot == QStringLiteral("off");
     const QString deepSeekEffort = deepSeek && !thinkingDisabled ? requestEffortSnapshot : QString();
     const int maxTokens = deepSeek && !thinkingDisabled ? 8192 : 2048;
     QByteArray body; QString error;
     if (!RAgent::buildToolRequest(settings.getModel().trimmed(), maxTokens, 1.0, messages, tools,
-                                 thinkingDisabled, &body, &error, deepSeekEffort))
-    { runner.providerFailed(requestId, error); return; }
+                                 thinkingDisabled, &body, &error, deepSeekEffort, streamEnabled))
+    { failBeforeRequest(error); return; }
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Accept", streamEnabled ? "text/event-stream" : "application/json");
     request.setRawHeader("Authorization", "Bearer " + providerKeyValue.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(60000);
-    auto *pending = network.post(request, body); reply = pending;
+    auto *pending = network->post(request, body);
+    if (!pending)
+    { failBeforeRequest(tr("The provider request could not be started.")); return; }
+    reply = pending;
     pending->setReadBufferSize(64 * 1024);
-    pending->setProperty("agentRequestId", requestId);
-    auto bytes = QSharedPointer<QByteArray>::create();
-    connect(pending, &QNetworkReply::readyRead, this, [pending, bytes] {
-        const qint64 remaining = 1024 * 1024 + 1 - bytes->size();
-        if (remaining > 0) bytes->append(pending->read(remaining));
-        if (bytes->size() > 1024 * 1024) pending->abort();
+    auto responseBytes = QSharedPointer<QByteArray>::create();
+    auto streamParser = QSharedPointer<RAgentToolStream>::create();
+    auto tooLarge = QSharedPointer<bool>::create(false);
+    auto streamFailure = QSharedPointer<QString>::create();
+    const auto consumeAvailable = [this, pending, requestId, generation, streamEnabled,
+                                   responseBytes, streamParser, tooLarge, streamFailure] {
+        const QByteArray chunk = pending->readAll();
+        if (chunk.isEmpty()) return;
+        if (!isCurrentProviderRequest(requestId, generation, pending)) return;
+        const int statusCode = pending->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (statusCode != 200) return; // Provider error bodies are never parsed or displayed.
+        if (streamEnabled)
+        {
+            if (!streamFailure->isEmpty()) return;
+            const bool parsed = streamParser->feed(chunk);
+            appendStreamText(requestId, streamParser->takeTextDelta());
+            if (!parsed)
+            {
+                *streamFailure = streamParser->errorMessage();
+                pending->abort();
+            }
+            return;
+        }
+        if (*tooLarge) return;
+        if (chunk.size() > MaxProviderResponseBytes - responseBytes->size())
+        {
+            *tooLarge = true;
+            responseBytes->clear();
+            pending->abort();
+            return;
+        }
+        responseBytes->append(chunk);
+    };
+    connect(pending, &QNetworkReply::readyRead, this, [consumeAvailable] {
+        consumeAvailable();
     });
-    connect(pending, &QNetworkReply::finished, this, [this, pending, bytes, requestId] {
-        const qint64 remaining = 1024 * 1024 + 1 - bytes->size();
-        if (remaining > 0) bytes->append(pending->read(remaining));
+    connect(pending, &QNetworkReply::finished, this,
+            [this, pending, requestId, generation, streamEnabled, consumeAvailable,
+             responseBytes, streamParser, tooLarge, streamFailure] {
+        consumeAvailable();
+        const bool wasCurrent = isCurrentProviderRequest(requestId, generation, pending);
         const auto statusCode = pending->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto networkError = pending->error();
         if (reply == pending) reply.clear();
         pending->deleteLater();
-        if (networkError != QNetworkReply::NoError || statusCode != 200 || bytes->size() > 1024 * 1024)
+        if (!wasCurrent) return;
+
+        // Invalidate this request before delivering a turn; runner signals may start a new one inline.
+        activeProviderRequestId.clear();
+        ++providerRequestGeneration;
+        if (networkError != QNetworkReply::NoError || statusCode != 200 || *tooLarge
+            || !streamFailure->isEmpty())
         {
             // Provider error bodies may echo request data; never put them in logs or the transcript.
-            runner.providerFailed(requestId, tr("Provider request failed (HTTP %1, network code %2). Check credentials, connection and quota.").arg(statusCode).arg(int(networkError)));
+            if (streamEnabled && !streamFailure->isEmpty())
+                state->setToolTip(*streamFailure);
+            if (liveStreamRequestId == requestId)
+                finishStreamText(requestId, liveStreamText, false);
+            const QString message = !streamFailure->isEmpty()
+                ? *streamFailure
+                : (*tooLarge ? tr("Provider response exceeds the 1 MiB limit.")
+                             : tr("Provider request failed (HTTP %1, network code %2). Check credentials, connection and quota.")
+                                   .arg(statusCode).arg(int(networkError)));
+            runner.providerFailed(requestId, message);
             return;
         }
-        QJsonObject turn; QString parseError;
-        if (!RAgent::parseToolResponse(*bytes, &turn, &parseError)) { runner.providerFailed(requestId, parseError); return; }
-        emit providerUsage(turn.value("usage").toObject());
+
+        QJsonObject turn;
+        QString parseError;
+        if (streamEnabled)
+        {
+            turn = streamParser->finish();
+            if (turn.isEmpty())
+            {
+                if (liveStreamRequestId == requestId)
+                    finishStreamText(requestId, liveStreamText, false);
+                runner.providerFailed(requestId, streamParser->errorMessage().isEmpty()
+                    ? tr("The provider stream ended before a complete response was received.")
+                    : streamParser->errorMessage());
+                return;
+            }
+        }
+        else if (!RAgent::parseToolResponse(*responseBytes, &turn, &parseError))
+        { runner.providerFailed(requestId, parseError); return; }
+
+        if (streamEnabled && liveStreamRequestId == requestId)
+        {
+            finalizingStreamMessage = true;
+            finalizingStreamText = turn.value(QStringLiteral("text")).toString();
+        }
         runner.receiveTurn(requestId, turn);
+        if (finalizingStreamMessage && liveStreamRequestId == requestId)
+        {
+            finalizingStreamMessage = false;
+            finalizingStreamText.clear();
+            clearStreamText(requestId);
+        }
+        emit providerUsage(turn.value("usage").toObject());
     });
 }

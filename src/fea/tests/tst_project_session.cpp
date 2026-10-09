@@ -13,6 +13,8 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QSaveFile>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTabWidget>
 #include <QDockWidget>
@@ -23,6 +25,7 @@
 #include <thread>
 
 #include <rbl_job_manager.h>
+#include <rmodel_command_session.h>
 
 #include "application.h"
 #include "action.h"
@@ -226,6 +229,49 @@ private slots:
         auto *session = Application::instance()->getSession();
         QTRY_VERIFY_WITH_TIMEOUT(!ModelCommandHost::isBusy(), 15000);
         session->clear();
+    }
+
+    void closeReplayObservesOriginalOperationBeforeCompletingQueue()
+    {
+        for (bool observedBeforeExit : {false, true})
+        {
+            QTemporaryDir workspace;
+            QVERIFY(workspace.isValid());
+            QString error;
+            auto catalog = RProjectCatalog::open(workspace.path(), &error);
+            QVERIFY2(catalog, qPrintable(error));
+            const QString retryId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            const auto operation = catalog->beginOperation(retryId, {{"command", "model.session.close"}}, {}, {}, &error);
+            QVERIFY2(!operation.operation.operationId.isEmpty(), qPrintable(error));
+            const QString operationId = operation.operation.operationId;
+            QVERIFY2(catalog->advanceOperation(operationId, RProjectCatalog::OperationPhase::Accepted, {}, {}, &error), qPrintable(error));
+            RModelCommandSession::JournalOptions options;
+            options.path = QDir(workspace.path()).filePath("closed-session.json");
+            RModelCommandSession editing(modalFixture(), options);
+            const auto payload = editing.prepareCloseRetry(retryId, operationId, &error);
+            QVERIFY2(!payload.isEmpty(), qPrintable(error));
+            QVERIFY2(catalog->queueCloseRetry(retryId, operationId, "close_record_pending", payload, {}, &error), qPrintable(error));
+            QVERIFY2(editing.closeWithRetryPayload(payload, &error), qPrintable(error));
+            if (observedBeforeExit)
+            {
+                RProjectCatalog::OperationAssociation observation;
+                observation.observation = {{"status", "ok"}, {"code", "OK"}, {"result", QJsonObject{
+                    {"operationId", operationId}, {"command", "model.session.close"},
+                    {"editingSessionId", payload.value("record").toObject().value("sessionId")},
+                    {"recordId", payload.value("record").toObject().value("recordId")}, {"persistence", "durable"}}}};
+                QVERIFY2(catalog->advanceOperation(operationId, RProjectCatalog::OperationPhase::Observed, observation, {}, &error), qPrintable(error));
+            }
+            catalog.reset(); // Both process-exit windows leave the durable queue.
+            auto *session = Application::instance()->getSession();
+            QVERIFY2(openProject(session, workspace.path()), qPrintable(error));
+            const auto restored = session->getProjectCatalog()->queryOperation(operationId, {}, &error);
+            QVERIFY2(restored.has_value(), qPrintable(error));
+            QCOMPARE(int(restored->phase), int(RProjectCatalog::OperationPhase::Observed));
+            QCOMPARE(restored->association.observation.value("result").toObject().value("recordId"),
+                     payload.value("record").toObject().value("recordId"));
+            QVERIFY(session->getProjectCatalog()->pendingCloseRetries({}, &error).isEmpty());
+            QVERIFY(openProject(session, QDir(workspace.path()).filePath("next-project")));
+        }
     }
 
     void persistentIdentitySurvivesCloseAndReopen()
@@ -1052,6 +1098,100 @@ private slots:
         const auto stillC = RProjectCatalog::resolveSourceBinding(outputPath);
         QVERIFY(stillC.has_value());
         QCOMPARE(stillC->savedArtifactHash, actualC->savedArtifactHash);
+    }
+
+    void nativeSaveRevalidatesEachTargetImmediatelyBeforeCommit()
+    {
+        QTemporaryDir workspace;
+        QTemporaryDir outputs;
+        QTemporaryDir staging;
+        QVERIFY(workspace.isValid() && outputs.isValid() && staging.isValid());
+        auto *session = Application::instance()->getSession();
+        QVERIFY(openProject(session, workspace.path()));
+
+        const QString outputPath = nativeModelPath(outputs.path(), QStringLiteral("replace-during-save"));
+        Model previous = modalFixture(QStringLiteral("Existing output"));
+        ModelIO::save(previous, outputPath, true);
+        session->addModel(modalFixture(QStringLiteral("Tracked output")));
+        Model staged = session->getModel(0);
+        staged.getProblemSetup().getModalSetup().setNIterations(73);
+        const QString stagedRequestedPath = QDir(staging.path()).filePath(QFileInfo(outputPath).fileName());
+        ModelIO::save(staged, stagedRequestedPath, true);
+        QVERIFY(staged.getLoadedSourceBinding().has_value());
+
+        const QStringList publicPaths = session->getModel(0).nativeWritePaths(outputPath, true);
+        const QStringList stagedPaths = staged.nativeWritePaths(stagedRequestedPath, true);
+        QCOMPARE(publicPaths.size(), stagedPaths.size());
+        QVERIFY(publicPaths.size() >= 2);
+
+        const QString stageRoot = QDir::cleanPath(QDir::fromNativeSeparators(staging.path()));
+        const QString outputRoot = QDir::cleanPath(QDir::fromNativeSeparators(outputs.path()));
+        const auto mapStagedPath = [&stageRoot, &outputRoot](const QString &path) {
+            const QString absolute = QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath());
+            const QString relative = QDir::fromNativeSeparators(QDir(stageRoot).relativeFilePath(absolute));
+            return QDir::cleanPath(QDir::fromNativeSeparators(QDir(outputRoot).filePath(relative)));
+        };
+        RProjectCatalog::SourceBinding expectedWrittenBinding = *staged.getLoadedSourceBinding();
+        expectedWrittenBinding.logicalSourcePath = mapStagedPath(expectedWrittenBinding.logicalSourcePath);
+        expectedWrittenBinding.resolvedSourcePath = mapStagedPath(expectedWrittenBinding.resolvedSourcePath);
+        for (auto &artifact : expectedWrittenBinding.sourceArtifacts)
+            artifact.path = mapStagedPath(artifact.path);
+
+        QString error;
+        auto lease = session->reserveModelSave(0, outputPath, publicPaths, &error);
+        QVERIFY2(lease, qPrintable(error));
+        const QString runtimeDocumentId = session->modelCommandStamp(0).first;
+        const auto abortPublication = qScopeGuard([session, &runtimeDocumentId, &lease] {
+            session->abortModelSave(runtimeDocumentId, lease);
+        });
+        QVERIFY2(session->bindModelSaveArtifacts(runtimeDocumentId, expectedWrittenBinding, lease, &error),
+                 qPrintable(error));
+
+        const QByteArray replacementBytes("external replacement during publication");
+        bool replacementWritten = false;
+        qsizetype publishedFiles = 0;
+        QString copyError;
+        for (qsizetype i = 0; i < stagedPaths.size(); ++i)
+        {
+            const QString targetPath = publicPaths.at(i);
+            const auto validateTarget = [session, runtimeDocumentId, &lease, &replacementWritten,
+                                         &replacementBytes, i, targetPath](QString &validationError) {
+                if (i == 1 && !replacementWritten)
+                {
+                    QSaveFile externalWriter(targetPath);
+                    externalWriter.setDirectWriteFallback(false);
+                    if (!externalWriter.open(QIODevice::WriteOnly))
+                    {
+                        validationError = externalWriter.errorString();
+                        return false;
+                    }
+                    if (externalWriter.write(replacementBytes) != replacementBytes.size()
+                        || !externalWriter.commit())
+                    {
+                        validationError = externalWriter.errorString();
+                        externalWriter.cancelWriting();
+                        return false;
+                    }
+                    replacementWritten = true;
+                }
+                return session->validateModelSaveArtifactTarget(runtimeDocumentId, targetPath,
+                                                                 lease, &validationError);
+            };
+            if (!ModelIOPrivate::copyFileAtomically(stagedPaths.at(i), targetPath,
+                                                    validateTarget, copyError))
+                break;
+            ++publishedFiles;
+        }
+
+        QVERIFY(replacementWritten);
+        QCOMPARE(publishedFiles, 1);
+        QVERIFY(!copyError.isEmpty());
+        QCOMPARE(fileBytes(publicPaths.first()), fileBytes(stagedPaths.first()));
+        QCOMPARE(fileBytes(publicPaths.at(1)), replacementBytes);
+        session->abortModelSave(runtimeDocumentId, lease, copyError);
+        QCOMPARE(fileBytes(publicPaths.first()), fileBytes(stagedPaths.first()));
+        QCOMPARE(fileBytes(publicPaths.at(1)), replacementBytes);
+        Q_UNUSED(abortPublication);
     }
 
     void nativeLinkTargetTamperingIsDetected()

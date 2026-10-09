@@ -1,6 +1,7 @@
 """Focused contract tests for native accepted-control telemetry."""
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import sys
@@ -60,9 +61,55 @@ class TelemetryTest(unittest.TestCase):
     def query(self, **parameters):
         return request(self.service, "telemetry.query", {"jobId": self.job_id, **parameters})
 
+    def query_recovered_reader(self, mode="active", *, after_seq=0, limit=256):
+        return self.query(mode=mode, afterSeq=after_seq, limit=limit)
+
     def write_events(self, events):
         self.journal.write_bytes(b"".join(json.dumps(item, separators=(",", ":")).encode() + b"\n"
                                        for item in events))
+
+    def prepare_recovered_history(self, *, selected_seq=2):
+        dt, total_steps = 0.005, 4
+        run_result = {"jobId": self.job_id, "mode": "both", "totalSteps": total_steps,
+                      "dtSeconds": dt, "configuration": {"dt": dt}}
+        original_run = str(uuid.uuid4())
+        original_events = [event(original_run, 1, "SolverRunStarted")]
+        for accepted_seq in range(1, total_steps + 1):
+            original_events.append(event(
+                original_run, len(original_events) + 1, "ControlStepAccepted",
+                accepted((accepted_seq - 1) * dt)))
+        original_path = self.directory / f"active.ram.{original_run}.events.jsonl"
+        original_path.write_bytes(b"".join(json.dumps(item, separators=(",", ":")).encode() + b"\n"
+                                                   for item in original_events))
+
+        attempt_id = str(uuid.uuid4())
+        attempt_directory = self.directory / "attempts" / attempt_id
+        variant_directory = attempt_directory / "active"
+        variant_directory.mkdir(parents=True)
+        attempt_run = str(uuid.uuid4())
+        self.job.update(command="workflow.recover", state="running", attemptId=attempt_id,
+                        parameters={"jobId": self.job_id, "qualificationSha256": "a" * 64},
+                        recovery={"schema": "range.workflow-recovery/v1", "attempts": [
+                            {"attemptId": self.job_id, "directory": str(self.directory),
+                             "partialResult": run_result},
+                            {"attemptId": attempt_id, "directory": str(attempt_directory),
+                             "partialResult": run_result,
+                             "inheritedSelection": {
+                                 "attemptId": self.job_id, "targetSteps": total_steps,
+                                 "qualificationSha256": "b" * 64,
+                                 "variants": {
+                                     "active": {"phase": "checkpointed", "acceptedSeq": selected_seq},
+                                     "passive": {"phase": "prepared", "acceptedSeq": 0}}}}]})
+        attempt_events = [event(attempt_run, 1, "SolverRunStarted")]
+        for accepted_seq in range(selected_seq + 1, total_steps + 1):
+            attempt_events.append(event(
+                attempt_run, len(attempt_events) + 1, "ControlStepAccepted",
+                accepted((accepted_seq - 1) * dt)))
+        attempt_path = variant_directory / f"active.rbm.{attempt_run}.events.jsonl"
+        attempt_path.write_bytes(b"".join(json.dumps(item, separators=(",", ":")).encode() + b"\n"
+                                                  for item in attempt_events))
+        self.service._telemetry = telemetry.TelemetryReader(self.workspace)
+        return attempt_run, attempt_path, original_path
 
     def assertCode(self, code, callable, *args, **kwargs):
         with self.assertRaises(WorkflowError) as captured:
@@ -223,6 +270,173 @@ class TelemetryTest(unittest.TestCase):
         self.job["state"] = "cancelled"
         result = self.query()
         self.assertEqual(result["availability"], "unavailable")
+
+    def test_recovered_history_uses_checkpoint_cutoff_and_accepted_sequence(self):
+        attempt_run, _, _ = self.prepare_recovered_history(selected_seq=2)
+        result = self.query_recovered_reader()
+        samples = result["samples"]
+        self.assertEqual([sample["seq"] for sample in samples], [1, 2, 3, 4])
+        self.assertEqual([sample["timeS"] for sample in samples], [0.0, 0.005, 0.01, 0.015])
+        self.assertEqual([sample["replay"] for sample in samples], [True, True, False, False])
+        self.assertEqual([sample["originAttemptId"] for sample in samples[:2]], [self.job_id] * 2)
+        self.assertEqual([sample["originAttemptId"] for sample in samples[2:]],
+                         [self.job["attemptId"]] * 2)
+        self.assertEqual([sample["runId"] for sample in samples[2:]], [attempt_run] * 2)
+        self.assertEqual([sample["nativeEventSeq"] for sample in samples], [2, 3, 2, 3])
+        self.assertEqual(len({sample["seq"] for sample in samples}), len(samples))
+        self.assertEqual(result["nextSeq"], 4)
+        self.assertEqual(result["availability"], "available")
+
+    def test_recovered_history_paginates_by_logical_accepted_sequence(self):
+        self.prepare_recovered_history(selected_seq=2)
+        first = self.query_recovered_reader(limit=2)
+        second = self.query_recovered_reader(after_seq=first["nextSeq"], limit=2)
+        self.assertEqual([sample["seq"] for sample in first["samples"]], [1, 2])
+        self.assertEqual([sample["seq"] for sample in second["samples"]], [3, 4])
+
+    def test_recovery_on_recovery_preserves_each_selected_origin_prefix(self):
+        _, _, _ = self.prepare_recovered_history(selected_seq=2)
+        attempts = self.job["recovery"]["attempts"]
+        first_recovery_id = self.job["attemptId"]
+        second_id = str(uuid.uuid4())
+        second_directory = self.directory / "attempts" / second_id
+        second_variant = second_directory / "active"
+        second_variant.mkdir(parents=True)
+        second_run = str(uuid.uuid4())
+        second_events = [event(second_run, 1, "SolverRunStarted"),
+                         event(second_run, 2, "ControlStepAccepted", accepted(0.015))]
+        (second_variant / f"active.rbm.{second_run}.events.jsonl").write_bytes(
+            b"".join(json.dumps(item, separators=(",", ":")).encode() + b"\n"
+                    for item in second_events))
+        run_result = attempts[-1]["partialResult"]
+        attempts.append({"attemptId": second_id, "directory": str(second_directory),
+                         "partialResult": run_result,
+                         "inheritedSelection": {
+                             "attemptId": first_recovery_id, "targetSteps": 4,
+                             "qualificationSha256": "c" * 64,
+                             "variants": {
+                                 "active": {"phase": "checkpointed", "acceptedSeq": 3,
+                                            "sourceAttemptId": first_recovery_id},
+                                 "passive": {"phase": "prepared", "acceptedSeq": 0,
+                                             "sourceAttemptId": first_recovery_id}}}})
+        self.job["attemptId"] = second_id
+        result = self.query_recovered_reader()
+        samples = result["samples"]
+        self.assertEqual([sample["seq"] for sample in samples], [1, 2, 3, 4])
+        self.assertEqual([sample["originAttemptId"] for sample in samples],
+                         [self.job_id, self.job_id, first_recovery_id, second_id])
+        self.assertEqual([sample["replay"] for sample in samples], [True, True, True, False])
+
+    def test_recovered_read_budget_covers_all_attempt_journals(self):
+        self.prepare_recovered_history(selected_seq=2)
+        with mock.patch.object(telemetry, "MAX_READ_BYTES_PER_QUERY", 256):
+            result = self.query_recovered_reader()
+        read_bytes = sum(journal.offset for journal in self.service._telemetry._journals.values())
+        self.assertLessEqual(read_bytes, 256)
+        self.assertTrue(result["hasMore"])
+
+    def test_recovered_history_accepts_compact_source_attempt_identity(self):
+        self.prepare_recovered_history(selected_seq=2)
+        selection = self.job["recovery"]["attempts"][1]["inheritedSelection"]
+        selection.pop("attemptId")
+        selection["variants"]["active"]["sourceAttemptId"] = self.job_id
+        result = self.query_recovered_reader()
+        self.assertEqual([sample["seq"] for sample in result["samples"]], [1, 2, 3, 4])
+
+    def test_recovered_query_does_not_mutate_job_facts(self):
+        self.prepare_recovered_history(selected_seq=2)
+        before = copy.deepcopy(self.job)
+        self.query_recovered_reader()
+        self.assertEqual(self.job, before)
+
+    def test_recovered_history_rejects_unaligned_control_times(self):
+        _, attempt_path, _ = self.prepare_recovered_history(selected_seq=2)
+        run_id = str(uuid.uuid4())
+        malformed = [event(run_id, 1, "SolverRunStarted"),
+                     event(run_id, 2, "ControlStepAccepted", accepted(0.011))]
+        attempt_path.unlink()
+        attempt_path = attempt_path.with_name(f"active.rbm.{run_id}.events.jsonl")
+        attempt_path.write_bytes(b"".join(json.dumps(item, separators=(",", ":")).encode() + b"\n"
+                                       for item in malformed))
+        self.assertCode("TELEMETRY_CORRUPT", self.query_recovered_reader)
+
+    def test_recovered_partial_tail_completes_without_reparsing_old_attempt(self):
+        _, attempt_path, _ = self.prepare_recovered_history(selected_seq=2)
+        # Replace the prepared attempt journal with an incomplete event tail.
+        run_id = str(uuid.uuid4())
+        events = [event(run_id, 1, "SolverRunStarted"),
+                  event(run_id, 2, "ControlStepAccepted", accepted(0.01))]
+        encoded = json.dumps(events[1], separators=(",", ":")).encode()
+        split = len(encoded) // 2
+        attempt_path.unlink()
+        attempt_path = attempt_path.with_name(f"active.rbm.{run_id}.events.jsonl")
+        attempt_path.write_bytes(json.dumps(events[0], separators=(",", ":")).encode() + b"\n" + encoded[:split])
+
+        first = self.query_recovered_reader(after_seq=2)
+        self.assertEqual(first["samples"], [])
+        reader = self.service._telemetry
+        original_journal = reader._journals[(self.job_id, "active", self.job_id)]
+        original_offset = original_journal.offset
+        with attempt_path.open("ab") as stream:
+            stream.write(encoded[split:] + b"\n")
+        second = self.query_recovered_reader(after_seq=2)
+        self.assertEqual([sample["seq"] for sample in second["samples"]], [3])
+        self.assertEqual(second["samples"][0]["runId"], run_id)
+        self.assertEqual(original_journal.offset, original_offset)
+
+    def test_recovered_history_refuses_ambiguous_origin_journals(self):
+        _, _, original_path = self.prepare_recovered_history(selected_seq=2)
+        variant_directory = self.directory / "active"
+        variant_directory.mkdir()
+        duplicate = variant_directory / f"active.rbm.{uuid.uuid4()}.events.jsonl"
+        duplicate.write_bytes(original_path.read_bytes())
+        self.assertCode("TELEMETRY_AMBIGUOUS", self.query_recovered_reader)
+
+    def test_recovered_history_does_not_fall_back_after_origin_journal_disappears(self):
+        _, _, original_path = self.prepare_recovered_history(selected_seq=2)
+        self.query_recovered_reader()
+        original_path.unlink()
+        self.assertCode("TELEMETRY_CHANGED", self.query_recovered_reader)
+
+    def test_recovered_history_selection_cannot_change_after_projection(self):
+        self.prepare_recovered_history(selected_seq=2)
+        self.query_recovered_reader()
+        self.job["recovery"]["attempts"][1]["inheritedSelection"]["variants"]["active"]["acceptedSeq"] = 1
+        self.assertCode("TELEMETRY_CHANGED", self.query_recovered_reader)
+
+    def test_recovered_history_refuses_symlink_attempt_directory(self):
+        attempt_id = str(uuid.uuid4())
+        attempt_directory = self.directory / "attempts" / attempt_id
+        external = self.base / "external"
+        external.mkdir()
+        (self.directory / "attempts").mkdir()
+        try:
+            attempt_directory.symlink_to(external, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"directory symlinks are unavailable: {error}")
+        result = {"jobId": self.job_id, "mode": "both", "totalSteps": 4,
+                  "dtSeconds": 0.005, "configuration": {"dt": 0.005}}
+        self.job.update(command="workflow.recover", state="running", attemptId=attempt_id,
+                        recovery={"schema": "range.workflow-recovery/v1", "attempts": [
+                            {"attemptId": self.job_id, "directory": str(self.directory),
+                             "partialResult": result},
+                            {"attemptId": attempt_id, "directory": str(attempt_directory),
+                             "partialResult": result,
+                             "inheritedSelection": {"attemptId": self.job_id, "variants": {
+                                 "active": {"phase": "checkpointed", "acceptedSeq": 2}}}}]})
+        self.assertCode("TELEMETRY_PATH", self.query_recovered_reader)
+
+    def test_recovered_history_refuses_unknown_selection_origin(self):
+        self.prepare_recovered_history(selected_seq=2)
+        inherited = self.job["recovery"]["attempts"][1]["inheritedSelection"]
+        inherited["variants"]["active"]["sourceAttemptId"] = str(uuid.uuid4())
+        self.assertCode("TELEMETRY_AMBIGUOUS", self.query_recovered_reader)
+
+    def test_recovered_passive_telemetry_is_explicitly_unavailable(self):
+        self.prepare_recovered_history(selected_seq=2)
+        result = self.query_recovered_reader(mode="passive")
+        self.assertEqual(result["availability"], "unavailable")
+        self.assertIn("Passive", result["message"])
 
 
 if __name__ == "__main__":

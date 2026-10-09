@@ -166,6 +166,8 @@ class WorkflowService:
         self._workers: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._extension_writers: dict[str, str] = {}
         self._commands: dict[str, dict] = {}
+        # Authorization belongs to this live host instance, never its disk state.
+        self._approval_tokens: dict[str, str] = {}
         from .telemetry import TelemetryReader
         self._telemetry = TelemetryReader(self.workspace)
         self._closed = False
@@ -190,7 +192,7 @@ class WorkflowService:
         from .project_catalog import load_project_catalog
         catalog = load_project_catalog(self.workspace)
         if not self._state_path.exists():
-            return {"storageVersion": 1, "projectId": catalog["projectId"] if catalog else str(uuid.uuid4()), "modelId": str(uuid.uuid4()),
+            return {"storageVersion": 2, "projectId": catalog["projectId"] if catalog else str(uuid.uuid4()), "modelId": str(uuid.uuid4()),
                     "sessionId": str(uuid.uuid4()), "revision": 0, "auditRevision": 0,
                     "configuration": {"dt": 0.005, "steps": 400, "targetDamping": 0.1, "model": "four-rod"},
                     "jobs": {}, "previews": {}, "audit": [], "extensions": {}}
@@ -200,7 +202,7 @@ class WorkflowService:
             value = json.loads(self._state_path.read_bytes())
             exact(value, {"storageVersion", "projectId", "modelId", "sessionId", "revision",
                           "auditRevision", "configuration", "jobs", "previews", "audit", "extensions"})
-            if value["storageVersion"] != 1:
+            if value["storageVersion"] not in (1, 2):
                 raise ValueError("unsupported storage version")
             for key in ("projectId", "modelId", "sessionId"):
                 if uuid.UUID(value[key]).int == 0:
@@ -219,6 +221,13 @@ class WorkflowService:
             for jid, job in value["jobs"].items():
                 if str(uuid.UUID(jid)) != jid or job["jobId"] != jid or job["state"] not in TERMINAL_STATES | {"queued", "running", "cancelling"}:
                     raise ValueError("invalid job")
+            # v1 saved raw approval tokens. Migration discards them before the
+            # new session is committed; accepted jobs remain historical facts.
+            for preview in value["previews"].values():
+                if not isinstance(preview, dict):
+                    raise ValueError("invalid preview")
+                preview.pop("approvalToken", None)
+            value["storageVersion"] = 2
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
             raise WorkflowError("CORRUPT_STATE", "Workspace state is invalid; it was preserved") from error
         if catalog is not None and catalog["projectId"] != value["projectId"]:
@@ -404,9 +413,33 @@ class WorkflowService:
             if source["result"]["totalSteps"] + extra > MAX_STEPS:
                 raise WorkflowError("STEP_LIMIT", "Resumed trajectory exceeds 5000 total reference steps")
             return {"jobId": source["jobId"], "additionalSteps": extra}
+        if command == "workflow.recover":
+            exact(parameters, {"jobId", "qualificationSha256"})
+            from .recovery import qualify
+            qualification, source = qualify(self, identifier(parameters["jobId"], "jobId"))
+            if source is None or qualification["eligibility"] != "recoverable":
+                raise WorkflowError("RECOVERY_UNAVAILABLE", qualification["diagnostic"])
+            if parameters["qualificationSha256"] != qualification["qualificationSha256"]:
+                raise WorkflowError("RECOVERY_CHANGED", "Recovery selection changed; query and preview it again")
+            return dict(parameters)
         raise WorkflowError("UNKNOWN_COMMAND", "Command is not in the capability catalog")
 
     def _binding(self, command: str, parameters: dict) -> dict:
+        if command == "workflow.recover":
+            from .recovery import qualify
+            qualification, source = qualify(self, parameters["jobId"])
+            if source is None or qualification.get("qualificationSha256") != parameters["qualificationSha256"]:
+                raise WorkflowError("RECOVERY_CHANGED", "Original recovery evidence changed")
+            job = self._job(parameters["jobId"])
+            binding = copy.deepcopy(self._state["previews"][job["previewId"]]["binding"])
+            # Read-only qualification validates all original sources and results;
+            # these selected checkpoint bytes also enter the approval binding.
+            binding["recoverySelection"] = {"qualificationSha256": parameters["qualificationSha256"]}
+            for variant, selected in qualification["variants"].items():
+                if "checkpointPath" in selected:
+                    binding["recovery/" + variant] = {"path": selected["checkpointPath"],
+                                                     "sha256": selected["checkpointSha256"]}
+            return binding
         if command.startswith("extension."):
             from .extensions import bind_command
             return bind_command(self, command, parameters)
@@ -524,6 +557,10 @@ class WorkflowService:
                 return {"job": self._job(p["jobId"])} if operation == "jobs.query" else {"result": self.result_snapshot(p["jobId"])}
             jobs = list(self._state["jobs"].values())
             return {"jobs": jobs} if operation == "jobs.query" else {"results": [x["result"] for x in jobs if x["state"] == "succeeded" and "result" in x]}
+        if operation == "job.recovery.query":
+            exact(p, {"jobId"})
+            from .recovery import qualify
+            return self._public_recovery_qualification(qualify(self, identifier(p["jobId"], "jobId"))[0])
         if operation in {"result.catalog.query", "result.channels.query", "result.series.query", "result.summary.query"}:
             from .native_results import query_registered
             return query_registered(self, operation.split(".")[1], p)
@@ -544,6 +581,13 @@ class WorkflowService:
                 source = self._state["jobs"].get(source_id, {})
                 source_result = source.get("result", {})
                 scheduled_mode = source_result.get("mode") or source.get("parameters", {}).get("mode")
+            elif job.get("command") == "workflow.recover":
+                scheduled_mode = job.get("result", {}).get("mode")
+                attempts = job.get("recovery", {}).get("attempts", [])
+                if not scheduled_mode and isinstance(attempts, list) and attempts and isinstance(attempts[-1], dict):
+                    partial = attempts[-1].get("partialResult", {})
+                    if isinstance(partial, dict):
+                        scheduled_mode = partial.get("mode")
             return self._telemetry.query(job_id, job, mode, after_seq, limit, scheduled_mode)
         if operation == "audit.query":
             exact(p, set(), {"afterRevision", "limit"})
@@ -597,9 +641,13 @@ class WorkflowService:
                      "revision": expected, "normalized": {"command": command, "parameters": normalized},
                      "binding": self._binding(command, normalized)}
             value["effectiveConfiguration"] = (copy.deepcopy(self._job(normalized["jobId"])["result"]["configuration"])
-                if command == "workflow.resume" else normalized if command == "workflow.configure" else copy.deepcopy(self._state["configuration"]))
-            if command in ("workflow.configure", "workflow.run", "workflow.resume"):
+                if command == "workflow.resume" else copy.deepcopy(self._job(normalized["jobId"])["configuration"])
+                if command == "workflow.recover" else normalized if command == "workflow.configure" else copy.deepcopy(self._state["configuration"]))
+            if command in ("workflow.configure", "workflow.run", "workflow.resume", "workflow.recover"):
                 value["modelBinding"] = self._model_binding(value["effectiveConfiguration"])
+            if command == "workflow.recover":
+                from .recovery import qualify
+                value["recoverySelection"] = self._public_recovery_qualification(qualify(self, normalized["jobId"])[0])
             value["previewHash"] = digest(value)
             if len(candidate["previews"]) >= 1024:
                 raise WorkflowError("PREVIEW_LIMIT", "Workspace preview limit reached")
@@ -612,23 +660,27 @@ class WorkflowService:
             preview = self._preview(p["previewId"])
             if p["previewHash"] != preview["previewHash"]:
                 raise WorkflowError("PREVIEW_MISMATCH", "Approval hash does not match preview")
+            if preview["sessionId"] != self._state["sessionId"]:
+                raise WorkflowError("STALE_REVISION", "Approval belongs to an earlier session")
             if "jobId" in preview:
-                return {"approvalToken": preview.get("approvalToken", ""), "previewId": preview["previewId"]}
+                return {"approvalToken": self._approval_tokens.get(preview["previewId"], ""), "previewId": preview["previewId"]}
             self._validate_preview(preview)
             candidate = copy.deepcopy(self._state)
             approved = candidate["previews"][preview["previewId"]]
-            token = approved.setdefault("approvalToken", secrets.token_urlsafe(32))
+            token = self._approval_tokens.get(preview["previewId"]) or secrets.token_urlsafe(32)
+            approved["approvalState"] = "approved"
             self._commit(candidate, "host.approve", "approved", approval="approved", actor="user",
                          parameters={"previewHash": preview["previewHash"]})
+            self._approval_tokens[preview["previewId"]] = token
             return {"approvalToken": token, "previewId": preview["previewId"]}
         if operation == "command.execute":
             exact(p, {"previewId", "approvalToken"})
             preview = self._preview(p["previewId"])
             token = p["approvalToken"]
-            if not isinstance(token, str) or not secrets.compare_digest(token, preview.get("approvalToken", "")) or not token:
-                raise WorkflowError("APPROVAL_REQUIRED", "A matching host approval is required")
             if preview["sessionId"] != self._state["sessionId"]:
                 raise WorkflowError("STALE_REVISION", "Approval belongs to an earlier session")
+            if not isinstance(token, str) or not secrets.compare_digest(token, self._approval_tokens.get(preview["previewId"], "")) or not token:
+                raise WorkflowError("APPROVAL_REQUIRED", "A matching host approval is required")
             if "jobId" in preview:
                 job = self._job(preview["jobId"])
                 return {"jobId": job["jobId"], "state": job["state"], "revision": self._state["revision"]}
@@ -649,6 +701,15 @@ class WorkflowService:
             jid = str(uuid.uuid4())
             execution_parameters = copy.deepcopy(preview["normalized"]["parameters"])
             stored_parameters = execution_parameters
+            recovering_job = None
+            if command == "workflow.recover":
+                from .recovery import qualify
+                qualification, source = qualify(self, execution_parameters["jobId"])
+                if source is None or qualification.get("qualificationSha256") != execution_parameters["qualificationSha256"]:
+                    raise WorkflowError("RECOVERY_CHANGED", "Recovery evidence changed before acceptance")
+                jid = execution_parameters["jobId"]
+                recovering_job = copy.deepcopy(self._job(jid))
+                execution_parameters = {**execution_parameters, "_recoverySource": source}
             if command.startswith("extension."):
                 from .extensions import compact_job_parameters
                 stored_parameters = compact_job_parameters(command, execution_parameters)
@@ -662,6 +723,13 @@ class WorkflowService:
                    "previewId": preview["previewId"], "previewHash": preview["previewHash"],
                    "projectId": candidate["projectId"], "modelId": candidate["modelId"], "lane": lane,
                    "revision": candidate["revision"]}
+            if recovering_job is not None:
+                job["recovery"] = recovering_job["recovery"]
+                job["attemptId"] = str(uuid.uuid4())
+                job["priorAttempts"] = recovering_job.get("priorAttempts", []) + [{
+                    "previewId": recovering_job["previewId"], "command": recovering_job["command"],
+                    "state": recovering_job["state"], "error": recovering_job.get("error"),
+                    "attemptId": recovering_job.get("attemptId", jid)}]
             candidate["jobs"][jid] = job
             self._compact_stale_extension_previews(candidate["previews"], candidate["revision"],
                                                    candidate["sessionId"])
@@ -693,6 +761,19 @@ class WorkflowService:
             raise WorkflowError("PREVIEW_NOT_FOUND", "Unknown previewId")
         return self._state["previews"][preview_id]
 
+    @staticmethod
+    def _public_recovery_qualification(qualification: dict) -> dict:
+        # Selection is opaque outside the file-owner service. Hashes, policy,
+        # sequence and original attempt identity remain inspectable.
+        def redact(value):
+            if isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()
+                        if key == "relativePath" or (key != "path" and not key.endswith("Path") and not key.endswith("Directory"))}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            return value
+        return redact(qualification)
+
     def _validate_preview(self, preview: dict):
         if preview["sessionId"] != self._state["sessionId"] or preview["revision"] != self._state["revision"]:
             raise WorkflowError("STALE_REVISION", "Preview belongs to an earlier project revision or session")
@@ -722,6 +803,7 @@ class WorkflowService:
         return artifacts
 
     def _run_job(self, job_id: str, cancel: threading.Event, execution_parameters: dict | None = None):
+        directory = None
         try:
             with self._lock:
                 candidate = copy.deepcopy(self._state)
@@ -737,6 +819,8 @@ class WorkflowService:
                 if job.get("lane") == "extension":
                     job["_extensionBinding"] = binding
             directory = self.workspace / "jobs" / job_id
+            if "attemptId" in job:
+                directory = directory / "attempts" / job["attemptId"]
             directory.mkdir(parents=True, exist_ok=False)
             if job["command"] == "workflow.configure":
                 result = {"jobId": job_id, "configuration": job["parameters"]}
@@ -745,9 +829,12 @@ class WorkflowService:
             else:
                 from .jobs import run_native_workflow
                 result = run_native_workflow(self, job, directory, cancel, binding)
-            finite_tree(result)
+            # Native manifests may bind all 5,000 actual frames per variant.
+            # Request limits remain smaller; this is a bounded trusted result.
+            finite_tree(result, max_collection_size=12288 if job["command"] in
+                        ("workflow.run", "workflow.resume", "workflow.recover") else 1024)
             result.setdefault("jobId", job_id)
-            artifacts = self._artifacts(directory)
+            artifacts = self._artifacts(self.workspace / "jobs" / job_id)
             with self._lock:
                 if self._fault:
                     raise WorkflowError("PERSISTENCE_ERROR", "Cannot publish after a persistence failure")
@@ -774,6 +861,18 @@ class WorkflowService:
         except Exception as error:
             code = getattr(error, "code", "EXECUTION_FAILED")
             message = str(error) if isinstance(error, (WorkflowError, ProcessFailure)) else "Job execution failed; inspect job diagnostics"
+            if not isinstance(error, (WorkflowError, ProcessFailure)) and directory is not None:
+                # Diagnostics contain locations only, never exception values,
+                # source lines, locals, requests, approval tokens or credentials.
+                import traceback
+                frames = traceback.extract_tb(error.__traceback__, limit=32)
+                diagnostics = {"exceptionType": type(error).__name__[:64], "frames": [
+                    {"module": Path(frame.filename).name[:128], "function": frame.name[:128], "line": frame.lineno}
+                    for frame in frames]}
+                try:
+                    (directory / "execution-diagnostics.json").write_bytes(canonical(diagnostics))
+                except OSError:
+                    pass
             with self._lock:
                 if not self._fault:
                     candidate = copy.deepcopy(self._state)
@@ -810,6 +909,7 @@ class WorkflowService:
             "project.catalog.query": schema({"persistentDocumentId": id_schema}, []),
             "project.snapshot.query": schema({"persistentDocumentId": id_schema}),
             "jobs.query": schema({"jobId": id_schema}, []), "results.query": schema({"jobId": id_schema}, []),
+            "job.recovery.query": schema({"jobId": id_schema}),
             "telemetry.query": schema({"jobId": id_schema,
                                         "afterSeq": {"type": "integer", "minimum": 0, "maximum": 2**53 - 1},
                                         "limit": {"type": "integer", "minimum": 1, "maximum": 512},
@@ -840,7 +940,7 @@ class WorkflowService:
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200},
                 "cursor": {"type": "string", "maxLength": 16384}}, ["jobId"])
         read_operations = {"capabilities.query", "project.query", "project.catalog.query", "project.snapshot.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
-                           "model.sources.query", "model.source.query",
+                           "model.sources.query", "model.source.query", "job.recovery.query",
                            "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
         operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]
@@ -861,7 +961,11 @@ class WorkflowService:
                                            "independentReference": {"type": "boolean", "const": True}})},
                     {"id": "workflow.resume", "readOnly": False, "requiresApproval": True,
                      "precondition": "Successful native job, unchanged source artifacts, total steps <=5000",
-                     "parameters": schema({"jobId": id_schema, "additionalSteps": {"type": "integer", "minimum": 1, "maximum": MAX_STEPS}})}]
+                     "parameters": schema({"jobId": id_schema, "additionalSteps": {"type": "integer", "minimum": 1, "maximum": MAX_STEPS}})},
+                    {"id": "workflow.recover", "readOnly": False, "requiresApproval": True,
+                     "precondition": "Interrupted logical job with a freshly qualified original attempt",
+                     "parameters": schema({"jobId": id_schema,
+                         "qualificationSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}})}]
         commands += [{"id": name, **entry["descriptor"]} for name, entry in self._commands.items()]
         return {"apiVersion": API_VERSION, "operations": operations, "commands": commands,
                 "capabilityRevision": self._capability_revision(),

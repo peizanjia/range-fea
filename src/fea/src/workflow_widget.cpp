@@ -64,6 +64,20 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     nativeJobChoice = new QComboBox;
     nativeJobChoice->setObjectName("nativeResultJobChoice");
     nativeDocumentLayout->addWidget(nativeJobChoice);
+    nativeRecoveryButton = new QPushButton(tr("Check selected native recovery"));
+    nativeRecoveryButton->setObjectName("nativeRecoveryCheck");
+    nativeRecoveryApply = new QPushButton(tr("Approve this native recovery attempt"));
+    nativeRecoveryApply->setObjectName("nativeRecoveryApply");
+    nativeRecoveryApply->setEnabled(false);
+    nativeRecoveryStatus = new QLabel(tr("Select an interrupted native job to inspect its accepted checkpoint."));
+    nativeRecoveryStatus->setObjectName("nativeRecoveryStatus");
+    nativeRecoveryStatus->setTextFormat(Qt::PlainText);
+    nativeRecoveryStatus->setWordWrap(true);
+    nativeDocumentLayout->addWidget(nativeRecoveryButton);
+    nativeDocumentLayout->addWidget(nativeRecoveryApply);
+    nativeDocumentLayout->addWidget(nativeRecoveryStatus);
+    connect(nativeRecoveryButton, &QPushButton::clicked, this, &WorkflowWidget::checkNativeRecovery);
+    connect(nativeRecoveryApply, &QPushButton::clicked, this, &WorkflowWidget::applyNativeRecovery);
     documentNativeResults = new NativeResultsWidget;
     documentNativeResults->setObjectName("documentNativeResults");
     nativeDocumentLayout->addWidget(documentNativeResults);
@@ -73,6 +87,8 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
             workflowNativeResults->setWorkflowJob(item->data(0, Qt::UserRole).toString(), nativeMode->currentData().toString());
     });
     connect(nativeJobChoice, &QComboBox::currentIndexChanged, this, [this] {
+        nativeRecoveryPreviewId.clear(); nativeRecoveryJobId.clear();
+        nativeRecoveryApply->setEnabled(false);
         documentNativeResults->setArtifact(nativeJobChoice->currentData().toString(), {}, nativeJobChoice->currentText());
     });
     nativeJobTimer.setInterval(1000);
@@ -142,10 +158,13 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     configureButton = new QPushButton(tr("Preview configuration"));
     runButton = new QPushButton(tr("Preview active / passive run"));
     resumeButton = new QPushButton(tr("Preview continuation"));
+    recoverButton = new QPushButton(tr("Check interrupted recovery"));
+    recoverButton->setObjectName("workflowRecover");
     configureButton->setObjectName("workflowConfigure");
     runButton->setObjectName("workflowRun");
     resumeButton->setObjectName("workflowResume");
     buttons->addWidget(configureButton); buttons->addWidget(runButton); buttons->addWidget(resumeButton);
+    buttons->addWidget(recoverButton);
     layout->addLayout(buttons);
     connect(configureButton, &QPushButton::clicked, this, [this] {
         const QString model = modelChoice->currentData().toString();
@@ -178,6 +197,14 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
             previewCommand("workflow.resume", {{"jobId", item->data(0, Qt::UserRole).toString()}, {"additionalSteps", steps->value()}});
     });
     previewText = new QTextBrowser;
+    connect(recoverButton, &QPushButton::clicked, this, [this] {
+        if (const auto *item = jobTree->currentItem())
+        {
+            recoveryRequest = request("job.recovery.query", {{"jobId", item->data(0, Qt::UserRole).toString()}});
+            status->setText(tr("Checking original checkpoints and completed variants…"));
+            setActionAvailability();
+        }
+    });
     previewText->setObjectName("workflowPreview"); previewText->setMaximumHeight(145);
     previewText->setAccessibleName(tr("Changes awaiting approval"));
     layout->addWidget(previewText);
@@ -283,6 +310,7 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
         }
         continuations.remove(id);
         if (id == jobsRequest) jobsRequest.clear();
+        if (id == recoveryRequest) recoveryRequest.clear();
         commandInFlight = false;
         showFailure(message);
     });
@@ -310,6 +338,8 @@ void WorkflowWidget::setSession(Session *value)
     if (session == value) return;
     if (session) disconnect(session, nullptr, this, nullptr);
     session = value;
+    nativeRecoveryPreviewId.clear(); nativeRecoveryJobId.clear();
+    nativeRecoveryApply->setEnabled(false);
     if (!session) return;
     documentNativeResults->setQueryHandler([this](const QString &operation, const QJsonObject &parameters) {
         if (!session) return QJsonObject{{"valid", false}, {"message", tr("Document session is unavailable.")}};
@@ -720,6 +750,23 @@ void WorkflowWidget::refreshJobs()
 void WorkflowWidget::onReply(const QString &id, const QString &operation, const QJsonObject &result)
 {
     if (!ownedRequests.remove(id)) return;
+    if (operation == "job.recovery.query" && id == recoveryRequest)
+    {
+        recoveryRequest.clear();
+        const auto *item = jobTree->currentItem();
+        if (!item || item->data(0, Qt::UserRole).toString() != result.value("jobId").toString())
+        { setActionAvailability(); return; }
+        const QString eligibility = result.value("eligibility").toString();
+        const QMap<QString, QString> labels{{"recoverable", tr("Recoverable")},
+            {"recompute_required", tr("Recomputation required")},
+            {"reconcile_required", tr("Reconciliation required")}, {"conflict", tr("Conflict")}};
+        status->setText(labels.value(eligibility, tr("Recovery unavailable")) + " · " + result.value("diagnostic").toString());
+        if (eligibility == "recoverable")
+            previewCommand("workflow.recover", {{"jobId", result.value("jobId")},
+                {"qualificationSha256", result.value("qualificationSha256")}});
+        setActionAvailability();
+        return;
+    }
     if (operation == QStringLiteral("model.sources.query"))
     {
         const QString selected = selectedSourceId();
@@ -804,6 +851,7 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
         const auto normalized = result.value("normalized").toObject();
         const QString command = normalized.value("command").toString();
         const QString title = command == "workflow.configure" ? tr("Save configuration")
+                              : command == "workflow.recover" ? tr("Recover interrupted calculation with a new attempt")
                               : command == "workflow.resume" ? tr("Continue selected calculation") : tr("Run control comparison");
         QString summary = tr("%1\nModel: %2\nTime step: %3 s\nConfigured steps: %4\nTarget damping ratio: %5\n%6")
             .arg(title, configuration.value("model").toString())
@@ -822,6 +870,23 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
                                 : tr("Origin document status: stale — %1").arg(reason));
         }
         previewText->setPlainText(summary);
+        if (command == "workflow.recover")
+        {
+            const auto selection = result.value("recoverySelection").toObject();
+            summary += tr("\nFrozen target: %1 accepted steps\nOriginal attempt: %2")
+                .arg(selection.value("targetSteps").toInt()).arg(selection.value("attemptId").toString());
+            const auto variants = selection.value("variants").toObject();
+            for (const QString &variant : {QStringLiteral("active"), QStringLiteral("passive")})
+            {
+                if (!variants.value(variant).isObject()) continue;
+                const auto state = variants.value(variant).toObject();
+                summary += tr("\n%1: %2 · accepted %3 · remaining %4 · checkpoint %5")
+                    .arg(variant, state.value("phase").toString())
+                    .arg(state.value("acceptedSeq").toInt()).arg(state.value("remainingSteps").toInt())
+                    .arg(state.value("checkpointSha256").toString().left(12));
+            }
+            previewText->setPlainText(summary);
+        }
         status->setText(tr("Review the values, then apply this preview."));
         emit previewAvailable(preview);
     }
@@ -866,7 +931,8 @@ void WorkflowWidget::onReply(const QString &id, const QString &operation, const 
             const QString command = job.value("command").toString();
             item->setData(0, Qt::UserRole + 1, command);
             const QMap<QString, QString> labels{{"workflow.configure", tr("Settings")},
-                {"workflow.run", tr("Control run")}, {"workflow.resume", tr("Continuation")}};
+                {"workflow.run", tr("Control run")}, {"workflow.resume", tr("Continuation")},
+                {"workflow.recover", tr("Recovery attempt")}};
             item->setText(0, labels.value(command, tr("Extension task")) + " · " + jobId.left(6));
             QString jobTooltip = tr("Created: %1\nTask: %2").arg(job.value("createdAt").toString(), jobId);
             const auto jobBinding = job.value(QStringLiteral("result")).toObject().value(QStringLiteral("modelBinding")).toObject();
@@ -961,14 +1027,66 @@ void WorkflowWidget::refreshNativeJobs()
     {
         const auto job = value.toObject();
         const QString state = job.value("state").toString();
-        if (state != "succeeded" && state != "running" && state != "cancelling") continue;
+        if (state != "succeeded" && state != "running" && state != "cancelling" && state != "interrupted") continue;
         const QString id = job.value("jobId").toString();
         nativeJobChoice->addItem(tr("%1 · %2").arg(id.left(8), state), id);
         if (id == selected) nativeJobChoice->setCurrentIndex(nativeJobChoice->count() - 1);
     }
     const QString current = nativeJobChoice->currentData().toString();
     if (current != selected)
+    {
+        nativeRecoveryPreviewId.clear(); nativeRecoveryJobId.clear();
+        nativeRecoveryApply->setEnabled(false);
         documentNativeResults->setArtifact(current, {}, nativeJobChoice->currentText());
+    }
+}
+
+void WorkflowWidget::checkNativeRecovery()
+{
+    nativeRecoveryPreviewId.clear(); nativeRecoveryApply->setEnabled(false);
+    if (!session || nativeJobChoice->currentData().toString().isEmpty()) return;
+    nativeRecoveryJobId = nativeJobChoice->currentData().toString();
+    auto *host = session->getModelCommandHost();
+    const auto requestHost = [host](const QString &operation, const QJsonObject &parameters) {
+        return host->handle({{"apiVersion", "range.host/v1"}, {"requestId", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+            {"operation", operation}, {"parameters", parameters}});
+    };
+    const auto response = requestHost("native.job.recovery.query", {{"jobId", nativeRecoveryJobId}});
+    const auto qualification = response.value("result").toObject();
+    const auto checkpoint = qualification.value("checkpoint").toObject();
+    const QMap<QString, QString> states{{"recoverable", tr("Recoverable")}, {"recompute_required", tr("Recomputation required")},
+        {"reconcile_required", tr("Reconciliation required")}, {"conflict", tr("Conflict")}};
+    nativeRecoveryStatus->setText(states.value(qualification.value("eligibility").toString(), tr("Unavailable"))
+        + " · " + qualification.value("message").toString());
+    const int remaining = checkpoint.value("remainingSteps").toInt();
+    if (qualification.value("eligibility") != QJsonValue("recoverable") || remaining <= 0) return;
+    const auto proposal = requestHost("command.preview", {{"command", "analysis.recover"}, {"commandVersion", 1},
+        {"arguments", QJsonObject{{"jobId", nativeRecoveryJobId}, {"checkpointSha256", checkpoint.value("checkpointSha256")},
+            {"remainingSteps", remaining}}}});
+    if (proposal.value("status") != QJsonValue("preview"))
+    { nativeRecoveryStatus->setText(proposal.value("message").toString()); return; }
+    nativeRecoveryPreviewId = proposal.value("result").toObject().value("previewId").toString();
+    nativeRecoveryStatus->setText(tr("Checkpoint step %1 · target %2 · remaining %3\nSHA %4\nA separate attempt will preserve the original document and job history.")
+        .arg(checkpoint.value("acceptedSeq").toInt()).arg(checkpoint.value("targetSteps").toInt()).arg(remaining)
+        .arg(checkpoint.value("checkpointSha256").toString()));
+    nativeRecoveryApply->setEnabled(!nativeRecoveryPreviewId.isEmpty());
+}
+
+void WorkflowWidget::applyNativeRecovery()
+{
+    if (!session || nativeRecoveryPreviewId.isEmpty() || nativeJobChoice->currentData().toString() != nativeRecoveryJobId) return;
+    auto *host = session->getModelCommandHost();
+    const QString approved = nativeRecoveryPreviewId;
+    nativeRecoveryPreviewId.clear(); nativeRecoveryApply->setEnabled(false);
+    if (!host->approvePreview(approved))
+    { nativeRecoveryStatus->setText(tr("Checkpoint qualification changed. Check recovery again before approving.")); return; }
+    const auto accepted = host->handle({{"apiVersion", "range.host/v1"}, {"requestId", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+        {"operation", "command.execute"}, {"parameters", QJsonObject{{"previewId", approved},
+            {"idempotencyKey", QUuid::createUuid().toString(QUuid::WithoutBraces)}}}});
+    nativeRecoveryStatus->setText(accepted.value("status") == QJsonValue("accepted")
+        ? tr("Recovery attempt %1 was submitted. Its actual progress and results remain independently queryable.")
+            .arg(accepted.value("result").toObject().value("jobId").toString()) : accepted.value("message").toString());
+    refreshNativeJobs();
 }
 
 void WorkflowWidget::showFailure(const QString &message)
@@ -1002,6 +1120,10 @@ void WorkflowWidget::setActionAvailability()
     resumeButton->setEnabled(available && state == "succeeded" && item &&
         (item->data(0, Qt::UserRole + 1).toString() == "workflow.run" || item->data(0, Qt::UserRole + 1).toString() == "workflow.resume"));
     cancelButton->setEnabled(service.isReady() && (state == "queued" || state == "running"));
+    const QString selectedCommand = item ? item->data(0, Qt::UserRole + 1).toString() : QString();
+    const bool calculation = selectedCommand == "workflow.run" || selectedCommand == "workflow.resume" || selectedCommand == "workflow.recover";
+    resumeButton->setEnabled(available && state == "succeeded" && calculation);
+    recoverButton->setEnabled(available && state == "interrupted" && calculation && recoveryRequest.isEmpty());
 }
 
 QString WorkflowWidget::request(const QString &operation, const QJsonObject &parameters)

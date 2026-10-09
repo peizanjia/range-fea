@@ -45,6 +45,20 @@ public:
     // without changing lifecycle. Repeating the current transition is a no-op.
     bool setRunning(bool running);
     bool close();
+    // Build the exact close interaction record and its expected journal
+    // predecessor without appending it. Persist the returned payload through
+    // the project operations close queue before calling closeWithRetryPayload.
+    QJsonObject prepareCloseRetry(const QString &retryId, const QString &operationId,
+                                  QString *error = nullptr) const;
+    bool closeWithRetryPayload(const QJsonObject &payload, QString *error = nullptr);
+    static bool validateCloseRetryPayload(const QJsonObject &payload,
+                                          QString *error = nullptr,
+                                          QString *errorCode = nullptr);
+    // Replays the exact close record only when the journal has its captured
+    // predecessor or already contains the same recordId and bytes.
+    static bool replayCloseRetry(const QJsonObject &payload,
+                                 QString *error = nullptr,
+                                 QString *errorCode = nullptr);
     // Called AFTER a trusted host changes its live model. The old identity is
     // closed even on audit failure because its snapshot is already stale.
     bool recordExternalChange(const QString &reason, const RModel &changedModel,

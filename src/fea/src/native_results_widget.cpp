@@ -428,11 +428,13 @@ void NativeResultsWidget::refreshView()
     const QString coverage = snapshot.value("sparse").toBool() ? tr("Sparse native records") : tr("Actual native records");
     const QString lifecycle = origin.value("live").toBool() ? tr("Live snapshot") : tr("Published snapshot");
     const auto source = origin.value("sourceSnapshotRef").toObject();
-    const QString version = source.value("sourceRevision").toString(tr("Template snapshot"));
+    const QString version = source.value("sourceRevision").toString(tr("Frozen input snapshot"));
     const QString modelSha = source.value("modelSha256").toString(source.value("sourceSha256").toString());
-    sourceInfo->setText(tr("%1 · %2 frames · %3 · %4\nSource version: %5 · model %6 · %7 history frames reused")
-        .arg(snapshot.value("sourceLabel").toString()).arg(origin.value("frameCount").toInt())
-        .arg(coverage, lifecycle, version, modelSha.left(12)).arg(origin.value("reusedHistoryCount").toInt()));
+    sourceInfo->setText(origin.isEmpty()
+        ? tr("No verified native result provenance is available for this job.")
+        : tr("%1 · %2 frames · %3 · %4\nSource version: %5 · model %6 · %7 history frames reused")
+            .arg(snapshot.value("sourceLabel").toString()).arg(origin.value("frameCount").toInt())
+            .arg(coverage, lifecycle, version, modelSha.left(12)).arg(origin.value("reusedHistoryCount").toInt()));
     sourceInfo->setToolTip(jsonText(origin));
     const auto stats = snapshot.value("summary").toObject();
     statusLabel->setText(tr("%1 displayed native samples%2%3").arg(points.size())

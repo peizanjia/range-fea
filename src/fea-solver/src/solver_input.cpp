@@ -1,5 +1,7 @@
 #include "solver_input.h"
 
+#include <QByteArray>
+
 void SolverInput::_init(const SolverInput *pSolverInput)
 {
     if (pSolverInput)
@@ -17,6 +19,9 @@ void SolverInput::_init(const SolverInput *pSolverInput)
         this->typedCheckpointFileName = pSolverInput->typedCheckpointFileName;
         this->typedControllerIdentity = pSolverInput->typedControllerIdentity;
         this->typedConfigurationFileName = pSolverInput->typedConfigurationFileName;
+        this->nativeCheckpointDirectory = pSolverInput->nativeCheckpointDirectory;
+        this->nativeCheckpointContextJson = pSolverInput->nativeCheckpointContextJson;
+        this->nativeExecutionGate = pSolverInput->nativeExecutionGate;
         this->restart = pSolverInput->restart;
     }
 }
@@ -107,4 +112,16 @@ void SolverInput::setTypedControlRun(uint steps,const QString &checkpointFileNam
     this->typedCheckpointFileName=checkpointFileName;
     this->typedControllerIdentity=controllerIdentity;
     this->typedConfigurationFileName=configurationFileName;
+}
+
+void SolverInput::setNativeCheckpointRun(const QString &directory,const QByteArray &contextJson)
+{
+    this->nativeCheckpointDirectory = directory;
+    this->nativeCheckpointContextJson = contextJson;
+}
+
+void SolverInput::setNativeExecutionGate(
+    const std::shared_ptr<NativeExecutionGate> &gate)
+{
+    this->nativeExecutionGate = gate;
 }

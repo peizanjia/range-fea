@@ -6,6 +6,7 @@
 #include <QList>
 #include <memory>
 #include <rml_modal_setup.h>
+#include <rproject_catalog.h>
 
 class Session;
 
@@ -25,12 +26,14 @@ public:
     //! Trusted GUI approval boundary. This is deliberately not a handle operation.
     bool approvePreview(const QString &previewId);
     bool configureModal(const QList<uint> &modelIDs, const RModalSetup &setup, QString *error = nullptr);
-    bool recordArtifactPublished(uint modelID, const QString &path, QString *error = nullptr);
+    bool recordArtifactPublished(uint modelID, const QString &path, QString *error = nullptr,
+                                 const RProjectCatalog::PublicationLeasePtr &publicationLease = {});
     //! Audit a completed legacy GUI mutation and retire its old command identity.
     bool recordExternalChange(uint modelID, const QString &reason, QString *error = nullptr);
     QString journalPath() const;
     //! Runtime session namespace. Persistent project/document identities are separate.
     QString sessionEpoch() const;
+    bool closeDurableSessions(QString *error = nullptr);
     static bool isBusy();
     static bool isMutationBlocked();
 
@@ -43,6 +46,8 @@ private:
     std::unique_ptr<State> state;
     Session *session;
     void pruneClosedModels();
+    bool closeEditingDurably(const QString &documentId, QString *error = nullptr,
+                             const RProjectCatalog::PublicationLeasePtr &publicationLease = {});
     bool recordExternalChangeAfterNotification(uint modelID, const QString &reason,
                                                QString *error = nullptr);
 };

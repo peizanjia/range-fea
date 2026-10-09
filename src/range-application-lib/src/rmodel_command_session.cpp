@@ -66,7 +66,7 @@ bool normalizeJournalPath(const QString &configuredPath, QString &path, QString 
             if (error) *error = QStringLiteral("Journal path must be a regular non-symbolic file.");
             return false;
         }
-        path = info.canonicalFilePath();
+        path = QDir::cleanPath(QDir::fromNativeSeparators(info.canonicalFilePath()));
         if (!path.isEmpty()) return true;
         if (error) *error = QStringLiteral("Cannot resolve the interaction journal path.");
         return false;
@@ -82,7 +82,7 @@ bool normalizeJournalPath(const QString &configuredPath, QString &path, QString 
         if (error) *error = QStringLiteral("Journal directory must exist and the file name must be valid.");
         return false;
     }
-    path = QDir(parent).filePath(info.fileName());
+    path = QDir::cleanPath(QDir::fromNativeSeparators(QDir(parent).filePath(info.fileName())));
     return true;
 }
 
@@ -233,6 +233,250 @@ bool writeJournal(const QString &path, const JournalData &journal, QString *erro
     }
     return true;
 }
+
+bool validateJournalOptions(const RModelCommandSession::JournalOptions &options, QString *error)
+{
+    if (options.actorId.isEmpty() || options.actorId.size() > 128
+        || options.actorId.contains(QLatin1Char('\n')) || options.actorId.contains(QLatin1Char('\r'))
+        || options.sourcePath.size() > 4096
+        || (options.sourcePath.isEmpty() != options.sourceSha256.isEmpty())
+        || (!options.sourceSha256.isEmpty()
+            && !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(options.sourceSha256).hasMatch()))
+    {
+        if (error) *error = QStringLiteral("Trusted interaction journal metadata is invalid.");
+        return false;
+    }
+    return true;
+}
+
+bool buildJournalRecord(const RModelCommandSession::JournalOptions &options,
+                        const QString &sessionIdentity, const QUuid &currentRunId,
+                        const QUuid &journalProjectId, const QUuid &parentRecordId,
+                        const QDateTime &timestamp, const QString &commandId,
+                        const QString &resultStatus, const QString &modelRevision,
+                        const QString &preRevision,
+                        const QString &preStateHash, const QString &postStateHash,
+                        const QJsonObject &parameters, const QJsonObject &selectionSnapshot,
+                        const QJsonArray &artifactRefs, const QJsonArray &diagnostics,
+                        RInteractionRecordV1 &record, QString *error)
+{
+    if (!validateJournalOptions(options, error)) return false;
+    const QUuid sessionId(sessionIdentity);
+    if (sessionId.isNull() || journalProjectId.isNull())
+    {
+        if (error) *error = QStringLiteral("Trusted interaction record identity is invalid.");
+        return false;
+    }
+    record.recordId = QUuid::createUuid();
+    record.parentRecordId = parentRecordId;
+    record.timestampUtc = timestamp;
+    record.actorType = QStringLiteral("system");
+    record.actorId = options.actorId;
+    record.sessionId = sessionId;
+    record.projectId = journalProjectId;
+    record.modelId = sessionId;
+    // The v1 token grammar starts with a letter; public revisions retain their
+    // historical UUID:generation representation for API compatibility.
+    record.modelRevision = QStringLiteral("session:") + modelRevision;
+    record.runId = selectionSnapshot.contains(QStringLiteral("runId"))
+        ? QUuid(selectionSnapshot.value(QStringLiteral("runId")).toString()) : currentRunId;
+    record.workflowStage = QStringLiteral("modal_configuration");
+    record.commandId = commandId;
+    record.commandVersion = QStringLiteral("1.0.0");
+    record.parameters = parameters;
+    record.selectionSnapshot = selectionSnapshot;
+    // InteractionRecord v1 forbids null payload values. Preserve the exact
+    // nullable axis request as bounded JSON text, without changing that schema
+    // or substituting zero for an explicitly disabled component.
+    if (commandId == QStringLiteral("entity.boundary.set"))
+    {
+        const QJsonArray axes = parameters.value(QStringLiteral("values")).toArray();
+        bool nullableAxis = false;
+        for (const QJsonValue &axis : axes) nullableAxis |= axis.isNull();
+        if (nullableAxis)
+        {
+            const QByteArray encoded = QJsonDocument(parameters).toJson(QJsonDocument::Compact);
+            if (encoded.size() > 4096)
+            {
+                if (error) *error = QStringLiteral("Nullable axis parameters exceed the lossless audit encoding limit.");
+                return false;
+            }
+            record.parameters = {{QStringLiteral("json"), QString::fromUtf8(encoded)}};
+            record.selectionSnapshot.insert(QStringLiteral("parametersEncoding"), QStringLiteral("json-text/v1"));
+        }
+    }
+    record.selectionSnapshot.insert(QStringLiteral("preRevision"), preRevision);
+    record.selectionSnapshot.insert(QStringLiteral("postRevision"), modelRevision);
+    record.selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("supported_model_state"));
+    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 2);
+    if (!options.sourcePath.isEmpty())
+        record.selectionSnapshot.insert(QStringLiteral("sourcePath"), options.sourcePath);
+    if (!options.sourceSha256.isEmpty())
+        record.selectionSnapshot.insert(QStringLiteral("sourceSha256"), options.sourceSha256);
+    record.approvalState = QStringLiteral("not_required");
+    record.preStateHash = preStateHash;
+    record.postStateHash = postStateHash;
+    record.resultStatus = resultStatus;
+    record.diagnostics = diagnostics;
+    record.artifactRefs = artifactRefs;
+    record.applicationVersion = RVendor::version().toString();
+    return true;
+}
+
+struct ParsedCloseRetryPayload
+{
+    QString retryId;
+    QString operationId;
+    QString journalPath;
+    QString journalProjectId;
+    bool expectedJournalExists = false;
+    QString expectedJournalSha256;
+    RInteractionRecordV1 record;
+    QByteArray recordBytes;
+};
+
+bool containsSensitiveKey(const QJsonValue &value, int depth = 0)
+{
+    if (depth > 16) return true;
+    if (value.isArray())
+    {
+        const QJsonArray array = value.toArray();
+        if (array.size() > 256) return true;
+        for (const QJsonValue &item : array)
+            if (containsSensitiveKey(item, depth + 1)) return true;
+    }
+    else if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        if (object.size() > 256) return true;
+        for (auto it = object.begin(); it != object.end(); ++it)
+        {
+            QString key = it.key().toCaseFolded();
+            key.remove(QRegularExpression(QStringLiteral("[^a-z0-9]")));
+            if (key.contains(QStringLiteral("token")) || key.contains(QStringLiteral("secret"))
+                || key.contains(QStringLiteral("credential")) || key.contains(QStringLiteral("password"))
+                || key.contains(QStringLiteral("apikey")) || key.contains(QStringLiteral("authorization"))
+                || key == QStringLiteral("auth") || key.contains(QStringLiteral("authheader"))
+                || key.contains(QStringLiteral("cookie")) || containsSensitiveKey(it.value(), depth + 1))
+                return true;
+        }
+    }
+    return false;
+}
+
+bool boundedCloseRetryValue(const QJsonValue &value, int depth = 0, int *nodeCount = nullptr)
+{
+    int localCount = 0;
+    if (!nodeCount) nodeCount = &localCount;
+    if (depth > 16 || ++(*nodeCount) > 4096) return false;
+    if (value.isString()) return value.toString().toUtf8().size() <= 16 * 1024;
+    if (value.isDouble()) return std::isfinite(value.toDouble());
+    if (value.isArray())
+    {
+        const QJsonArray array = value.toArray();
+        if (array.size() > 256) return false;
+        for (const QJsonValue &item : array)
+            if (!boundedCloseRetryValue(item, depth + 1, nodeCount)) return false;
+        return true;
+    }
+    if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        if (object.size() > 256) return false;
+        for (auto it = object.begin(); it != object.end(); ++it)
+            if (it.key().toUtf8().size() > 128 || !boundedCloseRetryValue(it.value(), depth + 1, nodeCount)) return false;
+        return true;
+    }
+    return value.isBool() || value.isNull();
+}
+
+bool parseCloseRetryPayload(const QJsonObject &payload, ParsedCloseRetryPayload &parsed,
+                            QString *error)
+{
+    int nodeCount = 0;
+    if (QJsonDocument(payload).toJson(QJsonDocument::Compact).size() > 64 * 1024
+        || !boundedCloseRetryValue(QJsonValue(payload), 0, &nodeCount)
+        || !exactKeys(payload, {QStringLiteral("retryVersion"), QStringLiteral("retryId"),
+            QStringLiteral("operationId"), QStringLiteral("journalPath"),
+            QStringLiteral("journalProjectId"), QStringLiteral("expectedJournalExists"),
+            QStringLiteral("expectedJournalSha256"), QStringLiteral("record"),
+            QStringLiteral("recordSha256")})
+        || payload.value(QStringLiteral("retryVersion")).toInt(-1) != 1
+        || !payload.value(QStringLiteral("retryId")).isString()
+        || !payload.value(QStringLiteral("operationId")).isString()
+        || !payload.value(QStringLiteral("journalPath")).isString()
+        || !payload.value(QStringLiteral("journalProjectId")).isString()
+        || !payload.value(QStringLiteral("expectedJournalExists")).isBool()
+        || !payload.value(QStringLiteral("expectedJournalSha256")).isString()
+        || !payload.value(QStringLiteral("record")).isObject()
+        || !payload.value(QStringLiteral("recordSha256")).isString()
+        || containsSensitiveKey(QJsonValue(payload)))
+    {
+        if (error) *error = QStringLiteral("Close retry payload is malformed, oversized, or contains a sensitive field.");
+        return false;
+    }
+    parsed.retryId = payload.value(QStringLiteral("retryId")).toString();
+    parsed.operationId = payload.value(QStringLiteral("operationId")).toString();
+    parsed.journalPath = payload.value(QStringLiteral("journalPath")).toString();
+    parsed.journalProjectId = payload.value(QStringLiteral("journalProjectId")).toString();
+    parsed.expectedJournalExists = payload.value(QStringLiteral("expectedJournalExists")).toBool();
+    parsed.expectedJournalSha256 = payload.value(QStringLiteral("expectedJournalSha256")).toString();
+    const auto canonicalUuid = [](const QString &value) {
+        const QUuid id(value);
+        return !id.isNull() && id.toString(QUuid::WithoutBraces).toLower() == value;
+    };
+    bool cleanAbsoluteJournalPath = !parsed.journalPath.isEmpty()
+        && parsed.journalPath.toUtf8().size() <= 4096
+        && QDir::isAbsolutePath(parsed.journalPath)
+        && QDir::cleanPath(QDir::fromNativeSeparators(parsed.journalPath)) == parsed.journalPath
+        && !QFileInfo(parsed.journalPath).fileName().isEmpty();
+    for (const QChar character : parsed.journalPath)
+        if (character.unicode() < 0x20 || character.unicode() == 0x7f) cleanAbsoluteJournalPath = false;
+    if (!canonicalUuid(parsed.retryId) || !canonicalUuid(parsed.operationId)
+        || !canonicalUuid(parsed.journalProjectId)
+        || !cleanAbsoluteJournalPath
+        || (parsed.expectedJournalExists
+                ? !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$"))
+                       .match(parsed.expectedJournalSha256).hasMatch()
+                : !parsed.expectedJournalSha256.isEmpty()))
+    {
+        if (error && error->isEmpty()) *error = QStringLiteral("Close retry identity, journal path, or expected hash is invalid.");
+        return false;
+    }
+    parsed.recordBytes = QJsonDocument(payload.value(QStringLiteral("record")).toObject())
+                             .toJson(QJsonDocument::Compact);
+    QString recordError;
+    if (!RInteractionRecordV1::fromJson(parsed.recordBytes, parsed.record, &recordError))
+    {
+        if (error) *error = QStringLiteral("Close retry interaction record is invalid.");
+        return false;
+    }
+    QByteArray canonicalRecordBytes;
+    if (!parsed.record.toJson(canonicalRecordBytes, &recordError)
+        || QString::fromLatin1(QCryptographicHash::hash(canonicalRecordBytes, QCryptographicHash::Sha256).toHex())
+            != payload.value(QStringLiteral("recordSha256")).toString()
+        || parsed.record.projectId.toString(QUuid::WithoutBraces).toLower() != parsed.journalProjectId
+        || parsed.record.recordId.isNull() || parsed.record.sessionId.isNull()
+        || parsed.record.modelId.isNull()
+        || parsed.record.modelId != parsed.record.sessionId
+        || parsed.record.actorType != QStringLiteral("system")
+        || parsed.record.workflowStage != QStringLiteral("modal_configuration")
+        || parsed.record.commandVersion != QStringLiteral("1.0.0")
+        || parsed.record.commandId != QStringLiteral("model.session.close")
+        || parsed.record.resultStatus != QStringLiteral("closed")
+        || parsed.record.approvalState != QStringLiteral("not_required")
+        || !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(parsed.record.preStateHash).hasMatch()
+        || parsed.record.postStateHash != parsed.record.preStateHash
+        || !parsed.record.parameters.isEmpty() || !parsed.record.artifactRefs.isEmpty()
+        || !parsed.record.diagnostics.isEmpty()
+        || (!parsed.expectedJournalExists && !parsed.record.parentRecordId.isNull()))
+    {
+        if (error) *error = QStringLiteral("Close retry interaction record does not match its hash or close-event scope.");
+        return false;
+    }
+    parsed.recordBytes = canonicalRecordBytes;
+    return true;
+}
 }
 
 struct RModelCommandSession::State
@@ -343,6 +587,249 @@ bool RModelCommandSession::close()
     return true;
 }
 
+QJsonObject RModelCommandSession::prepareCloseRetry(const QString &retryId,
+                                                   const QString &operationId,
+                                                   QString *error) const
+{
+    if (error) error->clear();
+    if (QThread::currentThreadId() != ownerThread || state->lifecycle == Lifecycle::Closed
+        || state->journal.path.isEmpty())
+    {
+        if (error) *error = QStringLiteral("Durable close retry requires an open journaled session on its owner thread.");
+        return {};
+    }
+    const auto canonicalUuid = [](const QString &value) {
+        const QUuid id(value);
+        return !id.isNull() && id.toString(QUuid::WithoutBraces).toLower() == value;
+    };
+    if (!canonicalUuid(retryId) || !canonicalUuid(operationId))
+    {
+        if (error) *error = QStringLiteral("Close retry and operation IDs must be canonical UUIDs.");
+        return {};
+    }
+    const JournalOptions &options = state->journal;
+    if (!validateJournalOptions(options, error)) return {};
+    QString path;
+    if (!normalizeJournalPath(options.path, path, error)) return {};
+    const QString journalLockPath = path + QStringLiteral(".lock");
+    if (QFileInfo(journalLockPath).isSymLink())
+    {
+        if (error) *error = QStringLiteral("Interaction journal lock path is a symbolic link.");
+        return {};
+    }
+    QLockFile lock(journalLockPath);
+    lock.setStaleLockTime(0);
+    if (!lock.tryLock(0))
+    {
+        if (error) *error = QStringLiteral("Interaction journal is busy.");
+        return {};
+    }
+    JournalData journal;
+    if (!readJournal(path, journal, error)) return {};
+    if (journal.records.size() >= MaxJournalRecords)
+    {
+        if (error) *error = QStringLiteral("Interaction journal reached its record limit.");
+        return {};
+    }
+    const bool journalExists = QFileInfo::exists(path);
+    QString expectedJournalSha256;
+    if (journalExists && !sha256File(path, expectedJournalSha256, error)) return {};
+    const QUuid parentRecordId = journal.records.isEmpty()
+        ? QUuid{} : journal.records.constLast().recordId;
+    const QString currentHash = RModelCommandService::stateFingerprint(state->model);
+    RInteractionRecordV1 record;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    if (!buildJournalRecord(options, identity, state->runId, journal.projectId, parentRecordId,
+                            now, QStringLiteral("model.session.close"), QStringLiteral("closed"),
+                            revision(), revision(), currentHash, currentHash, QJsonObject{},
+                            QJsonObject{}, QJsonArray{}, QJsonArray{}, record, error)) return {};
+    QByteArray recordBytes;
+    if (!record.toJson(recordBytes, error)) return {};
+    QJsonParseError parseError;
+    const QJsonDocument recordDocument = QJsonDocument::fromJson(recordBytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !recordDocument.isObject())
+    {
+        if (error) *error = QStringLiteral("Prepared close interaction record is not valid JSON.");
+        return {};
+    }
+    const QJsonObject payload{{QStringLiteral("retryVersion"), 1},
+        {QStringLiteral("retryId"), retryId},
+        {QStringLiteral("operationId"), operationId},
+        {QStringLiteral("journalPath"), path},
+        {QStringLiteral("journalProjectId"), journal.projectId.toString(QUuid::WithoutBraces).toLower()},
+        {QStringLiteral("expectedJournalExists"), journalExists},
+        {QStringLiteral("expectedJournalSha256"), expectedJournalSha256},
+        {QStringLiteral("record"), recordDocument.object()},
+        {QStringLiteral("recordSha256"), QString::fromLatin1(
+             QCryptographicHash::hash(recordBytes, QCryptographicHash::Sha256).toHex())}};
+    QString validationError;
+    if (!validateCloseRetryPayload(payload, &validationError))
+    {
+        if (error) *error = validationError;
+        return {};
+    }
+    return payload;
+}
+
+bool RModelCommandSession::closeWithRetryPayload(const QJsonObject &payload, QString *error)
+{
+    if (error) error->clear();
+    if (QThread::currentThreadId() != ownerThread || state->lifecycle == Lifecycle::Closed)
+    {
+        if (error) *error = QStringLiteral("Close retry commit requires a ready session on its owner thread.");
+        return false;
+    }
+    ParsedCloseRetryPayload parsed;
+    if (!parseCloseRetryPayload(payload, parsed, error)) return false;
+    QString configuredPath;
+    if (state->journal.path.isEmpty()
+        || !normalizeJournalPath(state->journal.path, configuredPath, error)
+        || configuredPath != parsed.journalPath
+        || parsed.record.sessionId != QUuid(identity)
+        || parsed.record.modelId != QUuid(identity)
+        || parsed.record.modelRevision != QStringLiteral("session:") + revision()
+        || parsed.record.preStateHash != RModelCommandService::stateFingerprint(state->model)
+        || parsed.record.postStateHash != parsed.record.preStateHash)
+    {
+        if (error && error->isEmpty()) *error = QStringLiteral("Close retry payload no longer matches this session snapshot.");
+        return false;
+    }
+    QString errorCode;
+    if (!replayCloseRetry(payload, error, &errorCode)) return false;
+    state->lifecycle = Lifecycle::Closed;
+    return true;
+}
+
+bool RModelCommandSession::validateCloseRetryPayload(const QJsonObject &payload,
+                                                     QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    ParsedCloseRetryPayload parsed;
+    if (!parseCloseRetryPayload(payload, parsed, error))
+    {
+        if (errorCode) *errorCode = QStringLiteral("invalid_close_retry_payload");
+        return false;
+    }
+    return true;
+}
+
+bool RModelCommandSession::replayCloseRetry(const QJsonObject &payload,
+                                            QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    ParsedCloseRetryPayload parsed;
+    if (!parseCloseRetryPayload(payload, parsed, error))
+    {
+        if (errorCode) *errorCode = QStringLiteral("invalid_close_retry_payload");
+        return false;
+    }
+    if (QFileInfo(parsed.journalPath).isSymLink())
+    {
+        if (error) *error = QStringLiteral("Interaction journal path was replaced by a symbolic link.");
+        if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+        return false;
+    }
+    QString normalizedJournalPath;
+    if (!normalizeJournalPath(parsed.journalPath, normalizedJournalPath, error))
+    {
+        if (errorCode) *errorCode = QStringLiteral("journal_unavailable");
+        return false;
+    }
+    if (normalizedJournalPath != parsed.journalPath)
+    {
+        if (error) *error = QStringLiteral("Interaction journal path changed after close intent.");
+        if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+        return false;
+    }
+    const QString journalLockPath = parsed.journalPath + QStringLiteral(".lock");
+    if (QFileInfo(journalLockPath).isSymLink())
+    {
+        if (error) *error = QStringLiteral("Interaction journal lock path is a symbolic link.");
+        if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+        return false;
+    }
+    QLockFile lock(journalLockPath);
+    lock.setStaleLockTime(0);
+    if (!lock.tryLock(0))
+    {
+        if (error) *error = QStringLiteral("Interaction journal is busy.");
+        if (errorCode) *errorCode = QStringLiteral("journal_locked");
+        return false;
+    }
+    JournalData journal;
+    if (!readJournal(parsed.journalPath, journal, error))
+    {
+        if (errorCode) *errorCode = QStringLiteral("corrupt_journal");
+        return false;
+    }
+    if (!QFileInfo::exists(parsed.journalPath))
+        journal.projectId = QUuid(parsed.journalProjectId);
+    else if (journal.projectId.toString(QUuid::WithoutBraces).toLower() != parsed.journalProjectId)
+    {
+        if (error) *error = QStringLiteral("Interaction journal project identity changed after close intent.");
+        if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+        return false;
+    }
+    for (const RInteractionRecordV1 &existing : journal.records)
+    {
+        if (existing.recordId != parsed.record.recordId) continue;
+        QByteArray existingBytes;
+        if (!existing.toJson(existingBytes, error) || existingBytes != parsed.recordBytes)
+        {
+            if (error && error->isEmpty()) *error = QStringLiteral("Close retry record ID already exists with different content.");
+            if (errorCode) *errorCode = QStringLiteral("record_id_conflict");
+            return false;
+        }
+        return true;
+    }
+    const bool journalExists = QFileInfo::exists(parsed.journalPath);
+    if (journalExists != parsed.expectedJournalExists)
+    {
+        if (error) *error = QStringLiteral("Interaction journal existence changed after close intent.");
+        if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+        return false;
+    }
+    if (journalExists)
+    {
+        QString currentHash;
+        if (!sha256File(parsed.journalPath, currentHash, error))
+        {
+            if (errorCode) *errorCode = QStringLiteral("journal_io_error");
+            return false;
+        }
+        if (currentHash != parsed.expectedJournalSha256)
+        {
+            if (error) *error = QStringLiteral("Interaction journal changed after close intent; the retry was preserved without overwrite.");
+            if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+            return false;
+        }
+    }
+    const QUuid currentParent = journal.records.isEmpty()
+        ? QUuid{} : journal.records.constLast().recordId;
+    if (currentParent != parsed.record.parentRecordId || journal.projectId.toString(QUuid::WithoutBraces).toLower()
+            != parsed.journalProjectId)
+    {
+        if (error) *error = QStringLiteral("Interaction journal predecessor no longer matches the close intent.");
+        if (errorCode) *errorCode = QStringLiteral("journal_conflict");
+        return false;
+    }
+    if (journal.records.size() >= MaxJournalRecords)
+    {
+        if (error) *error = QStringLiteral("Interaction journal reached its record limit.");
+        if (errorCode) *errorCode = QStringLiteral("journal_limit");
+        return false;
+    }
+    journal.records.append(parsed.record);
+    if (!writeJournal(parsed.journalPath, journal, error))
+    {
+        if (errorCode) *errorCode = QStringLiteral("journal_io_error");
+        return false;
+    }
+    return true;
+}
+
 bool RModelCommandSession::appendJournalEvent(const QString &commandId, const QString &resultStatus,
                                                const QString &modelRevision,
                                                const QString &preStateHash,
@@ -355,16 +842,7 @@ bool RModelCommandSession::appendJournalEvent(const QString &commandId, const QS
 {
     const JournalOptions &options = state->journal;
     if (options.path.isEmpty()) return true;
-    if (options.actorId.isEmpty() || options.actorId.size() > 128
-        || options.actorId.contains(QLatin1Char('\n')) || options.actorId.contains(QLatin1Char('\r'))
-        || options.sourcePath.size() > 4096
-        || (options.sourcePath.isEmpty() != options.sourceSha256.isEmpty())
-        || (!options.sourceSha256.isEmpty()
-            && !QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(options.sourceSha256).hasMatch()))
-    {
-        if (error) *error = QStringLiteral("Trusted interaction journal metadata is invalid.");
-        return false;
-    }
+    if (!validateJournalOptions(options, error)) return false;
 
     QString path;
     if (!normalizeJournalPath(options.path, path, error)) return false;
@@ -385,61 +863,12 @@ bool RModelCommandSession::appendJournalEvent(const QString &commandId, const QS
     }
 
     RInteractionRecordV1 record;
-    record.recordId = QUuid::createUuid();
-    if (!journal.records.isEmpty()) record.parentRecordId = journal.records.constLast().recordId;
-    record.timestampUtc = QDateTime::currentDateTimeUtc();
-    record.actorType = QStringLiteral("system");
-    record.actorId = options.actorId;
-    record.sessionId = QUuid(identity);
-    record.projectId = journal.projectId;
-    record.modelId = QUuid(identity);
-    // The v1 token grammar starts with a letter; public revisions retain their
-    // historical UUID:generation representation for API compatibility.
-    record.modelRevision = QStringLiteral("session:") + modelRevision;
-    record.runId = selectionSnapshot.contains(QStringLiteral("runId"))
-                       ? QUuid(selectionSnapshot.value(QStringLiteral("runId")).toString()) : state->runId;
-    record.workflowStage = QStringLiteral("modal_configuration");
-    record.commandId = commandId;
-    record.commandVersion = QStringLiteral("1.0.0");
-    record.parameters = parameters;
-    record.selectionSnapshot = selectionSnapshot;
-    // InteractionRecord v1 forbids null payload values. Preserve the exact
-    // nullable axis request as bounded JSON text, without changing that schema
-    // or substituting zero for an explicitly disabled component.
-    if (commandId == QStringLiteral("entity.boundary.set"))
-    {
-        const QJsonArray axes = parameters.value(QStringLiteral("values")).toArray();
-        bool nullableAxis = false;
-        for (const QJsonValue &axis : axes) nullableAxis |= axis.isNull();
-        if (nullableAxis)
-        {
-            const QByteArray encoded = QJsonDocument(parameters).toJson(QJsonDocument::Compact);
-            if (encoded.size() > 4096)
-            {
-                if (error) *error = QStringLiteral("Nullable axis parameters exceed the lossless audit encoding limit.");
-                return false;
-            }
-            record.parameters = {{QStringLiteral("json"), QString::fromUtf8(encoded)}};
-            record.selectionSnapshot.insert(QStringLiteral("parametersEncoding"), QStringLiteral("json-text/v1"));
-        }
-    }
-    record.selectionSnapshot.insert(QStringLiteral("preRevision"), revision());
-    record.selectionSnapshot.insert(QStringLiteral("postRevision"), modelRevision);
-    // Hash scope is versioned independently from the v1 interaction envelope.
-    // Existing records retain their original modal-only scope when appended.
-    record.selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("supported_model_state"));
-    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 2);
-    if (!options.sourcePath.isEmpty())
-        record.selectionSnapshot.insert(QStringLiteral("sourcePath"), options.sourcePath);
-    if (!options.sourceSha256.isEmpty())
-        record.selectionSnapshot.insert(QStringLiteral("sourceSha256"), options.sourceSha256);
-    record.approvalState = QStringLiteral("not_required");
-    record.preStateHash = preStateHash;
-    record.postStateHash = postStateHash;
-    record.resultStatus = resultStatus;
-    record.diagnostics = diagnostics;
-    record.artifactRefs = artifactRefs;
-    record.applicationVersion = RVendor::version().toString();
+    const QUuid parentRecordId = journal.records.isEmpty()
+        ? QUuid{} : journal.records.constLast().recordId;
+    if (!buildJournalRecord(options, identity, state->runId, journal.projectId, parentRecordId,
+                            QDateTime::currentDateTimeUtc(), commandId, resultStatus,
+                            modelRevision, revision(), preStateHash, postStateHash,
+                            parameters, selectionSnapshot, artifactRefs, diagnostics, record, error)) return false;
 
     journal.records.append(record);
     return writeJournal(path, journal, error);

@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <functional>
 #include <memory>
 #include <rproject_catalog.h>
 
@@ -10,6 +11,15 @@
 #include <rbl_job.h>
 
 #include "model.h"
+
+namespace ModelIOPrivate
+{
+using PublicationTargetValidator = std::function<bool(QString &)>;
+
+bool copyFileAtomically(const QString &sourcePath, const QString &targetPath,
+                        const PublicationTargetValidator &validateBeforeCommit,
+                        QString &error);
+}
 
 typedef enum _ModelIOType
 {

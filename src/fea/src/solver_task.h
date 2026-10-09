@@ -3,9 +3,12 @@
 
 #include <atomic>
 #include <memory>
+#include <functional>
 
 #include <QByteArray>
 #include <QJsonObject>
+#include <QLockFile>
+#include <QMutex>
 #include <QPair>
 #include <QProcess>
 
@@ -54,6 +57,9 @@ class SolverTask : public RJob
         QString nativeProgressFileName;
         //! Actual persisted result-frame journal, separate from solver progress.
         QString nativeResultJournalFileName;
+        //! Frozen bytes for the exact initial MODEL opened by a checkpoint-enabled solver.
+        QString nativeCheckpointInputModelFileName;
+        QByteArray nativeCheckpointModelSha256;
         //! Detached model copy captured on the document thread at scheduling.
         std::unique_ptr<Model> inputSnapshot;
         //! Detached result copy owned and updated by the worker.
@@ -74,13 +80,34 @@ class SolverTask : public RJob
         QString frozenSnapshotPath;
         QString frozenSnapshotSha256;
         bool frozenSnapshotVerified = false;
+        //! Immutable ancestry and source-frame proof for a detached native recovery attempt.
+        QJsonObject nativeRecoveryProvenance;
+        QString nativeRecoveryArtifactRoot;
+        //! Cross-process lease for this logical recovery lineage, held while the attempt is active.
+        std::shared_ptr<QLockFile> nativeRecoveryLogicalLock;
+        //! Durable seed that binds a recovery attempt's initial accepted state to its new checkpoint context.
+        QJsonObject nativeCheckpointSeedProvenance;
         //! Guards pre-queue validation copies from a task that has begun execution.
         std::atomic_bool performStarted{false};
+        //! Serializes queued execution-control configuration against perform() startup.
+        QMutex nativeExecutionConfigurationMutex;
+        bool nativeExecutionBoundaryConfigurationRejected = false;
+        uint nativeExecutionBoundaryPauseSequence = 0;
+        QString nativeExecutionStateFileName;
 
     public:
 
         //! Constructor.
         explicit SolverTask(const ApplicationSettings *applicationSettings, uint modelID);
+
+        //! Construct a task from a detached, already-authorized native recovery model.
+        //! The source stamp is retained as provenance; no live model ID is rebound.
+        SolverTask(const ApplicationSettings *applicationSettings, const Model &model,
+                   const QPair<QString, quint64> &sourceStamp,
+                   const QJsonObject &recoveryProvenance,
+                   const QString &artifactRoot,
+                   const QString &taskServerName,
+                   std::shared_ptr<QLockFile> logicalRecoveryLock = {});
 
         //! Capture the input model and its source stamp before the job is queued.
         bool captureInputSnapshot(const Model &model,
@@ -107,6 +134,12 @@ class SolverTask : public RJob
         const QString &getFrozenSnapshotSha256() const;
         bool getFrozenSnapshotVerified() const;
 
+        //! Return the pinned ancestry facts for this detached recovery attempt.
+        const QJsonObject &getNativeRecoveryProvenance() const;
+        bool isNativeRecoveryTask() const;
+        bool hasNativeRecoveryLogicalLock() const;
+        void releaseNativeRecoveryLogicalLock();
+
         //! Return the stable source identity selected when this task was created.
         const QString &getSourceDocumentId() const;
 
@@ -128,6 +161,27 @@ class SolverTask : public RJob
         //! Freeze the source and declared-runtime provenance before queueing.
         bool freezeNativeResultProvenance(const QJsonObject &sourceRuntimeStamp,
                                           const QJsonObject &sourceSnapshotRef);
+
+        //! Capture the exact serialized solver input in the immutable input package.
+        bool prepareNativeCheckpointInput(QString *error = nullptr);
+
+        const QString &getNativeCheckpointInputModelFileName() const;
+        const QByteArray &getNativeCheckpointModelSha256() const;
+
+        //! Enable the bounded accepted-state checkpoint channel before this task is queued.
+        bool enableNativeAcceptedCheckpoints(const QString &directory,
+                                             const QByteArray &canonicalContextJson,
+                                             QString *error = nullptr);
+
+        //! Configure one accepted-step pause before process start, persisting the request through the callback.
+        bool requestNativeAcceptedBoundaryPause(
+            uint acceptedSequence,
+            const std::function<bool(const QString &, QString *)> &persistRequest,
+            QString *error = nullptr);
+        const QString &getNativeExecutionStateFileName() const;
+
+        //! Return the provenance for a seeded recovery checkpoint, or an empty object for ordinary jobs.
+        const QJsonObject &getNativeCheckpointSeedProvenance() const;
 
         //! Return the immutable native-result provenance frozen before queueing.
         const QJsonObject &getNativeResultProvenance() const;
@@ -172,6 +226,12 @@ class SolverTask : public RJob
 
     protected:
 
+        void initializeTaskPaths(const Model &model, const QString &artifactRoot = QString(),
+                                 const QString &taskServerName = QString());
+        bool seedNativeAcceptedCheckpoint(const QString &directory,
+                                          const QJsonObject &checkpointContext,
+                                          QString *error);
+
         //! Run job.
         virtual int perform() override final;
 
@@ -193,6 +253,9 @@ class SolverTask : public RJob
 
         //! A complete task result artifact was read back successfully.
         void resultArtifactCreated(QString fileName, QString sha256, QJsonObject sourceBinding);
+
+        //! The operating system confirmed that this task's native solver process started.
+        void nativeProcessStarted(QString jobId, qint64 processId);
 
         //! A verified immutable manifest descriptor copied to the manager thread.
         void nativeResultManifestPublished(QString jobId, QJsonObject descriptor);

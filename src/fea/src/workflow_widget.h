@@ -57,6 +57,9 @@ private:
     NativeResultsWidget *documentNativeResults;
     QComboBox *nativeMode;
     QComboBox *nativeJobChoice;
+    QPushButton *nativeRecoveryButton, *nativeRecoveryApply;
+    QLabel *nativeRecoveryStatus;
+    QString nativeRecoveryPreviewId, nativeRecoveryJobId;
     QTimer nativeJobTimer;
     QLineEdit *workspaceEdit;
     QCheckBox *trustedExtensions;
@@ -69,6 +72,7 @@ private:
     QPushButton *configureButton;
     QPushButton *runButton;
     QPushButton *resumeButton;
+    QPushButton *recoverButton;
     QPushButton *cancelButton;
     QPushButton *applyButton;
     QLabel *status;
@@ -95,6 +99,7 @@ private:
     QString sourceRegisterRequest;
     QJsonObject preview, pendingArguments;
     QString pendingCommand, displayedResult, jobsRequest, foregroundJob;
+    QString recoveryRequest;
     bool commandInFlight = false;
     bool sourceRegistrationInFlight = false;
     void useCurrentDocumentSnapshot();
@@ -106,6 +111,8 @@ private:
     void updateSourceChoiceLabel(const QString &sourceId);
     void updateSelectedSourceStatus();
     void refreshNativeJobs();
+    void checkNativeRecovery();
+    void applyNativeRecovery();
     bool previewSourceIsCurrent() const;
     QString previewSourceId() const;
     void onReply(const QString &id, const QString &operation, const QJsonObject &result);

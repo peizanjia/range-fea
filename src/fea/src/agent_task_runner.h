@@ -45,6 +45,9 @@ signals:
     //! proposalId binds the visible approval controls to this exact pending proposal.
     void proposalReady(const QString &origin, const QString &proposalId, const QJsonObject &proposal);
     void actionCompleted(const QString &origin, const QJsonObject &result);
+    //! Activity facts originate from complete validated tool calls and host replies.
+    void toolActivity(const QString &taskId, const QString &toolCallId, const QString &toolName,
+                      const QString &phase, const QString &operationId, const QJsonObject &facts);
     void finished(const QString &status, const QString &message);
 
 private:
@@ -59,10 +62,12 @@ private:
     QJsonObject currentCall, proposal, proposedArguments;
     QString sessionEpoch, workflowWorkspace, providerRequestId, waitingRequest, waitingOperation;
     QString proposalOrigin, pendingProposalId, awaitedJob;
+    QString activityTaskId;
     QString awaitingQuestionId;
     quint64 taskGeneration = 0, waitingRequestGeneration = 0;
     int nextCall = 0, turns = 0, toolCount = 0;
     bool active = false, providerPending = false, automatic = false;
+    bool authorizationInProgress = false;
     QJsonObject hostRequest(const QString &operation, const QJsonObject &parameters = {});
     bool workflowSourceIsCurrent(const QJsonObject &preview);
     void beginTask(const QString &goal, bool executeRequestedActions, const QJsonArray &priorConversation);
@@ -73,6 +78,8 @@ private:
     void nextTool();
     void finishTool(const QJsonObject &result);
     void failTool(const QString &code, const QString &message);
+    bool publishToolActivity(const QString &phase, const QJsonObject &facts = {},
+                             const QString &operationId = {});
     void finishTask(const QString &status, const QString &message);
     void workflowReply(const QString &id, const QString &operation, const QJsonObject &result);
     void submitWorkflow(const QString &operation, const QJsonObject &parameters = {});

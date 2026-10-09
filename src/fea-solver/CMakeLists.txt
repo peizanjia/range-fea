@@ -10,6 +10,8 @@ qt_add_executable(fea-solver
     src/linear_model_task.cpp
     src/native_progress_journal.cpp
     src/native_result_journal.cpp
+    src/native_accepted_checkpoint.cpp
+    src/native_execution_gate.cpp
     src/solver_input.cpp
     src/solver_task.cpp
 
@@ -23,6 +25,8 @@ qt_add_executable(fea-solver
     src/linear_model_task.h
     src/native_progress_journal.h
     src/native_result_journal.h
+    src/native_accepted_checkpoint.h
+    src/native_execution_gate.h
     src/solver_input.h
     src/solver_task.h
 )

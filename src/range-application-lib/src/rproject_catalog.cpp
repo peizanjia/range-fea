@@ -1,6 +1,7 @@
 #include <rproject_catalog.h>
 
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -13,6 +14,7 @@
 #include <QSet>
 #include <QThread>
 #include <QUuid>
+#include <rmodel_command_session.h>
 #include <rml_file.h>
 #include <rml_file_header.h>
 #include <rml_file_io.h>
@@ -1144,8 +1146,12 @@ bool prepareManagedDirectory(const QString &root, const QString &relativeDirecto
         }
         else if (!QDir().mkdir(current))
         {
-            error = QStringLiteral("Could not create a managed workspace directory: %1").arg(current);
-            return false;
+            const QFileInfo racedDirectory(current);
+            if (!racedDirectory.isDir() || racedDirectory.isSymLink())
+            {
+                error = QStringLiteral("Could not create a managed workspace directory: %1").arg(current);
+                return false;
+            }
         }
     }
     absoluteDirectory = current;
@@ -1352,6 +1358,655 @@ bool commitMutation(const QString &root, QJsonObject &manifest, QString &error)
 }
 }
 
+namespace
+{
+constexpr qint64 MaxOperationLedgerBytes = 64 * 1024 * 1024;
+constexpr int MaxDurableOperations = 8192;
+constexpr int MaxOperationEvents = 32;
+constexpr int MaxOperationArtifacts = MaxNativeLinkDepth + 2;
+constexpr int MaxCloseRetries = 4096;
+
+bool acquireRuntimeLease(const QString &root, const QString &runtimeId,
+                         std::unique_ptr<QLockFile> &lease, QString &error)
+{
+    if (!validUuid(runtimeId))
+    {
+        error = QStringLiteral("Project runtime identity is invalid.");
+        return false;
+    }
+    QString directory;
+    if (!prepareManagedDirectory(root, QStringLiteral("operations/runtimes"), directory, error))
+        return false;
+    const QString path = QDir(directory).filePath(runtimeId + QStringLiteral(".lock"));
+    if (QFileInfo(path).isSymLink())
+    {
+        error = QStringLiteral("Project runtime lock path is a symbolic link.");
+        return false;
+    }
+    auto candidate = std::make_unique<QLockFile>(path);
+    // This lease lives for the catalog lifetime. Disable age-based staleness;
+    // QLockFile's owner PID/process-name check decides whether it is abandoned.
+    candidate->setStaleLockTime(0);
+    if (!candidate->tryLock(0))
+    {
+        error = QStringLiteral("Could not acquire the project runtime liveness lease.");
+        return false;
+    }
+    lease = std::move(candidate);
+    return true;
+}
+
+QString operationPhaseName(RProjectCatalog::OperationPhase phase)
+{
+    switch (phase)
+    {
+    case RProjectCatalog::OperationPhase::Intent: return QStringLiteral("intent");
+    case RProjectCatalog::OperationPhase::Accepted: return QStringLiteral("accepted");
+    case RProjectCatalog::OperationPhase::ArtifactPublished: return QStringLiteral("artifact_published");
+    case RProjectCatalog::OperationPhase::Observed: return QStringLiteral("observed");
+    case RProjectCatalog::OperationPhase::Unknown: return QStringLiteral("unknown");
+    case RProjectCatalog::OperationPhase::Conflict: return QStringLiteral("conflict");
+    }
+    return {};
+}
+
+bool operationPhase(const QJsonValue &value, RProjectCatalog::OperationPhase &phase)
+{
+    if (!value.isString()) return false;
+    const QString text = value.toString();
+    if (text == QStringLiteral("intent")) phase = RProjectCatalog::OperationPhase::Intent;
+    else if (text == QStringLiteral("accepted")) phase = RProjectCatalog::OperationPhase::Accepted;
+    else if (text == QStringLiteral("artifact_published")) phase = RProjectCatalog::OperationPhase::ArtifactPublished;
+    else if (text == QStringLiteral("observed")) phase = RProjectCatalog::OperationPhase::Observed;
+    else if (text == QStringLiteral("unknown")) phase = RProjectCatalog::OperationPhase::Unknown;
+    else if (text == QStringLiteral("conflict")) phase = RProjectCatalog::OperationPhase::Conflict;
+    else return false;
+    return true;
+}
+
+bool validPhaseTransition(RProjectCatalog::OperationPhase from,
+                          RProjectCatalog::OperationPhase to)
+{
+    using Phase = RProjectCatalog::OperationPhase;
+    if (from == to) return true;
+    switch (from)
+    {
+    case Phase::Intent:
+        return to == Phase::Accepted || to == Phase::Observed
+            || to == Phase::Unknown || to == Phase::Conflict;
+    case Phase::Accepted:
+        return to == Phase::ArtifactPublished || to == Phase::Observed
+            || to == Phase::Unknown || to == Phase::Conflict;
+    case Phase::ArtifactPublished:
+        return to == Phase::Observed || to == Phase::Unknown || to == Phase::Conflict;
+    case Phase::Unknown:
+        return to == Phase::ArtifactPublished || to == Phase::Observed || to == Phase::Conflict;
+    case Phase::Observed:
+        return to == Phase::Unknown || to == Phase::Conflict;
+    case Phase::Conflict:
+        return false;
+    }
+    return false;
+}
+
+bool validDiagnosticCode(const QString &value)
+{
+    return value.isEmpty()
+        || QRegularExpression(QStringLiteral("^[a-z][a-z0-9_.-]{0,63}$")).match(value).hasMatch();
+}
+
+bool safeObservationKey(const QString &key)
+{
+    QString normalized = key.toCaseFolded();
+    normalized.remove(QRegularExpression(QStringLiteral("[^a-z0-9]")));
+    return !normalized.contains(QStringLiteral("token"))
+        && !normalized.contains(QStringLiteral("secret"))
+        && !normalized.contains(QStringLiteral("credential"))
+        && !normalized.contains(QStringLiteral("password"))
+        && !normalized.contains(QStringLiteral("apikey"))
+        && normalized != QStringLiteral("auth")
+        && !normalized.contains(QStringLiteral("authorization"))
+        && !normalized.contains(QStringLiteral("authheader"))
+        && !normalized.contains(QStringLiteral("cookie"));
+}
+
+bool boundedObservationValue(const QJsonValue &value, int depth, int &nodes)
+{
+    if (depth > 16 || ++nodes > 4096) return false;
+    if (value.isString()) return value.toString().toUtf8().size() <= 16 * 1024;
+    if (value.isDouble()) return std::isfinite(value.toDouble());
+    if (value.isArray())
+    {
+        const QJsonArray array = value.toArray();
+        if (array.size() > 256) return false;
+        for (const QJsonValue &item : array)
+            if (!boundedObservationValue(item, depth + 1, nodes)) return false;
+        return true;
+    }
+    if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        if (object.size() > 256) return false;
+        for (auto it = object.begin(); it != object.end(); ++it)
+        {
+            if (it.key().toUtf8().size() > 128 || !safeObservationKey(it.key())
+                || !boundedObservationValue(it.value(), depth + 1, nodes)) return false;
+        }
+        return true;
+    }
+    return value.isBool() || value.isNull();
+}
+
+bool safeHostObservation(const QJsonObject &observation)
+{
+    if (observation.isEmpty()) return true;
+    QStringList keys{QStringLiteral("status"), QStringLiteral("code"), QStringLiteral("result")};
+    if (observation.contains(QStringLiteral("message"))) keys.append(QStringLiteral("message"));
+    if (!exactKeys(observation, keys)) return false;
+    const QJsonValue status = observation.value(QStringLiteral("status"));
+    const QJsonValue code = observation.value(QStringLiteral("code"));
+    const QJsonValue result = observation.value(QStringLiteral("result"));
+    const QJsonValue message = observation.value(QStringLiteral("message"));
+    if (!status.isString() || status.toString().trimmed().isEmpty()
+        || status.toString().toUtf8().size() > 128
+        || (observation.contains(QStringLiteral("code"))
+            && (!code.isString() || code.toString().toUtf8().size() > 128))
+        || (observation.contains(QStringLiteral("result")) && !result.isObject())
+        || (observation.contains(QStringLiteral("message"))
+            && (!message.isString() || message.toString().toUtf8().size() > 16 * 1024))) return false;
+    int nodes = 0;
+    if (!boundedObservationValue(QJsonValue(observation), 0, nodes)) return false;
+    return QJsonDocument(observation).toJson(QJsonDocument::Compact).size() <= 64 * 1024;
+}
+
+bool validOperationToken(const QString &value)
+{
+    if (value.trimmed().isEmpty() || value.toUtf8().size() > 128) return false;
+    for (const QChar character : value)
+        if (character.unicode() < 0x20 || character.unicode() == 0x7f) return false;
+    return true;
+}
+
+bool validOperationAssociation(const RProjectCatalog::OperationAssociation &association)
+{
+    return (association.candidateSha256.isEmpty() || validHash(association.candidateSha256))
+        && (association.approvalSummarySha256.isEmpty() || validHash(association.approvalSummarySha256))
+        && (association.acceptedModelSha256.isEmpty() || validHash(association.acceptedModelSha256))
+        && (association.acceptedRevision.isEmpty()
+            || validOperationToken(association.acceptedRevision))
+        && validDiagnosticCode(association.diagnosticCode)
+        && safeHostObservation(association.observation);
+}
+
+QJsonObject operationAssociationJson(const RProjectCatalog::OperationAssociation &association)
+{
+    return {{QStringLiteral("candidateSha256"), association.candidateSha256},
+            {QStringLiteral("approvalSummarySha256"), association.approvalSummarySha256},
+            {QStringLiteral("acceptedRevision"), association.acceptedRevision},
+            {QStringLiteral("acceptedModelSha256"), association.acceptedModelSha256},
+            {QStringLiteral("diagnosticCode"), association.diagnosticCode},
+            {QStringLiteral("observation"), association.observation}};
+}
+
+bool operationAssociationFromJson(const QJsonValue &value,
+                                  RProjectCatalog::OperationAssociation &association)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    if (!exactKeys(object, {QStringLiteral("candidateSha256"), QStringLiteral("approvalSummarySha256"),
+                            QStringLiteral("acceptedRevision"), QStringLiteral("acceptedModelSha256"),
+                            QStringLiteral("diagnosticCode"), QStringLiteral("observation")})) return false;
+    if (!object.value(QStringLiteral("candidateSha256")).isString()
+        || !object.value(QStringLiteral("approvalSummarySha256")).isString()
+        || !object.value(QStringLiteral("acceptedRevision")).isString()
+        || !object.value(QStringLiteral("acceptedModelSha256")).isString()
+        || !object.value(QStringLiteral("diagnosticCode")).isString()
+        || !object.value(QStringLiteral("observation")).isObject()) return false;
+    association.candidateSha256 = object.value(QStringLiteral("candidateSha256")).toString();
+    association.approvalSummarySha256 = object.value(QStringLiteral("approvalSummarySha256")).toString();
+    association.acceptedRevision = object.value(QStringLiteral("acceptedRevision")).toString();
+    association.acceptedModelSha256 = object.value(QStringLiteral("acceptedModelSha256")).toString();
+    association.diagnosticCode = object.value(QStringLiteral("diagnosticCode")).toString();
+    association.observation = object.value(QStringLiteral("observation")).toObject();
+    return validOperationAssociation(association);
+}
+
+void mergeOperationAssociation(RProjectCatalog::OperationAssociation &target,
+                               const RProjectCatalog::OperationAssociation &update)
+{
+    if (!update.candidateSha256.isEmpty()) target.candidateSha256 = update.candidateSha256;
+    if (!update.approvalSummarySha256.isEmpty()) target.approvalSummarySha256 = update.approvalSummarySha256;
+    if (!update.acceptedRevision.isEmpty()) target.acceptedRevision = update.acceptedRevision;
+    if (!update.acceptedModelSha256.isEmpty()) target.acceptedModelSha256 = update.acceptedModelSha256;
+    if (!update.diagnosticCode.isEmpty()) target.diagnosticCode = update.diagnosticCode;
+    if (!update.observation.isEmpty()) target.observation = update.observation;
+}
+
+QString operationArtifactStatus(const QString &status)
+{
+    static const QSet<QString> valid{QStringLiteral("pending"), QStringLiteral("published"),
+        QStringLiteral("not_published"), QStringLiteral("unchanged_matches_intended"),
+        QStringLiteral("unknown"), QStringLiteral("conflict"), QStringLiteral("unreadable")};
+    return valid.contains(status) ? status : QString();
+}
+
+QJsonObject operationArtifactJson(const RProjectCatalog::OperationArtifactIntent &artifact)
+{
+    return {{QStringLiteral("path"), artifact.path},
+            {QStringLiteral("expectedPriorExists"), artifact.expectedPriorExists},
+            {QStringLiteral("expectedPriorSha256"), artifact.expectedPriorSha256},
+            {QStringLiteral("intendedSha256"), artifact.intendedSha256},
+            {QStringLiteral("observedStatus"), artifact.observedStatus},
+            {QStringLiteral("observedExists"), artifact.observedExists},
+            {QStringLiteral("observedSha256"), artifact.observedSha256}};
+}
+
+bool operationArtifactFromJson(const QJsonValue &value,
+                               RProjectCatalog::OperationArtifactIntent &artifact)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    if (!exactKeys(object, {QStringLiteral("path"), QStringLiteral("expectedPriorExists"),
+                            QStringLiteral("expectedPriorSha256"), QStringLiteral("intendedSha256"),
+                            QStringLiteral("observedStatus"), QStringLiteral("observedExists"),
+                            QStringLiteral("observedSha256")})) return false;
+    if (!object.value(QStringLiteral("path")).isString()
+        || !object.value(QStringLiteral("expectedPriorExists")).isBool()
+        || !object.value(QStringLiteral("expectedPriorSha256")).isString()
+        || !object.value(QStringLiteral("intendedSha256")).isString()
+        || !object.value(QStringLiteral("observedStatus")).isString()
+        || !object.value(QStringLiteral("observedExists")).isBool()
+        || !object.value(QStringLiteral("observedSha256")).isString()) return false;
+    artifact.path = object.value(QStringLiteral("path")).toString();
+    artifact.expectedPriorExists = object.value(QStringLiteral("expectedPriorExists")).toBool();
+    artifact.expectedPriorSha256 = object.value(QStringLiteral("expectedPriorSha256")).toString();
+    artifact.intendedSha256 = object.value(QStringLiteral("intendedSha256")).toString();
+    artifact.observedStatus = object.value(QStringLiteral("observedStatus")).toString();
+    artifact.observedExists = object.value(QStringLiteral("observedExists")).toBool();
+    artifact.observedSha256 = object.value(QStringLiteral("observedSha256")).toString();
+    const QString priorHash = artifact.expectedPriorSha256;
+    const QString intendedHash = artifact.intendedSha256;
+    const QString observedHash = artifact.observedSha256;
+    const QString status = artifact.observedStatus;
+    return !artifact.path.isEmpty() && artifact.path.toUtf8().size() <= MaxPathBytes
+        && QDir::isAbsolutePath(artifact.path)
+        && QDir::cleanPath(QDir::fromNativeSeparators(artifact.path)) == artifact.path
+        && (artifact.expectedPriorExists ? validHash(priorHash) : priorHash.isEmpty())
+        && (intendedHash.isEmpty() || validHash(intendedHash))
+        && (status.isEmpty() || operationArtifactStatus(status) == status)
+        && (artifact.observedExists
+                ? (validHash(observedHash) || (observedHash.isEmpty()
+                    && (status == QStringLiteral("conflict") || status == QStringLiteral("unreadable"))))
+                : observedHash.isEmpty());
+}
+
+QString timestampText(const QDateTime &time)
+{
+    return time.toUTC().toString(Qt::ISODateWithMs);
+}
+
+bool parseTimestamp(const QJsonValue &value, QDateTime &time)
+{
+    if (!value.isString()) return false;
+    time = QDateTime::fromString(value.toString(), Qt::ISODateWithMs);
+    return time.isValid() && time.timeSpec() == Qt::UTC;
+}
+
+QJsonObject operationEventJson(RProjectCatalog::OperationPhase phase,
+                                const RProjectCatalog::OperationAssociation &association,
+                                const QDateTime &time)
+{
+    return {{QStringLiteral("phase"), operationPhaseName(phase)},
+            {QStringLiteral("association"), operationAssociationJson(association)},
+            {QStringLiteral("atUtc"), timestampText(time)}};
+}
+
+QJsonObject durableOperationJson(const RProjectCatalog::DurableOperation &operation,
+                                 const QJsonArray &events)
+{
+    QJsonArray artifacts;
+    for (const auto &artifact : operation.artifacts) artifacts.append(operationArtifactJson(artifact));
+    return {{QStringLiteral("projectId"), operation.projectId},
+            {QStringLiteral("ownerRuntimeId"), operation.ownerRuntimeId},
+            {QStringLiteral("operationId"), operation.operationId},
+            {QStringLiteral("idempotencyKey"), operation.idempotencyKey},
+            {QStringLiteral("normalizedRequestSha256"), operation.normalizedRequestSha256},
+            {QStringLiteral("phase"), operationPhaseName(operation.phase)},
+            {QStringLiteral("association"), operationAssociationJson(operation.association)},
+            {QStringLiteral("artifacts"), artifacts},
+            {QStringLiteral("createdAtUtc"), timestampText(operation.createdAtUtc)},
+            {QStringLiteral("updatedAtUtc"), timestampText(operation.updatedAtUtc)},
+            {QStringLiteral("events"), events}};
+}
+
+bool durableOperationFromJson(const QJsonValue &value, const QString &expectedProjectId,
+                              RProjectCatalog::DurableOperation &operation)
+{
+    using Phase = RProjectCatalog::OperationPhase;
+    if (!value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    if (!exactKeys(object, {QStringLiteral("projectId"), QStringLiteral("ownerRuntimeId"),
+            QStringLiteral("operationId"),
+            QStringLiteral("idempotencyKey"), QStringLiteral("normalizedRequestSha256"),
+            QStringLiteral("phase"), QStringLiteral("association"), QStringLiteral("artifacts"),
+            QStringLiteral("createdAtUtc"), QStringLiteral("updatedAtUtc"), QStringLiteral("events")})) return false;
+    if (!object.value(QStringLiteral("projectId")).isString()
+        || !object.value(QStringLiteral("ownerRuntimeId")).isString()
+        || !object.value(QStringLiteral("operationId")).isString()
+        || !object.value(QStringLiteral("idempotencyKey")).isString()
+        || !object.value(QStringLiteral("normalizedRequestSha256")).isString()
+        || !object.value(QStringLiteral("artifacts")).isArray()
+        || !object.value(QStringLiteral("events")).isArray()) return false;
+    operation.projectId = object.value(QStringLiteral("projectId")).toString();
+    operation.ownerRuntimeId = object.value(QStringLiteral("ownerRuntimeId")).toString();
+    operation.operationId = object.value(QStringLiteral("operationId")).toString();
+    operation.idempotencyKey = object.value(QStringLiteral("idempotencyKey")).toString();
+    operation.normalizedRequestSha256 = object.value(QStringLiteral("normalizedRequestSha256")).toString();
+    if (operation.projectId != expectedProjectId || !validUuid(operation.ownerRuntimeId)
+        || !validUuid(operation.operationId)
+        || !validOperationToken(operation.idempotencyKey)
+        || !validHash(operation.normalizedRequestSha256)
+        || !operationPhase(object.value(QStringLiteral("phase")), operation.phase)
+        || !operationAssociationFromJson(object.value(QStringLiteral("association")), operation.association)
+        || !parseTimestamp(object.value(QStringLiteral("createdAtUtc")), operation.createdAtUtc)
+        || !parseTimestamp(object.value(QStringLiteral("updatedAtUtc")), operation.updatedAtUtc)) return false;
+    const QJsonArray artifactArray = object.value(QStringLiteral("artifacts")).toArray();
+    if (artifactArray.size() > MaxOperationArtifacts) return false;
+    QSet<QString> artifactPaths;
+    for (const QJsonValue &artifactValue : artifactArray)
+    {
+        RProjectCatalog::OperationArtifactIntent artifact;
+        if (!operationArtifactFromJson(artifactValue, artifact)) return false;
+#ifdef Q_OS_WIN
+        const QString key = artifact.path.toCaseFolded();
+#else
+        const QString key = artifact.path;
+#endif
+        if (artifactPaths.contains(key)) return false;
+        artifactPaths.insert(key);
+        operation.artifacts.append(artifact);
+    }
+    const QJsonArray events = object.value(QStringLiteral("events")).toArray();
+    if (events.isEmpty() || events.size() > MaxOperationEvents) return false;
+    QDateTime firstAt, lastAt;
+    Phase priorPhase = Phase::Intent;
+    RProjectCatalog::OperationAssociation lastAssociation;
+    for (qsizetype index = 0; index < events.size(); ++index)
+    {
+        if (!events.at(index).isObject()) return false;
+        const QJsonObject event = events.at(index).toObject();
+        Phase eventPhase;
+        RProjectCatalog::OperationAssociation eventAssociation;
+        QDateTime eventAt;
+        if (!exactKeys(event, {QStringLiteral("phase"), QStringLiteral("association"), QStringLiteral("atUtc")})
+            || !operationPhase(event.value(QStringLiteral("phase")), eventPhase)
+            || !operationAssociationFromJson(event.value(QStringLiteral("association")), eventAssociation)
+            || !parseTimestamp(event.value(QStringLiteral("atUtc")), eventAt)) return false;
+        if (index == 0)
+        {
+            if (eventPhase != Phase::Intent) return false;
+            firstAt = eventAt;
+        }
+        else if (!validPhaseTransition(priorPhase, eventPhase) || eventAt < lastAt) return false;
+        priorPhase = eventPhase;
+        lastAt = eventAt;
+        lastAssociation = eventAssociation;
+    }
+    if (priorPhase != operation.phase || firstAt != operation.createdAtUtc
+        || lastAt != operation.updatedAtUtc
+        || operationAssociationJson(lastAssociation) != operationAssociationJson(operation.association)) return false;
+    return true;
+}
+
+bool readOperationLedger(const QString &root, const QString &projectId,
+                         QJsonArray &operations, QString &error)
+{
+    const QFileInfo directoryInfo(QDir(root).filePath(QStringLiteral("operations")));
+    if (directoryInfo.exists() && (directoryInfo.isSymLink() || !directoryInfo.isDir()))
+    {
+        error = QStringLiteral("Managed operations path is a symbolic link or non-directory.");
+        return false;
+    }
+    const QString path = QDir(root).filePath(QStringLiteral("operations/ledger.json"));
+    const QFileInfo info(path);
+    if (!info.exists())
+    {
+        if (info.isSymLink())
+        {
+            error = QStringLiteral("Operation ledger path is a symbolic link.");
+            return false;
+        }
+        operations = {};
+        return true;
+    }
+    if (!info.isFile() || info.isSymLink() || info.size() <= 0 || info.size() > MaxOperationLedgerBytes)
+    {
+        error = QStringLiteral("Existing operation ledger is not a valid bounded regular file.");
+        return false;
+    }
+    QJsonObject envelope;
+    if (!readJsonObject(path, MaxOperationLedgerBytes, envelope, error)) return false;
+    if (!exactKeys(envelope, {QStringLiteral("ledgerVersion"), QStringLiteral("projectId"),
+                              QStringLiteral("operations")})
+        || envelope.value(QStringLiteral("ledgerVersion")).toInt(-1) != 1
+        || envelope.value(QStringLiteral("projectId")).toString() != projectId
+        || !envelope.value(QStringLiteral("operations")).isArray())
+    {
+        error = QStringLiteral("Operation ledger has an unsupported or mismatched envelope.");
+        return false;
+    }
+    operations = envelope.value(QStringLiteral("operations")).toArray();
+    if (operations.size() > MaxDurableOperations)
+    {
+        error = QStringLiteral("Operation ledger exceeds its record bound.");
+        return false;
+    }
+    QSet<QString> ids, keys;
+    for (const QJsonValue &value : operations)
+    {
+        RProjectCatalog::DurableOperation operation;
+        if (!durableOperationFromJson(value, projectId, operation))
+        {
+            error = QStringLiteral("Operation ledger contains an invalid or unsupported record.");
+            return false;
+        }
+        if (ids.contains(operation.operationId) || keys.contains(operation.idempotencyKey))
+        {
+            error = QStringLiteral("Operation ledger contains duplicate identity or idempotency keys.");
+            return false;
+        }
+        ids.insert(operation.operationId);
+        keys.insert(operation.idempotencyKey);
+    }
+    return true;
+}
+
+bool writeAtomicManagedJson(const QString &root, const QString &relativePath,
+                            const QJsonObject &object, qint64 maxBytes, QString &error)
+{
+    QString path;
+    if (!ensureManagedFilePath(root, relativePath, path, error)) return false;
+    const QByteArray bytes = QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n';
+    if (bytes.size() > maxBytes)
+    {
+        error = QStringLiteral("Managed durable state reached its byte limit.");
+        return false;
+    }
+    QSaveFile file(path);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+    {
+        error = QStringLiteral("Could not atomically publish managed durable state: %1").arg(file.errorString());
+        return false;
+    }
+    return true;
+}
+
+bool writeOperationLedger(const QString &root, const QString &projectId,
+                          const QJsonArray &operations, QString &error)
+{
+    const QJsonObject envelope{{QStringLiteral("ledgerVersion"), 1},
+                               {QStringLiteral("projectId"), projectId},
+                               {QStringLiteral("operations"), operations}};
+    return writeAtomicManagedJson(root, QStringLiteral("operations/ledger.json"),
+                                  envelope, MaxOperationLedgerBytes, error);
+}
+
+bool requestDigest(const QJsonObject &normalizedRequest, QString &digest, QString &error)
+{
+    const QByteArray bytes = QJsonDocument(normalizedRequest).toJson(QJsonDocument::Compact);
+    if (normalizedRequest.isEmpty() || bytes.isEmpty() || bytes.size() > 64 * 1024)
+    {
+        error = QStringLiteral("Normalized operation request must be a non-empty object within 64 KiB.");
+        return false;
+    }
+    digest = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+    return true;
+}
+
+RProjectCatalog::DurableOperation operationFromJsonUnchecked(const QJsonObject &object)
+{
+    RProjectCatalog::DurableOperation operation;
+    durableOperationFromJson(object, object.value(QStringLiteral("projectId")).toString(), operation);
+    return operation;
+}
+
+int findOperationIndex(const QJsonArray &operations, const QString &field, const QString &value)
+{
+    for (qsizetype index = 0; index < operations.size(); ++index)
+        if (operations.at(index).toObject().value(field).toString() == value) return int(index);
+    return -1;
+}
+
+QJsonArray operationEvents(const QJsonObject &operation)
+{
+    return operation.value(QStringLiteral("events")).toArray();
+}
+
+void appendOperationEvent(QJsonObject &operation, RProjectCatalog::OperationPhase phase,
+                          const RProjectCatalog::OperationAssociation &association,
+                          const QDateTime &time)
+{
+    QJsonArray events = operationEvents(operation);
+    events.append(operationEventJson(phase, association, time));
+    operation.insert(QStringLiteral("events"), events);
+    operation.insert(QStringLiteral("phase"), operationPhaseName(phase));
+    operation.insert(QStringLiteral("association"), operationAssociationJson(association));
+    operation.insert(QStringLiteral("updatedAtUtc"), timestampText(time));
+}
+
+bool validCloseRetryId(const QString &value)
+{
+    return validUuid(value);
+}
+
+QJsonArray readCloseRetryRecords(const QString &root, const QString &projectId,
+                                 QString &error, bool *valid)
+{
+    if (valid) *valid = false;
+    const QFileInfo directoryInfo(QDir(root).filePath(QStringLiteral("operations")));
+    if (directoryInfo.exists() && (directoryInfo.isSymLink() || !directoryInfo.isDir()))
+    {
+        error = QStringLiteral("Managed operations path is a symbolic link or non-directory.");
+        return {};
+    }
+    const QString path = QDir(root).filePath(QStringLiteral("operations/close-retries.json"));
+    const QFileInfo info(path);
+    if (!info.exists())
+    {
+        if (info.isSymLink()) error = QStringLiteral("Close retry queue path is a symbolic link.");
+        else if (valid) *valid = true;
+        return {};
+    }
+    if (!info.isFile() || info.isSymLink() || info.size() <= 0 || info.size() > 8 * 1024 * 1024)
+    {
+        error = QStringLiteral("Existing close retry queue is not a valid bounded regular file.");
+        return {};
+    }
+    QJsonObject envelope;
+    if (!readJsonObject(path, 8 * 1024 * 1024, envelope, error)) return {};
+    if (!exactKeys(envelope, {QStringLiteral("queueVersion"), QStringLiteral("projectId"),
+                              QStringLiteral("records")})
+        || envelope.value(QStringLiteral("queueVersion")).toInt(-1) != 1
+        || envelope.value(QStringLiteral("projectId")).toString() != projectId
+        || !envelope.value(QStringLiteral("records")).isArray())
+    {
+        error = QStringLiteral("Close retry queue has an unsupported or mismatched envelope.");
+        return {};
+    }
+    const QJsonArray records = envelope.value(QStringLiteral("records")).toArray();
+    if (records.size() > MaxCloseRetries)
+    {
+        error = QStringLiteral("Close retry queue exceeds its record bound.");
+        return {};
+    }
+    QSet<QString> retryIds;
+    for (const auto &value : records)
+    {
+        if (!value.isObject())
+        {
+            error = QStringLiteral("Close retry queue contains a non-record entry.");
+            return {};
+        }
+        const auto record = value.toObject();
+        QDateTime created, completed;
+        const bool isComplete = record.value(QStringLiteral("status")).toString() == QStringLiteral("complete");
+        const QJsonObject payload = record.value(QStringLiteral("payload")).toObject();
+        const QByteArray payloadBytes = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+        QString payloadError;
+        if (!exactKeys(record, {QStringLiteral("retryId"), QStringLiteral("operationId"),
+                QStringLiteral("diagnosticCode"), QStringLiteral("createdAtUtc"),
+                QStringLiteral("status"), QStringLiteral("completedAtUtc"),
+                QStringLiteral("payload"), QStringLiteral("payloadSha256")})
+            || !record.value(QStringLiteral("retryId")).isString()
+            || !record.value(QStringLiteral("operationId")).isString()
+            || !record.value(QStringLiteral("diagnosticCode")).isString()
+            || !record.value(QStringLiteral("payload")).isObject()
+            || !record.value(QStringLiteral("payloadSha256")).isString()
+            || !validCloseRetryId(record.value(QStringLiteral("retryId")).toString())
+            || !validUuid(record.value(QStringLiteral("operationId")).toString())
+            || !validDiagnosticCode(record.value(QStringLiteral("diagnosticCode")).toString())
+            || payloadBytes.size() > 64 * 1024
+            || !RModelCommandSession::validateCloseRetryPayload(payload, &payloadError)
+            || payload.value(QStringLiteral("retryId")).toString()
+                != record.value(QStringLiteral("retryId")).toString()
+            || payload.value(QStringLiteral("operationId")).toString()
+                != record.value(QStringLiteral("operationId")).toString()
+            || QString::fromLatin1(QCryptographicHash::hash(payloadBytes, QCryptographicHash::Sha256).toHex())
+                != record.value(QStringLiteral("payloadSha256")).toString()
+            || !parseTimestamp(record.value(QStringLiteral("createdAtUtc")), created)
+            || (!isComplete && record.value(QStringLiteral("status")).toString() != QStringLiteral("pending"))
+            || (isComplete ? !parseTimestamp(record.value(QStringLiteral("completedAtUtc")), completed)
+                           : !record.value(QStringLiteral("completedAtUtc")).isString()
+                                 || !record.value(QStringLiteral("completedAtUtc")).toString().isEmpty()))
+        {
+            error = QStringLiteral("Close retry queue contains an invalid record.");
+            return {};
+        }
+        const QString id = record.value(QStringLiteral("retryId")).toString();
+        if (retryIds.contains(id))
+        {
+            error = QStringLiteral("Close retry queue contains duplicate retry IDs.");
+            return {};
+        }
+        retryIds.insert(id);
+    }
+    if (valid) *valid = true;
+    return records;
+}
+
+bool writeCloseRetryRecords(const QString &root, const QString &projectId,
+                            const QJsonArray &records, QString &error)
+{
+    const QJsonObject envelope{{QStringLiteral("queueVersion"), 1},
+                               {QStringLiteral("projectId"), projectId},
+                               {QStringLiteral("records"), records}};
+    return writeAtomicManagedJson(root, QStringLiteral("operations/close-retries.json"),
+                                  envelope, 8 * 1024 * 1024, error);
+}
+
+}
+
 std::optional<RProjectCatalog::SourceBinding> RProjectCatalog::resolveSourceBinding(
     const QString &sourcePath, QString *error, QString *errorCode)
 {
@@ -1469,8 +2124,10 @@ QJsonObject RProjectCatalog::SnapshotArtifact::toJson() const
             {QStringLiteral("instanceRef"), instanceRef.toJson()}};
 }
 
-RProjectCatalog::RProjectCatalog(QString canonicalWorkspace, QString projectId)
+RProjectCatalog::RProjectCatalog(QString canonicalWorkspace, QString projectId,
+                                 QString runtimeId, std::unique_ptr<QLockFile> runtimeLock)
     : root(std::move(canonicalWorkspace)), projectIdentity(std::move(projectId)),
+      runtimeIdentity(std::move(runtimeId)), runtimeLease(std::move(runtimeLock)),
       ownerThread(QThread::currentThreadId())
 {
 }
@@ -1527,6 +2184,17 @@ std::unique_ptr<RProjectCatalog> RProjectCatalog::open(const QString &workspace,
         return {};
     }
     const QString root = QDir::cleanPath(QDir::fromNativeSeparators(workspaceInfo.canonicalFilePath()));
+    const auto createCatalog = [&](const QString &projectId) -> std::unique_ptr<RProjectCatalog> {
+        const QString runtimeId = newId();
+        std::unique_ptr<QLockFile> lease;
+        if (!acquireRuntimeLease(root, runtimeId, lease, localError))
+        {
+            setError(error, localError);
+            return {};
+        }
+        return std::unique_ptr<RProjectCatalog>(new RProjectCatalog(
+            root, projectId, runtimeId, std::move(lease)));
+    };
     const QString manifestPath = QDir(root).filePath(QStringLiteral("project.json"));
     if (QFileInfo(manifestPath).exists())
     {
@@ -1536,8 +2204,7 @@ std::unique_ptr<RProjectCatalog> RProjectCatalog::open(const QString &workspace,
             setError(error, localError);
             return {};
         }
-        return std::unique_ptr<RProjectCatalog>(new RProjectCatalog(
-            root, manifest.value(QStringLiteral("projectId")).toString()));
+        return createCatalog(manifest.value(QStringLiteral("projectId")).toString());
     }
 
     auto lock = acquireLock(root, localError);
@@ -1554,8 +2221,7 @@ std::unique_ptr<RProjectCatalog> RProjectCatalog::open(const QString &workspace,
             setError(error, localError);
             return {};
         }
-        return std::unique_ptr<RProjectCatalog>(new RProjectCatalog(
-            root, manifest.value(QStringLiteral("projectId")).toString()));
+        return createCatalog(manifest.value(QStringLiteral("projectId")).toString());
     }
     QString projectId;
     const QString workflowState = QDir(root).filePath(QStringLiteral("workflow-state.json"));
@@ -1566,11 +2232,12 @@ std::unique_ptr<RProjectCatalog> RProjectCatalog::open(const QString &workspace,
         setError(error, localError);
         return {};
     }
-    return std::unique_ptr<RProjectCatalog>(new RProjectCatalog(root, projectId));
+    return createCatalog(projectId);
 }
 
 QString RProjectCatalog::workspace() const { return root; }
 QString RProjectCatalog::projectId() const { return projectIdentity; }
+QString RProjectCatalog::runtimeId() const { return runtimeIdentity; }
 
 bool RProjectCatalog::validateInstanceLease(const QString &persistentDocumentId,
                                             const InstanceRef *instanceRef,
@@ -3004,4 +3671,1182 @@ QJsonObject RProjectCatalog::capabilityDescription()
             {QStringLiteral("manifestExample"), manifestExample},
             {QStringLiteral("examples"), examples},
             {QStringLiteral("refusals"), refusals}};
+}
+
+bool RProjectCatalog::validatePublicationLease(const PublicationLeasePtr &lease,
+                                              QString *error, QString *errorCode) const
+{
+    if (!lease || !lease->lockFile || !lease->lockFile->isLocked()
+        || lease->projectIdentity != projectIdentity || lease->workspaceRoot != root
+        || lease->lockPath != QDir(root).filePath(QStringLiteral(".project.lock"))
+        || lease->ownerThread != ownerThread || QThread::currentThreadId() != ownerThread
+        || !validUuid(lease->documentIdentity) || !validRevision(lease->sourceRevision)
+        || lease->paths.isEmpty())
+    {
+        setError(error, QStringLiteral("Publication lease does not belong to this workspace or owner thread."));
+        setErrorCode(errorCode, QStringLiteral("lease_mismatch"));
+        return false;
+    }
+    QString localError;
+    if (!validWorkspaceRoot(root, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    return true;
+}
+
+RProjectCatalog::BeginOperationResult RProjectCatalog::beginOperation(
+    const QString &idempotencyKey, const QJsonObject &normalizedRequest,
+    const OperationAssociation &association, const PublicationLeasePtr &publicationLease,
+    QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    BeginOperationResult result;
+    QString localError, digest;
+    if (QThread::currentThreadId() != ownerThread || !validOperationToken(idempotencyKey)
+        || !validOperationAssociation(association) || !association.observation.isEmpty()
+        || !requestDigest(normalizedRequest, digest, localError))
+    {
+        setError(error, localError.isEmpty() ? QStringLiteral("Operation identity, owner thread, or association is invalid.") : localError);
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return result;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return result;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return result;
+        }
+    }
+
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return result;
+    }
+    const int existingIndex = findOperationIndex(operations, QStringLiteral("idempotencyKey"), idempotencyKey);
+    if (existingIndex >= 0)
+    {
+        const QJsonObject existing = operations.at(existingIndex).toObject();
+        result.operation = operationFromJsonUnchecked(existing);
+        if (result.operation.normalizedRequestSha256 != digest)
+        {
+            result.disposition = OperationDisposition::Conflict;
+            setError(error, QStringLiteral("This project idempotency key is already bound to a different normalized request."));
+            setErrorCode(errorCode, QStringLiteral("idempotency_conflict"));
+            return result;
+        }
+        result.disposition = OperationDisposition::Reused;
+        return result;
+    }
+    if (operations.size() >= MaxDurableOperations)
+    {
+        setError(error, QStringLiteral("Project operation ledger reached its record limit."));
+        setErrorCode(errorCode, QStringLiteral("ledger_limit"));
+        return result;
+    }
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    DurableOperation operation;
+    operation.projectId = projectIdentity;
+    operation.ownerRuntimeId = runtimeIdentity;
+    operation.operationId = newId();
+    operation.idempotencyKey = idempotencyKey;
+    operation.normalizedRequestSha256 = digest;
+    operation.phase = OperationPhase::Intent;
+    operation.association = association;
+    operation.createdAtUtc = now;
+    operation.updatedAtUtc = now;
+    QJsonArray events{operationEventJson(OperationPhase::Intent, association, now)};
+    operations.append(durableOperationJson(operation, events));
+    if (!writeOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return result;
+    }
+    result.disposition = OperationDisposition::Created;
+    result.operation = std::move(operation);
+    return result;
+}
+
+bool RProjectCatalog::advanceOperation(const QString &operationId, OperationPhase phase,
+                                       const OperationAssociation &association,
+                                       const PublicationLeasePtr &publicationLease,
+                                       QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !validUuid(operationId)
+        || operationPhaseName(phase).isEmpty()
+        || !validOperationAssociation(association))
+    {
+        setError(error, QStringLiteral("Operation ID, phase, owner thread, or association is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return false;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return false;
+        }
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return false;
+    }
+    const int index = findOperationIndex(operations, QStringLiteral("operationId"), operationId);
+    if (index < 0)
+    {
+        setError(error, QStringLiteral("Durable operation was not found in this project."));
+        setErrorCode(errorCode, QStringLiteral("not_found"));
+        return false;
+    }
+    QJsonObject object = operations.at(index).toObject();
+    DurableOperation operation = operationFromJsonUnchecked(object);
+    if (!validPhaseTransition(operation.phase, phase))
+    {
+        setError(error, QStringLiteral("Durable operation phase transition is not allowed."));
+        setErrorCode(errorCode, QStringLiteral("invalid_transition"));
+        return false;
+    }
+    OperationAssociation updateAssociation = association;
+    if (phase != OperationPhase::Observed) updateAssociation.observation = {};
+    OperationAssociation nextAssociation = operation.association;
+    mergeOperationAssociation(nextAssociation, updateAssociation);
+    if (phase == OperationPhase::Observed && nextAssociation.observation.isEmpty()
+        && operation.artifacts.isEmpty())
+    {
+        setError(error, QStringLiteral("A no-artifact operation requires its original trusted-host observation."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    if ((phase == OperationPhase::Accepted || phase == OperationPhase::Observed)
+        && updateAssociation.diagnosticCode.isEmpty())
+        nextAssociation.diagnosticCode.clear();
+    const bool phaseUnchanged = operation.phase == phase;
+    const bool associationUnchanged = operationAssociationJson(nextAssociation)
+        == operationAssociationJson(operation.association);
+    if (phaseUnchanged && associationUnchanged) return true;
+    QJsonArray events = operationEvents(object);
+    if (events.size() >= MaxOperationEvents)
+    {
+        setError(error, QStringLiteral("Durable operation reached its event limit."));
+        setErrorCode(errorCode, QStringLiteral("ledger_limit"));
+        return false;
+    }
+    QDateTime now = QDateTime::currentDateTimeUtc();
+    if (now < operation.updatedAtUtc) now = operation.updatedAtUtc;
+    operation.phase = phase;
+    operation.association = nextAssociation;
+    operation.updatedAtUtc = now;
+    appendOperationEvent(object, phase, nextAssociation, now);
+    object = durableOperationJson(operation, operationEvents(object));
+    operations[index] = object;
+    if (!writeOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return false;
+    }
+    return true;
+}
+
+bool RProjectCatalog::markUnfinishedOperationsUnknown(
+    const PublicationLeasePtr &publicationLease, QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread)
+    {
+        setError(error, QStringLiteral("Operation recovery must run on the catalog owner thread."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return false;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return false;
+        }
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return false;
+    }
+    bool changed = false;
+    for (qsizetype index = 0; index < operations.size(); ++index)
+    {
+        QJsonObject object = operations.at(index).toObject();
+        DurableOperation operation = operationFromJsonUnchecked(object);
+        if (operation.ownerRuntimeId == runtimeIdentity) continue;
+        if (operation.phase != OperationPhase::Intent
+            && operation.phase != OperationPhase::Accepted
+            && operation.phase != OperationPhase::ArtifactPublished) continue;
+        const QString runtimeDirectory = QDir(root).filePath(QStringLiteral("operations/runtimes"));
+        const QFileInfo runtimeDirectoryInfo(runtimeDirectory);
+        if (!runtimeDirectoryInfo.isDir() || runtimeDirectoryInfo.isSymLink())
+        {
+            setError(error, QStringLiteral("Project runtime liveness directory is unavailable or unsafe."));
+            setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+            return false;
+        }
+        const QString ownerLockPath = QDir(runtimeDirectory).filePath(
+            operation.ownerRuntimeId + QStringLiteral(".lock"));
+        if (QFileInfo(ownerLockPath).isSymLink())
+        {
+            setError(error, QStringLiteral("Recorded project runtime lock path is a symbolic link."));
+            setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+            return false;
+        }
+        QLockFile ownerProbe(ownerLockPath);
+        ownerProbe.setStaleLockTime(0);
+        if (!ownerProbe.tryLock(0)) continue;
+        ownerProbe.unlock();
+        const QJsonArray events = operationEvents(object);
+        if (events.size() >= MaxOperationEvents)
+        {
+            setError(error, QStringLiteral("An unfinished operation reached its event limit and could not be marked unknown."));
+            setErrorCode(errorCode, QStringLiteral("ledger_limit"));
+            return false;
+        }
+        OperationAssociation association = operation.association;
+        association.diagnosticCode = QStringLiteral("interrupted_unobserved");
+        QDateTime now = QDateTime::currentDateTimeUtc();
+        if (now < operation.updatedAtUtc) now = operation.updatedAtUtc;
+        operation.phase = OperationPhase::Unknown;
+        operation.association = association;
+        operation.updatedAtUtc = now;
+        appendOperationEvent(object, OperationPhase::Unknown, association, now);
+        operations[index] = durableOperationJson(operation, operationEvents(object));
+        changed = true;
+    }
+    if (!changed) return true;
+    if (!writeOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return false;
+    }
+    return true;
+}
+
+std::optional<RProjectCatalog::DurableOperation> RProjectCatalog::queryOperation(
+    const QString &operationId, const PublicationLeasePtr &publicationLease,
+    QString *error, QString *errorCode) const
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !validUuid(operationId))
+    {
+        setError(error, QStringLiteral("Operation ID or owner thread is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return std::nullopt;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return std::nullopt;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return std::nullopt;
+        }
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return std::nullopt;
+    }
+    const int index = findOperationIndex(operations, QStringLiteral("operationId"), operationId);
+    if (index < 0)
+    {
+        setError(error, QStringLiteral("Durable operation was not found in this project."));
+        setErrorCode(errorCode, QStringLiteral("not_found"));
+        return std::nullopt;
+    }
+    return operationFromJsonUnchecked(operations.at(index).toObject());
+}
+
+std::optional<RProjectCatalog::DurableOperation> RProjectCatalog::queryOperationByIdempotencyKey(
+    const QString &idempotencyKey, const PublicationLeasePtr &publicationLease,
+    QString *error, QString *errorCode) const
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !validOperationToken(idempotencyKey))
+    {
+        setError(error, QStringLiteral("Operation idempotency key or owner thread is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return std::nullopt;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return std::nullopt;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return std::nullopt;
+        }
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return std::nullopt;
+    }
+    const int index = findOperationIndex(operations, QStringLiteral("idempotencyKey"), idempotencyKey);
+    if (index < 0) return std::nullopt;
+    return operationFromJsonUnchecked(operations.at(index).toObject());
+}
+
+RProjectCatalog::OperationPage RProjectCatalog::queryOperations(
+    int limit, const QString &afterOperationId,
+    const PublicationLeasePtr &publicationLease, QString *error, QString *errorCode) const
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    OperationPage page;
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || limit < 1 || limit > 200
+        || (!afterOperationId.isEmpty() && !validUuid(afterOperationId)))
+    {
+        setError(error, QStringLiteral("Operation page limit, cursor, or owner thread is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return page;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return page;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return page;
+        }
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return page;
+    }
+    qsizetype start = 0;
+    if (!afterOperationId.isEmpty())
+    {
+        const int cursorIndex = findOperationIndex(operations, QStringLiteral("operationId"), afterOperationId);
+        if (cursorIndex < 0)
+        {
+            setError(error, QStringLiteral("Operation cursor is not present in this project ledger."));
+            setErrorCode(errorCode, QStringLiteral("invalid_cursor"));
+            return page;
+        }
+        start = qsizetype(cursorIndex) + 1;
+    }
+    const qsizetype end = qMin(operations.size(), start + qsizetype(limit));
+    page.operations.reserve(end - start);
+    for (qsizetype index = start; index < end; ++index)
+        page.operations.append(operationFromJsonUnchecked(operations.at(index).toObject()));
+    if (end < operations.size() && end > start)
+        page.nextCursor = page.operations.constLast().operationId;
+    return page;
+}
+
+RProjectCatalog::BeginOperationResult RProjectCatalog::beginSavePublication(
+    const QString &persistentDocumentId, const QString &idempotencyKey,
+    const QJsonObject &normalizedRequest, const QString &expectedSourceRevision,
+    const QVector<OperationArtifactIntent> &artifacts,
+    const PublicationLeasePtr &publicationLease,
+    const OperationAssociation &association, QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    BeginOperationResult result;
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !publicationLease
+        || !validatePublicationLease(publicationLease, error, errorCode))
+    {
+        if (!publicationLease && error) *error = QStringLiteral("A live publication lease is required before recording a save intent.");
+        if (!publicationLease && errorCode) *errorCode = QStringLiteral("lease_mismatch");
+        return result;
+    }
+    if (!validUuid(persistentDocumentId) || publicationLease->documentIdentity != persistentDocumentId
+        || !validRevision(expectedSourceRevision) || publicationLease->sourceRevision != expectedSourceRevision
+        || !validOperationToken(idempotencyKey)
+        || !validOperationAssociation(association) || !association.observation.isEmpty()
+        || normalizedRequest.isEmpty()
+        || artifacts.isEmpty() || artifacts.size() > MaxOperationArtifacts)
+    {
+        setError(error, QStringLiteral("Save intent identity, revision, association, or artifact count is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return result;
+    }
+
+    QSet<QString> reservedPaths;
+    for (const QString &reserved : publicationLease->paths) reservedPaths.insert(pathIndexKey(reserved));
+    QSet<QString> uniquePaths;
+    QJsonArray normalizedArtifacts;
+    QVector<OperationArtifactIntent> checkedArtifacts;
+    checkedArtifacts.reserve(artifacts.size());
+    for (const OperationArtifactIntent &input : artifacts)
+    {
+        QString canonical;
+        if (!canonicalPlannedOutputPath(input.path, canonical, localError)
+            || managedCatalogPath(root, canonical))
+        {
+            setError(error, localError.isEmpty() ? QStringLiteral("Save intent cannot target a managed workspace path.") : localError);
+            setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+            return result;
+        }
+        const QString key = pathIndexKey(canonical);
+        if (!reservedPaths.contains(key) || uniquePaths.contains(key)
+            || (input.expectedPriorExists ? !validHash(input.expectedPriorSha256)
+                                          : !input.expectedPriorSha256.isEmpty())
+            || (!input.intendedSha256.isEmpty() && !validHash(input.intendedSha256))
+            || !input.observedStatus.isEmpty() || input.observedExists || !input.observedSha256.isEmpty())
+        {
+            setError(error, QStringLiteral("Save artifact intent is not bound to the active lease or has invalid hashes."));
+            setErrorCode(errorCode, QStringLiteral("lease_mismatch"));
+            return result;
+        }
+        OperationArtifactIntent checked;
+        checked.path = canonical;
+        checked.expectedPriorExists = input.expectedPriorExists;
+        checked.expectedPriorSha256 = input.expectedPriorSha256;
+        checked.intendedSha256 = input.intendedSha256;
+        checkedArtifacts.append(checked);
+        uniquePaths.insert(key);
+        normalizedArtifacts.append(QJsonObject{
+            {QStringLiteral("path"), canonical},
+            {QStringLiteral("expectedPriorExists"), input.expectedPriorExists},
+            {QStringLiteral("expectedPriorSha256"), input.expectedPriorSha256}});
+    }
+    QJsonObject digestRequest{{QStringLiteral("request"), normalizedRequest},
+        {QStringLiteral("persistentDocumentId"), persistentDocumentId},
+        {QStringLiteral("expectedSourceRevision"), expectedSourceRevision},
+        {QStringLiteral("artifacts"), normalizedArtifacts}};
+    QString digest;
+    if (!requestDigest(digestRequest, digest, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return result;
+    }
+
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return result;
+    }
+    const int existingIndex = findOperationIndex(operations, QStringLiteral("idempotencyKey"), idempotencyKey);
+    if (existingIndex >= 0)
+    {
+        result.operation = operationFromJsonUnchecked(operations.at(existingIndex).toObject());
+        if (result.operation.normalizedRequestSha256 != digest)
+        {
+            result.disposition = OperationDisposition::Conflict;
+            setError(error, QStringLiteral("This project idempotency key is already bound to a different save intent."));
+            setErrorCode(errorCode, QStringLiteral("idempotency_conflict"));
+            return result;
+        }
+        if (result.operation.artifacts.size() != checkedArtifacts.size())
+        {
+            setError(error, QStringLiteral("The saved operation intent is incomplete; it cannot be replayed."));
+            setErrorCode(errorCode, QStringLiteral("unknown_operation"));
+            return result;
+        }
+        for (qsizetype i = 0; i < checkedArtifacts.size(); ++i)
+        {
+            auto &stored = result.operation.artifacts[i];
+            const auto &requested = checkedArtifacts.at(i);
+            if (pathIndexKey(stored.path) != pathIndexKey(requested.path)
+                || stored.expectedPriorExists != requested.expectedPriorExists
+                || stored.expectedPriorSha256 != requested.expectedPriorSha256
+                || (!requested.intendedSha256.isEmpty() && !stored.intendedSha256.isEmpty()
+                    && requested.intendedSha256 != stored.intendedSha256))
+            {
+                result.disposition = OperationDisposition::Conflict;
+                setError(error, QStringLiteral("The existing operation has different per-file publication evidence."));
+                setErrorCode(errorCode, QStringLiteral("idempotency_conflict"));
+                return result;
+            }
+        }
+        result.disposition = OperationDisposition::Reused;
+        return result;
+    }
+    if (operations.size() >= MaxDurableOperations)
+    {
+        setError(error, QStringLiteral("Project operation ledger reached its record limit."));
+        setErrorCode(errorCode, QStringLiteral("ledger_limit"));
+        return result;
+    }
+    // A reused key returns its original operation without rechecking current
+    // file bytes; a completed publication must never be mistaken for a new
+    // prior-state conflict or executed a second time.
+    for (const OperationArtifactIntent &artifact : checkedArtifacts)
+    {
+        const QFileInfo info(artifact.path);
+        if (info.isSymLink() || info.exists() != artifact.expectedPriorExists)
+        {
+            setError(error, QStringLiteral("Save target existence changed after the expected prior state was captured."));
+            setErrorCode(errorCode, QStringLiteral("source_conflict"));
+            return result;
+        }
+        if (artifact.expectedPriorExists)
+        {
+            QString actualPrior;
+            if (!fileHash(artifact.path, actualPrior, localError)
+                || actualPrior != artifact.expectedPriorSha256)
+            {
+                setError(error, localError.isEmpty()
+                    ? QStringLiteral("Save target bytes changed after the expected prior hash was captured.")
+                    : localError);
+                setErrorCode(errorCode, QStringLiteral("source_conflict"));
+                return result;
+            }
+        }
+    }
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    DurableOperation operation;
+    operation.projectId = projectIdentity;
+    operation.ownerRuntimeId = runtimeIdentity;
+    operation.operationId = newId();
+    operation.idempotencyKey = idempotencyKey;
+    operation.normalizedRequestSha256 = digest;
+    operation.phase = OperationPhase::Intent;
+    operation.association = association;
+    operation.artifacts = checkedArtifacts;
+    operation.createdAtUtc = now;
+    operation.updatedAtUtc = now;
+    QJsonArray events{operationEventJson(OperationPhase::Intent, association, now)};
+    operations.append(durableOperationJson(operation, events));
+    if (!writeOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return result;
+    }
+    result.disposition = OperationDisposition::Created;
+    result.operation = std::move(operation);
+    return result;
+}
+
+bool RProjectCatalog::bindSaveArtifactHash(const QString &operationId, const QString &path,
+                                           const QString &intendedSha256,
+                                           const PublicationLeasePtr &publicationLease,
+                                           QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError, canonical;
+    if (QThread::currentThreadId() != ownerThread || !validUuid(operationId)
+        || !validHash(intendedSha256) || !canonicalPlannedOutputPath(path, canonical, localError))
+    {
+        setError(error, localError.isEmpty() ? QStringLiteral("Operation, path, or intended artifact hash is invalid.") : localError);
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    if (!publicationLease || !validatePublicationLease(publicationLease, error, errorCode))
+    {
+        if (!publicationLease && error) *error = QStringLiteral("A live publication lease is required to bind artifact bytes.");
+        if (!publicationLease && errorCode) *errorCode = QStringLiteral("lease_mismatch");
+        return false;
+    }
+    bool pathIsLeased = false;
+    for (const QString &reservedPath : publicationLease->paths)
+        pathIsLeased |= pathIndexKey(reservedPath) == pathIndexKey(canonical);
+    if (!pathIsLeased)
+    {
+        setError(error, QStringLiteral("Intended artifact path is not held by the publication lease."));
+        setErrorCode(errorCode, QStringLiteral("lease_mismatch"));
+        return false;
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return false;
+    }
+    const int index = findOperationIndex(operations, QStringLiteral("operationId"), operationId);
+    if (index < 0)
+    {
+        setError(error, QStringLiteral("Durable save operation was not found."));
+        setErrorCode(errorCode, QStringLiteral("not_found"));
+        return false;
+    }
+    QJsonObject object = operations.at(index).toObject();
+    DurableOperation operation = operationFromJsonUnchecked(object);
+    if (operation.phase != OperationPhase::Intent && operation.phase != OperationPhase::Accepted
+        && operation.phase != OperationPhase::Unknown)
+    {
+        setError(error, QStringLiteral("Artifact bytes can only be bound before publication is observed."));
+        setErrorCode(errorCode, QStringLiteral("invalid_transition"));
+        return false;
+    }
+    int artifactIndex = -1;
+    for (qsizetype i = 0; i < operation.artifacts.size(); ++i)
+        if (pathIndexKey(operation.artifacts.at(i).path) == pathIndexKey(canonical))
+        {
+            artifactIndex = int(i);
+            break;
+        }
+    if (artifactIndex < 0)
+    {
+        setError(error, QStringLiteral("Artifact path is not part of this durable save intent."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    OperationArtifactIntent &artifact = operation.artifacts[artifactIndex];
+    // Binding the same staged bytes again is read-only. Publication may have
+    // replaced the predecessor meanwhile; reconcileSavePublication checks
+    // the current target against this intended hash separately.
+    if (!artifact.intendedSha256.isEmpty())
+    {
+        if (artifact.intendedSha256 != intendedSha256)
+        {
+            setError(error, QStringLiteral("Intended artifact hash is already bound to different bytes."));
+            setErrorCode(errorCode, QStringLiteral("idempotency_conflict"));
+            return false;
+        }
+        return true;
+    }
+    const QFileInfo info(canonical);
+    if (info.isSymLink() || info.exists() != artifact.expectedPriorExists)
+    {
+        setError(error, QStringLiteral("Save target changed before intended bytes were bound."));
+        setErrorCode(errorCode, QStringLiteral("source_conflict"));
+        return false;
+    }
+    if (artifact.expectedPriorExists)
+    {
+        QString actualPrior;
+        if (!fileHash(canonical, actualPrior, localError)
+            || actualPrior != artifact.expectedPriorSha256)
+        {
+            setError(error, localError.isEmpty()
+                ? QStringLiteral("Save target bytes changed before intended bytes were bound.") : localError);
+            setErrorCode(errorCode, QStringLiteral("source_conflict"));
+            return false;
+        }
+    }
+    artifact.intendedSha256 = intendedSha256;
+    object = durableOperationJson(operation, operationEvents(object));
+    operations[index] = object;
+    if (!writeOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return false;
+    }
+    return true;
+}
+
+bool RProjectCatalog::reconcileSavePublication(const QString &operationId,
+                                               const PublicationLeasePtr &publicationLease,
+                                               QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !validUuid(operationId))
+    {
+        setError(error, QStringLiteral("Operation ID or owner thread is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return false;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return false;
+        }
+    }
+    QJsonArray operations;
+    if (!readOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_operation_ledger"));
+        return false;
+    }
+    const int index = findOperationIndex(operations, QStringLiteral("operationId"), operationId);
+    if (index < 0)
+    {
+        setError(error, QStringLiteral("Durable save operation was not found."));
+        setErrorCode(errorCode, QStringLiteral("not_found"));
+        return false;
+    }
+    QJsonObject object = operations.at(index).toObject();
+    DurableOperation operation = operationFromJsonUnchecked(object);
+    if (operation.artifacts.isEmpty())
+    {
+        OperationAssociation association = operation.association;
+        association.diagnosticCode = QStringLiteral("incomplete_save_intent");
+        if (operation.phase != OperationPhase::Unknown)
+        {
+            if (!validPhaseTransition(operation.phase, OperationPhase::Unknown))
+            {
+                setError(error, QStringLiteral("Operation state cannot reconcile an incomplete save intent."));
+                setErrorCode(errorCode, QStringLiteral("invalid_transition"));
+                return false;
+            }
+            QDateTime now = QDateTime::currentDateTimeUtc();
+            if (now < operation.updatedAtUtc) now = operation.updatedAtUtc;
+            operation.phase = OperationPhase::Unknown;
+            operation.association = association;
+            operation.updatedAtUtc = now;
+            appendOperationEvent(object, OperationPhase::Unknown, association, now);
+        }
+        object = durableOperationJson(operation, operationEvents(object));
+        operations[index] = object;
+        if (!writeOperationLedger(root, projectIdentity, operations, localError))
+        {
+            setError(error, localError);
+            setErrorCode(errorCode, QStringLiteral("io_error"));
+            return false;
+        }
+        return true;
+    }
+
+    bool anyConflict = false;
+    bool anyUnknown = false;
+    int publishedCount = 0;
+    int notPublishedCount = 0;
+    for (OperationArtifactIntent &artifact : operation.artifacts)
+    {
+        const QFileInfo info(artifact.path);
+        artifact.observedExists = info.exists() || info.isSymLink();
+        artifact.observedSha256.clear();
+        artifact.observedStatus.clear();
+        if (info.isSymLink())
+        {
+            artifact.observedStatus = QStringLiteral("conflict");
+            anyConflict = true;
+            continue;
+        }
+        QString canonical;
+        if (!canonicalPlannedOutputPath(artifact.path, canonical, localError)
+            || pathIndexKey(canonical) != pathIndexKey(artifact.path)
+            || managedCatalogPath(root, canonical))
+        {
+            artifact.observedExists = false;
+            artifact.observedStatus = QStringLiteral("unknown");
+            anyUnknown = true;
+            continue;
+        }
+        if (!info.exists())
+        {
+            if (artifact.expectedPriorExists)
+            {
+                artifact.observedStatus = QStringLiteral("conflict");
+                anyConflict = true;
+            }
+            else
+            {
+                artifact.observedStatus = QStringLiteral("not_published");
+                ++notPublishedCount;
+            }
+            continue;
+        }
+        QString actual;
+        if (!fileHash(canonical, actual, localError))
+        {
+            artifact.observedStatus = QStringLiteral("unreadable");
+            anyUnknown = true;
+            continue;
+        }
+        artifact.observedSha256 = actual;
+        if (!artifact.intendedSha256.isEmpty() && actual == artifact.intendedSha256)
+        {
+            if (artifact.expectedPriorExists && actual == artifact.expectedPriorSha256)
+            {
+                artifact.observedStatus = QStringLiteral("unchanged_matches_intended");
+                ++notPublishedCount;
+            }
+            else
+            {
+                artifact.observedStatus = QStringLiteral("published");
+                ++publishedCount;
+            }
+        }
+        else if (artifact.expectedPriorExists && actual == artifact.expectedPriorSha256)
+        {
+            artifact.observedStatus = QStringLiteral("not_published");
+            ++notPublishedCount;
+        }
+        else if (!artifact.intendedSha256.isEmpty() || artifact.expectedPriorExists)
+        {
+            artifact.observedStatus = QStringLiteral("conflict");
+            anyConflict = true;
+        }
+        else
+        {
+            // A newly found file without an intended hash cannot prove this
+            // process published it; preserve the unresolved state.
+            artifact.observedStatus = QStringLiteral("unknown");
+            anyUnknown = true;
+        }
+    }
+
+    bool acceptedWasRecorded = false;
+    for (const QJsonValue &eventValue : operationEvents(object))
+        acceptedWasRecorded |= eventValue.toObject().value(QStringLiteral("phase")).toString()
+            == QStringLiteral("accepted");
+    OperationPhase targetPhase = OperationPhase::Unknown;
+    OperationAssociation association = operation.association;
+    if (operation.phase == OperationPhase::Conflict)
+    {
+        targetPhase = OperationPhase::Conflict;
+        if (association.diagnosticCode.isEmpty())
+            association.diagnosticCode = QStringLiteral("publication_conflict");
+    }
+    else if (anyConflict)
+    {
+        targetPhase = OperationPhase::Conflict;
+        association.diagnosticCode = QStringLiteral("publication_conflict");
+    }
+    else if (anyUnknown)
+    {
+        targetPhase = OperationPhase::Unknown;
+        association.diagnosticCode = QStringLiteral("publication_unknown");
+    }
+    else if (publishedCount > 0 && notPublishedCount > 0)
+    {
+        targetPhase = OperationPhase::Unknown;
+        association.diagnosticCode = QStringLiteral("partial_publication");
+    }
+    else if (!acceptedWasRecorded)
+    {
+        if (publishedCount == 0 && notPublishedCount == operation.artifacts.size())
+        {
+            targetPhase = OperationPhase::Observed;
+            association.diagnosticCode = QStringLiteral("artifacts_not_published");
+        }
+        else
+        {
+            targetPhase = OperationPhase::Unknown;
+            association.diagnosticCode = QStringLiteral("accepted_state_unverified");
+        }
+    }
+    else
+    {
+        targetPhase = OperationPhase::Observed;
+        association.diagnosticCode = publishedCount == 0
+            ? QStringLiteral("artifacts_not_published") : QString();
+    }
+
+    const auto persistPhase = [&](OperationPhase phase, OperationAssociation nextAssociation,
+                                  QJsonObject &record, DurableOperation &current,
+                                  QJsonArray &events, QString &failure) -> bool {
+        if (!validPhaseTransition(current.phase, phase))
+        {
+            failure = QStringLiteral("Operation state cannot record the publication observation.");
+            return false;
+        }
+        if (current.phase == phase && operationAssociationJson(current.association)
+                == operationAssociationJson(nextAssociation)) return true;
+        if (events.size() >= MaxOperationEvents)
+        {
+            failure = QStringLiteral("Durable operation reached its event limit.");
+            return false;
+        }
+        QDateTime now = QDateTime::currentDateTimeUtc();
+        if (now < current.updatedAtUtc) now = current.updatedAtUtc;
+        current.phase = phase;
+        current.association = std::move(nextAssociation);
+        current.updatedAtUtc = now;
+        appendOperationEvent(record, phase, current.association, now);
+        record = durableOperationJson(current, operationEvents(record));
+        events = operationEvents(record);
+        return true;
+    };
+
+    QJsonArray events = operationEvents(object);
+    if (operation.phase != OperationPhase::Conflict && !anyConflict && !anyUnknown
+        && publishedCount > 0 && notPublishedCount == 0
+        && acceptedWasRecorded && operation.phase != OperationPhase::ArtifactPublished
+        && operation.phase != OperationPhase::Observed)
+    {
+        OperationAssociation publishedAssociation = association;
+        publishedAssociation.diagnosticCode.clear();
+        if (!persistPhase(OperationPhase::ArtifactPublished, publishedAssociation,
+                          object, operation, events, localError))
+        {
+            setError(error, localError);
+            setErrorCode(errorCode, QStringLiteral("invalid_transition"));
+            return false;
+        }
+        targetPhase = OperationPhase::Observed;
+        association = publishedAssociation;
+    }
+    if (!persistPhase(targetPhase, association, object, operation, events, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("invalid_transition"));
+        return false;
+    }
+    // The phase event records the operation outcome. The per-file observations
+    // are updated in the same atomic ledger publication.
+    object = durableOperationJson(operation, operationEvents(object));
+    QJsonArray storedArtifacts;
+    for (const auto &artifact : operation.artifacts) storedArtifacts.append(operationArtifactJson(artifact));
+    object.insert(QStringLiteral("artifacts"), storedArtifacts);
+    operations[index] = object;
+    if (!writeOperationLedger(root, projectIdentity, operations, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return false;
+    }
+    return true;
+}
+
+bool RProjectCatalog::queueCloseRetry(const QString &retryId, const QString &operationId,
+                                      const QString &diagnosticCode,
+                                      const QJsonObject &payload,
+                                      const PublicationLeasePtr &publicationLease,
+                                      QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !validCloseRetryId(retryId)
+        || !validUuid(operationId) || !validDiagnosticCode(diagnosticCode)
+        || diagnosticCode.isEmpty()
+        || !RModelCommandSession::validateCloseRetryPayload(payload, &localError)
+        || payload.value(QStringLiteral("retryId")).toString() != retryId
+        || payload.value(QStringLiteral("operationId")).toString() != operationId)
+    {
+        setError(error, localError.isEmpty()
+            ? QStringLiteral("Close retry identity, payload, or diagnostic code is invalid.") : localError);
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return false;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return false;
+        }
+    }
+    bool valid = false;
+    QJsonArray records = readCloseRetryRecords(root, projectIdentity, localError, &valid);
+    if (!valid)
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_close_queue"));
+        return false;
+    }
+    for (const QJsonValue &value : records)
+    {
+        const QJsonObject record = value.toObject();
+        if (record.value(QStringLiteral("retryId")).toString() != retryId) continue;
+        if (record.value(QStringLiteral("operationId")).toString() == operationId
+            && record.value(QStringLiteral("diagnosticCode")).toString() == diagnosticCode
+            && record.value(QStringLiteral("payload")).toObject() == payload) return true;
+        setError(error, QStringLiteral("Close retry ID is already associated with a different operation."));
+        setErrorCode(errorCode, QStringLiteral("idempotency_conflict"));
+        return false;
+    }
+    if (records.size() >= MaxCloseRetries)
+    {
+        setError(error, QStringLiteral("Durable close retry queue reached its record limit."));
+        setErrorCode(errorCode, QStringLiteral("queue_limit"));
+        return false;
+    }
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    records.append(QJsonObject{{QStringLiteral("retryId"), retryId},
+        {QStringLiteral("operationId"), operationId},
+        {QStringLiteral("diagnosticCode"), diagnosticCode},
+        {QStringLiteral("createdAtUtc"), timestampText(now)},
+        {QStringLiteral("status"), QStringLiteral("pending")},
+        {QStringLiteral("completedAtUtc"), QString()},
+        {QStringLiteral("payload"), payload},
+        {QStringLiteral("payloadSha256"), QString::fromLatin1(
+             QCryptographicHash::hash(QJsonDocument(payload).toJson(QJsonDocument::Compact),
+                                      QCryptographicHash::Sha256).toHex())}});
+    if (!writeCloseRetryRecords(root, projectIdentity, records, localError))
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("io_error"));
+        return false;
+    }
+    return true;
+}
+
+QVector<RProjectCatalog::CloseRetry> RProjectCatalog::pendingCloseRetries(
+    const PublicationLeasePtr &publicationLease, QString *error, QString *errorCode) const
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QVector<CloseRetry> result;
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread)
+    {
+        setError(error, QStringLiteral("Close retry queue must be read on the catalog owner thread."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return result;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return result;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return result;
+        }
+    }
+    bool valid = false;
+    const QJsonArray records = readCloseRetryRecords(root, projectIdentity, localError, &valid);
+    if (!valid)
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_close_queue"));
+        return result;
+    }
+    for (const QJsonValue &value : records)
+    {
+        const QJsonObject record = value.toObject();
+        if (record.value(QStringLiteral("status")).toString() != QStringLiteral("pending")) continue;
+        CloseRetry retry;
+        retry.retryId = record.value(QStringLiteral("retryId")).toString();
+        retry.operationId = record.value(QStringLiteral("operationId")).toString();
+        retry.diagnosticCode = record.value(QStringLiteral("diagnosticCode")).toString();
+        retry.status = record.value(QStringLiteral("status")).toString();
+        retry.payload = record.value(QStringLiteral("payload")).toObject();
+        parseTimestamp(record.value(QStringLiteral("createdAtUtc")), retry.createdAtUtc);
+        result.append(std::move(retry));
+    }
+    return result;
+}
+
+bool RProjectCatalog::completeCloseRetry(const QString &retryId,
+                                         const PublicationLeasePtr &publicationLease,
+                                         QString *error, QString *errorCode)
+{
+    if (error) error->clear();
+    if (errorCode) errorCode->clear();
+    QString localError;
+    if (QThread::currentThreadId() != ownerThread || !validCloseRetryId(retryId))
+    {
+        setError(error, QStringLiteral("Close retry ID or owner thread is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    std::unique_ptr<QLockFile> directLock;
+    if (publicationLease)
+    {
+        if (!validatePublicationLease(publicationLease, error, errorCode)) return false;
+    }
+    else
+    {
+        directLock = acquireLock(root, localError, errorCode);
+        if (!directLock)
+        {
+            setError(error, localError);
+            return false;
+        }
+    }
+    bool valid = false;
+    QJsonArray records = readCloseRetryRecords(root, projectIdentity, localError, &valid);
+    if (!valid)
+    {
+        setError(error, localError);
+        setErrorCode(errorCode, QStringLiteral("corrupt_close_queue"));
+        return false;
+    }
+    for (qsizetype index = 0; index < records.size(); ++index)
+    {
+        QJsonObject record = records.at(index).toObject();
+        if (record.value(QStringLiteral("retryId")).toString() != retryId) continue;
+        if (record.value(QStringLiteral("status")).toString() == QStringLiteral("complete")) return true;
+        record.insert(QStringLiteral("status"), QStringLiteral("complete"));
+        record.insert(QStringLiteral("completedAtUtc"), timestampText(QDateTime::currentDateTimeUtc()));
+        records[index] = record;
+        if (!writeCloseRetryRecords(root, projectIdentity, records, localError))
+        {
+            setError(error, localError);
+            setErrorCode(errorCode, QStringLiteral("io_error"));
+            return false;
+        }
+        return true;
+    }
+    setError(error, QStringLiteral("Close retry item was not found."));
+    setErrorCode(errorCode, QStringLiteral("not_found"));
+    return false;
 }

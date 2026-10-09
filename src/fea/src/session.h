@@ -69,6 +69,7 @@ class Session : public QObject
             QString publicationSourceRevision;
             QString publicationLogicalPath;
             QStringList publicationPaths;
+            QString publicationOperationId;
             bool sourceConflict = false;
             bool catalogRevisionConflict = false;
             bool persistenceUnavailable = false;
@@ -130,6 +131,14 @@ class Session : public QObject
         ProjectPublicationLease reserveModelSave(uint modelID, const QString &logicalPath,
                                                   const QStringList &actualWritePaths,
                                                   QString *error = nullptr);
+        bool bindModelSaveArtifacts(const QString &runtimeDocumentId,
+                                    const RProjectCatalog::SourceBinding &stagedBinding,
+                                    const ProjectPublicationLease &lease, QString *error = nullptr);
+        bool validateModelSaveArtifactTarget(const QString &runtimeDocumentId,
+                                             const QString &targetPath,
+                                             const ProjectPublicationLease &lease,
+                                             QString *error = nullptr);
+        RProjectCatalog *getProjectCatalog() const { return projectCatalog.get(); }
         bool recordModelReloaded(uint modelID, const QString &path, QString *error = nullptr);
         bool recordModelReloaded(uint modelID, const RProjectCatalog::SourceBinding &sourceBinding,
                                  QString *error = nullptr);

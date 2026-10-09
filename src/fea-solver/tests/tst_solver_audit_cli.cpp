@@ -13,16 +13,24 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QProcessEnvironment>
+#include <QScopeGuard>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QDataStream>
 #include <QLockFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QUuid>
 
 #include "execution_event_journal.h"
 #include "rml_model.h"
+#include "rml_structural_dynamics_restart_data.h"
 #include "rstructural_thermal_fe_adapter.h"
 #include "rstructural_typed_control.h"
 #include "rstructural_typed_fe_control.h"
@@ -262,6 +270,168 @@ QString controlFixturePath()
 #else
     return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("control_ndjson_fixture"));
 #endif
+}
+
+QString sha256Bytes(const QByteArray &bytes)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(
+        bytes,QCryptographicHash::Sha256).toHex());
+}
+
+bool isLowerHexSha256(const QString &value)
+{
+    if (value.size() != 64) return false;
+    for (const QChar character : value)
+    {
+        if (!((character >= QLatin1Char('0') && character <= QLatin1Char('9')) ||
+              (character >= QLatin1Char('a') && character <= QLatin1Char('f'))))
+            return false;
+    }
+    return true;
+}
+
+QJsonObject nativeCheckpointContext(const QString &modelPath,double dtS)
+{
+    const QString inputModelHash = sha256(modelPath);
+    return {{QStringLiteral("schema"),QStringLiteral("range.native-checkpoint-context/v1")},
+            {QStringLiteral("sourceSha256"),inputModelHash},
+            {QStringLiteral("modelSha256"),inputModelHash},
+            {QStringLiteral("controlSha256"),sha256Bytes(
+                 QByteArrayLiteral("range.native-checkpoint.no-control.v1"))},
+            {QStringLiteral("runtimeSha256"),sha256(solverExecutablePath())},
+            {QStringLiteral("packageSha256"),sha256Bytes(
+                 QByteArrayLiteral("range-native-checkpoint-test-package-v1"))},
+            {QStringLiteral("policy"),QStringLiteral("accepted-steps-or-sim-time-v1")},
+            {QStringLiteral("maxAcceptedSteps"),10},
+            {QStringLiteral("maxSimulationSeconds"),1.0},
+            {QStringLiteral("dtS"),dtS}};
+}
+
+bool runNativeCheckpointCli(const QString &input,
+                            const QString &checkpointDirectory,
+                            const QJsonObject &context,
+                            bool restart,
+                            QString &diagnostic)
+{
+    QStringList arguments{
+        QStringLiteral("--file=")+input,
+        QStringLiteral("--native-checkpoint-dir=")+checkpointDirectory,
+        QStringLiteral("--native-checkpoint-context-json=")+
+            QString::fromUtf8(QJsonDocument(context).toJson(QJsonDocument::Compact))};
+    if (restart) arguments.append(QStringLiteral("--restart"));
+    QProcess process;
+    process.start(solverExecutablePath(),arguments);
+    const bool finished = process.waitForFinished(60000);
+    diagnostic = QString::fromUtf8(process.readAllStandardOutput()+process.readAllStandardError());
+    if (!finished)
+    {
+        process.kill();
+        process.waitForFinished();
+        diagnostic += process.errorString();
+    }
+    return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+QVector<QJsonObject> nativeCheckpointEnvelopes(const QString &directory)
+{
+    QVector<QJsonObject> envelopes;
+    QDir dir(directory);
+    for (const QString &name : dir.entryList({QStringLiteral("envelope-*.json")},QDir::Files,QDir::Name))
+    {
+        QFile file(dir.filePath(name));
+        if (!file.open(QIODevice::ReadOnly)) return {};
+        const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+        if (!document.isObject()) return {};
+        envelopes.append(document.object());
+    }
+    return envelopes;
+}
+
+bool closePhysical(double actual,double expected,double characteristicScale,
+                   double relativeTolerance = 1.0e-8)
+{
+    const double scale = std::max({characteristicScale,std::abs(actual),std::abs(expected)});
+    return std::isfinite(actual) && std::isfinite(expected) && std::isfinite(scale) &&
+           scale > 0.0 && std::abs(actual-expected) <= relativeTolerance*scale;
+}
+
+bool readJsonObject(const QString &path,QJsonObject &object)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject()) return false;
+    object = document.object();
+    return true;
+}
+
+QVector<QJsonObject> nativeResultJournalRecords(const QString &path)
+{
+    QVector<QJsonObject> records;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return records;
+    const QByteArray bytes = file.readAll();
+    if (file.error() != QFileDevice::NoError || (!bytes.isEmpty() && !bytes.endsWith('\n')))
+        return {};
+    for (const QByteArray &line : bytes.split('\n'))
+    {
+        if (line.isEmpty()) continue;
+        const QJsonDocument document = QJsonDocument::fromJson(line);
+        if (!document.isObject()) return {};
+        records.append(document.object());
+    }
+    return records;
+}
+
+bool sendLocalCommand(QLocalSocket *socket,const QString &taskId,
+                      const QString &command,bool fragmented = false)
+{
+    if (!socket || socket->state() != QLocalSocket::ConnectedState) return false;
+    const QString message = taskId+QLatin1Char(':')+command;
+    QByteArray frameBytes;
+    QDataStream output(&frameBytes,QIODevice::WriteOnly);
+    output.setVersion(QDataStream::Qt_6_8);
+    output << quint32(message.size()) << message;
+    if (output.status() != QDataStream::Ok) return false;
+    if (fragmented && frameBytes.size() > 3)
+    {
+        if (socket->write(frameBytes.constData(),3) != 3 ||
+            !socket->waitForBytesWritten(5000)) return false;
+        QTest::qWait(20);
+        if (socket->write(frameBytes.constData()+3,frameBytes.size()-3) !=
+            frameBytes.size()-3) return false;
+    }
+    else if (socket->write(frameBytes) != frameBytes.size())
+    {
+        return false;
+    }
+    return socket->waitForBytesWritten(5000);
+}
+
+bool sendRepeatedResumeCommands(QLocalSocket *socket,const QString &taskId)
+{
+    if (!socket || socket->state() != QLocalSocket::ConnectedState) return false;
+    QByteArray frames;
+    QDataStream output(&frames,QIODevice::WriteOnly);
+    output.setVersion(QDataStream::Qt_6_8);
+    for (int index=0;index<2;index++)
+    {
+        const QString message = taskId+QStringLiteral(":RESUME");
+        output << quint32(message.size()) << message;
+    }
+    if (output.status() != QDataStream::Ok ||
+        socket->write(frames) != frames.size()) return false;
+    return socket->waitForBytesWritten(5000);
+}
+
+bool sendMalformedLocalCommandFrame(QLocalSocket *socket)
+{
+    if (!socket || socket->state() != QLocalSocket::ConnectedState) return false;
+    // The outer character count is six while the serialized QString is one
+    // UTF-16 character. The parser must reject this frame without resuming.
+    const QByteArray malformed = QByteArray::fromHex("00000006000000020041");
+    if (socket->write(malformed) != malformed.size()) return false;
+    return socket->waitForBytesWritten(5000);
 }
 
 QString typedControlPython()
@@ -570,6 +740,12 @@ private slots:
     void malformedExternalControlOptionsFailBeforeRun();
     void externalControllerCommitsTwoStepsWithJournal();
     void enabledControllerWithoutProgramFailsClosed();
+    void nativeAcceptedCheckpointsFollowPolicyAndIgnoreOutputFrequency();
+    void nativeAcceptedCheckpointRejectsCorruptionAndDiskFailure();
+    void nativeExecutionGatePausesAtAcceptedBoundaryAndResumesExactly();
+    void nativeExecutionGateStopCancelsAtAcceptedBoundary();
+    void nativeExecutionGateHostDisconnectCancelsPausedRun();
+    void nativeExecutionGateRefusesExternalStateReplacement();
     void externalControllerTimeoutDoesNotAcceptStep();
     void pythonPidControllerRunsWhenInterpreterAvailable();
     void pythonPidRestartMatchesUninterrupted();
@@ -595,6 +771,729 @@ private slots:
     void nodalPiezoPersistsPotentialAndCharge_data();
     void nodalPiezoPersistsPotentialAndCharge();
 };
+
+void TestSolverAuditCli::nativeAcceptedCheckpointsFollowPolicyAndIgnoreOutputFrequency()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    RModel base = makeModel();
+    auto &setup = base.getProblemSetup().getStructuralDynamicsSetup();
+    setup.setTimeStep(1.0e-5);
+    setup.setNSteps(25);
+    setup.setOutputFrequency(1);
+    const QString denseInput = directory.filePath(QStringLiteral("dense.rbm"));
+    const QString sparseInput = directory.filePath(QStringLiteral("sparse.rbm"));
+    QCOMPARE(base.write(denseInput,false),denseInput);
+    QVERIFY(QFile::copy(denseInput,sparseInput));
+    const QString denseDirectory = directory.filePath(QStringLiteral("dense-checkpoints"));
+    const QString sparseDirectory = directory.filePath(QStringLiteral("sparse-checkpoints"));
+    const QJsonObject denseContext = nativeCheckpointContext(denseInput,1.0e-5);
+    QString diagnostic;
+    QVERIFY2(runNativeCheckpointCli(denseInput,denseDirectory,denseContext,false,diagnostic),
+             qPrintable(diagnostic));
+
+    RModel sparseBase;
+    sparseBase.read(sparseInput);
+    sparseBase.getProblemSetup().getStructuralDynamicsSetup().setOutputFrequency(7);
+    QCOMPARE(sparseBase.write(sparseInput,false),sparseInput);
+    const QJsonObject adjustedSparseContext = nativeCheckpointContext(sparseInput,1.0e-5);
+    QVERIFY2(runNativeCheckpointCli(sparseInput,sparseDirectory,adjustedSparseContext,false,diagnostic),
+             qPrintable(diagnostic));
+
+    auto denseEnvelopes = nativeCheckpointEnvelopes(denseDirectory);
+    auto sparseEnvelopes = nativeCheckpointEnvelopes(sparseDirectory);
+    auto sequenceList = [](const QVector<QJsonObject> &envelopes)
+    {
+        QVector<quint64> values;
+        for (const QJsonObject &envelope : envelopes)
+            values.append(quint64(envelope.value(QStringLiteral("acceptedSeq")).toDouble()));
+        return values;
+    };
+    const QVector<quint64> expectedSteps{10,20,25};
+    QCOMPARE(sequenceList(denseEnvelopes),expectedSteps);
+    QCOMPARE(sequenceList(sparseEnvelopes),expectedSteps);
+
+    auto statesByStep = [](const QVector<QJsonObject> &envelopes,const QString &checkpointDirectory)
+    {
+        QMap<quint64,RStructuralDynamicsRestartData> states;
+        for (const QJsonObject &envelope : envelopes)
+        {
+            const quint64 step = quint64(envelope.value(QStringLiteral("acceptedSeq")).toDouble());
+            RModel checkpoint;
+            checkpoint.read(QDir(checkpointDirectory).filePath(
+                envelope.value(QStringLiteral("modelFile")).toString()));
+            states.insert(step,checkpoint.getProblemSetup().getStructuralDynamicsRestartData());
+        }
+        return states;
+    };
+    const auto denseStates = statesByStep(denseEnvelopes,denseDirectory);
+    const auto sparseStates = statesByStep(sparseEnvelopes,sparseDirectory);
+    const double omega = std::sqrt(3.0*2.0e11/(8000.0*2.0*2.0));
+    const double qScale = 1.0e-5;
+    const double vScale = qScale*omega;
+    const double aScale = qScale*omega*omega;
+    const double energyScale = 0.5*(2.0e11*0.01/2.0)*qScale*qScale;
+    for (quint64 step : expectedSteps)
+    {
+        const auto &dense = denseStates[step];
+        const auto &sparse = sparseStates[step];
+        QCOMPARE(dense.completedSteps,uint(step));
+        QCOMPARE(sparse.completedSteps,dense.completedSteps);
+        QCOMPARE(sparse.systemFingerprint,dense.systemFingerprint);
+        QCOMPARE(sparse.controlControllerState,dense.controlControllerState);
+        QCOMPARE(sparse.cumulativeControlWork,dense.cumulativeControlWork);
+        QCOMPARE(sparse.q.size(),dense.q.size());
+        QCOMPARE(sparse.v.size(),dense.v.size());
+        QCOMPARE(sparse.a.size(),dense.a.size());
+        for (std::size_t i=0;i<dense.q.size();++i)
+        {
+            QVERIFY(closePhysical(sparse.q[i],dense.q[i],qScale));
+            QVERIFY(closePhysical(sparse.v[i],dense.v[i],vScale));
+            QVERIFY(closePhysical(sparse.a[i],dense.a[i],aScale));
+        }
+        QVERIFY(closePhysical(sparse.cumulativeExternalWork,
+                              dense.cumulativeExternalWork,energyScale));
+        QVERIFY(closePhysical(sparse.cumulativeDampingDissipation,
+                              dense.cumulativeDampingDissipation,energyScale));
+    }
+
+    RModel timeBound = makeModel();
+    auto &timeSetup = timeBound.getProblemSetup().getStructuralDynamicsSetup();
+    timeSetup.setTimeStep(0.25);
+    timeSetup.setNSteps(10);
+    timeSetup.setOutputFrequency(7);
+    const QString timeInput = directory.filePath(QStringLiteral("time-bound.rbm"));
+    QCOMPARE(timeBound.write(timeInput,false),timeInput);
+    const QString timeCheckpointDirectory = directory.filePath(QStringLiteral("time-bound-checkpoints"));
+    QVERIFY2(runNativeCheckpointCli(timeInput,timeCheckpointDirectory,
+             nativeCheckpointContext(timeInput,0.25),false,diagnostic),qPrintable(diagnostic));
+    const QVector<QJsonObject> timeEnvelopes = nativeCheckpointEnvelopes(timeCheckpointDirectory);
+    QCOMPARE(sequenceList(timeEnvelopes),QVector<quint64>({4,8,10}));
+}
+
+void TestSolverAuditCli::nativeAcceptedCheckpointRejectsCorruptionAndDiskFailure()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    RModel model = makeModel();
+    auto &setup = model.getProblemSetup().getStructuralDynamicsSetup();
+    setup.setTimeStep(1.0e-5);
+    setup.setNSteps(10);
+    setup.setOutputFrequency(10);
+    const QString input = directory.filePath(QStringLiteral("accepted-input.rbm"));
+    QCOMPARE(model.write(input,false),input);
+    const QByteArray originalInput = [&]()
+    {
+        QFile file(input);
+        if (!file.open(QIODevice::ReadOnly)) return QByteArray();
+        return file.readAll();
+    }();
+    QVERIFY(!originalInput.isEmpty());
+    const QString checkpointDirectory = directory.filePath(QStringLiteral("accepted-checkpoints"));
+    const QJsonObject context = nativeCheckpointContext(input,1.0e-5);
+    QString diagnostic;
+    QVERIFY2(runNativeCheckpointCli(input,checkpointDirectory,context,false,diagnostic),
+             qPrintable(diagnostic));
+
+    QFile firstPointer(QDir(checkpointDirectory).filePath(QStringLiteral("latest.json")));
+    QVERIFY(firstPointer.open(QIODevice::ReadOnly));
+    const QJsonObject firstPointerObject =
+        QJsonDocument::fromJson(firstPointer.readAll()).object();
+    firstPointer.close();
+    const QJsonObject firstEnvelope = QJsonDocument::fromJson(
+        [&]()
+        {
+            QFile file(QDir(checkpointDirectory).filePath(
+                firstPointerObject.value(QStringLiteral("envelopeFile")).toString()));
+            if (!file.open(QIODevice::ReadOnly)) return QByteArray();
+            return file.readAll();
+        }()).object();
+    const QString firstModelPath = QDir(checkpointDirectory).filePath(
+        firstEnvelope.value(QStringLiteral("modelFile")).toString());
+    const QString validResumeInput = directory.filePath(QStringLiteral("valid-resume-input.rbm"));
+    QVERIFY(QFile::copy(firstModelPath,validResumeInput));
+    QVERIFY2(runNativeCheckpointCli(validResumeInput,checkpointDirectory,context,true,diagnostic),
+             qPrintable(diagnostic));
+    const QVector<QJsonObject> beforeCorruption = nativeCheckpointEnvelopes(checkpointDirectory);
+    QVector<quint64> beforeCorruptionSteps;
+    for (const QJsonObject &envelope : beforeCorruption)
+        beforeCorruptionSteps.append(quint64(envelope.value(QStringLiteral("acceptedSeq")).toDouble()));
+    QCOMPARE(beforeCorruptionSteps,QVector<quint64>({10,20}));
+    QFile lastValidPointer(QDir(checkpointDirectory).filePath(QStringLiteral("lastvalid.json")));
+    QVERIFY(lastValidPointer.open(QIODevice::ReadOnly));
+    const QJsonObject lastValidObject = QJsonDocument::fromJson(lastValidPointer.readAll()).object();
+    lastValidPointer.close();
+    QFile lastValidEnvelopeFile(QDir(checkpointDirectory).filePath(
+        lastValidObject.value(QStringLiteral("envelopeFile")).toString()));
+    QVERIFY(lastValidEnvelopeFile.open(QIODevice::ReadOnly));
+    const QJsonObject lastValidEnvelope =
+        QJsonDocument::fromJson(lastValidEnvelopeFile.readAll()).object();
+    QCOMPARE(lastValidEnvelope.value(QStringLiteral("acceptedSeq")).toInt(),10);
+    lastValidEnvelopeFile.close();
+
+    QFile pointer(QDir(checkpointDirectory).filePath(QStringLiteral("latest.json")));
+    QVERIFY(pointer.open(QIODevice::ReadOnly));
+    const QByteArray pointerBytes = pointer.readAll();
+    pointer.close();
+    const QJsonDocument pointerDocument = QJsonDocument::fromJson(pointerBytes);
+    QVERIFY(pointerDocument.isObject());
+    const QString envelopeName = pointerDocument.object()
+        .value(QStringLiteral("envelopeFile")).toString();
+    const QString envelopePath = QDir(checkpointDirectory).filePath(envelopeName);
+    QFile envelope(envelopePath);
+    QVERIFY(envelope.open(QIODevice::ReadOnly));
+    QByteArray envelopeBytes = envelope.readAll();
+    envelope.close();
+    QVERIFY(!envelopeBytes.isEmpty());
+    envelopeBytes[envelopeBytes.size()-1] = char(envelopeBytes.back() ^ 0x5a);
+    QVERIFY(envelope.open(QIODevice::WriteOnly|QIODevice::Truncate));
+    QCOMPARE(envelope.write(envelopeBytes),qint64(envelopeBytes.size()));
+    envelope.close();
+
+    // The tampered envelope may no longer parse; retrieve the immutable MODEL
+    // name from the already written original envelope in its unmodified bytes.
+    QByteArray restoredEnvelopeBytes = envelopeBytes;
+    restoredEnvelopeBytes[restoredEnvelopeBytes.size()-1] = char(
+        restoredEnvelopeBytes.back() ^ 0x5a);
+    const QString resumeModelPath = QDir(checkpointDirectory).filePath(
+        QJsonDocument::fromJson(restoredEnvelopeBytes).object()
+            .value(QStringLiteral("modelFile")).toString());
+    QVERIFY(QFile::exists(resumeModelPath));
+    const QString corruptResumeInput = directory.filePath(QStringLiteral("corrupt-resume-input.rbm"));
+    QVERIFY(QFile::copy(resumeModelPath,corruptResumeInput));
+
+    QVERIFY(!runNativeCheckpointCli(corruptResumeInput,checkpointDirectory,context,true,diagnostic));
+    QVERIFY2(diagnostic.contains(QStringLiteral("checkpoint"),Qt::CaseInsensitive),
+             qPrintable(diagnostic));
+    // A valid older MODEL cannot authorize silent rollback past damaged latest.
+    const QString olderResumeInput = directory.filePath(QStringLiteral("older-resume-input.rbm"));
+    QVERIFY(QFile::copy(firstModelPath,olderResumeInput));
+    const QString olderHash = sha256(olderResumeInput);
+    QVERIFY(!runNativeCheckpointCli(olderResumeInput,checkpointDirectory,context,true,diagnostic));
+    QCOMPARE(sha256(olderResumeInput),olderHash);
+    QFile pointerAfter(QDir(checkpointDirectory).filePath(QStringLiteral("latest.json")));
+    QVERIFY(pointerAfter.open(QIODevice::ReadOnly));
+    QCOMPARE(pointerAfter.readAll(),pointerBytes);
+    pointerAfter.close();
+
+    const QString blockerPath = directory.filePath(QStringLiteral("checkpoint-path-is-file"));
+    QFile blocker(blockerPath);
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    const QByteArray blockerBytes("keep this file intact");
+    QCOMPARE(blocker.write(blockerBytes),qint64(blockerBytes.size()));
+    blocker.close();
+    const QString blockerHash = sha256(blockerPath);
+    const QString diskFailureInput = directory.filePath(QStringLiteral("disk-failure-input.rbm"));
+    QFile pristine(diskFailureInput);
+    QVERIFY(pristine.open(QIODevice::WriteOnly));
+    QCOMPARE(pristine.write(originalInput),qint64(originalInput.size()));
+    pristine.close();
+    QVERIFY(!runNativeCheckpointCli(diskFailureInput,blockerPath,
+             nativeCheckpointContext(diskFailureInput,1.0e-5),false,diagnostic));
+    QCOMPARE(sha256(blockerPath),blockerHash);
+}
+
+void TestSolverAuditCli::nativeExecutionGatePausesAtAcceptedBoundaryAndResumesExactly()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const double dtS = 1.0e-5;
+    auto writeTwentyStepModel = [dtS](const QString &path)
+    {
+        RModel model = makeModel();
+        RStructuralDynamicsSetup &setup =
+            model.getProblemSetup().getStructuralDynamicsSetup();
+        setup.setTimeStep(dtS);
+        setup.setNSteps(20);
+        setup.setOutputFrequency(1);
+        return model.write(path,false) == path;
+    };
+
+    const QString resultDirectory = directory.filePath(QStringLiteral("results"));
+    QVERIFY(QDir().mkpath(resultDirectory));
+    const QString fullInput = directory.filePath(QStringLiteral("continuous.rbm"));
+    const QString pausedInput = QDir(resultDirectory).filePath(QStringLiteral("paused.rbm"));
+    QVERIFY(writeTwentyStepModel(fullInput));
+    QVERIFY(writeTwentyStepModel(pausedInput));
+    const QString fullCheckpointDirectory = directory.filePath(QStringLiteral("continuous-checkpoints"));
+    const QString pausedCheckpointDirectory = directory.filePath(QStringLiteral("paused-checkpoints"));
+    QVERIFY(QDir().mkpath(fullCheckpointDirectory));
+    QVERIFY(QDir().mkpath(pausedCheckpointDirectory));
+    QString diagnostic;
+    QVERIFY2(runNativeCheckpointCli(fullInput,fullCheckpointDirectory,
+             nativeCheckpointContext(fullInput,dtS),false,diagnostic),qPrintable(diagnostic));
+
+    const QString eventDirectory = directory.filePath(QStringLiteral("events"));
+    QVERIFY(QDir().mkpath(eventDirectory));
+    const QString jobId = QStringLiteral("solver-audit-job-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString taskId = QStringLiteral("solver-audit-task-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString serverName = QStringLiteral("range-solver-audit-")+
+        QUuid::createUuid().toString(QUuid::Id128);
+    QLocalServer::removeServer(serverName);
+    QLocalServer server;
+    QVERIFY(server.listen(serverName));
+
+    const QString resultJournalPath = QDir(eventDirectory)
+        .filePath(QStringLiteral("native-result-frames.jsonl"));
+    const QString statePath = QDir(eventDirectory)
+        .filePath(QStringLiteral("native-execution-state.json"));
+    const QJsonObject context = nativeCheckpointContext(pausedInput,dtS);
+    const QByteArray contextBytes = QJsonDocument(context).toJson(QJsonDocument::Compact);
+    const QString initialSourceSha256 = context.value(QStringLiteral("sourceSha256")).toString();
+    const QString initialModelSha256 = context.value(QStringLiteral("modelSha256")).toString();
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"),jobId);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_DIRECTORY"),resultDirectory);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_JOURNAL_PATH"),resultJournalPath);
+
+    QProcess process;
+    const auto processCleanup = qScopeGuard([&process]
+    {
+        if (process.state() != QProcess::NotRunning)
+        {
+            process.kill();
+            process.waitForFinished(5000);
+        }
+    });
+    process.setProcessEnvironment(environment);
+    process.start(solverExecutablePath(),{
+        QStringLiteral("--file=")+pausedInput,
+        QStringLiteral("--native-checkpoint-dir=")+pausedCheckpointDirectory,
+        QStringLiteral("--native-checkpoint-context-json=")+QString::fromUtf8(contextBytes),
+        QStringLiteral("--pause-at-accepted-seq=15"),
+        QStringLiteral("--native-execution-state=")+statePath,
+        QStringLiteral("--task-id=")+taskId,
+        QStringLiteral("--task-server=")+serverName});
+    QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(),10000);
+    QLocalSocket *hostSocket = server.nextPendingConnection();
+    QVERIFY(hostSocket);
+
+    QJsonObject pausedState;
+    QElapsedTimer pauseTimer;
+    pauseTimer.start();
+    while (pauseTimer.elapsed() < 15000)
+    {
+        readJsonObject(statePath,pausedState);
+        if (pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"))
+            break;
+        if (process.state() == QProcess::NotRunning)
+            break;
+        QTest::qWait(10);
+    }
+    const QString beforeResumeDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QVERIFY2(pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"),
+             qPrintable(beforeResumeDiagnostic));
+    QVERIFY(process.state() != QProcess::NotRunning);
+    QCOMPARE(pausedState.value(QStringLiteral("schema")).toString(),
+             QStringLiteral("range.native-execution-state/v1"));
+    QCOMPARE(pausedState.value(QStringLiteral("generation")).toInt(),1);
+    QCOMPARE(pausedState.value(QStringLiteral("jobId")).toString(),jobId);
+    QCOMPARE(pausedState.value(QStringLiteral("taskId")).toString(),taskId);
+    QCOMPARE(pausedState.value(QStringLiteral("pauseAtAcceptedSeq")).toDouble(),15.0);
+    QCOMPARE(pausedState.value(QStringLiteral("acceptedSeq")).toDouble(),15.0);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAvailable")).toBool(),true);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(pausedState.value(QStringLiteral("sourceSha256")).toString(),initialSourceSha256);
+    QCOMPARE(pausedState.value(QStringLiteral("modelSha256")).toString(),initialModelSha256);
+    QCOMPARE(pausedState.value(QStringLiteral("contextSha256")).toString(),sha256Bytes(contextBytes));
+    for (const QString &name : {QStringLiteral("sourceSha256"),QStringLiteral("modelSha256"),
+                                QStringLiteral("controlSha256"),QStringLiteral("runtimeSha256"),
+                                QStringLiteral("packageSha256")})
+        QCOMPARE(pausedState.value(name).toString(),context.value(name).toString());
+
+    const QString latestPointerPath = QDir(pausedCheckpointDirectory)
+        .filePath(QStringLiteral("latest.json"));
+    QJsonObject latestPointer;
+    QVERIFY(readJsonObject(latestPointerPath,latestPointer));
+    const QString envelopePath = QDir(pausedCheckpointDirectory).filePath(
+        latestPointer.value(QStringLiteral("envelopeFile")).toString());
+    QFile envelopeFile(envelopePath);
+    QVERIFY(envelopeFile.open(QIODevice::ReadOnly));
+    const QByteArray envelopeBytes = envelopeFile.readAll();
+    const QJsonDocument envelopeDocument = QJsonDocument::fromJson(envelopeBytes);
+    QVERIFY(envelopeDocument.isObject());
+    const QJsonObject envelopeObject = envelopeDocument.object();
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointEnvelopeSha256")).toString(),
+             sha256Bytes(envelopeBytes));
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointModelSha256")).toString(),
+             envelopeObject.value(QStringLiteral("checkpointModelSha256")).toString());
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),
+             envelopeObject.value(QStringLiteral("acceptedSeq")).toDouble());
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointTimeS")).toDouble(),
+             envelopeObject.value(QStringLiteral("timeS")).toDouble());
+
+    const QVector<QJsonObject> recordsAtPause = nativeResultJournalRecords(resultJournalPath);
+    QCOMPARE(recordsAtPause.size(),15);
+    QCOMPARE(recordsAtPause.last().value(QStringLiteral("seq")).toInt(),15);
+    QCOMPARE(qRound64(recordsAtPause.last().value(QStringLiteral("timeS")).toDouble()/dtS),15LL);
+    QFile stateFile(statePath);
+    QVERIFY(stateFile.open(QIODevice::ReadOnly));
+    const QByteArray pausedStateBytes = stateFile.readAll();
+    stateFile.close();
+    QVERIFY(sendLocalCommand(hostSocket,taskId+QStringLiteral("-wrong"),QStringLiteral("RESUME")));
+    QVERIFY(sendMalformedLocalCommandFrame(hostSocket));
+    QTest::qWait(50);
+    QVERIFY(process.state() != QProcess::NotRunning);
+    QVERIFY(stateFile.open(QIODevice::ReadOnly));
+    QCOMPARE(stateFile.readAll(),pausedStateBytes);
+    stateFile.close();
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),15);
+
+    QVERIFY(sendRepeatedResumeCommands(hostSocket,taskId));
+    QVERIFY2(process.waitForFinished(60000),qPrintable(process.errorString()));
+    const QString completedDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0,qPrintable(completedDiagnostic));
+
+    QJsonObject resumedState;
+    QVERIFY(readJsonObject(statePath,resumedState));
+    QCOMPARE(resumedState.value(QStringLiteral("state")).toString(),QStringLiteral("resumed"));
+    QCOMPARE(resumedState.value(QStringLiteral("generation")).toInt(),2);
+    QCOMPARE(resumedState.value(QStringLiteral("acceptedSeq")).toDouble(),15.0);
+    const QVector<QJsonObject> completedRecords = nativeResultJournalRecords(resultJournalPath);
+    QCOMPARE(completedRecords.size(),20);
+    QCOMPARE(completedRecords.last().value(QStringLiteral("seq")).toInt(),20);
+
+    RModel continuous, resumed;
+    continuous.read(fullInput);
+    resumed.read(pausedInput);
+    const RStructuralDynamicsRestartData &expected =
+        continuous.getProblemSetup().getStructuralDynamicsRestartData();
+    const RStructuralDynamicsRestartData &actual =
+        resumed.getProblemSetup().getStructuralDynamicsRestartData();
+    QCOMPARE(actual.completedSteps,20u);
+    QCOMPARE(actual.systemFingerprint,expected.systemFingerprint);
+    QCOMPARE(actual.controlControllerState,expected.controlControllerState);
+    QCOMPARE(actual.cumulativeControlWork,expected.cumulativeControlWork);
+    QCOMPARE(actual.q.size(),expected.q.size());
+    QCOMPARE(actual.v.size(),expected.v.size());
+    QCOMPARE(actual.a.size(),expected.a.size());
+    const double omega = std::sqrt(3.0*2.0e11/(8000.0*2.0*2.0));
+    const double qScale = 1.0e-5;
+    const double vScale = qScale*omega;
+    const double aScale = qScale*omega*omega;
+    const double energyScale = 0.5*(2.0e11*0.01/2.0)*qScale*qScale;
+    for (std::size_t index=0;index<expected.q.size();++index)
+    {
+        QVERIFY(closePhysical(actual.q[index],expected.q[index],qScale));
+        QVERIFY(closePhysical(actual.v[index],expected.v[index],vScale,1.0e-7));
+        QVERIFY(closePhysical(actual.a[index],expected.a[index],aScale,1.0e-7));
+    }
+    QVERIFY(closePhysical(actual.cumulativeExternalWork,
+                          expected.cumulativeExternalWork,energyScale));
+    QVERIFY(closePhysical(actual.cumulativeDampingDissipation,
+                          expected.cumulativeDampingDissipation,energyScale));
+}
+
+void TestSolverAuditCli::nativeExecutionGateStopCancelsAtAcceptedBoundary()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const double dtS = 1.0e-5;
+    const QString resultDirectory = directory.filePath(QStringLiteral("results"));
+    QVERIFY(QDir().mkpath(resultDirectory));
+    RModel model = makeModel();
+    auto &setup = model.getProblemSetup().getStructuralDynamicsSetup();
+    setup.setTimeStep(dtS);
+    setup.setNSteps(20);
+    setup.setOutputFrequency(1);
+    const QString input = QDir(resultDirectory).filePath(QStringLiteral("cancel-at-boundary.rbm"));
+    QCOMPARE(model.write(input,false),input);
+    const QString checkpointDirectory = directory.filePath(QStringLiteral("checkpoints"));
+    const QString eventsDirectory = directory.filePath(QStringLiteral("events"));
+    QVERIFY(QDir().mkpath(checkpointDirectory));
+    QVERIFY(QDir().mkpath(eventsDirectory));
+    const QString jobId = QStringLiteral("solver-audit-cancel-job-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString taskId = QStringLiteral("solver-audit-cancel-task-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString serverName = QStringLiteral("range-solver-cancel-")+
+        QUuid::createUuid().toString(QUuid::Id128);
+    QLocalServer::removeServer(serverName);
+    QLocalServer server;
+    QVERIFY(server.listen(serverName));
+
+    const QString resultJournalPath = QDir(eventsDirectory)
+        .filePath(QStringLiteral("native-result-frames.jsonl"));
+    const QString statePath = QDir(eventsDirectory)
+        .filePath(QStringLiteral("native-execution-state.json"));
+    const QByteArray contextBytes = QJsonDocument(
+        nativeCheckpointContext(input,dtS)).toJson(QJsonDocument::Compact);
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"),jobId);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_DIRECTORY"),resultDirectory);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_JOURNAL_PATH"),resultJournalPath);
+
+    QProcess process;
+    const auto processCleanup = qScopeGuard([&process]
+    {
+        if (process.state() != QProcess::NotRunning)
+        {
+            process.kill();
+            process.waitForFinished(5000);
+        }
+    });
+    process.setProcessEnvironment(environment);
+    process.start(solverExecutablePath(),{
+        QStringLiteral("--file=")+input,
+        QStringLiteral("--native-checkpoint-dir=")+checkpointDirectory,
+        QStringLiteral("--native-checkpoint-context-json=")+QString::fromUtf8(contextBytes),
+        QStringLiteral("--pause-at-accepted-seq=10"),
+        QStringLiteral("--native-execution-state=")+statePath,
+        QStringLiteral("--task-id=")+taskId,
+        QStringLiteral("--task-server=")+serverName});
+    QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(),10000);
+    QLocalSocket *hostSocket = server.nextPendingConnection();
+    QVERIFY(hostSocket);
+
+    QJsonObject pausedState;
+    QElapsedTimer pauseTimer;
+    pauseTimer.start();
+    while (pauseTimer.elapsed() < 15000)
+    {
+        readJsonObject(statePath,pausedState);
+        if (pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"))
+            break;
+        if (process.state() == QProcess::NotRunning)
+            break;
+        QTest::qWait(10);
+    }
+    const QString pauseDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QVERIFY2(pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"),
+             qPrintable(pauseDiagnostic));
+    QCOMPARE(pausedState.value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAvailable")).toBool(),true);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),10);
+
+    QVERIFY(sendLocalCommand(hostSocket,taskId,QStringLiteral("STOP"),true));
+    QVERIFY2(process.waitForFinished(60000),qPrintable(process.errorString()));
+    const QString stoppedDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0,qPrintable(stoppedDiagnostic));
+    QJsonObject cancelledState;
+    QVERIFY(readJsonObject(statePath,cancelledState));
+    QCOMPARE(cancelledState.value(QStringLiteral("state")).toString(),QStringLiteral("cancelled"));
+    QCOMPARE(cancelledState.value(QStringLiteral("generation")).toInt(),2);
+    QCOMPARE(cancelledState.value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+    QCOMPARE(cancelledState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),10);
+
+    RModel stopped;
+    stopped.read(input);
+    QCOMPARE(stopped.getProblemSetup().getStructuralDynamicsRestartData().completedSteps,10u);
+}
+
+void TestSolverAuditCli::nativeExecutionGateHostDisconnectCancelsPausedRun()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const double dtS = 1.0e-5;
+    const QString resultDirectory = directory.filePath(QStringLiteral("results"));
+    QVERIFY(QDir().mkpath(resultDirectory));
+    RModel model = makeModel();
+    auto &setup = model.getProblemSetup().getStructuralDynamicsSetup();
+    setup.setTimeStep(dtS);
+    setup.setNSteps(20);
+    setup.setOutputFrequency(1);
+    const QString input = QDir(resultDirectory).filePath(QStringLiteral("host-disconnect.rbm"));
+    QCOMPARE(model.write(input,false),input);
+    const QString checkpointDirectory = directory.filePath(QStringLiteral("checkpoints"));
+    const QString eventsDirectory = directory.filePath(QStringLiteral("events"));
+    QVERIFY(QDir().mkpath(checkpointDirectory));
+    QVERIFY(QDir().mkpath(eventsDirectory));
+    const QString jobId = QStringLiteral("solver-audit-disconnect-job-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString taskId = QStringLiteral("solver-audit-disconnect-task-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString serverName = QStringLiteral("range-solver-disconnect-")+
+        QUuid::createUuid().toString(QUuid::Id128);
+    QLocalServer::removeServer(serverName);
+    QLocalServer server;
+    QVERIFY(server.listen(serverName));
+
+    const QString resultJournalPath = QDir(eventsDirectory)
+        .filePath(QStringLiteral("native-result-frames.jsonl"));
+    const QString statePath = QDir(eventsDirectory)
+        .filePath(QStringLiteral("native-execution-state.json"));
+    const QByteArray contextBytes = QJsonDocument(
+        nativeCheckpointContext(input,dtS)).toJson(QJsonDocument::Compact);
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"),jobId);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_DIRECTORY"),resultDirectory);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_JOURNAL_PATH"),resultJournalPath);
+
+    QProcess process;
+    const auto processCleanup = qScopeGuard([&process]
+    {
+        if (process.state() != QProcess::NotRunning)
+        {
+            process.kill();
+            process.waitForFinished(5000);
+        }
+    });
+    process.setProcessEnvironment(environment);
+    process.start(solverExecutablePath(),{
+        QStringLiteral("--file=")+input,
+        QStringLiteral("--native-checkpoint-dir=")+checkpointDirectory,
+        QStringLiteral("--native-checkpoint-context-json=")+QString::fromUtf8(contextBytes),
+        QStringLiteral("--pause-at-accepted-seq=10"),
+        QStringLiteral("--native-execution-state=")+statePath,
+        QStringLiteral("--task-id=")+taskId,
+        QStringLiteral("--task-server=")+serverName});
+    QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(),10000);
+    QLocalSocket *hostSocket = server.nextPendingConnection();
+    QVERIFY(hostSocket);
+
+    QJsonObject pausedState;
+    QElapsedTimer pauseTimer;
+    pauseTimer.start();
+    while (pauseTimer.elapsed() < 15000)
+    {
+        readJsonObject(statePath,pausedState);
+        if (pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"))
+            break;
+        if (process.state() == QProcess::NotRunning)
+            break;
+        QTest::qWait(10);
+    }
+    const QString pauseDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QVERIFY2(pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"),
+             qPrintable(pauseDiagnostic));
+    QCOMPARE(pausedState.value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),10);
+
+    hostSocket->abort();
+    QVERIFY2(process.waitForFinished(15000),qPrintable(process.errorString()));
+    const QString stoppedDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0,qPrintable(stoppedDiagnostic));
+    QJsonObject cancelledState;
+    QVERIFY(readJsonObject(statePath,cancelledState));
+    QCOMPARE(cancelledState.value(QStringLiteral("state")).toString(),QStringLiteral("cancelled"));
+    QCOMPARE(cancelledState.value(QStringLiteral("generation")).toInt(),2);
+    QCOMPARE(cancelledState.value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),10);
+
+    RModel stopped;
+    stopped.read(input);
+    QCOMPARE(stopped.getProblemSetup().getStructuralDynamicsRestartData().completedSteps,10u);
+}
+
+void TestSolverAuditCli::nativeExecutionGateRefusesExternalStateReplacement()
+{
+    QVERIFY(QFile::exists(solverExecutablePath()));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const double dtS = 1.0e-5;
+    const QString resultDirectory = directory.filePath(QStringLiteral("results"));
+    QVERIFY(QDir().mkpath(resultDirectory));
+    RModel model = makeModel();
+    auto &setup = model.getProblemSetup().getStructuralDynamicsSetup();
+    setup.setTimeStep(dtS);
+    setup.setNSteps(20);
+    setup.setOutputFrequency(1);
+    const QString input = QDir(resultDirectory).filePath(QStringLiteral("external-state-change.rbm"));
+    QCOMPARE(model.write(input,false),input);
+    const QString checkpointDirectory = directory.filePath(QStringLiteral("checkpoints"));
+    const QString eventsDirectory = directory.filePath(QStringLiteral("events"));
+    QVERIFY(QDir().mkpath(checkpointDirectory));
+    QVERIFY(QDir().mkpath(eventsDirectory));
+    const QString jobId = QStringLiteral("solver-audit-external-state-job-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString taskId = QStringLiteral("solver-audit-external-state-task-")+
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString serverName = QStringLiteral("range-solver-external-state-")+
+        QUuid::createUuid().toString(QUuid::Id128);
+    QLocalServer::removeServer(serverName);
+    QLocalServer server;
+    QVERIFY(server.listen(serverName));
+
+    const QString resultJournalPath = QDir(eventsDirectory)
+        .filePath(QStringLiteral("native-result-frames.jsonl"));
+    const QString statePath = QDir(eventsDirectory)
+        .filePath(QStringLiteral("native-execution-state.json"));
+    const QByteArray contextBytes = QJsonDocument(
+        nativeCheckpointContext(input,dtS)).toJson(QJsonDocument::Compact);
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"),jobId);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_DIRECTORY"),resultDirectory);
+    environment.insert(QStringLiteral("RANGE_NATIVE_RESULT_JOURNAL_PATH"),resultJournalPath);
+
+    QProcess process;
+    const auto processCleanup = qScopeGuard([&process]
+    {
+        if (process.state() != QProcess::NotRunning)
+        {
+            process.kill();
+            process.waitForFinished(5000);
+        }
+    });
+    process.setProcessEnvironment(environment);
+    process.start(solverExecutablePath(),{
+        QStringLiteral("--file=")+input,
+        QStringLiteral("--native-checkpoint-dir=")+checkpointDirectory,
+        QStringLiteral("--native-checkpoint-context-json=")+QString::fromUtf8(contextBytes),
+        QStringLiteral("--pause-at-accepted-seq=15"),
+        QStringLiteral("--native-execution-state=")+statePath,
+        QStringLiteral("--task-id=")+taskId,
+        QStringLiteral("--task-server=")+serverName});
+    QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(),10000);
+    QLocalSocket *hostSocket = server.nextPendingConnection();
+    QVERIFY(hostSocket);
+
+    QJsonObject pausedState;
+    QElapsedTimer pauseTimer;
+    pauseTimer.start();
+    while (pauseTimer.elapsed() < 15000)
+    {
+        readJsonObject(statePath,pausedState);
+        if (pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"))
+            break;
+        if (process.state() == QProcess::NotRunning)
+            break;
+        QTest::qWait(10);
+    }
+    const QString pauseDiagnostic = QString::fromUtf8(
+        process.readAllStandardOutput()+process.readAllStandardError());
+    QVERIFY2(pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"),
+             qPrintable(pauseDiagnostic));
+    QCOMPARE(pausedState.value(QStringLiteral("acceptedSeq")).toDouble(),15.0);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),15);
+
+    const QByteArray externalContents("external state replacement must survive");
+    QFile stateFile(statePath);
+    QVERIFY(stateFile.open(QIODevice::WriteOnly|QIODevice::Truncate));
+    QCOMPARE(stateFile.write(externalContents),qint64(externalContents.size()));
+    stateFile.close();
+    QVERIFY(sendLocalCommand(hostSocket,taskId,QStringLiteral("RESUME")));
+    QVERIFY2(process.waitForFinished(15000),qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(),QProcess::NormalExit);
+    QVERIFY(process.exitCode() != 0);
+    QVERIFY(stateFile.open(QIODevice::ReadOnly));
+    QCOMPARE(stateFile.readAll(),externalContents);
+    stateFile.close();
+    QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),15);
+    QCOMPARE(nativeCheckpointEnvelopes(checkpointDirectory).size(),1);
+    QCOMPARE(nativeCheckpointEnvelopes(checkpointDirectory).front()
+                 .value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+}
 
 void TestSolverAuditCli::staticCablePersistsCertifiedResult_data()
 {

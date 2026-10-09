@@ -31,6 +31,8 @@
 #include "control_ndjson_transport.h"
 #include "native_progress_journal.h"
 #include "native_result_journal.h"
+#include "native_accepted_checkpoint.h"
+#include "native_execution_gate.h"
 #include "solver_task.h"
 
 namespace
@@ -296,6 +298,9 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , typedCheckpointFileName(solverInput.typedCheckpointFileName)
     , typedControllerIdentity(solverInput.typedControllerIdentity)
     , typedConfigurationFileName(solverInput.typedConfigurationFileName)
+    , nativeCheckpointDirectory(solverInput.nativeCheckpointDirectory)
+    , nativeCheckpointContextJson(solverInput.nativeCheckpointContextJson)
+    , nativeExecutionGate(solverInput.nativeExecutionGate)
     , restart(solverInput.restart)
     , app(app)
 {
@@ -514,6 +519,24 @@ void SolverTask::run(void)
                                                                : resolveModelTargetPath(inputPath);
         const QString inputTargetHash = thermalCheckpointInput ? inputArgumentHash
                                                                 : sha256File(inputTargetPath);
+        std::optional<NativeAcceptedCheckpointContext> nativeCheckpointContext;
+        if (this->nativeCheckpointDirectory.isEmpty())
+        {
+            if (!this->nativeCheckpointContextJson.isEmpty())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native checkpoint context requires --native-checkpoint-dir.");
+        }
+        else
+        {
+            if (this->nativeCheckpointContextJson.isEmpty())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native checkpoint directory requires a versioned context.");
+            nativeCheckpointContext = NativeAcceptedCheckpointContext::parse(
+                this->nativeCheckpointContextJson);
+            if (!this->restart && nativeCheckpointContext->modelSha256 != inputTargetHash)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native checkpoint context modelSha256 does not match the input MODEL.");
+        }
         if (this->nThreads)
         {
             RLogger::info("CLI thread override = %u (max=%d)\n",
@@ -687,18 +710,71 @@ void SolverTask::run(void)
                          "Enabled structural control requires --control-program; disabled control rejects one.");
         QString controlRevision;
         quint64 nextControlStepId = 1;
+        std::unique_ptr<NativeAcceptedCheckpointStore> acceptedCheckpointStore;
         if (controlSetup.enabled)
         {
             controlRevision = controllerRevision(this->controlProgram,this->controlArguments);
             const auto &restartData = model.getProblemSetup().getStructuralDynamicsRestartData();
             if (this->restart && restartData.available)
                 nextControlStepId = quint64(restartData.completedSteps)+1;
+        }
+
+        if (nativeCheckpointContext)
+        {
+            const QString activeControlSha256 = controlSetup.enabled
+                ? controlRevision : NativeAcceptedCheckpointContext::noControlSha256();
+            const QString runtimeSha256 = sha256File(QCoreApplication::applicationFilePath());
+            acceptedCheckpointStore.reset(new NativeAcceptedCheckpointStore(
+                this->nativeCheckpointDirectory,this->nativeCheckpointContextJson,
+                inputTargetHash,activeControlSha256,runtimeSha256,this->restart,model));
+        }
+
+        quint64 acceptedBaselineSequence = 0;
+        double acceptedBaselineTimeS = 0.0;
+        quint64 targetAcceptedSequence = 0;
+        const RStructuralDynamicsRestartData &initialRestartData =
+            model.getProblemSetup().getStructuralDynamicsRestartData();
+        if (initialRestartData.available)
+        {
+            initialRestartData.validate();
+            acceptedBaselineSequence = initialRestartData.completedSteps;
+            acceptedBaselineTimeS = initialRestartData.time;
+        }
+        if (this->nativeExecutionGate)
+        {
+            if (!nativeCheckpointContext || !acceptedCheckpointStore)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native execution pause requires the periodic native structural checkpoint context.");
+            const RStructuralDynamicsSetup &dynamicsSetup =
+                model.getProblemSetup().getStructuralDynamicsSetup();
+            if (!dynamicsSetup.getEnabled() ||
+                dynamicsSetup.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
+                model.getProblemTaskTree().getProblemTypeMask() != R_PROBLEM_STRESS)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native execution pause supports only stress-only Newmark structural dynamics.");
+            const quint64 requestedSteps = dynamicsSetup.getNSteps();
+            if (requestedSteps == 0 ||
+                acceptedBaselineSequence > std::numeric_limits<quint64>::max()-requestedSteps)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native execution target accepted sequence overflows its supported range.");
+            targetAcceptedSequence = acceptedBaselineSequence + requestedSteps;
+            QString gateError;
+            if (!this->nativeExecutionGate->configureAcceptedRange(
+                    acceptedBaselineSequence,targetAcceptedSequence,
+                    acceptedBaselineTimeS,&gateError))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Invalid native execution pause range: %s",qPrintable(gateError));
+        }
+
+        if (controlSetup.enabled)
+        {
             ControlTransportConfig config;
             config.program = this->controlProgram;
             config.arguments = this->controlArguments;
             config.controllerId = controlSetup.controllerId;
             config.controllerRevision = controlRevision;
-            config.modelSnapshotSha256 = inputTargetHash;
+            config.modelSnapshotSha256 = nativeCheckpointContext
+                ? nativeCheckpointContext->modelSha256 : inputTargetHash;
             config.deterministicSeed = controlSetup.deterministicSeed;
             config.timeoutMs = int(this->controlTimeoutMs);
             const auto &interaction = model.getProblemSetup().getStructuralInteractionSetup();
@@ -736,6 +812,81 @@ void SolverTask::run(void)
         RLogger::indent();
         loggerIndented = true;
         RSolver solver(model,this->modelFileName,this->convergenceFileName);
+        quint64 lastCheckpointSequence = acceptedBaselineSequence;
+        double lastCheckpointTimeS = acceptedBaselineTimeS;
+        NativeAcceptedCheckpointStore::VerifiedCheckpoint latestCheckpoint;
+        bool hasLatestCheckpoint = false;
+        if (acceptedCheckpointStore)
+        {
+            const QString latestPointerPath = QDir(this->nativeCheckpointDirectory)
+                .filePath(QStringLiteral("latest.json"));
+            if (QFileInfo::exists(latestPointerPath))
+            {
+                latestCheckpoint = acceptedCheckpointStore->readLatest();
+                hasLatestCheckpoint = true;
+                lastCheckpointSequence = quint64(latestCheckpoint.envelope
+                    .value(QStringLiteral("acceptedSeq")).toDouble());
+                lastCheckpointTimeS = latestCheckpoint.envelope
+                    .value(QStringLiteral("timeS")).toDouble();
+            }
+            solver.setAcceptedStructuralStepObserver(
+                [&,lastCheckpointSequence,lastCheckpointTimeS](const RModel &acceptedModel) mutable
+                {
+                    const RStructuralDynamicsRestartData &restartData =
+                        acceptedModel.getProblemSetup().getStructuralDynamicsRestartData();
+                    const RTimeSolver &timeSolver = acceptedModel.getTimeSolver();
+                    const quint64 acceptedSequence = restartData.completedSteps;
+                    const double acceptedTimeS = restartData.time;
+                    const double elapsedSinceCheckpoint = acceptedTimeS-lastCheckpointTimeS;
+                    if (acceptedSequence < lastCheckpointSequence ||
+                        !std::isfinite(elapsedSinceCheckpoint) || elapsedSinceCheckpoint < 0.0)
+                        throw RError(RError::Type::Application,R_ERROR_REF,
+                                     "Native checkpoint schedule moved backwards at an accepted step.");
+                    const bool checkpointDue =
+                        acceptedSequence-lastCheckpointSequence >=
+                            nativeCheckpointContext->maxAcceptedSteps ||
+                        elapsedSinceCheckpoint >= nativeCheckpointContext->maxSimulationSeconds ||
+                        elapsedSinceCheckpoint+restartData.fixedTimeStep >
+                            nativeCheckpointContext->maxSimulationSeconds ||
+                        timeSolver.getCurrentTimeStep()+1 >= timeSolver.getNTimeSteps();
+                    acceptedCheckpointStore->accept(acceptedModel);
+                    if (checkpointDue)
+                    {
+                        latestCheckpoint = acceptedCheckpointStore->readLatest();
+                        hasLatestCheckpoint = true;
+                        lastCheckpointSequence = quint64(latestCheckpoint.envelope
+                            .value(QStringLiteral("acceptedSeq")).toDouble());
+                        lastCheckpointTimeS = latestCheckpoint.envelope
+                            .value(QStringLiteral("timeS")).toDouble();
+                    }
+                    if (this->nativeExecutionGate)
+                    {
+                        NativeExecutionGate::CheckpointReceipt receipt;
+                        if (hasLatestCheckpoint)
+                        {
+                            receipt.available = true;
+                            receipt.acceptedSequence = quint64(latestCheckpoint.envelope
+                                .value(QStringLiteral("acceptedSeq")).toDouble());
+                            receipt.timeS = latestCheckpoint.envelope
+                                .value(QStringLiteral("timeS")).toDouble();
+                            receipt.modelSha256 = latestCheckpoint.envelope
+                                .value(QStringLiteral("checkpointModelSha256")).toString();
+                            receipt.envelopeSha256 = QString::fromLatin1(
+                                QCryptographicHash::hash(
+                                    QJsonDocument(latestCheckpoint.envelope)
+                                        .toJson(QJsonDocument::Compact),
+                                    QCryptographicHash::Sha256).toHex());
+                        }
+                        QString gateError;
+                        this->nativeExecutionGate->acceptedBoundary(
+                            acceptedSequence,acceptedTimeS,receipt,&gateError);
+                        if (!gateError.isEmpty())
+                            throw RError(RError::Type::Application,R_ERROR_REF,
+                                         "Native execution state gate failed: %s",
+                                         qPrintable(gateError));
+                    }
+                });
+        }
         const bool resultJournalRequested =
             !qEnvironmentVariable(NativeResultJournal::jobIdEnvironmentVariable).isEmpty() ||
             !qEnvironmentVariable(NativeResultJournal::pathEnvironmentVariable).isEmpty() ||
@@ -877,6 +1028,14 @@ void SolverTask::run(void)
             });
         solverEntered = true;
         solver.run();
+        if (this->nativeExecutionGate)
+        {
+            QString completionGateError;
+            if (!this->nativeExecutionGate->markCompleted(&completionGateError))
+                throw RError(RError::Type::Application,R_ERROR_REF,
+                             "Native execution completion state failed: %s",
+                             qPrintable(completionGateError));
+        }
         reportResultJournalUnavailable();
         reportProgressUnavailable();
         RLogger::unindent();

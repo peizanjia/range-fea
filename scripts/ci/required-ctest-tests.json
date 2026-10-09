@@ -123,6 +123,8 @@
       "tst_agent_conversation_widget",
       "tst_project_session",
       "tst_native_job_registry",
+      "tst_recovery_interaction",
+      "tst_model_commit_recovery",
       "tst_gui_model_operations",
       "tst_native_results_widget",
       "tst_current_model_workflow"
@@ -132,7 +134,11 @@
       "tst_workflow_native_import",
       "tst_workflow_model_sources",
       "tst_workflow_runtime",
+      "tst_workflow_recovery",
+      "tst_workflow_recovery_runtime",
       "tst_workflow_telemetry",
+      "tst_workflow_series_analysis",
+      "tst_workflow_series_service",
       "tst_workflow_project_catalog",
       "tst_workflow_extensions",
       "tst_private_python_packaging",
@@ -142,7 +148,8 @@
       "tst_workflow_native_results"
     ],
     "range-ai-lib": [
-      "tst_agent_tool_turn"
+      "tst_agent_tool_turn",
+      "tst_agent_tool_stream"
     ]
   }
 }

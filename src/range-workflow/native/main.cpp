@@ -16,12 +16,14 @@
 #include <rml_model.h>
 #include <rml_file_io.h>
 #include <rml_file_utils.h>
+#include <rstructural_control_conditioner.h>
 #include "import_model.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include <algorithm>
 #ifdef Q_OS_WIN
 #include <io.h>
 #else
@@ -88,6 +90,28 @@ QJsonValue components(const RModel &model, RVariableType type, uint node) {
         require(std::isfinite(value), "Non-finite nodal result."); result.append(value);
     }
     return result;
+}
+
+QJsonObject controlStateComponents(const RModel &model) {
+    const auto &restart=model.getProblemSetup().getStructuralDynamicsRestartData();
+    if (!restart.controlAvailable) return {};
+    const auto envelope=RStructuralControlStateEnvelope::deserialize(restart.controlControllerState);
+    std::vector<RStructuralControlConditioningPolicy> policies;
+    for (const auto &id: restart.controlChannelIds) policies.push_back({id,0,1,0.0});
+    const auto &setup=model.getProblemSetup().getStructuralControlSetup();
+    for (const auto &configured: setup.channelConditioning) {
+        auto found=std::find_if(policies.begin(),policies.end(),[&](const auto &policy) {return policy.actuatorId==configured.actuatorId;});
+        require(found!=policies.end(),"Accepted control conditioner has an unknown channel.");
+        *found={configured.actuatorId,configured.delaySteps,configured.holdSteps,configured.noiseAmplitude};
+    }
+    const RStructuralControlConditioner conditioner(setup.deterministicSeed,std::move(policies));
+    const auto state=conditioner.deserialize(envelope.conditionerState);
+    QJsonArray delayed;
+    for (const auto &values: state.delayedCommands) delayed.append(array(values));
+    return {{"controllerLogicStateSha256",QString::fromLatin1(QCryptographicHash::hash(envelope.controllerState,QCryptographicHash::Sha256).toHex())},
+        {"conditionerConfigurationSha256",QString::fromLatin1(state.configurationSha256.toHex())},
+        {"conditionerCompletedSteps",double(state.completedSteps)},
+        {"conditionerHeldCommands",array(state.heldCommands)},{"conditionerDelayedCommands",delayed}};
 }
 }
 
@@ -189,7 +213,21 @@ int main(int argc,char **argv) {
                 {"time",restart.time},{"dt",restart.fixedTimeStep},
                 {"q",array(restart.q)},{"v",array(restart.v)},{"a",array(restart.a)},
                 {"controlAvailable",restart.controlAvailable},
-                {"controlWork",array(restart.cumulativeControlWork)}});
+                {"controlWork",array(restart.cumulativeControlWork)},
+                {"controlStateComponents",controlStateComponents(model)},
+                {"controlFingerprint",restart.controlFingerprint},
+                {"controlControllerStateSha256", restart.controlAvailable ? QString::fromLatin1(
+                    QCryptographicHash::hash(restart.controlControllerState,QCryptographicHash::Sha256).toHex()) : QString()},
+                {"controlLastCommands",array(restart.controlLastCommands)},
+                {"controlPowers",array(restart.controlPowers)},
+                {"systemFingerprint",restart.systemFingerprint},
+                {"meshFingerprint",restart.meshFingerprint},{"dofFingerprint",restart.dofFingerprint},
+                {"externalWorkJ",restart.cumulativeExternalWork},
+                {"dampingDissipationJ",restart.cumulativeDampingDissipation},
+                {"initialMechanicalEnergyJ",restart.initialMechanicalEnergy},
+                {"supportReactions",array(restart.supportReactions)},
+                {"supportPowers",array(restart.supportPowers)},
+                {"supportWork",array(restart.cumulativeSupportWork)}});
             return 0;
         }
         bool valid=false; const auto steps=parser.value("steps").toUInt(&valid);

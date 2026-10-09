@@ -30,6 +30,31 @@
 
 namespace
 {
+QString durableOperationPhase(RProjectCatalog::OperationPhase phase)
+{
+    switch (phase)
+    {
+        case RProjectCatalog::OperationPhase::Intent: return QStringLiteral("intent");
+        case RProjectCatalog::OperationPhase::Accepted: return QStringLiteral("accepted");
+        case RProjectCatalog::OperationPhase::ArtifactPublished: return QStringLiteral("artifact_published");
+        case RProjectCatalog::OperationPhase::Observed: return QStringLiteral("observed");
+        case RProjectCatalog::OperationPhase::Conflict: return QStringLiteral("conflict");
+        case RProjectCatalog::OperationPhase::Unknown: return QStringLiteral("unknown");
+    }
+    return QStringLiteral("unknown");
+}
+
+QJsonObject durableOperationJson(const RProjectCatalog::DurableOperation &operation)
+{
+    return {{"projectId", operation.projectId}, {"operationId", operation.operationId},
+            {"phase", durableOperationPhase(operation.phase)}, {"persistence", "durable"},
+            {"normalizedRequestSha256", operation.normalizedRequestSha256},
+            {"acceptedRevision", operation.association.acceptedRevision},
+            {"acceptedModelSha256", operation.association.acceptedModelSha256},
+            {"diagnosticCode", operation.association.diagnosticCode},
+            {"observation", operation.association.observation}};
+}
+
 QString modelArtifact(QString path, QString *error = nullptr)
 {
     QSet<QString> visited;
@@ -272,6 +297,7 @@ struct ModelCommandHost::State
         QString jobSourceRevision;
         QJsonObject projectSnapshotRef;
         QJsonObject validation;
+        QJsonObject recoveryQualification;
         bool approved = false;
         bool consumed = false;
     };
@@ -304,6 +330,8 @@ struct ModelCommandHost::State
     {
         quint64 generation = 0;
         std::unique_ptr<RModelCommandSession> editing;
+        QString closeRetryId, closeOperationId;
+        QJsonObject closeRetryPayload;
     };
     std::map<QString, Entry> entries;
     std::map<QString, Preview> previews;
@@ -385,6 +413,9 @@ struct ModelCommandHost::State
                 }
             }
             entry.editing = std::make_unique<RModelCommandSession>(session->getModel(id), options);
+            entry.closeRetryId.clear();
+            entry.closeOperationId.clear();
+            entry.closeRetryPayload = {};
             entry.generation = stamp.second;
         }
         failure.clear();
@@ -501,7 +532,7 @@ void ModelCommandHost::pruneClosedModels()
     {
         if (session->findModelByCommandIdentity(it->first) == RConstants::eod)
         {
-            if (it->second.editing && !it->second.editing->close())
+            if (it->second.editing && !closeEditingDurably(it->first))
             {
                 const auto message = tr("The model was closed, but its audit record could not be saved. The pending record will be retried on the next model command.");
                 RLogger::error("%s\n", message.toUtf8().constData());
@@ -513,6 +544,57 @@ void ModelCommandHost::pruneClosedModels()
         }
         else ++it;
     }
+}
+
+bool ModelCommandHost::closeEditingDurably(const QString &documentId, QString *error,
+                                          const RProjectCatalog::PublicationLeasePtr &publicationLease)
+{
+    auto found = state->entries.find(documentId);
+    if (found == state->entries.end() || !found->second.editing) return true;
+    auto &entry = found->second;
+    const bool alreadyClosed = entry.editing->query().value("lifecycle") == QJsonValue("closed");
+    if (alreadyClosed && entry.closeRetryPayload.isEmpty()) return true;
+    auto *catalog = session->getProjectCatalog();
+    if (!catalog)
+    {
+        if (error) *error = tr("The project ledger is unavailable; the close record remains pending.");
+        return false;
+    }
+    if (entry.closeRetryPayload.isEmpty())
+    {
+        if (entry.closeRetryId.isEmpty()) entry.closeRetryId = uuid();
+        auto intent = catalog->beginOperation(entry.closeRetryId,
+            {{"command", "model.session.close"}, {"documentId", documentId},
+             {"editingIdentity", entry.editing->query().value("modelId")}}, {}, publicationLease, error);
+        if (intent.operation.operationId.isEmpty()) return false;
+        entry.closeOperationId = intent.operation.operationId;
+        const auto payload = entry.editing->prepareCloseRetry(entry.closeRetryId, entry.closeOperationId, error);
+        if (payload.isEmpty() || !catalog->queueCloseRetry(entry.closeRetryId, entry.closeOperationId,
+                "close_record_pending", payload, publicationLease, error)) return false;
+        entry.closeRetryPayload = payload;
+        if (!catalog->advanceOperation(entry.closeOperationId, RProjectCatalog::OperationPhase::Accepted,
+                                        {}, publicationLease, error)) return false;
+    }
+    if (alreadyClosed ? !RModelCommandSession::replayCloseRetry(entry.closeRetryPayload, error)
+                      : !entry.editing->closeWithRetryPayload(entry.closeRetryPayload, error)) return false;
+    RProjectCatalog::OperationAssociation association;
+    association.observation = {{"status", "ok"}, {"code", "OK"},
+        {"result", QJsonObject{{"operationId", entry.closeOperationId},
+            {"command", "model.session.close"},
+            {"editingSessionId", entry.closeRetryPayload.value("record").toObject().value("sessionId")},
+            {"recordId", entry.closeRetryPayload.value("record").toObject().value("recordId")},
+            {"persistence", "durable"}}}};
+    if (!catalog->advanceOperation(entry.closeOperationId, RProjectCatalog::OperationPhase::Observed,
+                                  association, publicationLease, error)) return false;
+    return catalog->completeCloseRetry(entry.closeRetryId, publicationLease, error);
+}
+
+bool ModelCommandHost::closeDurableSessions(QString *error)
+{
+    bool complete = true;
+    for (const auto &[identity, entry] : state->entries)
+        if (entry.editing && !closeEditingDurably(identity, error)) complete = false;
+    return complete;
 }
 
 QJsonObject ModelCommandHost::query(uint modelID)
@@ -559,8 +641,23 @@ QJsonObject ModelCommandHost::execute(uint modelID, const QJsonObject &request)
 QJsonObject ModelCommandHost::handle(const QJsonObject &request)
 {
     const QJsonValue requestId = request.value(QStringLiteral("requestId"));
+    QString durableIntentId;
+    bool durableSideEffect = false;
     auto invalid = [&](const QString &code, const QString &message) {
-        return hostRejected(requestId, code, message);
+        auto response = hostRejected(requestId, code, message);
+        if (!durableIntentId.isEmpty())
+        {
+            auto *catalog = session->getProjectCatalog();
+            RProjectCatalog::OperationAssociation association;
+            association.diagnosticCode = code.toLower();
+            association.observation = {{"status", "rejected"}, {"code", code}, {"result", QJsonObject{}}, {"message", message}};
+            QString error;
+            if (!catalog || !catalog->advanceOperation(durableIntentId, durableSideEffect
+                    ? RProjectCatalog::OperationPhase::Unknown : RProjectCatalog::OperationPhase::Observed,
+                    association, {}, &error))
+                response.insert("durableObservation", "unavailable");
+        }
+        return response;
     };
     if (QThread::currentThread() != thread())
         return invalid(QStringLiteral("WRONG_THREAD"), tr("GUI host requests must be handled on the GUI thread."));
@@ -768,7 +865,14 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             {QStringLiteral("requiresHostApproval"), true},
             {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("jobId"), QStringLiteral("registered native job ID")}}},
             {QStringLiteral("history"), QStringLiteral("none")},
-            {QStringLiteral("sideEffect"), QStringLiteral("cancel_specific_native_job")}}};
+            {QStringLiteral("sideEffect"), QStringLiteral("cancel_specific_native_job")}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("analysis.recover")},
+            {QStringLiteral("version"), 1}, {QStringLiteral("requiresPreview"), true},
+            {QStringLiteral("requiresHostApproval"), true},
+            {QStringLiteral("arguments"), QJsonObject{{"jobId", "registered interrupted job ID"},
+                {"checkpointSha256", "verified accepted checkpoint SHA-256"}, {"remainingSteps", "frozen remaining range"}}},
+            {QStringLiteral("history"), QStringLiteral("none")},
+            {QStringLiteral("sideEffect"), QStringLiteral("submit_detached_native_recovery_attempt")}}};
 
     auto nativeJob = [&](const QString &jobId) {
         return SolverManager::getInstance().jobQuery(jobId);
@@ -913,6 +1017,16 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             return invalid(QStringLiteral("JOB_NOT_FOUND"), tr("No native job with this ID is registered."));
         addHostJobSource(&job, jobId);
         return ok({{QStringLiteral("job"), job}});
+    }
+    if (operation == QStringLiteral("native.job.recovery.query"))
+    {
+        if (!exactKeys(parameters, {QStringLiteral("jobId")}) || !validToken(parameters.value("jobId")))
+            return invalid("INVALID_PARAMETERS", tr("Native recovery query requires a registered jobId."));
+        auto qualification = SolverManager::getInstance().nativeJobRecoveryQuery(parameters.value("jobId").toString());
+        if (!qualification.value("found").toBool()) return invalid("JOB_NOT_FOUND", tr("No native job with this ID is registered."));
+        qualification.remove("checkpointPath");
+        qualification.remove("checkpointDirectory");
+        return ok(qualification);
     }
 
     if (operation == QStringLiteral("native.result.catalog.query")
@@ -1321,10 +1435,12 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QJsonObject{{QStringLiteral("id"), QStringLiteral("command.preview")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("command.execute")}, {QStringLiteral("version"), 1}, {QStringLiteral("requiresHostApproval"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("operation.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("operations.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.targets.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.inputs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.jobs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.job.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("native.job.recovery.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.source.validate")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.result.open")}, {QStringLiteral("version"), 1},
                 {QStringLiteral("readOnly"), true}, {QStringLiteral("createsIndependentResultDocument"), true},
@@ -1549,6 +1665,45 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QStringLiteral("command"), QStringLiteral("commandVersion"), QStringLiteral("arguments")};
         const QSet<QString> detachedCancelKeys{QStringLiteral("command"), QStringLiteral("commandVersion"),
             QStringLiteral("arguments")};
+        if (command == "analysis.recover")
+        {
+            const int remaining = arguments.value("remainingSteps").toInt(-1);
+            static const QRegularExpression shaPattern(QStringLiteral("^[0-9a-f]{64}$"));
+            if (!exactKeys(parameters, detachedCancelKeys) || !exactKeys(arguments, {"jobId", "checkpointSha256", "remainingSteps"})
+                || !validToken(arguments.value("jobId")) || !arguments.value("checkpointSha256").isString()
+                || !shaPattern.match(arguments.value("checkpointSha256").toString()).hasMatch()
+                || !arguments.value("remainingSteps").isDouble() || arguments.value("remainingSteps").toDouble() != remaining
+                || remaining < 1 || remaining > 5000)
+                return invalid("INVALID_PARAMETERS", tr("Recovery requires an opaque job ID, selected checkpoint SHA and exact positive remaining range."));
+            if (activeModalInteraction() || isMutationBlocked())
+                return invalid("INTERACTION_BLOCKED", tr("Finish the current document interaction before previewing native recovery."));
+            const auto qualification = SolverManager::getInstance().nativeJobRecoveryQuery(arguments.value("jobId").toString());
+            const auto checkpoint = qualification.value("checkpoint").toObject();
+            if (qualification.value("eligibility") != QJsonValue("recoverable")
+                || checkpoint.value("checkpointSha256") != arguments.value("checkpointSha256")
+                || checkpoint.value("remainingSteps").toInt(-1) != remaining)
+                return invalid("RECOVERY_CHANGED", tr("The selected checkpoint or remaining range is unavailable. Query native recovery again."));
+            State::Preview preview;
+            preview.id = uuid();
+            preview.sessionEpoch = state->sessionEpoch;
+            preview.command = command;
+            preview.jobId = arguments.value("jobId").toString();
+            preview.arguments = arguments;
+            preview.recoveryQualification = qualification;
+            preview.digest = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(qualification)
+                .toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+            QJsonObject result{{"command", command}, {"commandVersion", 1}, {"previewId", preview.id},
+                {"digest", preview.digest}, {"arguments", arguments}, {"requiresHostApproval", true},
+                {"before", QJsonObject{{"jobId", preview.jobId}, {"acceptedSeq", checkpoint.value("acceptedSeq")}}},
+                {"after", QJsonObject{{"remainingSteps", remaining}, {"targetSteps", checkpoint.value("targetSteps")},
+                    {"sourceDocumentModified", false}, {"newAttempt", true}}},
+                {"history", "none"}, {"changedPaths", QJsonArray{}}};
+            if (state->previewOrder.size() >= 128)
+            { state->previews.erase(state->previewOrder.takeFirst()); }
+            state->previewOrder.append(preview.id);
+            state->previews.emplace(preview.id, preview);
+            return ok(result, "preview");
+        }
         if (cancelCommand)
         {
             if ((!hasTarget && !exactKeys(parameters, detachedCancelKeys))
@@ -1882,8 +2037,36 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         if (!exactKeys(parameters, {QStringLiteral("operationId")}) || !validToken(parameters.value(QStringLiteral("operationId"))))
             return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("operation.query requires an operationId."));
         const auto found = state->operations.find(parameters.value(QStringLiteral("operationId")).toString());
-        if (found == state->operations.end()) return invalid(QStringLiteral("OPERATION_NOT_FOUND"), tr("No in-memory operation with this ID is available."));
+        if (found == state->operations.end())
+        {
+            auto *catalog = session->getProjectCatalog();
+            QString error;
+            const auto persisted = catalog ? catalog->queryOperation(parameters.value("operationId").toString(), {}, &error)
+                                           : std::optional<RProjectCatalog::DurableOperation>{};
+            if (!persisted) return invalid(QStringLiteral("OPERATION_NOT_FOUND"), error.isEmpty() ? tr("No durable operation with this ID is available.") : error);
+            return ok(durableOperationJson(*persisted));
+        }
         return ok(found->second);
+    }
+
+    if (operation == QStringLiteral("operations.query"))
+    {
+        for (auto it = parameters.begin(); it != parameters.end(); ++it)
+            if (it.key() != "limit" && it.key() != "afterOperationId")
+                return invalid("INVALID_PARAMETERS", tr("Unknown operations query field."));
+        const int limit = parameters.value("limit").toInt(100);
+        if ((parameters.contains("limit") && (!parameters.value("limit").isDouble()
+                || parameters.value("limit").toDouble() != double(limit))) || limit < 1 || limit > 100
+            || (parameters.contains("afterOperationId") && !validToken(parameters.value("afterOperationId"))))
+            return invalid("INVALID_PARAMETERS", tr("Operations page limit must be 1–100."));
+        auto *catalog = session->getProjectCatalog();
+        if (!catalog) return invalid("PERSISTENCE_UNAVAILABLE", tr("The project operations ledger is unavailable."));
+        QString error;
+        const auto page = catalog->queryOperations(limit, parameters.value("afterOperationId").toString(), {}, &error);
+        if (!error.isEmpty()) return invalid("PERSISTENCE_ERROR", error);
+        QJsonArray items;
+        for (const auto &item : page.operations) items.append(durableOperationJson(item));
+        return ok({{"operations", items}, {"nextCursor", page.nextCursor}, {"persistence", "durable"}});
     }
 
     if (operation == QStringLiteral("command.execute") || operation == QStringLiteral("document.undo")
@@ -1906,6 +2089,29 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             response.insert(QStringLiteral("requestId"), requestId);
             return response;
         }
+        auto *catalog = session->getProjectCatalog();
+        if (!catalog) return invalid("PERSISTENCE_UNAVAILABLE", tr("The project operations ledger is unavailable."));
+        const QJsonObject normalizedRequest{{"operation", operation}, {"previewId", previewId}};
+        const QString durableRequestDigest = QString::fromLatin1(QCryptographicHash::hash(
+            QJsonDocument(normalizedRequest).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+        QString ledgerError;
+        const auto durablePrior = catalog->queryOperationByIdempotencyKey(idempotencyKey, {}, &ledgerError);
+        if (!ledgerError.isEmpty()) return invalid("PERSISTENCE_ERROR", ledgerError);
+        if (durablePrior)
+        {
+            if (durablePrior->normalizedRequestSha256 != durableRequestDigest)
+                return invalid("IDEMPOTENCY_CONFLICT", tr("This key is durably bound to a different request."));
+            if (durablePrior->phase == RProjectCatalog::OperationPhase::Observed
+                && !durablePrior->association.observation.isEmpty())
+            {
+                const auto observed = durablePrior->association.observation;
+                auto response = hostResponse(requestId, observed.value("status").toString(),
+                    observed.value("code").toString(), observed.value("result").toObject());
+                if (observed.contains("message")) response.insert("message", observed.value("message"));
+                return response;
+            }
+            return invalid("OPERATION_RECONCILE_REQUIRED", tr("The earlier operation is unobserved; query its durable record before any new action."));
+        }
         auto stored = state->previews.find(previewId);
         if (stored == state->previews.end()) return invalid(QStringLiteral("PREVIEW_EXPIRED"), tr("The preview is no longer available in this host session."));
         State::Preview &preview = stored->second;
@@ -1917,13 +2123,66 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         if (preview.consumed) return invalid(QStringLiteral("PREVIEW_ALREADY_EXECUTED"), tr("This preview has already been used."));
         if (preview.sessionEpoch != state->sessionEpoch)
             return invalid(QStringLiteral("STALE_SESSION"), tr("The preview belongs to a different host session."));
-        const QString operationId = uuid();
+        RProjectCatalog::OperationAssociation initialAssociation;
+        initialAssociation.candidateSha256 = preview.nativePreview.value("candidateFingerprint").toString();
+        initialAssociation.approvalSummarySha256 = QString::fromLatin1(QCryptographicHash::hash(
+            QJsonDocument(QJsonObject{{"command", preview.command}, {"arguments", preview.arguments}})
+                .toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+        const auto durableIntent = catalog->beginOperation(idempotencyKey, normalizedRequest, initialAssociation, {}, &ledgerError);
+        if (durableIntent.disposition == RProjectCatalog::OperationDisposition::Reused)
+        {
+            const auto &record = durableIntent.operation;
+            if (record.phase == RProjectCatalog::OperationPhase::Observed && !record.association.observation.isEmpty())
+            {
+                const auto observed = record.association.observation;
+                auto response = hostResponse(requestId, observed.value("status").toString(),
+                    observed.value("code").toString(), observed.value("result").toObject());
+                if (observed.contains("message")) response.insert("message", observed.value("message"));
+                return response;
+            }
+            return invalid("OPERATION_RECONCILE_REQUIRED", tr("Another runtime recorded this operation; query its outcome before any new action."));
+        }
+        if (durableIntent.operation.operationId.isEmpty() || durableIntent.disposition != RProjectCatalog::OperationDisposition::Created)
+            return invalid("PERSISTENCE_ERROR", ledgerError.isEmpty() ? tr("Could not persist this operation intent.") : ledgerError);
+        const QString operationId = durableIntent.operation.operationId;
+        durableIntentId = operationId;
         const QString previousActiveOperation = state->activeOperationId;
         const QJsonArray previousChangedPaths = state->activeChangedPaths;
         auto finishCompleted = [&](const QJsonObject &operationResult, const QString &status,
                                    const QString &code, const QString &message) {
-            QJsonObject response = hostResponse(requestId, status, code, operationResult);
+            QJsonObject observedResult = operationResult;
+            RProjectCatalog::OperationAssociation association = initialAssociation;
+            const uint currentModel = session->findModelByCommandIdentity(preview.documentId);
+            QString snapshotError;
+            if (status == "accepted" && observedResult.contains("afterRevision") && currentModel != RConstants::eod)
+            {
+                const auto snapshot = session->createDocumentSnapshot(currentModel, &snapshotError);
+                if (!snapshot.isEmpty())
+                {
+                    observedResult.insert("acceptedSnapshotRef", snapshot);
+                    observedResult.insert("persistence", "accepted_snapshot");
+                    association.acceptedRevision = snapshot.value("sourceRevision").toString();
+                    association.acceptedModelSha256 = snapshot.value("modelSha256").toString();
+                }
+                else
+                {
+                    observedResult.insert("recoveryProtection", "memory_only");
+                    observedResult.insert("recoveryDiagnostic", snapshotError);
+                }
+            }
+            QJsonObject response = hostResponse(requestId, status, code, observedResult);
             if (!message.isEmpty()) response.insert(QStringLiteral("message"), message);
+            association.observation = {{"status", status}, {"code", code}, {"result", observedResult}};
+            if (!message.isEmpty()) association.observation.insert("message", message);
+            association.diagnosticCode = status == "accepted" ? QString() : code.toLower();
+            const bool acceptedRecorded = status != "accepted" || catalog->advanceOperation(
+                operationId, RProjectCatalog::OperationPhase::Accepted, association, {}, &ledgerError);
+            if (!acceptedRecorded || !catalog->advanceOperation(operationId, RProjectCatalog::OperationPhase::Observed,
+                                            association, {}, &ledgerError))
+            {
+                response = hostResponse(requestId, "error", "OBSERVED_MODIFIED_UNLOGGED", observedResult);
+                response.insert("message", tr("The operation happened, but its durable observation failed: %1").arg(ledgerError));
+            }
             preview.consumed = true;
             if (state->operationOrder.size() >= 256)
             {
@@ -1931,7 +2190,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 state->operations.erase(expired);
             }
             state->operationOrder.append(operationId);
-            state->operations.emplace(operationId, operationResult);
+            state->operations.emplace(operationId, observedResult);
             if (state->idempotencyOrder.size() >= 256)
             {
                 const QString expired = state->idempotencyOrder.takeFirst();
@@ -1940,6 +2199,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             state->idempotencyOrder.append(idempotencyKey);
             state->idempotency.emplace(idempotencyKey,
                 State::IdempotentResult{requestDigest, preview.documentId, response});
+            durableIntentId.clear();
             return response;
         };
         auto finishAccepted = [&](const QJsonObject &operationResult) {
@@ -1949,6 +2209,25 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             return finishCompleted(operationResult, QStringLiteral("error"),
                                    QStringLiteral("OBSERVED_MODIFIED_UNLOGGED"), message);
         };
+
+        if (preview.command == "analysis.recover")
+        {
+            if (activeModalInteraction() || isMutationBlocked())
+                return invalid("INTERACTION_BLOCKED", tr("Finish the current document interaction before native recovery."));
+            const auto qualification = SolverManager::getInstance().nativeJobRecoveryQuery(preview.jobId);
+            if (qualification != preview.recoveryQualification)
+                return invalid("RECOVERY_CHANGED", tr("Checkpoint qualification changed after preview; a new approval is required."));
+            QString error;
+            const QString attempt = SolverManager::getInstance().submitNativeRecovery(preview.jobId,
+                preview.arguments.value("checkpointSha256").toString(), uint(preview.arguments.value("remainingSteps").toInt()), &error);
+            if (attempt.isEmpty()) return invalid("RECOVERY_REJECTED", error);
+            durableSideEffect = true;
+            return finishAccepted({{"operationId", operationId}, {"command", preview.command},
+                {"jobId", attempt}, {"recoverySourceJobId", preview.jobId},
+                {"checkpointSha256", preview.arguments.value("checkpointSha256")},
+                {"remainingSteps", preview.arguments.value("remainingSteps")},
+                {"sourceDocumentModified", false}, {"newAttempt", true}, {"history", "none"}});
+        }
 
         if (preview.command == QStringLiteral("analysis.cancel"))
         {
@@ -1974,6 +2253,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QString cancelError;
             if (!SolverManager::getInstance().cancelJob(preview.jobId, &cancelError))
                 return invalid(QStringLiteral("CANCEL_REJECTED"), cancelError);
+            durableSideEffect = true;
             QJsonObject afterJob = SolverManager::getInstance().jobQuery(preview.jobId);
             addHostJobSource(&afterJob, preview.jobId);
             QJsonObject event = state->appendEvent(QStringLiteral("analysis.job_cancellation_requested"),
@@ -2049,6 +2329,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 modelID, projectSnapshotRef, warningsAccepted, &submitError);
             if (jobId.isEmpty())
                 return invalid(QStringLiteral("SUBMISSION_REJECTED"), submitError);
+            durableSideEffect = true;
             state->jobSources[jobId] = State::JobSource{preview.documentId, preview.sessionEpoch,
                 QString::number(preview.stampGeneration), projectSnapshotRef};
             QJsonObject job = SolverManager::getInstance().jobQuery(jobId);
@@ -2167,6 +2448,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                                        : coreCode.isEmpty() ? QStringLiteral("COMMAND_REJECTED") : coreCode.toUpper(),
                                    acceptedCore.value(QStringLiteral("message")).toString());
                 }
+                durableSideEffect = true;
                 coreJournalRevision = acceptedCore.value(QStringLiteral("revision")).toString();
                 auditCommandId = preview.command;
                 corePreStateHash = currentFingerprint;
@@ -2224,6 +2506,7 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                     return invalid(QStringLiteral("STALE_PREVIEW"), tr("The selected GUI history item is no longer current."));
                 session->getPickList().removeItems(modelID);
                 if (undo) model.undo(0); else model.redo(0);
+                durableSideEffect = true;
                 postStateHash = RModelCommandService::stateFingerprint(model);
             }
             guard.unlock();
@@ -2326,6 +2609,13 @@ bool ModelCommandHost::approvePreview(const QString &previewId)
     auto found = state->previews.find(previewId);
     if (found == state->previews.end() || found->second.approved || found->second.consumed
         || found->second.sessionEpoch != state->sessionEpoch) return false;
+    if (found->second.command == "analysis.recover")
+    {
+        if (isMutationBlocked() || SolverManager::getInstance().nativeJobRecoveryQuery(found->second.jobId)
+                != found->second.recoveryQualification) return false;
+        found->second.approved = true;
+        return true;
+    }
     if (found->second.command == QStringLiteral("analysis.cancel"))
     {
         const QJsonObject job = SolverManager::getInstance().jobQuery(found->second.jobId);
@@ -2596,7 +2886,8 @@ bool ModelCommandHost::configureModal(const QList<uint> &modelIDs, const RModalS
     return true;
 }
 
-bool ModelCommandHost::recordArtifactPublished(uint modelID, const QString &path, QString *error)
+bool ModelCommandHost::recordArtifactPublished(uint modelID, const QString &path, QString *error,
+                                              const RProjectCatalog::PublicationLeasePtr &publicationLease)
 {
     if (QThread::currentThread() != thread()) { if (error) *error = tr("Publication requires the GUI thread."); return false; }
     QMutexLocker guard(session->getMutex());
@@ -2614,9 +2905,9 @@ bool ModelCommandHost::recordArtifactPublished(uint modelID, const QString &path
     if (!entry->editing->recordArtifactPublished(artifact, nullptr, error)) return false;
     const QString visiblePath = QFileInfo(path).canonicalFilePath();
     if (visiblePath != artifact && !entry->editing->recordArtifactPublished(visiblePath, nullptr, error)) return false;
-    const bool closed = entry->editing->close();
-    entry->editing.reset();
-    if (!closed && error) *error = tr("The model was saved and journaled, but its editing session could not be closed in the journal.");
+    const bool closed = closeEditingDurably(stamp.first, error, publicationLease);
+    if (closed) entry->editing.reset();
+    if (!closed && error) *error = tr("The model was saved and journaled, but its close bookkeeping remains pending: %1").arg(*error);
     return closed;
 }
 

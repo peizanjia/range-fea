@@ -1,5 +1,5 @@
 qt_add_executable(range-workflow-native native/main.cpp native/import_model.cpp native/import_model.h)
-target_link_libraries(range-workflow-native PRIVATE range-model-lib Qt6::Core)
+target_link_libraries(range-workflow-native PRIVATE range-model-lib range-solver-lib Qt6::Core)
 set_target_properties(range-workflow-native PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
 install(TARGETS range-workflow-native RUNTIME DESTINATION bin COMPONENT Application)
 install(DIRECTORY python/ DESTINATION share/range-workflow COMPONENT Application
@@ -10,6 +10,8 @@ install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
     ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_SDK.md
     ${CMAKE_SOURCE_DIR}/../docs/NATIVE_DOCUMENT_SDK.md
     ${CMAKE_SOURCE_DIR}/../docs/NATIVE_RESULTS.md
+    ${CMAKE_SOURCE_DIR}/../docs/RECOVERY_OPERATIONS.md
+    ${CMAKE_SOURCE_DIR}/../docs/RECOVERY_CONTRACT.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_INTERACTION_DESIGN.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_UX_ACCEPTANCE.md
     ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
@@ -70,12 +72,30 @@ if(RANGE_BUILD_TESTS)
         --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
         --python "${Python3_EXECUTABLE}" -v)
     set_tests_properties(tst_workflow_runtime PROPERTIES TIMEOUT 180)
+    add_test(NAME tst_workflow_recovery COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_recovery.py" -v)
+    set_tests_properties(tst_workflow_recovery PROPERTIES TIMEOUT 60)
+    add_test(NAME tst_workflow_recovery_runtime COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_recovery_runtime.py"
+        --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+        --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+        --python "${Python3_EXECUTABLE}" -v)
+    set_tests_properties(tst_workflow_recovery_runtime PROPERTIES TIMEOUT 300)
+    if(WIN32)
+        set_tests_properties(tst_workflow_recovery_runtime PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME tst_workflow_extensions COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extensions.py" -v)
     set_tests_properties(tst_workflow_extensions PROPERTIES TIMEOUT 120)
     add_test(NAME tst_workflow_telemetry COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_telemetry.py" -v)
     set_tests_properties(tst_workflow_telemetry PROPERTIES TIMEOUT 60)
+    add_test(NAME tst_workflow_series_analysis COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_analysis.py" -v)
+    add_test(NAME tst_workflow_series_service COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_service.py" -v)
+    set_tests_properties(tst_workflow_series_analysis tst_workflow_series_service PROPERTIES TIMEOUT 60)
     add_test(NAME tst_workflow_project_catalog COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_project_catalog.py"
         --catalog-cli "$<TARGET_FILE:range-project>" -v)

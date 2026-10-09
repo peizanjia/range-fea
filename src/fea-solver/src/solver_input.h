@@ -3,8 +3,11 @@
 
 #include <QString>
 #include <QStringList>
+#include <QByteArray>
+#include <memory>
 #include <optional>
 
+class NativeExecutionGate;
 class SolverTask;
 
 class SolverInput
@@ -35,6 +38,12 @@ class SolverInput
         QString typedCheckpointFileName;
         QString typedControllerIdentity;
         QString typedConfigurationFileName;
+        //! Optional directory for periodic accepted structural checkpoints.
+        QString nativeCheckpointDirectory;
+        //! Canonical range.native-checkpoint-context/v1 JSON bytes.
+        QByteArray nativeCheckpointContextJson;
+        //! Shared command/worker gate for an explicitly enabled run.
+        std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
         //! Force to restart solver
         bool restart;
 
@@ -77,6 +86,12 @@ class SolverInput
 
         void setThermalControlRun(uint macrosteps,const QString &checkpointFileName);
         void setTypedControlRun(uint steps,const QString &checkpointFileName,const QString &controllerIdentity,const QString &configurationFileName = {});
+
+        //! Enable native accepted structural checkpoints with versioned context.
+        void setNativeCheckpointRun(const QString &directory,const QByteArray &contextJson);
+
+        //! Bind the per-run accepted-boundary gate shared with command IPC.
+        void setNativeExecutionGate(const std::shared_ptr<NativeExecutionGate> &gate);
 
         //! Set force restart solver.
         void setRestart(bool restart);

@@ -13,7 +13,10 @@
 #include <QSaveFile>
 #include <QTemporaryDir>
 #include <QUuid>
+#include <cstdio>
+#include <cstdlib>
 #include <rbl_error.h>
+#include <rmodel_command_session.h>
 #include <rproject_catalog.h>
 #include <rml_file_utils.h>
 
@@ -137,6 +140,257 @@ RModel sampleModel(double x)
     model.addNode(RNode(x, 2.0, 3.0));
     return model;
 }
+
+constexpr int ForcedCrashExitCode = 86;
+
+struct HelperResult
+{
+    bool started = false;
+    bool finished = false;
+    int exitCode = -1;
+    QProcess::ExitStatus exitStatus = QProcess::CrashExit;
+    QByteArray output;
+    QByteArray error;
+};
+
+HelperResult runSelfHelper(const QStringList &arguments)
+{
+    QProcess process;
+    process.setProgram(QCoreApplication::applicationFilePath());
+    process.setArguments(QStringList{QStringLiteral("--wf05-helper")} + arguments);
+    process.start();
+    HelperResult result;
+    result.started = process.waitForStarted(5000);
+    if (!result.started)
+    {
+        result.error = process.errorString().toUtf8();
+        return result;
+    }
+    result.finished = process.waitForFinished(30000);
+    if (!result.finished)
+    {
+        process.kill();
+        process.waitForFinished(5000);
+    }
+    result.exitCode = process.exitCode();
+    result.exitStatus = process.exitStatus();
+    result.output = process.readAllStandardOutput();
+    result.error = process.readAllStandardError();
+    return result;
+}
+
+int helperFailure(const QString &message)
+{
+    const QByteArray bytes = message.toUtf8();
+    std::fwrite(bytes.constData(), 1, size_t(bytes.size()), stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+    return 90;
+}
+
+bool appendSideEffect(const QString &path, const QString &effectId)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) return false;
+    const QByteArray line = effectId.toUtf8() + '\n';
+    return file.write(line) == line.size() && file.flush();
+}
+
+int runCrashHelper(const QStringList &arguments)
+{
+    if (arguments.isEmpty()) return helperFailure(QStringLiteral("missing helper mode"));
+    const QString mode = arguments.at(0);
+    QString error, errorCode;
+
+    if (mode == QStringLiteral("operation-boundary"))
+    {
+        if (arguments.size() != 4) return helperFailure(QStringLiteral("invalid operation-boundary arguments"));
+        const QString phaseName = arguments.at(1);
+        const QString workspace = arguments.at(2);
+        const QString sideEffectPath = arguments.at(3);
+        auto catalog = RProjectCatalog::open(workspace, &error);
+        if (!catalog) return helperFailure(error);
+        const QString key = QStringLiteral("crash-boundary-") + phaseName;
+        const QJsonObject request{{QStringLiteral("commandId"), QStringLiteral("test.operation")},
+                                  {QStringLiteral("phase"), phaseName}};
+        RProjectCatalog::OperationAssociation candidate;
+        candidate.candidateSha256 = hashBytes(QByteArrayLiteral("candidate bytes"));
+        const auto begun = catalog->beginOperation(key, request, candidate, {}, &error, &errorCode);
+        if (begun.disposition != RProjectCatalog::OperationDisposition::Created)
+            return helperFailure(error.isEmpty() ? QStringLiteral("operation was not newly created") : error);
+
+        if (phaseName == QStringLiteral("accepted")
+            || phaseName == QStringLiteral("artifact_published")
+            || phaseName == QStringLiteral("observed"))
+        {
+            RProjectCatalog::OperationAssociation accepted;
+            accepted.acceptedRevision = QStringLiteral("r1");
+            accepted.acceptedModelSha256 = hashBytes(QByteArrayLiteral("accepted model bytes"));
+            if (!catalog->advanceOperation(begun.operation.operationId,
+                    RProjectCatalog::OperationPhase::Accepted, accepted, {}, &error, &errorCode))
+                return helperFailure(error);
+        }
+        if (phaseName == QStringLiteral("artifact_published")
+            || phaseName == QStringLiteral("observed"))
+        {
+            const QByteArray effectBytes = QByteArrayLiteral("published test artifact");
+            if (!writeBytes(sideEffectPath, effectBytes))
+                return helperFailure(QStringLiteral("could not publish test artifact"));
+            RProjectCatalog::OperationAssociation published;
+            published.acceptedRevision = QStringLiteral("r1");
+            published.acceptedModelSha256 = hashBytes(QByteArrayLiteral("accepted model bytes"));
+            if (!catalog->advanceOperation(begun.operation.operationId,
+                    RProjectCatalog::OperationPhase::ArtifactPublished, published, {}, &error, &errorCode))
+                return helperFailure(error);
+        }
+        if (phaseName == QStringLiteral("observed"))
+        {
+            RProjectCatalog::OperationAssociation observed;
+            observed.observation = {{QStringLiteral("status"), QStringLiteral("accepted")},
+                {QStringLiteral("code"), QStringLiteral("ACCEPTED")},
+                {QStringLiteral("result"), QJsonObject{
+                    {QStringLiteral("acceptedRevision"), QStringLiteral("r1")},
+                    {QStringLiteral("artifactSha256"), hashBytes(QByteArrayLiteral("published test artifact"))}}}};
+            if (!catalog->advanceOperation(begun.operation.operationId,
+                    RProjectCatalog::OperationPhase::Observed, observed, {}, &error, &errorCode))
+                return helperFailure(error);
+        }
+        if (phaseName != QStringLiteral("intent") && phaseName != QStringLiteral("accepted")
+            && phaseName != QStringLiteral("artifact_published") && phaseName != QStringLiteral("observed"))
+            return helperFailure(QStringLiteral("unknown operation phase"));
+
+        // _Exit bypasses C++ and Qt destructors after the durable boundary.
+        std::_Exit(ForcedCrashExitCode);
+    }
+
+    if (mode == QStringLiteral("idempotent-operation"))
+    {
+        if (arguments.size() != 3) return helperFailure(QStringLiteral("invalid idempotent-operation arguments"));
+        const QString workspace = arguments.at(1);
+        const QString sideEffectPath = arguments.at(2);
+        auto catalog = RProjectCatalog::open(workspace, &error);
+        if (!catalog) return helperFailure(error);
+        const QString key = QStringLiteral("cross-process-idempotency-key");
+        const QJsonObject request{{QStringLiteral("commandId"), QStringLiteral("test.side-effect")},
+                                  {QStringLiteral("parameters"), QJsonObject{{QStringLiteral("value"), 17}}}};
+        const auto begun = catalog->beginOperation(key, request, {}, {}, &error, &errorCode);
+        if (begun.disposition == RProjectCatalog::OperationDisposition::Conflict)
+            return helperFailure(error.isEmpty() ? QStringLiteral("idempotency conflict") : error);
+
+        RProjectCatalog::DurableOperation result = begun.operation;
+        if (begun.disposition == RProjectCatalog::OperationDisposition::Created)
+        {
+            const QString effectId = uuid();
+            if (!appendSideEffect(sideEffectPath, effectId))
+                return helperFailure(QStringLiteral("could not record test side effect"));
+            RProjectCatalog::OperationAssociation accepted;
+            accepted.acceptedRevision = QStringLiteral("r1");
+            accepted.acceptedModelSha256 = hashBytes(effectId.toUtf8());
+            if (!catalog->advanceOperation(result.operationId, RProjectCatalog::OperationPhase::Accepted,
+                                           accepted, {}, &error, &errorCode))
+                return helperFailure(error);
+            RProjectCatalog::OperationAssociation observed;
+            observed.observation = {{QStringLiteral("status"), QStringLiteral("accepted")},
+                                    {QStringLiteral("code"), QStringLiteral("ACCEPTED")},
+                                    {QStringLiteral("result"), QJsonObject{{QStringLiteral("effectId"), effectId}}}};
+            if (!catalog->advanceOperation(result.operationId, RProjectCatalog::OperationPhase::Observed,
+                                           observed, {}, &error, &errorCode))
+                return helperFailure(error);
+            const auto persisted = catalog->queryOperation(result.operationId, {}, &error, &errorCode);
+            if (!persisted) return helperFailure(error);
+            result = *persisted;
+        }
+        else if (begun.disposition == RProjectCatalog::OperationDisposition::Reused)
+        {
+            if (result.phase != RProjectCatalog::OperationPhase::Observed
+                || result.association.observation.isEmpty())
+                return helperFailure(QStringLiteral("reused operation has no terminal observation; refusing to retry"));
+        }
+
+        const QByteArray output = QJsonDocument(result.association.observation).toJson(QJsonDocument::Compact);
+        std::fwrite(output.constData(), 1, size_t(output.size()), stdout);
+        std::fputc('\n', stdout);
+        std::fflush(stdout);
+        return 0;
+    }
+
+    if (mode == QStringLiteral("save-partial"))
+    {
+        if (arguments.size() != 5) return helperFailure(QStringLiteral("invalid save-partial arguments"));
+        const QString workspace = arguments.at(1);
+        const QString documentId = arguments.at(2);
+        const QString modelPath = arguments.at(3);
+        const QString linkPath = arguments.at(4);
+        const QByteArray oldModelBytes = QByteArrayLiteral("old model bytes");
+        const QByteArray newModelBytes = QByteArrayLiteral("new accepted model bytes");
+        const QByteArray newLinkBytes = QByteArrayLiteral("new link bytes");
+        auto catalog = RProjectCatalog::open(workspace, &error);
+        if (!catalog) return helperFailure(error);
+        const auto document = catalog->document(documentId, &error);
+        if (!document) return helperFailure(error);
+        auto lease = catalog->reservePublication(documentId, {modelPath, linkPath},
+                                                 document->sourceRevision, &error, &errorCode);
+        if (!lease) return helperFailure(error);
+
+        RProjectCatalog::OperationArtifactIntent modelArtifact;
+        modelArtifact.path = modelPath;
+        modelArtifact.expectedPriorExists = true;
+        modelArtifact.expectedPriorSha256 = hashBytes(oldModelBytes);
+        modelArtifact.intendedSha256 = hashBytes(newModelBytes);
+        RProjectCatalog::OperationArtifactIntent linkArtifact;
+        linkArtifact.path = linkPath;
+        linkArtifact.intendedSha256 = hashBytes(newLinkBytes);
+        const QJsonObject request{{QStringLiteral("commandId"), QStringLiteral("document.save")},
+                                  {QStringLiteral("sourceRevision"), document->sourceRevision}};
+        const auto begun = catalog->beginSavePublication(documentId, QStringLiteral("crash-save-key"),
+            request, document->sourceRevision, {modelArtifact, linkArtifact}, lease, {}, &error, &errorCode);
+        if (begun.disposition != RProjectCatalog::OperationDisposition::Created)
+            return helperFailure(error.isEmpty() ? QStringLiteral("save operation was not created") : error);
+        RProjectCatalog::OperationAssociation accepted;
+        accepted.acceptedRevision = QStringLiteral("r1");
+        accepted.acceptedModelSha256 = hashBytes(newModelBytes);
+        if (!catalog->advanceOperation(begun.operation.operationId, RProjectCatalog::OperationPhase::Accepted,
+                                       accepted, lease, &error, &errorCode))
+            return helperFailure(error);
+        if (!writeBytes(modelPath, newModelBytes)) return helperFailure(QStringLiteral("could not publish first save artifact"));
+
+        // The model file is committed while the second native output is still absent.
+        std::_Exit(ForcedCrashExitCode);
+    }
+
+    if (mode == QStringLiteral("close-retry"))
+    {
+        if (arguments.size() != 6) return helperFailure(QStringLiteral("invalid close-retry arguments"));
+        const QString workspace = arguments.at(1);
+        const QString journalPath = arguments.at(2);
+        const QString retryId = arguments.at(3);
+        const QString operationId = arguments.at(4);
+        const QString crashWindow = arguments.at(5);
+        RModelCommandSession::JournalOptions journalOptions;
+        journalOptions.path = journalPath;
+        RModelCommandSession session(sampleModel(8.0), journalOptions);
+        const QJsonObject payload = session.prepareCloseRetry(retryId, operationId, &error);
+        if (payload.isEmpty()) return helperFailure(error);
+        auto catalog = RProjectCatalog::open(workspace, &error);
+        if (!catalog) return helperFailure(error);
+        if (!catalog->queueCloseRetry(retryId, operationId, QStringLiteral("journal_write_failed"),
+                                      payload, {}, &error, &errorCode))
+            return helperFailure(error);
+        if (crashWindow == QStringLiteral("after-journal"))
+        {
+            if (!RModelCommandSession::replayCloseRetry(payload, &error, &errorCode))
+                return helperFailure(error);
+        }
+        else if (crashWindow != QStringLiteral("after-queue"))
+        {
+            return helperFailure(QStringLiteral("unknown close-retry crash window"));
+        }
+
+        std::_Exit(ForcedCrashExitCode);
+    }
+
+    return helperFailure(QStringLiteral("unknown helper mode"));
+}
 }
 
 class TestProjectCatalog : public QObject
@@ -159,6 +413,15 @@ private slots:
     void lockRejectsConcurrentMutationWithoutManifestChange();
     void snapshotsAreCasBoundHashAddressedAndImmutable();
     void invalidRuntimeReferencesAreRejected();
+    void durableOperationsSurviveReopenAndRejectIdempotencyConflicts();
+    void durableOperationLedgerFailsClosedOnCorruptionAndLock();
+    void runtimeLivenessDoesNotRetireAnotherLiveCatalogOperation();
+    void operationCrashBoundariesRequireFreshRuntimeReconciliation();
+    void crossProcessDuplicateOperationReturnsOriginalObservationWithoutRepeatingSideEffect();
+    void savePublicationReconcilesPartialFilesAndExternalReplacement();
+    void partialSavePublicationSurvivesAbruptProcessExit();
+    void closeRetryQueueSurvivesReopenAndCompletes();
+    void closeRetryQueueReplaysAcrossBothProcessCrashWindows();
     void cliQueryIsReadonlyJsonOnly();
 };
 
@@ -999,6 +1262,538 @@ void TestProjectCatalog::invalidRuntimeReferencesAreRejected()
     QVERIFY(!error.isEmpty());
 }
 
+void TestProjectCatalog::durableOperationsSurviveReopenAndRejectIdempotencyConflicts()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    QString error, errorCode;
+    auto catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    RProjectCatalog::OperationAssociation association;
+    association.candidateSha256 = hashBytes(QByteArrayLiteral("candidate"));
+    association.approvalSummarySha256 = hashBytes(QByteArrayLiteral("approval summary"));
+    const QJsonObject request{{QStringLiteral("commandId"), QStringLiteral("analysis.modal.configure")},
+                              {QStringLiteral("parameters"), QJsonObject{{QStringLiteral("modes"), 3}}}};
+    const auto first = catalog->beginOperation(QStringLiteral("operation-key-1"), request,
+                                               association, {}, &error, &errorCode);
+    QCOMPARE(int(first.disposition), int(RProjectCatalog::OperationDisposition::Created));
+    QVERIFY2(!first.operation.operationId.isEmpty(), qPrintable(error));
+    const QString operationId = first.operation.operationId;
+    const QByteArray ledgerBytes = readBytes(QDir(workspace).filePath(QStringLiteral("operations/ledger.json")));
+    QVERIFY(!ledgerBytes.isEmpty());
+    QVERIFY(!ledgerBytes.contains("approval summary"));
+    QVERIFY(!ledgerBytes.contains("approvalToken"));
+
+    catalog.reset();
+    catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const auto repeated = catalog->beginOperation(QStringLiteral("operation-key-1"), request,
+                                                 association, {}, &error, &errorCode);
+    QCOMPARE(int(repeated.disposition), int(RProjectCatalog::OperationDisposition::Reused));
+    QCOMPARE(repeated.operation.operationId, operationId);
+    RProjectCatalog::OperationAssociation accepted;
+    accepted.acceptedRevision = QStringLiteral("r1");
+    accepted.acceptedModelSha256 = hashBytes(QByteArrayLiteral("accepted model"));
+    QVERIFY2(catalog->advanceOperation(operationId, RProjectCatalog::OperationPhase::Accepted,
+                                       accepted, {}, &error, &errorCode), qPrintable(error));
+    catalog.reset();
+    catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    QVERIFY2(catalog->markUnfinishedOperationsUnknown({}, &error, &errorCode), qPrintable(error));
+    const auto persisted = catalog->queryOperation(operationId, {}, &error, &errorCode);
+    QVERIFY2(persisted.has_value(), qPrintable(error));
+    QCOMPARE(int(persisted->phase), int(RProjectCatalog::OperationPhase::Unknown));
+    QCOMPARE(persisted->association.diagnosticCode, QStringLiteral("interrupted_unobserved"));
+    QCOMPARE(persisted->association.acceptedRevision, QStringLiteral("r1"));
+    const auto byKey = catalog->queryOperationByIdempotencyKey(QStringLiteral("operation-key-1"),
+        {}, &error, &errorCode);
+    QVERIFY2(byKey.has_value(), qPrintable(error));
+    QCOMPARE(byKey->operationId, operationId);
+    const auto page = catalog->queryOperations(1, {}, {}, &error, &errorCode);
+    QCOMPARE(page.operations.size(), 1);
+    QVERIFY(page.nextCursor.isEmpty());
+    const auto recoveredRetry = catalog->beginOperation(QStringLiteral("operation-key-1"), request,
+        association, {}, &error, &errorCode);
+    QCOMPARE(int(recoveredRetry.disposition), int(RProjectCatalog::OperationDisposition::Reused));
+    QCOMPARE(int(recoveredRetry.operation.phase), int(RProjectCatalog::OperationPhase::Unknown));
+    RProjectCatalog::OperationAssociation observed;
+    observed.observation = {{QStringLiteral("status"), QStringLiteral("accepted")},
+        {QStringLiteral("code"), QStringLiteral("ACCEPTED")},
+        {QStringLiteral("result"), QJsonObject{
+            {QStringLiteral("documentId"), uuid()},
+            {QStringLiteral("beforeRevision"), QStringLiteral("r0")},
+            {QStringLiteral("afterRevision"), QStringLiteral("r1")},
+            {QStringLiteral("changedPaths"), QJsonArray{QStringLiteral("analysis.modal")}}}}};
+    QVERIFY2(catalog->advanceOperation(operationId, RProjectCatalog::OperationPhase::Observed,
+        observed, {}, &error, &errorCode), qPrintable(error));
+    catalog.reset();
+    catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const auto observedOperation = catalog->queryOperation(operationId, {}, &error, &errorCode);
+    QVERIFY2(observedOperation.has_value(), qPrintable(error));
+    QCOMPARE(observedOperation->association.observation, observed.observation);
+
+    const QJsonObject changedRequest{{QStringLiteral("commandId"), QStringLiteral("analysis.modal.configure")},
+        {QStringLiteral("parameters"), QJsonObject{{QStringLiteral("modes"), 4}}}};
+    const auto conflict = catalog->beginOperation(QStringLiteral("operation-key-1"), changedRequest,
+                                                  association, {}, &error, &errorCode);
+    QCOMPARE(int(conflict.disposition), int(RProjectCatalog::OperationDisposition::Conflict));
+    QCOMPARE(errorCode, QStringLiteral("idempotency_conflict"));
+    QCOMPARE(conflict.operation.operationId, operationId);
+
+    RProjectCatalog::OperationAssociation unsafeObservation;
+    unsafeObservation.observation = {{QStringLiteral("status"), QStringLiteral("accepted")},
+        {QStringLiteral("result"), QJsonObject{{QStringLiteral("approvalToken"), QStringLiteral("must-not-persist")}}}};
+    const auto rejectedSecret = catalog->beginOperation(QStringLiteral("unsafe-observation-key"),
+        QJsonObject{{QStringLiteral("commandId"), QStringLiteral("edit")}},
+        unsafeObservation, {}, &error, &errorCode);
+    QCOMPARE(int(rejectedSecret.disposition), int(RProjectCatalog::OperationDisposition::Conflict));
+    QCOMPARE(errorCode, QStringLiteral("invalid_argument"));
+    RProjectCatalog::OperationAssociation oversizedObservation;
+    oversizedObservation.observation = {{QStringLiteral("status"), QStringLiteral("accepted")},
+        {QStringLiteral("result"), QJsonObject{{QStringLiteral("detail"), QString(16 * 1024 + 1, QLatin1Char('x'))}}}};
+    const auto rejectedSize = catalog->beginOperation(QStringLiteral("oversized-observation-key"),
+        QJsonObject{{QStringLiteral("commandId"), QStringLiteral("edit")}},
+        oversizedObservation, {}, &error, &errorCode);
+    QCOMPARE(int(rejectedSize.disposition), int(RProjectCatalog::OperationDisposition::Conflict));
+    QCOMPARE(errorCode, QStringLiteral("invalid_argument"));
+}
+
+void TestProjectCatalog::durableOperationLedgerFailsClosedOnCorruptionAndLock()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    QString error, errorCode;
+    auto catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const auto created = catalog->beginOperation(QStringLiteral("ledger-key"),
+        QJsonObject{{QStringLiteral("commandId"), QStringLiteral("edit")}}, {}, {}, &error, &errorCode);
+    QCOMPARE(int(created.disposition), int(RProjectCatalog::OperationDisposition::Created));
+    const QString ledgerPath = QDir(workspace).filePath(QStringLiteral("operations/ledger.json"));
+    const QByteArray malformed = QByteArrayLiteral("{\"ledgerVersion\":1");
+    QVERIFY(writeBytes(ledgerPath, malformed));
+    const auto rejected = catalog->queryOperation(created.operation.operationId, {}, &error, &errorCode);
+    QVERIFY(!rejected.has_value());
+    QCOMPARE(errorCode, QStringLiteral("corrupt_operation_ledger"));
+    QCOMPARE(readBytes(ledgerPath), malformed);
+
+    const QString lockWorkspace = temporary.filePath(QStringLiteral("locked-workspace"));
+    auto lockedCatalog = RProjectCatalog::open(lockWorkspace, &error);
+    QVERIFY2(lockedCatalog, qPrintable(error));
+    QLockFile externalLock(QDir(lockWorkspace).filePath(QStringLiteral(".project.lock")));
+    externalLock.setStaleLockTime(0);
+    QVERIFY(externalLock.tryLock(0));
+    const auto busy = lockedCatalog->beginOperation(QStringLiteral("locked-key"),
+        QJsonObject{{QStringLiteral("commandId"), QStringLiteral("edit")}}, {}, {}, &error, &errorCode);
+    QCOMPARE(int(busy.disposition), int(RProjectCatalog::OperationDisposition::Conflict));
+    QCOMPARE(errorCode, QStringLiteral("catalog_locked"));
+    QVERIFY(!QFileInfo::exists(QDir(lockWorkspace).filePath(QStringLiteral("operations/ledger.json"))));
+}
+
+void TestProjectCatalog::runtimeLivenessDoesNotRetireAnotherLiveCatalogOperation()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    QString error, errorCode;
+    auto ownerCatalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(ownerCatalog, qPrintable(error));
+    auto recoveryCatalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(recoveryCatalog, qPrintable(error));
+    const auto created = ownerCatalog->beginOperation(QStringLiteral("live-runtime-key"),
+        QJsonObject{{QStringLiteral("commandId"), QStringLiteral("document.edit")}}, {}, {},
+        &error, &errorCode);
+    QCOMPARE(int(created.disposition), int(RProjectCatalog::OperationDisposition::Created));
+    QCOMPARE(created.operation.ownerRuntimeId, ownerCatalog->runtimeId());
+
+    QVERIFY2(recoveryCatalog->markUnfinishedOperationsUnknown({}, &error, &errorCode), qPrintable(error));
+    auto whileLive = recoveryCatalog->queryOperation(created.operation.operationId, {}, &error, &errorCode);
+    QVERIFY2(whileLive.has_value(), qPrintable(error));
+    QCOMPARE(int(whileLive->phase), int(RProjectCatalog::OperationPhase::Intent));
+
+    ownerCatalog.reset();
+    QVERIFY2(recoveryCatalog->markUnfinishedOperationsUnknown({}, &error, &errorCode), qPrintable(error));
+    const auto afterOwnerExit = recoveryCatalog->queryOperation(created.operation.operationId,
+        {}, &error, &errorCode);
+    QVERIFY2(afterOwnerExit.has_value(), qPrintable(error));
+    QCOMPARE(int(afterOwnerExit->phase), int(RProjectCatalog::OperationPhase::Unknown));
+    QCOMPARE(afterOwnerExit->association.diagnosticCode, QStringLiteral("interrupted_unobserved"));
+}
+
+void TestProjectCatalog::operationCrashBoundariesRequireFreshRuntimeReconciliation()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const struct Boundary
+    {
+        QString name;
+        RProjectCatalog::OperationPhase beforeRecovery;
+        bool hasArtifact;
+    } boundaries[] = {
+        {QStringLiteral("intent"), RProjectCatalog::OperationPhase::Intent, false},
+        {QStringLiteral("accepted"), RProjectCatalog::OperationPhase::Accepted, false},
+        {QStringLiteral("artifact_published"), RProjectCatalog::OperationPhase::ArtifactPublished, true},
+        {QStringLiteral("observed"), RProjectCatalog::OperationPhase::Observed, true}};
+
+    for (const Boundary &boundary : boundaries)
+    {
+        const QString workspace = temporary.filePath(QStringLiteral("workspace-%1").arg(boundary.name));
+        const QString sideEffectPath = temporary.filePath(QStringLiteral("effect-%1.bin").arg(boundary.name));
+        const HelperResult child = runSelfHelper({QStringLiteral("operation-boundary"), boundary.name,
+                                                  workspace, sideEffectPath});
+        QVERIFY2(child.started && child.finished, qPrintable(QString::fromUtf8(child.error)));
+        QCOMPARE(child.exitStatus, QProcess::NormalExit);
+        QCOMPARE(child.exitCode, ForcedCrashExitCode);
+
+        QString error, errorCode;
+        auto catalog = RProjectCatalog::open(workspace, &error);
+        QVERIFY2(catalog, qPrintable(error));
+        const QString key = QStringLiteral("crash-boundary-") + boundary.name;
+        const auto beforeRecovery = catalog->queryOperationByIdempotencyKey(key, {}, &error, &errorCode);
+        QVERIFY2(beforeRecovery.has_value(), qPrintable(error));
+        QCOMPARE(int(beforeRecovery->phase), int(boundary.beforeRecovery));
+        QVERIFY(beforeRecovery->ownerRuntimeId != catalog->runtimeId());
+        if (boundary.hasArtifact)
+            QCOMPARE(readBytes(sideEffectPath), QByteArrayLiteral("published test artifact"));
+        else
+            QVERIFY(!QFileInfo::exists(sideEffectPath));
+
+        const QJsonObject sameRequest{{QStringLiteral("commandId"), QStringLiteral("test.operation")},
+                                      {QStringLiteral("phase"), boundary.name}};
+        const auto repeated = catalog->beginOperation(key, sameRequest, {}, {}, &error, &errorCode);
+        QCOMPARE(int(repeated.disposition), int(RProjectCatalog::OperationDisposition::Reused));
+        QCOMPARE(repeated.operation.operationId, beforeRecovery->operationId);
+        QCOMPARE(readBytes(sideEffectPath), boundary.hasArtifact
+                 ? QByteArrayLiteral("published test artifact") : QByteArray{});
+
+        QVERIFY2(catalog->markUnfinishedOperationsUnknown({}, &error, &errorCode), qPrintable(error));
+        const auto recovered = catalog->queryOperation(beforeRecovery->operationId, {}, &error, &errorCode);
+        QVERIFY2(recovered.has_value(), qPrintable(error));
+        if (boundary.beforeRecovery == RProjectCatalog::OperationPhase::Observed)
+        {
+            QCOMPARE(int(recovered->phase), int(RProjectCatalog::OperationPhase::Observed));
+            QCOMPARE(recovered->association.observation, beforeRecovery->association.observation);
+        }
+        else
+        {
+            QCOMPARE(int(recovered->phase), int(RProjectCatalog::OperationPhase::Unknown));
+            QCOMPARE(recovered->association.diagnosticCode, QStringLiteral("interrupted_unobserved"));
+            QCOMPARE(recovered->association.acceptedRevision,
+                     beforeRecovery->association.acceptedRevision);
+        }
+    }
+}
+
+void TestProjectCatalog::crossProcessDuplicateOperationReturnsOriginalObservationWithoutRepeatingSideEffect()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    const QString sideEffectPath = temporary.filePath(QStringLiteral("side-effects.txt"));
+
+    const HelperResult first = runSelfHelper({QStringLiteral("idempotent-operation"), workspace, sideEffectPath});
+    QVERIFY2(first.started && first.finished, qPrintable(QString::fromUtf8(first.error)));
+    QCOMPARE(first.exitStatus, QProcess::NormalExit);
+    QCOMPARE(first.exitCode, 0);
+    QJsonObject firstObservation;
+    QVERIFY2(parseObject(first.output, firstObservation), qPrintable(QString::fromUtf8(first.output)));
+
+    const QByteArray sideEffectsAfterFirst = readBytes(sideEffectPath);
+    QCOMPARE(sideEffectsAfterFirst.count('\n'), 1);
+    QVERIFY(!sideEffectsAfterFirst.trimmed().isEmpty());
+
+    const HelperResult second = runSelfHelper({QStringLiteral("idempotent-operation"), workspace, sideEffectPath});
+    QVERIFY2(second.started && second.finished, qPrintable(QString::fromUtf8(second.error)));
+    QCOMPARE(second.exitStatus, QProcess::NormalExit);
+    QCOMPARE(second.exitCode, 0);
+    QJsonObject secondObservation;
+    QVERIFY2(parseObject(second.output, secondObservation), qPrintable(QString::fromUtf8(second.output)));
+    QCOMPARE(secondObservation, firstObservation);
+    QCOMPARE(readBytes(sideEffectPath), sideEffectsAfterFirst);
+
+    QString error, errorCode;
+    auto catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const auto persisted = catalog->queryOperationByIdempotencyKey(
+        QStringLiteral("cross-process-idempotency-key"), {}, &error, &errorCode);
+    QVERIFY2(persisted.has_value(), qPrintable(error));
+    QCOMPARE(int(persisted->phase), int(RProjectCatalog::OperationPhase::Observed));
+    QCOMPARE(persisted->association.observation, firstObservation);
+}
+
+void TestProjectCatalog::savePublicationReconcilesPartialFilesAndExternalReplacement()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    const QString source = temporary.filePath(QStringLiteral("source.ram"));
+    QVERIFY(!writeNativeModel(source, sampleModel(5.5)).isEmpty());
+    QString error, errorCode;
+    auto catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const QString documentId = catalog->registerDocument(source, QStringLiteral("Save source"), {}, &error);
+    QVERIFY2(!documentId.isEmpty(), qPrintable(error));
+    const auto document = catalog->document(documentId, &error);
+    QVERIFY2(document.has_value(), qPrintable(error));
+
+    const QString modelOutput = temporary.filePath(QStringLiteral("published.rbm"));
+    const QString linkOutput = temporary.filePath(QStringLiteral("published.ram"));
+    const QByteArray oldModelBytes = QByteArrayLiteral("old model bytes");
+    const QByteArray newModelBytes = QByteArrayLiteral("new accepted model bytes");
+    const QByteArray newLinkBytes = QByteArrayLiteral("new link bytes");
+    QVERIFY(writeBytes(modelOutput, oldModelBytes));
+    const QString oldModelHash = hashBytes(oldModelBytes);
+    auto lease = catalog->reservePublication(documentId, {modelOutput, linkOutput},
+                                             document->sourceRevision, &error, &errorCode);
+    QVERIFY2(lease, qPrintable(error));
+    RProjectCatalog::OperationArtifactIntent modelIntent;
+    modelIntent.path = modelOutput;
+    modelIntent.expectedPriorExists = true;
+    modelIntent.expectedPriorSha256 = oldModelHash;
+    modelIntent.intendedSha256 = hashBytes(newModelBytes);
+    RProjectCatalog::OperationArtifactIntent linkIntent;
+    linkIntent.path = linkOutput;
+    RProjectCatalog::OperationAssociation initialAssociation;
+    initialAssociation.candidateSha256 = hashBytes(newModelBytes);
+    const QJsonObject normalizedRequest{{QStringLiteral("commandId"), QStringLiteral("document.save")},
+        {QStringLiteral("sourceRevision"), document->sourceRevision}};
+    const auto intent = catalog->beginSavePublication(documentId, QStringLiteral("save-key-1"),
+        normalizedRequest, document->sourceRevision, {modelIntent, linkIntent}, lease,
+        initialAssociation, &error, &errorCode);
+    QCOMPARE(int(intent.disposition), int(RProjectCatalog::OperationDisposition::Created));
+    QVERIFY2(!intent.operation.operationId.isEmpty(), qPrintable(error));
+    QVERIFY2(catalog->bindSaveArtifactHash(intent.operation.operationId, linkOutput,
+        hashBytes(newLinkBytes), lease, &error, &errorCode), qPrintable(error));
+    RProjectCatalog::OperationAssociation accepted;
+    accepted.acceptedRevision = QStringLiteral("r1");
+    accepted.acceptedModelSha256 = hashBytes(newModelBytes);
+    QVERIFY2(catalog->advanceOperation(intent.operation.operationId,
+        RProjectCatalog::OperationPhase::Accepted, accepted, lease, &error, &errorCode), qPrintable(error));
+
+    QVERIFY(writeBytes(modelOutput, newModelBytes));
+    QVERIFY2(catalog->reconcileSavePublication(intent.operation.operationId, lease, &error, &errorCode), qPrintable(error));
+    auto partial = catalog->queryOperation(intent.operation.operationId, lease, &error, &errorCode);
+    QVERIFY2(partial.has_value(), qPrintable(error));
+    QCOMPARE(int(partial->phase), int(RProjectCatalog::OperationPhase::Unknown));
+    QCOMPARE(partial->artifacts.at(0).observedStatus, QStringLiteral("published"));
+    QCOMPARE(partial->artifacts.at(1).observedStatus, QStringLiteral("not_published"));
+
+    QVERIFY(writeBytes(linkOutput, newLinkBytes));
+    QVERIFY2(catalog->reconcileSavePublication(intent.operation.operationId, lease, &error, &errorCode), qPrintable(error));
+    auto complete = catalog->queryOperation(intent.operation.operationId, lease, &error, &errorCode);
+    QVERIFY2(complete.has_value(), qPrintable(error));
+    QCOMPARE(int(complete->phase), int(RProjectCatalog::OperationPhase::Observed));
+    QCOMPARE(complete->artifacts.at(1).observedStatus, QStringLiteral("published"));
+
+    const QByteArray externalBytes = QByteArrayLiteral("external replacement");
+    QVERIFY(writeBytes(modelOutput, externalBytes));
+    QVERIFY2(catalog->reconcileSavePublication(intent.operation.operationId, lease, &error, &errorCode), qPrintable(error));
+    const auto conflicted = catalog->queryOperation(intent.operation.operationId, lease, &error, &errorCode);
+    QVERIFY2(conflicted.has_value(), qPrintable(error));
+    QCOMPARE(int(conflicted->phase), int(RProjectCatalog::OperationPhase::Conflict));
+    QCOMPARE(conflicted->artifacts.at(0).observedStatus, QStringLiteral("conflict"));
+    QCOMPARE(readBytes(modelOutput), externalBytes);
+
+    lease.reset();
+    const QString unboundOutput = temporary.filePath(QStringLiteral("unbound.rbm"));
+    auto unboundLease = catalog->reservePublication(documentId, {unboundOutput},
+        document->sourceRevision, &error, &errorCode);
+    QVERIFY2(unboundLease, qPrintable(error));
+    RProjectCatalog::OperationArtifactIntent unboundIntent;
+    unboundIntent.path = unboundOutput;
+    const auto unbound = catalog->beginSavePublication(documentId, QStringLiteral("save-key-unbound"),
+        QJsonObject{{QStringLiteral("commandId"), QStringLiteral("document.save")},
+                    {QStringLiteral("variant"), QStringLiteral("unbound")}},
+        document->sourceRevision, {unboundIntent}, unboundLease, {}, &error, &errorCode);
+    QCOMPARE(int(unbound.disposition), int(RProjectCatalog::OperationDisposition::Created));
+    accepted.acceptedRevision = QStringLiteral("r2");
+    QVERIFY2(catalog->advanceOperation(unbound.operation.operationId,
+        RProjectCatalog::OperationPhase::Accepted, accepted, unboundLease, &error, &errorCode), qPrintable(error));
+    const QByteArray unknownBytes = QByteArrayLiteral("unattributed new file");
+    QVERIFY(writeBytes(unboundOutput, unknownBytes));
+    QVERIFY2(catalog->reconcileSavePublication(unbound.operation.operationId, unboundLease,
+        &error, &errorCode), qPrintable(error));
+    const auto unknown = catalog->queryOperation(unbound.operation.operationId,
+        unboundLease, &error, &errorCode);
+    QVERIFY2(unknown.has_value(), qPrintable(error));
+    QCOMPARE(int(unknown->phase), int(RProjectCatalog::OperationPhase::Unknown));
+    QCOMPARE(unknown->artifacts.first().observedStatus, QStringLiteral("unknown"));
+    QCOMPARE(unknown->artifacts.first().observedSha256, hashBytes(unknownBytes));
+    QCOMPARE(readBytes(unboundOutput), unknownBytes);
+}
+
+void TestProjectCatalog::partialSavePublicationSurvivesAbruptProcessExit()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    const QString source = temporary.filePath(QStringLiteral("source.ram"));
+    QVERIFY(!writeNativeModel(source, sampleModel(5.5)).isEmpty());
+    QString error, errorCode;
+    auto seedCatalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(seedCatalog, qPrintable(error));
+    const QString documentId = seedCatalog->registerDocument(source, QStringLiteral("Crash save source"), {}, &error);
+    QVERIFY2(!documentId.isEmpty(), qPrintable(error));
+    seedCatalog.reset();
+
+    const QString modelPath = temporary.filePath(QStringLiteral("published-model.rbm"));
+    const QString linkPath = temporary.filePath(QStringLiteral("published-link.ram"));
+    QVERIFY(writeBytes(modelPath, QByteArrayLiteral("old model bytes")));
+    const HelperResult child = runSelfHelper({QStringLiteral("save-partial"), workspace, documentId,
+                                              modelPath, linkPath});
+    QVERIFY2(child.started && child.finished, qPrintable(QString::fromUtf8(child.error)));
+    QCOMPARE(child.exitStatus, QProcess::NormalExit);
+    QCOMPARE(child.exitCode, ForcedCrashExitCode);
+    QCOMPARE(readBytes(modelPath), QByteArrayLiteral("new accepted model bytes"));
+    QVERIFY(!QFileInfo::exists(linkPath));
+
+    auto catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const auto pending = catalog->queryOperationByIdempotencyKey(
+        QStringLiteral("crash-save-key"), {}, &error, &errorCode);
+    QVERIFY2(pending.has_value(), qPrintable(error));
+    QVERIFY(pending->ownerRuntimeId != catalog->runtimeId());
+    QCOMPARE(int(pending->phase), int(RProjectCatalog::OperationPhase::Accepted));
+    QVERIFY2(catalog->reconcileSavePublication(pending->operationId, {}, &error, &errorCode), qPrintable(error));
+
+    const auto reconciled = catalog->queryOperation(pending->operationId, {}, &error, &errorCode);
+    QVERIFY2(reconciled.has_value(), qPrintable(error));
+    QCOMPARE(int(reconciled->phase), int(RProjectCatalog::OperationPhase::Unknown));
+    QCOMPARE(reconciled->association.diagnosticCode, QStringLiteral("partial_publication"));
+    QCOMPARE(reconciled->artifacts.size(), 2);
+    QCOMPARE(reconciled->artifacts.at(0).observedStatus, QStringLiteral("published"));
+    QCOMPARE(reconciled->artifacts.at(1).observedStatus, QStringLiteral("not_published"));
+    QCOMPARE(reconciled->artifacts.at(0).observedSha256,
+             hashBytes(QByteArrayLiteral("new accepted model bytes")));
+    QVERIFY(!reconciled->artifacts.at(1).observedExists);
+    QCOMPARE(readBytes(modelPath), QByteArrayLiteral("new accepted model bytes"));
+    QVERIFY(!QFileInfo::exists(linkPath));
+}
+
+void TestProjectCatalog::closeRetryQueueSurvivesReopenAndCompletes()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString workspace = temporary.filePath(QStringLiteral("workspace"));
+    QString error, errorCode;
+    auto catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const QString retryId = uuid();
+    const QString operationId = uuid();
+    const QString journalPath = temporary.filePath(QStringLiteral("close.journal"));
+    RModelCommandSession::JournalOptions journalOptions;
+    journalOptions.path = journalPath;
+    auto session = std::make_unique<RModelCommandSession>(sampleModel(1.0), journalOptions);
+    const QJsonObject payload = session->prepareCloseRetry(retryId, operationId, &error);
+    QVERIFY2(!payload.isEmpty(), qPrintable(error));
+    QVERIFY2(catalog->queueCloseRetry(retryId, operationId, QStringLiteral("journal_write_failed"),
+                                      payload, {}, &error, &errorCode), qPrintable(error));
+    QCOMPARE(catalog->pendingCloseRetries({}, &error, &errorCode).size(), 1);
+    QVERIFY2(session->closeWithRetryPayload(payload, &error), qPrintable(error));
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY2(catalog->completeCloseRetry(retryId, {}, &error, &errorCode), qPrintable(error));
+    QCOMPARE(catalog->pendingCloseRetries({}, &error, &errorCode).size(), 0);
+
+    const QString replayRetryId = uuid();
+    const QString replayOperationId = uuid();
+    const QString replayJournalPath = temporary.filePath(QStringLiteral("replay-close.journal"));
+    RModelCommandSession::JournalOptions replayOptions;
+    replayOptions.path = replayJournalPath;
+    auto interruptedSession = std::make_unique<RModelCommandSession>(sampleModel(2.0), replayOptions);
+    const QJsonObject replayPayload = interruptedSession->prepareCloseRetry(
+        replayRetryId, replayOperationId, &error);
+    QVERIFY2(!replayPayload.isEmpty(), qPrintable(error));
+    QVERIFY2(catalog->queueCloseRetry(replayRetryId, replayOperationId,
+        QStringLiteral("journal_write_failed"), replayPayload, {}, &error, &errorCode), qPrintable(error));
+    interruptedSession.reset();
+
+    catalog.reset();
+    catalog = RProjectCatalog::open(workspace, &error);
+    QVERIFY2(catalog, qPrintable(error));
+    const auto pending = catalog->pendingCloseRetries({}, &error, &errorCode);
+    QCOMPARE(pending.size(), 1);
+    QCOMPARE(pending.first().retryId, replayRetryId);
+    QCOMPARE(pending.first().operationId, replayOperationId);
+    QCOMPARE(pending.first().payload, replayPayload);
+    QVERIFY2(RModelCommandSession::replayCloseRetry(pending.first().payload, &error, &errorCode), qPrintable(error));
+    const QByteArray replayedBytes = readBytes(replayJournalPath);
+    QVERIFY(!replayedBytes.isEmpty());
+    QVERIFY2(RModelCommandSession::replayCloseRetry(pending.first().payload, &error, &errorCode), qPrintable(error));
+    QCOMPARE(readBytes(replayJournalPath), replayedBytes);
+    QVERIFY2(catalog->completeCloseRetry(replayRetryId, {}, &error, &errorCode), qPrintable(error));
+    QCOMPARE(catalog->pendingCloseRetries({}, &error, &errorCode).size(), 0);
+    QVERIFY2(catalog->completeCloseRetry(replayRetryId, {}, &error, &errorCode), qPrintable(error));
+
+    const QString externalRetryId = uuid();
+    const QString externalOperationId = uuid();
+    const QString externalJournalPath = temporary.filePath(QStringLiteral("external-close.journal"));
+    RModelCommandSession::JournalOptions externalOptions;
+    externalOptions.path = externalJournalPath;
+    auto queuedSession = std::make_unique<RModelCommandSession>(sampleModel(3.0), externalOptions);
+    const QJsonObject externalPayload = queuedSession->prepareCloseRetry(
+        externalRetryId, externalOperationId, &error);
+    QVERIFY2(!externalPayload.isEmpty(), qPrintable(error));
+    QVERIFY2(catalog->queueCloseRetry(externalRetryId, externalOperationId,
+        QStringLiteral("journal_write_failed"), externalPayload, {}, &error, &errorCode), qPrintable(error));
+    queuedSession.reset();
+    RModelCommandSession replacementSession(sampleModel(4.0), externalOptions);
+    QVERIFY2(replacementSession.close(), qPrintable(error));
+    const QByteArray externalBytes = readBytes(externalJournalPath);
+    QVERIFY(!externalBytes.isEmpty());
+    QVERIFY(!RModelCommandSession::replayCloseRetry(externalPayload, &error, &errorCode));
+    QCOMPARE(errorCode, QStringLiteral("journal_conflict"));
+    QCOMPARE(readBytes(externalJournalPath), externalBytes);
+}
+
+void TestProjectCatalog::closeRetryQueueReplaysAcrossBothProcessCrashWindows()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QStringList crashWindows{QStringLiteral("after-queue"), QStringLiteral("after-journal")};
+    for (const QString &crashWindow : crashWindows)
+    {
+        const QString workspace = temporary.filePath(QStringLiteral("workspace-%1").arg(crashWindow));
+        const QString journalPath = temporary.filePath(QStringLiteral("journal-%1.json").arg(crashWindow));
+        const QString retryId = uuid();
+        const QString operationId = uuid();
+        const HelperResult child = runSelfHelper({QStringLiteral("close-retry"), workspace, journalPath,
+                                                  retryId, operationId, crashWindow});
+        QVERIFY2(child.started && child.finished, qPrintable(QString::fromUtf8(child.error)));
+        QCOMPARE(child.exitStatus, QProcess::NormalExit);
+        QCOMPARE(child.exitCode, ForcedCrashExitCode);
+
+        const QByteArray journalBeforeReplay = readBytes(journalPath);
+        if (crashWindow == QStringLiteral("after-queue"))
+            QVERIFY(!QFileInfo::exists(journalPath));
+        else
+        {
+            QVERIFY(!journalBeforeReplay.isEmpty());
+            QVERIFY(journalBeforeReplay.contains("model.session.close"));
+        }
+
+        QString error, errorCode;
+        auto catalog = RProjectCatalog::open(workspace, &error);
+        QVERIFY2(catalog, qPrintable(error));
+        const auto pending = catalog->pendingCloseRetries({}, &error, &errorCode);
+        QCOMPARE(pending.size(), 1);
+        QCOMPARE(pending.first().retryId, retryId);
+        QCOMPARE(pending.first().operationId, operationId);
+        QVERIFY2(RModelCommandSession::replayCloseRetry(pending.first().payload, &error, &errorCode),
+                 qPrintable(error));
+        const QByteArray journalAfterReplay = readBytes(journalPath);
+        QVERIFY(!journalAfterReplay.isEmpty());
+        QVERIFY2(RModelCommandSession::replayCloseRetry(pending.first().payload, &error, &errorCode),
+                 qPrintable(error));
+        QCOMPARE(readBytes(journalPath), journalAfterReplay);
+        QVERIFY2(catalog->completeCloseRetry(retryId, {}, &error, &errorCode), qPrintable(error));
+        QCOMPARE(catalog->pendingCloseRetries({}, &error, &errorCode).size(), 0);
+        QVERIFY2(catalog->completeCloseRetry(retryId, {}, &error, &errorCode), qPrintable(error));
+        QCOMPARE(readBytes(journalPath), journalAfterReplay);
+    }
+}
+
 void TestProjectCatalog::cliQueryIsReadonlyJsonOnly()
 {
     QTemporaryDir temporary;
@@ -1061,5 +1856,13 @@ void TestProjectCatalog::cliQueryIsReadonlyJsonOnly()
     QVERIFY(QFileInfo::exists(QDir(workspace).filePath(artifact.value(QStringLiteral("relativePath")).toString())));
 }
 
-QTEST_GUILESS_MAIN(TestProjectCatalog)
+int main(int argc, char *argv[])
+{
+    QCoreApplication application(argc, argv);
+    const QStringList arguments = application.arguments();
+    if (arguments.size() >= 2 && arguments.at(1) == QStringLiteral("--wf05-helper"))
+        return runCrashHelper(arguments.mid(2));
+    TestProjectCatalog test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "tst_project_catalog.moc"

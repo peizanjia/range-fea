@@ -361,7 +361,7 @@
       "id": "WF-05",
       "title": "Durable operations and checkpoint recovery",
       "status": "in_progress",
-      "statusReason": "WF04已验收，按最新持续开发授权启动；恢复契约准备已冻结，先持久操作/发布账本，再周期接受检查点与both恢复/UI，尚未产品验收。",
+      "statusReason": "持久账本/关闭保存/接受检查点/独立恢复已实现；最终Release、8/8整合、Windows4/4、安装私有SDK5/5和独立终审通过。旧127/129失败已修，待冻结完整132项回归和逐条验收。",
       "priority": "P0",
       "effort": "XL",
       "dependsOn": [
@@ -397,7 +397,7 @@
       "id": "WF-06",
       "title": "SSE and activity feed",
       "status": "in_progress",
-      "statusReason": "同步体验线已授权，依赖WF01完成；有界SSE核心已准备但未注册/编译，接下来公开接口与真实Widget/取消/滚动/非流式兼容接线，尚未验收。",
+      "statusReason": "有界SSE/代次隔离/增量Markdown/可信活动已实现；离线协议与控件、Windows4/4、DeepSeek真实流式编辑/宿主核对/追问3/3及独立终审通过，待冻结完整132项回归和逐条验收。",
       "priority": "P1",
       "effort": "M",
       "dependsOn": [
@@ -527,8 +527,8 @@
     {
       "id": "WF-10",
       "title": "Comparison and long plots",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "依赖WF03/04已验收；先实现独立时程分析/显示抽样契约，GUI与共享service接线由Root在WF05/06闭合后整合。尚未验收。",
       "priority": "P1",
       "effort": "L",
       "dependsOn": [

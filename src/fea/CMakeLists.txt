@@ -666,7 +666,10 @@ if(RANGE_BUILD_TESTS)
         tests/tst_agent_task_runner.cpp tests/tst_solver_snapshot.cpp tests/tst_extension_widget.cpp
         tests/tst_agent_event_view.cpp tests/tst_agent_conversation_widget.cpp tests/tst_project_session.cpp
         tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp tests/tst_native_results_widget.cpp
-        tests/tst_current_model_workflow.cpp ${_fea_lifecycle_sources})
+        tests/tst_current_model_workflow.cpp tests/tst_recovery_interaction.cpp
+        tests/tst_model_commit_recovery.cpp ${_fea_lifecycle_sources})
+    set_source_files_properties(tests/tst_recovery_interaction.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_RECOVERY_INTERACTION_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
     set_source_files_properties(tests/tst_current_model_workflow.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_CURRENT_MODEL_TEST_FIXTURE=\"$<TARGET_FILE:range-workflow-native-import-fixture>\"")
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
@@ -694,6 +697,14 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_gui_model_operations COMMAND tst_gui_model_lifecycle --model-operations -o -,txt)
     add_test(NAME tst_native_results_widget COMMAND tst_gui_model_lifecycle --native-results-widget -o -,txt)
     add_test(NAME tst_current_model_workflow COMMAND tst_gui_model_lifecycle --current-model-workflow -o -,txt)
+    add_test(NAME tst_recovery_interaction COMMAND tst_gui_model_lifecycle --recovery-interaction -o -,txt)
+    add_test(NAME tst_model_commit_recovery COMMAND tst_gui_model_lifecycle --model-commit-recovery -o -,txt)
+    set_tests_properties(tst_recovery_interaction tst_model_commit_recovery PROPERTIES TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_recovery_interaction tst_model_commit_recovery PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(tst_current_model_workflow PROPERTIES TIMEOUT 300)
     if(WIN32)
         set_tests_properties(tst_current_model_workflow PROPERTIES ENVIRONMENT
@@ -709,6 +720,9 @@ if(RANGE_BUILD_TESTS)
     set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session tst_native_job_registry tst_gui_model_operations PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1"
         TIMEOUT 120)
+    # Recovery adds two real process interruptions, a continued solve, and
+    # registry integrity checks to this suite; this is its harness deadline.
+    set_tests_properties(tst_native_job_registry PROPERTIES TIMEOUT 300)
     if(WIN32)
         set_tests_properties(tst_gui_model_lifecycle tst_gui_host_context tst_agent_task_runner tst_solver_snapshot tst_extension_widget tst_agent_event_view tst_agent_conversation_widget tst_project_session tst_native_job_registry tst_gui_model_operations PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

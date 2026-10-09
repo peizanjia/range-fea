@@ -1,5 +1,79 @@
 # 续作交接
 
+## 2026-10-09 10:02 当前入口：实现冻结与完整132项验收
+
+- 目标仍active到顺序4，WF05/06尚未done；所有当前实现/审查代理已完成。Root配置/skill/凭据/记忆保持原样，不push。执行Luna max，reviewer Root继承；没有新增不必要升级。
+- 时钟实际缺陷已修并独立复审，solver子模块已提交 `450acbdb90ee72128f244400c5352e24b7c62fdb`；AI `451b134ad1169b7e9b1c2a28669749ff58bad484`。Root即将提交全部授权实现及WF10纯模块准备，验收文档仍明确pending最终full；不要从已提交推断done。
+- 全目标Release `canonical-final-all-build.log`通过；三GUI Host退出窗口+结构恢复/回滚/cable精确状态+CLI+真GUI恢复+Workflow真恢复8/8通过102.78s，`canonical-integrated-regression.log`。原zero/checkpoint10与nonzero/two恢复15 Qt案例、零skip3.982s，`canonical-clock-cable.txt`。旧完整127/129、1284.99s日志保留，两个失败已修；不能将旧log称通过。
+- 最新Windows恢复/同barrier双提交4/4、零skip16.554s，`recovery-native-window-final.txt`；图片 `recovery-native-window-final/evidence`来源不可用文案已实际查看。三Host崩溃fixture覆盖approve后/execute前、livecommit后/观察前、Observed后；不声称coreaccept/commit和snapshotpublish/Observed之间有精确钩子。
+- 安装树已更新，`canonical-final-install.log`通过；仅installedbin+Windows PATH、privatePython3.13.5，SDK断言installedshare，真实五恢复case5/5通过44.228s，`installed-sdk-recovery.log`。DeepSeek真实stream编辑/宿主核对/追问3/3、零skip5.123s，4请求30530tokens，`WF-06/live-stream-provider.txt`；无凭据值输出。
+- WF10 puremath12/12、fakeverified-broker adapter7/7通过，`WF-10/pure-final-test.log`、`adapter-fixed-test.log`；首次adapter测试KeyError属fixture路径误写已修，不放宽production。新series_service与series_analysis仅准备，无RPC/GUI接线、不宣称WF10完成。两个mandatory纯模块suite已注册；`freeze-inventory.json`实际132/132、9组，CI工具14/14。
+- 独立clock/fixture/release终审均无新materialfinding；最后review明确final frozen132 full仍pending。Root下一步实现freeze提交，OMP_NUM_THREADS=4（现有CI配置）完整132项串行跑、保存exit/log；通过后更新WF05/06逐条证据/status/验收提交，然后WF07及后续按依赖持续推进。不要以部分绿色退出。
+
+## 2026-10-09 当前入口：最终回归发现及模型提交崩溃补验
+
+- 后续实测：session83214已结束exit8，完整127/129通过、2失败、1284.99s。host旧断言修正+新增真实模型提交fixture已构建并focused2/2通过3.86s，`commit-recovery-focused.log`；首次fixture编译nested QJsonObject缺显式类型失败已修，不作为通过证据。
+- Windows真恢复与fresh双进程提交竞争4/4、零skip17.093s，`recovery-native-window.txt`；保留temp roots及复制 `recovery-native-window/evidence` 三截图，Root已查看。截图发现无verified结果仍称Template snapshot，Root已修native_results_widget为空provenance时明确不可用、加真实恢复assert；此UI小修尚未重建。
+- DeepSeek本地授权凭据真实流式GUI edit+host核对+追问3/3、零skip5.123s；4请求30530total_tokens，`WF-06/live-stream-provider.txt`。没有输出凭据或HTTP正文。这是WF06真实供应商联调，不冒充WF13完整供应商故事。
+- cable直接safe QtTest报告 `cable-control-diagnostic.txt` 查明真实restart clock defect：full step12为0.059999999999999998，restart segment endpoint+localdt为0.060000000000000005；controller把nextTime转17位opaque bytes，导致controllerStateSHA精确不同。Luna只读定位后Root分配worker仅solver rsolver.cpp/rsolverstress.cpp+该test：固定步结构restart未来schedule从持久全局origin/absolute ordinal产生，保留接受历史/其他time语义；linear control nextTime读真实schedule。实现/回归待完成，不删case/放宽哈希。
+
+- 持续目标仍 active 到顺序4；Root HEAD bcc3446，WF01–04 done，WF05/06/10 in_progress。最新 astra-orchestrator 已重读：有界执行 Luna max，具体推理证据才升级；reviewer 由 Root 直接创建并继承。用户配置、凭据、记忆未改，不 push。
+- 共享完整129项 CTest正在运行，exec session83214，日志 `build/audit-20261009/WF-05/final-full-ctest.log`。先核对它结束，再构建/CTest/安装。已发现 structural_cable_control 与 gui_host_context 失败；后者旧 memory_only 断言已改为真实 accepted_snapshot/来源哈希检查，待编译运行。纜索失败由 Luna 只读定位；不能把本轮称全通过。
+- 真实接受边界 CLI 四业务案例+init/cleanup 6/6、零skip，`accepted-boundary-cli-fixed.txt`。真正两次中断10/15并续到20的q/v/a/work/20唯一幀与源包不变3/3、零skip42.438s，`live-process-numeric.txt`。新鲜GUI恢复及两进程同一提交barrier CTest通过10.17s，`recovery-same-submit-barrier.log`。
+- 完整 native registry14 Qt案例通过207.549s，`native-registry-full-detail.txt`；旧120s总suite deadline使六目标集成仅5/6，已在最终公共属性后单独设300s、配置构建通过。完整129内registry实际通过230.54s。只调整测试suite时间，不改变数值/交互门槛。
+- 新 `tst_model_commit_recovery.cpp` 已接 lifecycle dispatcher/CMake/必跑manifest，现应注册130项；尚未构建运行。自然 synchronous document.changed 边界在活模型提交后/接受快照与观察前真正_Exit86；另一边界为command.execute完成Observed后_Exit。提交前core已接受以及snapshot发布/ledger观察间没有自然回调，本fixture不冒称覆盖这两微边界。
+- 本地 `.env.local` 存在但未读取/输出值；既有 DeepSeek 实际GUI命名测试增加 `RANGE_TEST_DEEPSEEK_STREAM=1` 控件opt-in，后续使用既有授权凭据入口验证真实流式，不打印HTTP错误正文/密钥。当前环境变量无key不等于本地凭据缺失。新opt-in尚未运行。
+- 全目标Release此前通过；安装仍旧版本。安装后真实恢复脚本已准备 `build/audit-20261009/WF-05/installed_recovery_runtime.py`，断言SDK来自install share；尚未执行。下一步完整回归结束后补两失败、真模型提交fixture、Windows恢复/供应商流式、安装SDK恢复、独立终审、实现freeze与逐条验收，再WF07及后续推进。
+
+## 2026-10-09 07:30 后当前入口：接受边界暂停与逻辑恢复锁
+
+- 目标仍active到顺序4，根HEAD仍bcc3446；不是退出/暂停。Task状态4done、3in_progress(WF05/06/10)、7planned；WF09没有提前done。用户配置/凭据/记忆未动，未push。子模块已提交AI451b134、solver c968aec，根引用尚待整合。
+- 原生恢复真实续算已越过capture/seed并跑到20。修复了历史误写原input包（明确sourceHistory只读/targetHistory新目录）、内部reserved basename碰撞（恢复私有binary recovery-solver-input.rbm）、漏传CLI --restart；普通用户native-checkpoint-input命名反例通过。数值/二次中断案例仍未通过整体验收：GUI cancel、随后验证OwnChild Terminate均因观察/验证延迟推进到20，latest20或LINK20，reconcile_required是正确判定；没有降门槛/改原target20。实际日志logical-lease-persistence-numeric.txt latest20；早先native-restart-flag-test.txt second reconcile，保留D: audit/native-frozen-cases原始MODEL/log。
+- 独立审查新增P1跨进程同时续作已实现project+logicalJob QLockFile，在刷新/资格/暂存前获取，移交task并保留；有界刷新已加载持久记录并重建单一sourceJobId后继链，旧祖先返回latestAttemptJobId/reconcile。仅无任何committed record的orphan/precommit目录忽略并诊断，坏已提交链不fallback。updateNativeJob返回真正落盘成功；失败时Task+Manager共同保留逻辑lease，不能把内存terminal当durable。源码复审结构关闭P1，实际双进程竞争测试待跑。
+- 同一二次中断条件在GUI取消和现场查PID/hash后Terminate两种实测方法失败。按新skill升级仅一个Sol medium只读推理：外部journal watcher即使预验证handle也不提供同步ACK，现有IPC仅STOP，不能保证15前20。Root决定实施实际生产accepted-boundary暂停基础，属WF05恢复整合前置及后续WF09共用基础，非测试flag；RECOVERY_CONTRACT已明确，不修改10steps/1s周期或q/v/a/work，不额外checkpoint15。
+- 新CLI --pause-at-accepted-seq=N +--native-execution-state=abs，要求checkpoint/context+任务IPC身份；完整事务+resultjournal flush+正常checkpoint处理后发布range.native-execution-state/v1 ACK并等待RESUME/STOP。ACK真实accepted/time/contexthash/checkpointSHA/seq。GUI trusted C++ requestNativeAcceptedBoundaryPause(jobId,seq,error)仅owned queued，先持久operational facts再添加CLI，不改模型/输入包；perform-start与配置同mutex，settertry-lock拒绝同步nativeJobUpdated再入。
+- 测试新tst_recovery_interaction.cpp已注册129 mandatory/9组：真实GUI producer queuegate后声明pause10、验证ACK与10实际frame稳定100ms后只Terminate唯一匹配PID+exeSHA的自身直接solver child，再GUI _Exit86；freshconsumer实际鼠标Check/Approve、另文档draft不变/host接受snapshot事实、取消queued后继。另freshroot两个contender先各自query、barrier一次并发submit，winner保持queued直到双方结果，要求exact1accepted/1reconcileOrLockReject。test-only verifiedchildwrapper供numeric casepause15后terminate；不再指望外部时序恰巧停15。
+- Boundary primitive worker、GUI worker及UI tester均已停止写入，Root串行构建会话6939 accepted-boundary-gate-build.log，目标tst_solver_audit_cli+tst_gui_model_lifecycle；续作先核对结束/退出码。新增solverAudit真实pause15/latest10冻结、错task/坏/fragment IPC、resume vscontinuous、pause10 STOP两case未执行。独立reviewer wf05_boundary_gate_review只读当前实现。
+- WF06实际Windows控件native-stream-window-final.txt 4/4零skip1.183s；截图stream-markdown-tail/stream-activity已查看，草稿/选择、滚动/列表/表格/代码及可信活动卡正常，修复了流式后superseded标题粘连。没有凭据值输出；当前进程DEEPSEEK_API_KEY/OPENAI_API_KEY均未设置，这不证明产品独立凭据存储没有key；真实供应商联调未执行，不能冒称通过。
+- WF05其余最终证据：真实workflow恢复5/5重跑54.74s；runtime qualification unit15/15；CLI badlatest/oldMODEL拒绝4/4；catalog真正_Exit86跨进程fixtures通过4.67s；保存外部替换3/3及四目标GUI regression全59.85s；独立复审关闭相应P1/P2。终态持锁与新pause/genuineUI/竞争仍须运行及复审，再全目标/full129/安装/privateSDK/实现freeze。
+- WF10纯数学模块12/12、独立review闭合PSD overflow/underflow与recordOrdinal误比；新series_analysis两个文件尚未CMake/service/GUI整合。WF12只读准备已经核实本机SDK D:/Windows Kits/10 10.0.26100、VS18 v145/MSVC19.51.36257，privatePython3.13.5/NumPy2.2.6/SciPy1.15.3；AppContainer/LPAC+JobObject候选及官方资料在researcher结果，没有创建profile/执行/探测真实秘密，没有实现WF12。
+- 下一步具体：6939成功后先两个nativeExecutionGate* namedcase(真实CLI)，再nativeRecoveryContinues... withRANGE_NATIVE_JOB_AUDIT_DIR，随后tst_recovery_interaction离屏与Windows。查所有失败本机日志/ACK/原始MODEL，修复/复审；然后WF05/06 freeze+验收，WF07及余项继续依赖开发。不要以部分绿色结束目标。
+
+## 2026-10-09 06:40 后当前入口：WF05/06闭合，WF10独立分析已启动
+
+- 持续目标仍active到顺序4，不是退出/暂停。根HEAD仍bcc3446；WF01–04 done、WF05/06/10 in_progress，其余planned。当前skill：有界执行Luna max，reviewer直接继承Root；用户配置/凭据/记忆未改，未push。
+- AI子模块已本地提交451b134（bounded SSE/toolturn/protocol），solver子模块已提交c968aec（完整接受步observer+独立默认conditioner恒等用例）；根引用待整合冻结。WF05/06尚未done、最终根freeze/全128项/安装/真实GUI验收仍待完成。
+- 原生history known-invalid manifest必须failclosed修复已通过真实namedcase：ancestor-failclosed-test.txt 3/3、0skip、38.661s。剩下nativeRecoveryContinues...暂存后资格conflict：frozen input/package guard。新native-package-trace首次编译bool/unique_ptr重名失败已改snapshotCaptured；Root构建会话33202（native-package-trace-fixed-build.log）需先核对结束/退出码再跑一个namedcase，所有构建/CTest/native/install串行。
+- 独立WF05终审新增三项已源码闭合：逐文件QSaveFile提交前重查冻结prior存在/SHA（save-guard-test.txt 3/3、0skip336ms；四目标regression全通过59.85s）；恢复当前solver/native/python/nativeResults路径+SHA必须与原binding相同（runtime-binding-unit.log15/15；真实五故事重跑runtime-binding-real-test.log通过54.74s）；CLIconstructor/readLatest/publish禁止badlatest自动fallback lastvalid（checkpoint-failclosed-test.txt4/4、0skip3.284s，包括坏latest+旧MODEL反例）。最终hash检查与OS rename之间的非协作writer竞态已文档声明，不夸称OS compare-and-swap。
+- 新真正跨进程catalog/helper _Exit(86)覆盖Intent/Accepted/ArtifactPublished/Observed、幂等不再产生副作用、部分save、关闭queue/journal窗口。首次两项失败缺code属测试schemabug已修；crash-boundaries-fixed-test.log CTest通过4.67s。它不冒充GUI host模型提交进程崩溃覆盖；新真实恢复窗口故事代理还在制作此项及nativeUI故事。
+- WF10依赖03/04已满足，独立pure模块series_analysis.py与test_series_analysis.py已完成首轮实现/复审修复：精确来源/单位/时间，Hann/rect单边幅值PSD、phase/error、首最小最大末显示桶，aggregate origins4MiB/200k节点。独立审查PSD overflow/underflow及错误ordinal比较已修，Root12/12通过0.082s；GUI/service/分页/持久布局/真实性能仍未整合验收。运行前契约docs/WF10_SERIES_CONTRACT.md冻结5k×4真实FE与显示1000点、响应/读取/内存门槛，不能按实测调门槛。
+- 活动所有权续作时重新查agents：native job worker仅manager/task/nativeJobRegistry三文件；新recovery_window_story tester仅新tst_recovery_interaction.cpp；WF10math只新pure模块/新test，reviewer只读。Root拥有Session/ModelIO/runner/AgentWidget/WorkflowWidget/service/CMake/inventory/docs与串行验证。Session保存修复worker已完成；无其它作者继续写这些文件。Agent conversation测试新增可选真实窗口截图目录RANGE_AGENT_STREAM_EVIDENCE_DIRECTORY，尚未运行新Windows截图。
+- 下一具体动作：待33202构建结束且成功，运行nativeRecoveryContinues...并输出native-package-trace.txt，检查原输入及包before/after哈希与逐文件差异，修真实原因，随后全nativeRegistry回归/真实窗口故事/安装私有SDK/最终独立复审/全128冻结回归。然后WF07及其后按依赖持续推进，不以部分绿色结束。
+
+## 2026-10-09 06:10后 WF05/WF06 最新验证断点（覆盖下方入口）
+
+- 持续目标 active 到顺序4，HEAD仍bcc3446；WF05/06尚未冻结或done。Root构建/CTest串行；Luna max有界执行，reviewer继承Root，未改配置/凭据/记忆，未push。
+- 最新build/audit-20261009/WF-05/seed-close-state-focused.log：8目标7通过197.09s；SSE core、独立conditioner恒等用例、runner、conversation、projectSession（含精确关闭重试重开观察）和GUI modelOperations通过；workflow_recovery_runtime **真实5/5**50.18s通过。仅nativeJobRegistry两项失败（known ancestor manifest篡改被错误legacy降级，native GUI recover eligibility conflict）。不能把8目标全称通过。
+- 原生GUI EFS rename错误已解决为不可变JSON blob+独占空commit marker原子提交；正常未加密路径仍QSaveFile。真实C: EFS持久重开/坏记录case通过。跨进程timestamp taskID碰撞由有界持久可用性检查修复。CurrentSource/Root Goal普通模式无旧批准重放。
+- 真实Workflow五故事含active完成/passive待启动、passive10步部分、active10步部分、最后checkpoint后终态记账前退出及workspace锁。最初假fixture null/JSON、NameError缺record_progress、controller handshake context输入SHA、legacy origin必须null、targetfile_hash(str)、连续oracle缩减/物理坐标混淆及子进程环境不一致均已修，失败日志全保留。连续oracle与SDK子进程使用同一允许环境快照和原attempt cwd/控制argv。
+- 控制状态：native inspect新增controlStateComponents，使用现有RCCE/conditioner decoder；逻辑SHA/configSHA/count严格，默认no-delay/hold1/no-noise策略由独立解析用例证明held==实际applied严格、delay空；跨命令仍原2e-10门槛，q/v/a/work和文件SHA原门槛不动。跨浮点轨迹比较整个RCCE SHA是错误泛化（实际差4.44e-16 N），契约已记录精确/浮点拆分，独立Luna只读复审闭合。没有对失败数字调新阈值。原cable字节相等fixture保留。
+- root roothost+runner+WorkflowWidget已接native analysis.recover新的preview/approval和opaque检查点/固定剩余范围；Task明确isNativeRecoveryTask禁止acceptSolverResult写原文档，GUI seed/latest在queue前发布，第二次15步崩溃仍选10步baseline；这些新GUI续作仍待两项故障闭合及最终回归。nativeJob页包含interrupted，其他文档/草稿不被恢复操作覆盖。
+- 此刻Root构建会话74239用于native资格原因诊断新assert（是否结束续作时重查）；native worker /root/wf05_native_job_reopen拥有manager/task/nativeJobRegistry test，已请求运行一个命名case但Root须先结束build再明确串行授权。其它agents已完成，勿凭旧列表重复调度。Root不再并行改其文件。
+- 新手册docs/RECOVERY_OPERATIONS.md在install清单；SDK recovery()/preview_recovery()；product knowledge自动检索收录等待WF08，不冒充已完成。128必跑/9组inventory通过，CI工具14/14；完整128/128、最后实现freeze、独立终审、本机私有SDK/真实窗口/安装验收未完成。随后继续WF07和顺序3/4，不能提前退出。
+
+
+## 2026-10-09 WF05/WF06 实施中：恢复与流式审查修复（最新入口）
+
+- 持续目标仍 active，授权到顺序4；不是暂停/退出。根HEAD仍 bcc3446，WF01–04 done、WF05/06 in_progress，后续不能标为已完成。最新调度 skill 已重读：有界执行 Luna max，独立 reviewer 默认继承根；具体未解决推理才按证据升 Sol。用户配置/凭据/记忆不改，不push。
+- 当前工作树新增持久operations账本/原始观察、活runtime锁、GUI保存预写意图和暂存哈希、精确关闭重试队列；批准token仅内存，v1→v2迁移丢弃旧token。接受态检查点独立outputFrequency，最多10步或1sim s，MODEL/envelope不可变，latest/lastvalid原子指针；CLI optin和原生GUI持久job索引已接线。WF06 SSE+增量文本+可信活动卡已接线。均尚未完成整体验收/提交。
+- 实际证据：WF05 approval-and-recovery-contract.log 8/8；recovery单元最初10/10（后续prefix实现变化须重跑）；telemetry-unit.log 27项、2个既有Windows无创建symlink权限skip。checkpoint-ledger-focused.log 7目标6通过，仅目录观察可选message bug失败；修复后project-catalog-fixed-test.log单目标通过2.93s。checkpoint/rollback/CLI和SSE测试通过，SSE后续审查修复须最终复跑。GUI整合编译widget-integrated-build.log和widget-review-fixes-build.log通过；widget-focused.log五目标均失败，未验收。
+- GUI失败已分类：多数来自原生registry QSaveFile.commit在C: EFS目录返回ERROR_NOT_SAME_DEVICE（registry-diagnostic.txt明确记录，2pass1fail）；Luna原worker调查并实施保持原子性的同目录Windows EFS写入兼容，禁止directWriteFallback。其余是旧直接保存测试无预绑hash、同幂等key已知拒绝却期待重执行、SSE fixture等待短暂finished=1；根已修接口/测试语义，待重建回归。不降门槛、不把环境问题当Sol升级理由。
+- WF06独立审查发现私有reasoning_content丢失、无效工具字段错误不粘住、同代批准/活动同步重入、旧actionCompleted清新提案、taskId引用被新任务改写；根已修并加回归。DeepSeek官方thinking_mode确认后续tools请求需要完整私有字段；只留当前协议内存，不显示/导出/持久化。
+- WF05独立审查重点：保存二次绑定的前置hash检查、诊断code大小写、已知执行拒绝未观察；根已修，待回归。恢复prefix历史遗漏、target checkpoint原始MODEL不能当LINK、恢复中再次崩溃丢baseline；workflow worker正在修，使用已有reusedHistory/legacy-history-unattributed语义与真实frame journal，不得把历史冒充新produced。telemetry worker已交付inheritedSelection/attempt合并、接受步cursor与replay，仅pure unit验证。
+- 真进程强退测试已新增 test_recovery_runtime.py（5项：锁、both active完成/passive未开始、passive partial10、active partial10、终态检查点）；语法通过、未运行。连续native oracle用同原controller argv路径，q/v/a/work/support/fingerprints/state SHA固定门槛。CMake/必跑清单已加recovery两目标与SSE，待确认最新inventory128并最终全套。
+- 活动所有权续作须重查agents：wf05_workflow_recovery只jobs.py/recovery.py/test_recovery.py；wf05_native_job_reopen只GUI solver manager/task/nativeJob测试；其它完成代理不继续写。根拥有service/Session/host/ModelIO/runner/workflowWidget/CMake/清单与串行build/CTest/install。最后运行会话工具返回ID续作重查，不能凭旧日志判断仍运行或重发副作用。
+
+
 ## 2026-10-09 WF03/WF04验收闭合，持续推进WF05/WF06（最新入口）
 
 - 最新用户目标持续到顺序4：WF05、同步WF06→07、WF08/09/10/14、WF11→12。目标仍active，不是退出/暂停；Root settings不改，执行Luna max优先，具体未解决推理再按新skill升Sol。难题经真实升级仍不能解可完整记录跳过，不标验收通过。

@@ -256,7 +256,12 @@ private slots:
         const auto operation = accepted.value(QStringLiteral("result")).toObject();
         QVERIFY(!operation.value(QStringLiteral("operationId")).toString().isEmpty());
         QCOMPARE(operation.value(QStringLiteral("documentId")).toString(), identity);
-        QCOMPARE(operation.value(QStringLiteral("persistence")).toString(), QStringLiteral("memory_only"));
+        QCOMPARE(operation.value(QStringLiteral("persistence")).toString(), QStringLiteral("accepted_snapshot"));
+        const auto acceptedSnapshot = operation.value(QStringLiteral("acceptedSnapshotRef")).toObject();
+        QVERIFY(!acceptedSnapshot.value(QStringLiteral("modelSha256")).toString().isEmpty());
+        QVERIFY(!acceptedSnapshot.value(QStringLiteral("sourceRevision")).toString().isEmpty());
+        QCOMPARE(acceptedSnapshot.value(QStringLiteral("modelSha256")),
+                 session->documentProjectContext(0).value(QStringLiteral("modelSha256")));
         QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 31u);
 
         const auto duplicate = host->handle(executeRequest());

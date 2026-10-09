@@ -8,6 +8,8 @@
 
 外部进程不能同时占有同一工作区。连接超时或进程退出后，重新打开工作区并查询持久化作业状态，再决定是否继续。GUI 宿主的内存事件游标与跨进程的工作区审计版本是不同概念。
 
+中断计算使用 `client.recovery(job_id)` 查询资格，`client.preview_recovery(job_id)` 生成绑定当前检查点的预览，再由可信调用方审阅并重新批准。旧批准不跨实例恢复；资格查询不会自动执行。固定目标、active/passive 部分复用、回放来源及冲突处理见 [恢复操作手册](RECOVERY_OPERATIONS.md)。
+
 若工作区已有宿主 `project.json`，服务保持相同 projectId；与既有工作流状态的身份冲突会明确拒绝。`client.project_catalog()` 读取目录元数据，`client.project_catalog(persistent_id)` 筛选文档；`client.project_snapshot(persistent_id)` 在返回冻结路径前检查来源版本与实际 SHA-256。元数据查询的 `snapshotBytesVerified=false` 不代表已验证模型字节。目录格式、CLI 创建方法及生命周期见 `PROJECT_CATALOG.md`。
 
 ## 安装后的独立客户端

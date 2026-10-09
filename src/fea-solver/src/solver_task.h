@@ -3,7 +3,9 @@
 
 #include <QObject>
 #include <QCoreApplication>
+#include <QByteArray>
 #include <optional>
+#include <memory>
 
 #include "solver_input.h"
 
@@ -34,6 +36,9 @@ class SolverTask : public QObject
         QString typedCheckpointFileName;
         QString typedControllerIdentity;
         QString typedConfigurationFileName;
+        QString nativeCheckpointDirectory;
+        QByteArray nativeCheckpointContextJson;
+        std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.

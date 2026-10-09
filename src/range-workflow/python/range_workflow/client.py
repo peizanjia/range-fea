@@ -151,6 +151,18 @@ class WorkflowClient:
         """Trusted file-owner operation, outside the product Agent tool catalog."""
         return self.request("model.source.register", {"catalogRoot": str(catalog_root), "snapshotRef": snapshot_ref})
 
+    def recovery(self, job_id):
+        """Read verified interrupted-job eligibility; never starts a job."""
+        return self.request("job.recovery.query", {"jobId": job_id})
+
+    def preview_recovery(self, job_id):
+        """Pin the original attempt/checkpoint in a fresh preview for approval."""
+        selected = self.recovery(job_id)
+        if selected.get("eligibility") != "recoverable":
+            raise WorkflowError("RECOVERY_UNAVAILABLE", selected.get("diagnostic", "Recovery is unavailable"))
+        return self.preview("workflow.recover", {"jobId": job_id,
+                            "qualificationSha256": selected["qualificationSha256"]})
+
     def native_result(self, job_id, operation="catalog", *, mode="active", **arguments):
         if operation not in ("catalog", "channels", "series", "summary"):
             raise WorkflowError("UNKNOWN_OPERATION", "Unsupported native result query")

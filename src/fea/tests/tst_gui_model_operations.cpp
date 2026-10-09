@@ -714,7 +714,11 @@ private slots:
         QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(identity)).second, beforeRevision);
         journalLock.unlock();
 
-        const auto accepted = commandExecute(session, previewId, QStringLiteral("gui-journal-failure-retry"));
+        const auto replayedRejection = commandExecute(session, previewId, QStringLiteral("gui-journal-failure-retry"));
+        QCOMPARE(replayedRejection.value("status"), rejected.value("status"));
+        QCOMPARE(replayedRejection.value("code"), rejected.value("code"));
+        QCOMPARE(session->modelCommandStamp(session->findModelByCommandIdentity(identity)).second, beforeRevision);
+        const auto accepted = commandExecute(session, previewId, QStringLiteral("gui-journal-failure-new-request"));
         QCOMPARE(accepted.value(QStringLiteral("status")).toString(), QStringLiteral("accepted"));
         QVERIFY(accepted.value(QStringLiteral("result")).toObject().value(QStringLiteral("auditRecorded")).toBool());
         const QJsonObject record = lastJournalRecord(host->journalPath(), QStringLiteral("entity.material.set"));

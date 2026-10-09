@@ -30,6 +30,7 @@
 #include <QTreeWidget>
 #include <QPlainTextEdit>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QPushButton>
 #include <QAccessible>
 #include "gl_widget.h"
@@ -47,6 +48,17 @@ public:
         cloudSessionManager = new RCloudSessionManager(this);
         cloudConnectionHandler = new RCloudConnectionHandler(cloudSessionManager, applicationSettings, this);
         aiAgentSettingsManager = new RAgentSettingsManager(this);
+        const QStringList testArguments = QCoreApplication::arguments();
+        if (testArguments.contains(QStringLiteral("--recovery-interaction"))
+            || testArguments.contains(QStringLiteral("--model-commit-recovery")))
+            for (const QString &role : {QStringLiteral("--producer"), QStringLiteral("--consumer"),
+                                       QStringLiteral("--contender")})
+            {
+                const int roleIndex = testArguments.indexOf(role);
+                if (roleIndex >= 0 && roleIndex + 1 < testArguments.size())
+                    QCoreApplication::setApplicationName(QStringLiteral("RangeFEA-WF05-")
+                        + QFileInfo(testArguments.at(roleIndex + 1)).fileName());
+            }
         initialize(false);
         setQuitOnLastWindowClosed(false);
     }
@@ -172,6 +184,12 @@ private slots:
         RAgentSettings settings(RAgentSettings::Type::DeepSeek);
         settings.setApiKey(apiKey);
         widget->setProviderSettings(settings);
+        if (qEnvironmentVariableIsSet("RANGE_TEST_DEEPSEEK_STREAM"))
+        {
+            auto *streaming = widget->findChild<QCheckBox *>("agentStreamResponses");
+            QVERIFY(streaming);
+            streaming->setChecked(true);
+        }
         auto *effort = widget->findChild<QComboBox *>("agentThinkingEffort");
         QVERIFY(effort);
         const auto effortName = qEnvironmentVariable("RANGE_TEST_DEEPSEEK_EFFORT", "off");
@@ -775,6 +793,8 @@ int runNativeJobRegistryTests(int argc, char **argv);
 int runGuiModelOperationsTests(int argc, char **argv);
 int runNativeResultsWidgetTests(int argc, char **argv);
 int runCurrentModelWorkflowTests(int argc, char **argv);
+int runRecoveryInteractionTests(int argc, char **argv);
+int runModelCommitRecoveryTests(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
@@ -806,7 +826,9 @@ int main(int argc, char **argv)
     const bool modelOperations = argc > 1 && QByteArray(argv[1]) == "--model-operations";
     const bool nativeResults = argc > 1 && QByteArray(argv[1]) == "--native-results-widget";
     const bool currentModelWorkflow = argc > 1 && QByteArray(argv[1]) == "--current-model-workflow";
-    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow)
+    const bool recoveryInteraction = argc > 1 && QByteArray(argv[1]) == "--recovery-interaction";
+    const bool modelCommitRecovery = argc > 1 && QByteArray(argv[1]) == "--model-commit-recovery";
+    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
@@ -821,7 +843,9 @@ int main(int argc, char **argv)
         : nativeJobs ? runNativeJobRegistryTests(argc, argv)
         : modelOperations ? runGuiModelOperationsTests(argc, argv)
         : nativeResults ? runNativeResultsWidgetTests(argc, argv)
-        : currentModelWorkflow ? runCurrentModelWorkflowTests(argc, argv) : QTest::qExec(&test, argc, argv);
+        : currentModelWorkflow ? runCurrentModelWorkflowTests(argc, argv)
+        : recoveryInteraction ? runRecoveryInteractionTests(argc, argv)
+        : modelCommitRecovery ? runModelCommitRecoveryTests(argc, argv) : QTest::qExec(&test, argc, argv);
     application.getSession()->clear();
     delete application.getMainWindow();
     SolverManager::getInstance().stopServer();

@@ -1,19 +1,31 @@
 #include <QtTest>
+#include <QCheckBox>
 
 #include <QComboBox>
+#include <QDir>
 #include <QFrame>
+#include <QFont>
 #include <QGridLayout>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QTextBrowser>
 #include <QTextBlock>
+#include <QTextCursor>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QUuid>
+#include <cstring>
+#include <utility>
 
 #include <rml_model.h>
 
@@ -34,7 +46,8 @@ public:
         if (!settings) return;
         for (const QString &key : {QStringLiteral("aiAgent/providerType"), QStringLiteral("aiAgent/endpoint"),
                                    QStringLiteral("aiAgent/model"), QStringLiteral("aiAgent/effort"),
-                                   QStringLiteral("aiAgent/automaticChanges"), QStringLiteral("aiAgent/apiKey")})
+                                   QStringLiteral("aiAgent/automaticChanges"), QStringLiteral("aiAgent/streamingResponses"),
+                                   QStringLiteral("aiAgent/apiKey")})
         {
             present.insert(key, settings->contains(key));
             if (present.value(key)) values.insert(key, settings->value(key));
@@ -99,6 +112,200 @@ QJsonObject finalTurn(const QString &text)
         {QStringLiteral("content"), text}};
     return {{QStringLiteral("text"), text}, {QStringLiteral("toolCalls"), QJsonArray{}},
         {QStringLiteral("assistantMessage"), assistant}, {QStringLiteral("usage"), QJsonObject{}}};
+}
+
+struct NetworkScript
+{
+    QList<QByteArray> chunks;
+    int status = 200;
+    QNetworkReply::NetworkError error = QNetworkReply::NoError;
+    int chunkDelayMs = 0;
+    bool deliverAfterAbort = false;
+};
+
+class FixtureReply final : public QNetworkReply
+{
+public:
+    FixtureReply(const QNetworkRequest &request, QNetworkAccessManager *manager, NetworkScript script)
+        : QNetworkReply(manager), response(std::move(script))
+    {
+        setRequest(request);
+        setUrl(request.url());
+        setOperation(QNetworkAccessManager::PostOperation);
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, response.status);
+        setHeader(QNetworkRequest::ContentTypeHeader,
+                  response.status == 200 ? QByteArray("application/json") : QByteArray("text/plain"));
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+    }
+
+    void begin()
+    {
+        QTimer::singleShot(response.chunkDelayMs, this, &FixtureReply::sendNextChunk);
+    }
+
+    void abort() override
+    {
+        if (isFinished()) return;
+        if (!response.deliverAfterAbort)
+            complete(QNetworkReply::OperationCanceledError, QStringLiteral("fixture request cancelled"));
+    }
+
+    bool isSequential() const override { return true; }
+
+    qint64 bytesAvailable() const override
+    {
+        return unread.size() + QNetworkReply::bytesAvailable();
+    }
+
+protected:
+    qint64 readData(char *destination, qint64 maximum) override
+    {
+        if (unread.isEmpty()) return isFinished() ? -1 : 0;
+        const qint64 count = qMin(maximum, qint64(unread.size()));
+        std::memcpy(destination, unread.constData(), size_t(count));
+        unread.remove(0, qsizetype(count));
+        return count;
+    }
+
+private:
+    void sendNextChunk()
+    {
+        if (isFinished()) return;
+        if (nextChunk < response.chunks.size())
+        {
+            unread.append(response.chunks.at(nextChunk++));
+            emit readyRead();
+            QTimer::singleShot(response.chunkDelayMs, this, &FixtureReply::sendNextChunk);
+            return;
+        }
+        complete(response.error, response.error == QNetworkReply::NoError
+            ? QString() : QStringLiteral("fixture transport failure"));
+    }
+
+    void complete(QNetworkReply::NetworkError error, const QString &message)
+    {
+        if (isFinished()) return;
+        if (error != QNetworkReply::NoError)
+        {
+            setError(error, message);
+            emit errorOccurred(error);
+        }
+        setFinished(true);
+        emit finished();
+    }
+
+    NetworkScript response;
+    QByteArray unread;
+    qsizetype nextChunk = 0;
+};
+
+class FixtureNetworkAccessManager final : public QNetworkAccessManager
+{
+public:
+    void enqueue(NetworkScript script) { scripts.append(std::move(script)); }
+    QList<QNetworkRequest> requests;
+    QList<QByteArray> requestBodies;
+
+protected:
+    QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request,
+                                 QIODevice *outgoingData) override
+    {
+        Q_UNUSED(operation);
+        requests.append(request);
+        requestBodies.append(outgoingData ? outgoingData->readAll() : QByteArray());
+        NetworkScript script;
+        if (!scripts.isEmpty()) script = scripts.takeFirst();
+        auto *reply = new FixtureReply(request, this, std::move(script));
+        QTimer::singleShot(0, reply, [reply] { reply->begin(); });
+        return reply;
+    }
+
+private:
+    QList<NetworkScript> scripts;
+};
+
+QByteArray streamEvent(const QJsonObject &chunk)
+{
+    return QByteArray("data: ") + QJsonDocument(chunk).toJson(QJsonDocument::Compact) + "\r\n\r\n";
+}
+
+QByteArray streamDone()
+{
+    return QByteArray("data: [DONE]\r\n\r\n");
+}
+
+QJsonObject streamTextChunk(const QString &text)
+{
+    return {{QStringLiteral("choices"), QJsonArray{QJsonObject{
+        {QStringLiteral("index"), 0},
+        {QStringLiteral("delta"), QJsonObject{{QStringLiteral("content"), text}}},
+        {QStringLiteral("finish_reason"), QJsonValue(QJsonValue::Null)}}}}};
+}
+
+QJsonObject streamFinishChunk(const QString &reason)
+{
+    return {{QStringLiteral("choices"), QJsonArray{QJsonObject{
+        {QStringLiteral("index"), 0}, {QStringLiteral("delta"), QJsonObject{}},
+        {QStringLiteral("finish_reason"), reason}}}}};
+}
+
+NetworkScript streamingTextScript(const QString &firstText, const QString &secondText, int delayMs = 0)
+{
+    const QByteArray firstEvent = streamEvent(streamTextChunk(firstText));
+    QByteArray secondEvent = streamEvent(streamTextChunk(secondText));
+    NetworkScript script;
+    script.chunkDelayMs = delayMs;
+    const QByteArray utf8Needle = QStringLiteral("λ").toUtf8();
+    secondEvent.replace(QByteArray("\\u03bb"), utf8Needle);
+    secondEvent.replace(QByteArray("\\u03BB"), utf8Needle);
+    const qsizetype utf8Position = secondEvent.indexOf(utf8Needle);
+    script.chunks << firstEvent;
+    if (utf8Position >= 0 && utf8Position + 1 < secondEvent.size())
+    {
+        script.chunks << secondEvent.left(utf8Position + 1)
+                      << secondEvent.mid(utf8Position + 1, 1)
+                      << secondEvent.mid(utf8Position + 2)
+                      + streamEvent(streamFinishChunk(QStringLiteral("stop"))) + streamDone();
+    }
+    else
+    {
+        const qsizetype split = secondEvent.size() / 2;
+        script.chunks << secondEvent.left(split)
+                      << secondEvent.mid(split)
+                      + streamEvent(streamFinishChunk(QStringLiteral("stop"))) + streamDone();
+    }
+    return script;
+}
+
+NetworkScript completeJsonScript(const QString &text)
+{
+    const QJsonObject message{{QStringLiteral("role"), QStringLiteral("assistant")},
+                              {QStringLiteral("content"), text}};
+    const QJsonObject response{{QStringLiteral("choices"), QJsonArray{QJsonObject{
+        {QStringLiteral("finish_reason"), QStringLiteral("stop")},
+        {QStringLiteral("message"), message}}}},
+        {QStringLiteral("usage"), QJsonObject{}}};
+    NetworkScript script;
+    script.chunks << QJsonDocument(response).toJson(QJsonDocument::Compact);
+    return script;
+}
+
+NetworkScript streamToolCallScript(const QString &id, const QString &name, const QJsonObject &arguments)
+{
+    const QString argumentText = QString::fromUtf8(QJsonDocument(arguments).toJson(QJsonDocument::Compact));
+    const QJsonObject fragment{{QStringLiteral("index"), 0}, {QStringLiteral("id"), id},
+        {QStringLiteral("type"), QStringLiteral("function")},
+        {QStringLiteral("function"), QJsonObject{{QStringLiteral("name"), name},
+            {QStringLiteral("arguments"), argumentText}}}};
+    const QJsonObject toolChunk{{QStringLiteral("choices"), QJsonArray{QJsonObject{
+        {QStringLiteral("index"), 0},
+        {QStringLiteral("delta"), QJsonObject{{QStringLiteral("tool_calls"), QJsonArray{fragment}}}},
+        {QStringLiteral("finish_reason"), QJsonValue(QJsonValue::Null)}}}}};
+    NetworkScript script;
+    script.chunks << streamEvent(toolChunk)
+                  << streamEvent(streamFinishChunk(QStringLiteral("tool_calls")))
+                  << streamDone();
+    return script;
 }
 }
 
@@ -252,6 +459,325 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 1000);
         QCOMPARE(transcript->toPlainText().count(QStringLiteral("Follow-up finished once.")), 1);
         QVERIFY(transcript->document()->lastBlock().textList() == nullptr);
+
+        session->clear();
+    }
+
+    void streamingRenderPreservesComposerAndScroll()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        Session *session = application->getSession();
+        QVERIFY(session);
+        auto *host = session->getModelCommandHost();
+        QVERIFY(host);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        PreferenceSnapshot restore(applicationSettings);
+        session->clear();
+        session->addModel(conversationFixture());
+        session->setModelSelected(0, true);
+
+        WorkflowProcess workflow;
+        FixtureNetworkAccessManager network;
+        network.enqueue(streamingTextScript(QStringLiteral("First part. "),
+            QStringLiteral("UTF-8 λ 🚀 and **bold** <b>raw</b>\n\n- item\n\n|Case|Result|\n|---|---|\n|fixture|ok|\n\n```cpp\nint value = 1;\n```"), 35));
+        AgentWidget widget(host, &workflow, nullptr, &network);
+        RAgentSettings settings(RAgentSettings::Type::DeepSeek);
+        settings.setApiUrl(QStringLiteral("https://fixture.invalid/v1/chat/completions"));
+        settings.setApiKey(QStringLiteral("offline-stream-secret"));
+        widget.setProviderSettings(settings);
+        auto *streaming = widget.findChild<QCheckBox *>(QStringLiteral("agentStreamResponses"));
+        auto *composer = widget.findChild<QPlainTextEdit *>(QStringLiteral("agentGoal"));
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(streaming);
+        QVERIFY(composer);
+        QVERIFY(transcript);
+        streaming->setChecked(true);
+
+        QStringList history;
+        for (int i = 0; i < 80; ++i) history.append(QStringLiteral("Earlier message %1").arg(i));
+        transcript->setPlainText(history.join(QLatin1Char('\n')));
+        widget.resize(480, 520);
+        widget.show();
+        QTRY_VERIFY_WITH_TIMEOUT(transcript->verticalScrollBar()->maximum() > 0, 1000);
+        transcript->verticalScrollBar()->setValue(0);
+
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+        widget.startTask(QStringLiteral("Stream the fixture reply."));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 1, 1000);
+        const QJsonObject requestBody = QJsonDocument::fromJson(network.requestBodies.first()).object();
+        QVERIFY(requestBody.value(QStringLiteral("stream")).toBool());
+        QCOMPARE(network.requests.first().rawHeader("Accept"), QByteArray("text/event-stream"));
+        QVERIFY(!network.requestBodies.first().contains("offline-stream-secret"));
+        RAgentSettings changedSettings = settings;
+        changedSettings.setApiUrl(QStringLiteral("https://changed.invalid/chat/completions"));
+        changedSettings.setApiKey(QStringLiteral("changed-secret"));
+        widget.setProviderSettings(changedSettings);
+        streaming->setChecked(false); // The active turn keeps its original provider and transport snapshot.
+
+        composer->setPlainText(QStringLiteral("draft to keep"));
+        QTextCursor draftSelection = composer->textCursor();
+        draftSelection.setPosition(9);
+        draftSelection.setPosition(13, QTextCursor::KeepAnchor);
+        composer->setTextCursor(draftSelection);
+        composer->setFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY_WITH_TIMEOUT(composer->hasFocus(), 1000);
+
+        QTRY_VERIFY_WITH_TIMEOUT(transcript->toPlainText().contains(QStringLiteral("First part.")), 2000);
+        QCOMPARE(composer->toPlainText(), QStringLiteral("draft to keep"));
+        QCOMPARE(composer->textCursor().selectedText(), QStringLiteral("keep"));
+        QVERIFY(composer->hasFocus());
+        QCOMPARE(transcript->verticalScrollBar()->value(), 0);
+
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+        const QString rendered = transcript->toPlainText();
+        QCOMPARE(rendered.count(QStringLiteral("First part.")), 1);
+        QVERIFY(rendered.contains(QStringLiteral("UTF-8 λ 🚀")));
+        QVERIFY(rendered.contains(QStringLiteral("<b>raw</b>")));
+        QVERIFY(rendered.contains(QStringLiteral("item")));
+        const QString html = transcript->document()->toHtml();
+        QVERIFY(html.contains(QStringLiteral("<ul")));
+        QVERIFY(html.contains(QStringLiteral("<table")));
+        QVERIFY(html.contains(QStringLiteral("<pre")));
+        const QString renderDirectory = qEnvironmentVariable("RANGE_AGENT_STREAM_EVIDENCE_DIRECTORY");
+        if (!renderDirectory.isEmpty())
+        {
+            QVERIFY(QDir().mkpath(renderDirectory));
+            QVERIFY(widget.grab().save(QDir(renderDirectory).filePath("stream-render.png")));
+        }
+        const QTextCursor boldText = transcript->document()->find(QStringLiteral("bold"));
+        QVERIFY(!boldText.isNull());
+        QVERIFY(boldText.charFormat().fontWeight() >= QFont::Bold);
+        QCOMPARE(composer->textCursor().selectedText(), QStringLiteral("keep"));
+        QVERIFY(composer->hasFocus());
+        QCOMPARE(transcript->verticalScrollBar()->value(), 0);
+
+        if (!renderDirectory.isEmpty())
+        {
+            transcript->verticalScrollBar()->setValue(transcript->verticalScrollBar()->maximum());
+            QVERIFY(widget.grab().save(QDir(renderDirectory).filePath("stream-markdown-tail.png")));
+        }
+        network.enqueue(streamingTextScript(QStringLiteral("Tail-follow "), QStringLiteral("confirmed."), 20));
+        streaming->setChecked(true);
+        transcript->verticalScrollBar()->setValue(transcript->verticalScrollBar()->maximum());
+        widget.startTask(QStringLiteral("Continue while following the latest reply."));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(transcript->toPlainText().contains(QStringLiteral("Tail-follow")), 2000);
+        QCOMPARE(transcript->verticalScrollBar()->value(), transcript->verticalScrollBar()->maximum());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 3000);
+        QCOMPARE(transcript->verticalScrollBar()->value(), transcript->verticalScrollBar()->maximum());
+        QCOMPARE(composer->textCursor().selectedText(), QStringLiteral("keep"));
+        QVERIFY(composer->hasFocus());
+
+        session->clear();
+    }
+
+    void malformedToolArgumentsAreNeverDispatchedAndJsonFallbackWorks()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        Session *session = application->getSession();
+        QVERIFY(session);
+        auto *host = session->getModelCommandHost();
+        QVERIFY(host);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        PreferenceSnapshot restore(applicationSettings);
+        session->clear();
+        session->addModel(conversationFixture());
+        session->setModelSelected(0, true);
+        const auto before = session->modelCommandStamp(0);
+
+        const QJsonObject malformedFragment{{QStringLiteral("index"), 0},
+            {QStringLiteral("id"), QStringLiteral("call-partial")},
+            {QStringLiteral("type"), QStringLiteral("function")},
+            {QStringLiteral("function"), QJsonObject{{QStringLiteral("name"), QStringLiteral("document_propose")},
+                {QStringLiteral("arguments"), QStringLiteral("{\"command\":")}}}};
+        const QJsonObject malformedChunk{{QStringLiteral("choices"), QJsonArray{QJsonObject{
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("delta"), QJsonObject{{QStringLiteral("tool_calls"), QJsonArray{malformedFragment}}}},
+            {QStringLiteral("finish_reason"), QJsonValue(QJsonValue::Null)}}}}};
+        NetworkScript malformed;
+        malformed.chunks << streamEvent(malformedChunk)
+                         << streamEvent(streamFinishChunk(QStringLiteral("tool_calls")))
+                         << streamDone();
+
+        WorkflowProcess workflow;
+        FixtureNetworkAccessManager network;
+        network.enqueue(std::move(malformed));
+        network.enqueue(completeJsonScript(QStringLiteral("JSON fallback completed.")));
+        AgentWidget widget(host, &workflow, nullptr, &network);
+        RAgentSettings settings(RAgentSettings::Type::DeepSeek);
+        settings.setApiUrl(QStringLiteral("https://fixture.invalid/v1/chat/completions"));
+        settings.setApiKey(QStringLiteral("offline-fallback-secret"));
+        widget.setProviderSettings(settings);
+        auto *streaming = widget.findChild<QCheckBox *>(QStringLiteral("agentStreamResponses"));
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(streaming);
+        QVERIFY(transcript);
+        streaming->setChecked(true);
+        QSignalSpy activities(widget.taskRunner(), &AgentTaskRunner::toolActivity);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+
+        widget.startTask(QStringLiteral("Malformed partial action."));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 2000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
+        QVERIFY(activities.isEmpty());
+        QVERIFY(widget.taskRunner()->pendingProposal().isEmpty());
+        const auto after = session->modelCommandStamp(0);
+        QCOMPARE(after.first, before.first);
+        QCOMPARE(after.second, before.second);
+
+        streaming->setChecked(false);
+        widget.startTask(QStringLiteral("Use complete JSON fallback."));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 1000);
+        const QJsonObject fallbackBody = QJsonDocument::fromJson(network.requestBodies.last()).object();
+        QVERIFY(!fallbackBody.value(QStringLiteral("stream")).toBool());
+        QCOMPARE(network.requests.last().rawHeader("Accept"), QByteArray("application/json"));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 2000);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+        QCOMPARE(transcript->toPlainText().count(QStringLiteral("JSON fallback completed.")), 1);
+
+        session->clear();
+    }
+
+    void stopTimeoutAndLateBytesStayWithTheirRequest()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        Session *session = application->getSession();
+        QVERIFY(session);
+        auto *host = session->getModelCommandHost();
+        QVERIFY(host);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        PreferenceSnapshot restore(applicationSettings);
+        session->clear();
+        session->addModel(conversationFixture());
+        session->setModelSelected(0, true);
+
+        NetworkScript late = streamingTextScript(QStringLiteral("Old partial. "),
+            QStringLiteral("Late stale bytes"), 35);
+        late.deliverAfterAbort = true;
+        NetworkScript timeout;
+        timeout.error = QNetworkReply::TimeoutError;
+        NetworkScript providerError;
+        providerError.status = 401;
+        providerError.chunks << QByteArray("credential-echo-sentinel provider error body");
+        WorkflowProcess workflow;
+        FixtureNetworkAccessManager network;
+        network.enqueue(std::move(late));
+        network.enqueue(std::move(timeout));
+        network.enqueue(std::move(providerError));
+        AgentWidget widget(host, &workflow, nullptr, &network);
+        RAgentSettings settings(RAgentSettings::Type::DeepSeek);
+        settings.setApiUrl(QStringLiteral("https://fixture.invalid/v1/chat/completions"));
+        settings.setApiKey(QStringLiteral("offline-cancel-secret"));
+        widget.setProviderSettings(settings);
+        widget.findChild<QCheckBox *>(QStringLiteral("agentStreamResponses"))->setChecked(true);
+        auto *stop = widget.findChild<QPushButton *>(QStringLiteral("agentStop"));
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(stop);
+        QVERIFY(transcript);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+        widget.show();
+
+        widget.startTask(QStringLiteral("Stop the old request."));
+        QTRY_VERIFY_WITH_TIMEOUT(transcript->toPlainText().contains(QStringLiteral("Old partial.")), 2000);
+        stop->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 1000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("cancelled"));
+
+        widget.startTask(QStringLiteral("Exercise the scoped timeout."));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 2000);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("failed"));
+        widget.startTask(QStringLiteral("Hide provider error details."));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 3, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 3, 2000);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("failed"));
+        QTest::qWait(250);
+        QVERIFY(!transcript->toPlainText().contains(QStringLiteral("Late stale bytes")));
+        QVERIFY(!transcript->toPlainText().contains(QStringLiteral("credential-echo-sentinel")));
+        QVERIFY(!transcript->toPlainText().contains(QStringLiteral("provider error body")));
+
+        session->clear();
+    }
+
+    void reentrantFollowupAndTrustedActivityKeepStableIds()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        Session *session = application->getSession();
+        QVERIFY(session);
+        auto *host = session->getModelCommandHost();
+        QVERIFY(host);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        PreferenceSnapshot restore(applicationSettings);
+        session->clear();
+        session->addModel(conversationFixture());
+        session->setModelSelected(0, true);
+
+        WorkflowProcess workflow;
+        FixtureNetworkAccessManager network;
+        network.enqueue(streamToolCallScript(QStringLiteral("call-context-1"),
+            QStringLiteral("context_query"), QJsonObject{}));
+        network.enqueue(streamingTextScript(QStringLiteral("The host returned "),
+            QStringLiteral("context.")));
+        network.enqueue(streamingTextScript(QStringLiteral("Follow-up "), QStringLiteral("received.")));
+        AgentWidget widget(host, &workflow, nullptr, &network);
+        RAgentSettings settings(RAgentSettings::Type::DeepSeek);
+        settings.setApiUrl(QStringLiteral("https://fixture.invalid/v1/chat/completions"));
+        settings.setApiKey(QStringLiteral("offline-activity-secret"));
+        widget.setProviderSettings(settings);
+        widget.findChild<QCheckBox *>(QStringLiteral("agentStreamResponses"))->setChecked(true);
+        auto *activityCards = widget.findChild<QWidget *>(QStringLiteral("agentActivityCards"));
+        QVERIFY(activityCards);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+        bool steeredReentrantly = false;
+        connect(widget.taskRunner(), &AgentTaskRunner::assistantMessage, &widget,
+                [&widget, &steeredReentrantly](const QString &message) {
+            if (steeredReentrantly || !message.contains(QStringLiteral("context."))) return;
+            steeredReentrantly = true;
+            widget.taskRunner()->submitMessage(QStringLiteral("Follow up during signal delivery."), false);
+        }, Qt::DirectConnection);
+
+        widget.startTask(QStringLiteral("Read the current model context."));
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 1, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!activityCards->findChildren<QFrame *>(QStringLiteral("agentActivityCard")).isEmpty(), 2000);
+        const auto cardFound = [activityCards] {
+            for (QFrame *card : activityCards->findChildren<QFrame *>(QStringLiteral("agentActivityCard")))
+                if (card->property("agentToolCallId").toString() == QStringLiteral("call-context-1"))
+                    return card;
+            return static_cast<QFrame *>(nullptr);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(cardFound(), 2000);
+        QVERIFY(!cardFound()->property("agentTaskId").toString().isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(cardFound()->property("agentActivityPhase").toString(),
+                                  QStringLiteral("completed"), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(network.requests.size() >= 2, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 3, 1000);
+        QVERIFY(steeredReentrantly);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 3000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+        auto *renderedTranscript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(renderedTranscript);
+        QVERIFY(renderedTranscript->toPlainText().contains(
+            QRegularExpression(QStringLiteral("context\\.\\s+superseded"))));
+
+        const QString renderDirectory = qEnvironmentVariable("RANGE_AGENT_STREAM_EVIDENCE_DIRECTORY");
+        if (!renderDirectory.isEmpty())
+        {
+            widget.resize(760, 900);
+            widget.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&widget, 5000));
+            QVERIFY(QDir().mkpath(renderDirectory));
+            QVERIFY(widget.grab().save(QDir(renderDirectory).filePath("stream-activity.png")));
+        }
 
         session->clear();
     }

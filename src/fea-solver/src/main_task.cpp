@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -14,6 +15,7 @@
 #include "main_task.h"
 #include "solver_task.h"
 #include "command_processor.h"
+#include "native_execution_gate.h"
 #include "linear_model_task.h"
 #include <rparallel_execution_context.h>
 
@@ -49,6 +51,10 @@ void MainTask::run()
         validOptions.append(RArgumentOption("typed-checkpoint",RArgumentOption::Path,QVariant(),"Atomic accepted typed FE .sfec destination",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("typed-controller-id",RArgumentOption::String,QVariant(),"Expected typed controller implementation/revision identity",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("restart",RArgumentOption::Switch,QVariant(),"Restart solver",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-checkpoint-dir",RArgumentOption::Path,QVariant(),"Enable periodic accepted structural checkpoints in this directory",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-checkpoint-context-json",RArgumentOption::String,QVariant(),"Canonical range.native-checkpoint-context/v1 JSON; required with --native-checkpoint-dir",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("pause-at-accepted-seq",RArgumentOption::String,QVariant(),"Positive decimal accepted Newmark structural sequence to pause at; requires --native-execution-state",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-execution-state",RArgumentOption::Path,QVariant(),"Atomically publish bounded accepted-boundary pause/resume state to this new absolute path",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-id",RArgumentOption::Path,QVariant(),"Task ID for inter process communication",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-server",RArgumentOption::Path,QVariant(),"Task server for inter process communication",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("log-debug",RArgumentOption::Switch,QVariant(),"Switch on debug log level",RArgumentOption::Logger,false));
@@ -111,7 +117,7 @@ void MainTask::run()
 
         if (argumentsParser.isSet("linear-model-output"))
         {
-            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server"})
+            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server","native-checkpoint-dir","native-checkpoint-context-json","pause-at-accepted-seq","native-execution-state"})
                 if (argumentsParser.isSet(option))
                     throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                                  "Linear-model export cannot combine simulation/control/task output options.");
@@ -133,12 +139,84 @@ void MainTask::run()
             return;
         }
 
-        // Command processor.
-        new CommandProcessor(argumentsParser.getValue("task-server").toString(),
-                             argumentsParser.getValue("task-id").toString(),
-                             application);
-
         SolverInput solverInput(argumentsParser.getValue("file").toString());
+        QByteArray nativeCheckpointContextJson;
+        if (argumentsParser.isSet("native-checkpoint-dir") !=
+            argumentsParser.isSet("native-checkpoint-context-json"))
+        {
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--native-checkpoint-dir and --native-checkpoint-context-json must be supplied together.");
+        }
+        if (argumentsParser.isSet("native-checkpoint-dir"))
+        {
+            const QString checkpointDirectory = argumentsParser.getValue("native-checkpoint-dir").toString();
+            const QByteArray checkpointContext =
+                argumentsParser.getValue("native-checkpoint-context-json").toString().toUtf8();
+            if (!QFileInfo(checkpointDirectory).isAbsolute())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--native-checkpoint-dir must be an absolute path.");
+            if (checkpointContext.isEmpty() || checkpointContext.size() > 16384)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--native-checkpoint-context-json must contain 1..16384 UTF-8 bytes.");
+            if (argumentsParser.isSet("thermal-steps") || argumentsParser.isSet("thermal-checkpoint") ||
+                argumentsParser.isSet("typed-steps") || argumentsParser.isSet("typed-checkpoint"))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native structural checkpoints cannot be combined with thermal or typed FE checkpoint modes.");
+            solverInput.setNativeCheckpointRun(checkpointDirectory,checkpointContext);
+            nativeCheckpointContextJson = checkpointContext;
+        }
+        if (argumentsParser.isSet("pause-at-accepted-seq") &&
+            !argumentsParser.isSet("native-execution-state"))
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--pause-at-accepted-seq requires --native-execution-state.");
+        std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
+        if (argumentsParser.isSet("native-execution-state"))
+        {
+            if (!argumentsParser.isSet("native-checkpoint-dir") ||
+                !argumentsParser.isSet("native-checkpoint-context-json"))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native execution state requires periodic --native-checkpoint-dir and --native-checkpoint-context-json.");
+            const QString statePath = argumentsParser.getValue("native-execution-state").toString();
+            if (!QFileInfo(statePath).isAbsolute())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--native-execution-state must be an absolute path.");
+            const QString jobId = qEnvironmentVariable("RANGE_NATIVE_JOB_ID");
+            const QString providedTaskId = argumentsParser.getValue("task-id").toString();
+            const QString taskId = providedTaskId.isEmpty() ? jobId : providedTaskId;
+            const QString effectiveJobId = jobId.isEmpty() ? taskId : jobId;
+            if (effectiveJobId.isEmpty() || taskId.isEmpty())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native execution state requires RANGE_NATIVE_JOB_ID or --task-id.");
+            if (argumentsParser.getValue("task-server").toString().isEmpty())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native execution state requires --task-server for exact-task resume/cancel commands.");
+
+            quint64 initialPauseSequence = 0;
+            if (argumentsParser.isSet("pause-at-accepted-seq"))
+            {
+                bool validSequence = false;
+                initialPauseSequence = argumentsParser.getValue("pause-at-accepted-seq")
+                    .toString().toULongLong(&validSequence,10);
+                if (!validSequence || initialPauseSequence == 0 ||
+                    QString::number(initialPauseSequence) !=
+                        argumentsParser.getValue("pause-at-accepted-seq").toString())
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "--pause-at-accepted-seq must be a positive decimal integer.");
+            }
+
+            NativeExecutionGate::Config gateConfig;
+            gateConfig.stateFileName = statePath;
+            gateConfig.jobId = effectiveJobId;
+            gateConfig.taskId = taskId;
+            gateConfig.initialPauseSequence = initialPauseSequence;
+            gateConfig.checkpointContextJson = nativeCheckpointContextJson;
+            QString gateError;
+            nativeExecutionGate = NativeExecutionGate::create(gateConfig,&gateError);
+            if (!nativeExecutionGate)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Cannot create native execution gate: %s",qPrintable(gateError));
+            solverInput.setNativeExecutionGate(nativeExecutionGate);
+        }
         const bool typedMode=argumentsParser.isSet("typed-steps");
         if (typedMode != argumentsParser.isSet("typed-checkpoint") ||
             typedMode != argumentsParser.isSet("typed-controller-id"))
@@ -236,6 +314,14 @@ void MainTask::run()
         {
             solverInput.setRestart(true);
         }
+
+        // Start IPC after validated run inputs and the per-run gate exist.
+        new CommandProcessor(argumentsParser.getValue("task-server").toString(),
+                             argumentsParser.getValue("task-id").toString().isEmpty() &&
+                                     nativeExecutionGate
+                                 ? qEnvironmentVariable("RANGE_NATIVE_JOB_ID")
+                                 : argumentsParser.getValue("task-id").toString(),
+                             application,nativeExecutionGate);
 
         // Start solver.
         QThread* thread = new QThread;
