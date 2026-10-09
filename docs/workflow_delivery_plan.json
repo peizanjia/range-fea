@@ -360,8 +360,8 @@
     {
       "id": "WF-05",
       "title": "Durable operations and checkpoint recovery",
-      "status": "in_progress",
-      "statusReason": "持久账本/关闭保存/接受检查点/独立恢复已实现；最终Release、8/8整合、Windows4/4、安装私有SDK5/5和独立终审通过。旧127/129失败已修，待冻结完整132项回归和逐条验收。",
+      "status": "done",
+      "statusReason": "冻结实现ed57d60完成十项受限验收：持久操作/保存关闭/周期接受检查点/独立恢复；完整132/132、Windows4/4、安装私有SDK5/5和独立终审通过，旧失败及细分覆盖边界完整记录。",
       "priority": "P0",
       "effort": "XL",
       "dependsOn": [
@@ -391,13 +391,84 @@
         "src/range-workflow/python/range_workflow/jobs.py",
         "src/range-workflow/tests/test_workflow_runtime.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A01",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A02",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A03",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A04",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A05",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A06",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A07",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A08",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A09",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A10",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        }
+      ]
     },
     {
       "id": "WF-06",
       "title": "SSE and activity feed",
-      "status": "in_progress",
-      "statusReason": "有界SSE/代次隔离/增量Markdown/可信活动已实现；离线协议与控件、Windows4/4、DeepSeek真实流式编辑/宿主核对/追问3/3及独立终审通过，待冻结完整132项回归和逐条验收。",
+      "status": "done",
+      "statusReason": "冻结实现ed57d60完成八项受限验收：有界SSE/代次隔离/增量Markdown/可信活动；完整132/132、Windows4/4、DeepSeek真实流式编辑/宿主核对/追问3/3及独立终审通过。",
       "priority": "P1",
       "effort": "M",
       "dependsOn": [
@@ -421,13 +492,70 @@
         "src/range-ai-lib/src/rai_agent_file_store.cpp",
         "src/range-workflow/python/range_workflow/process.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A01",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A02",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A03",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A04",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A05",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A06",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A07",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A08",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        }
+      ]
     },
     {
       "id": "WF-07",
       "title": "Persistent conversations and parallel read-only questions",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "WF05/06已验收，按顺序启动：可见消息/宿主事实独立持久存储，旁路只读权限围栏和独立控件路由，分支不复制批准或执行权；尚未交付。",
       "priority": "P1",
       "effort": "L",
       "dependsOn": [

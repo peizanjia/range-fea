@@ -1,5 +1,14 @@
 # 续作交接
 
+## 2026-10-09 WF05/WF06验收闭合，启动WF07
+
+- 持续目标active到顺序4，未退出/暂停。WF05与WF06现done，实现冻结 `ed57d6025ee5f1316ca172a4c635e32dcf14a7e6`；逐条结论 `docs/acceptance/WF-05.md`、`WF-06.md`。完整132/132、零失败1193.01s（`WF-05/frozen-full-ctest.log`），必跑132/9组、Release、Windows4/4、安装private SDK恢复5/5、DeepSeek真实stream3/3及独立终审通过。旧127/129失败保留，未降低门槛。User配置/skill/凭据/记忆不改，不push。
+- WF07已in_progress，WF10仍in_progress（puremath/native adapter准备，无RPC/GUI）；其余顺序3/4待依赖推进。Root拥有架构/Widget/Host/共享service/CMake及串行build/test/install；接下来两个Luna max有界执行：新可见消息存储及Runner只读围栏，文件所有权不重叠。
+- WF07决定：项目managed conversations内只存显式可见user/assistant消息、脱敏宿主事实及来源/工件引用，不存Runner raw history（含system/context/tool/protocol/private reasoning）。版本化有界不可变record+commit marker，分支复制历史事实而不复制批准或执行权；加载只展示历史，必须fresh查询。
+- 旁路使用独立AgentWidget/Runner实例，独立request/generation/stream状态，保留primary明确objectName避免activeAgentWidget歧义；readonly policy构造后固定，强制automatic=false，工具/Host/Workflow/批准路径多层白名单及source版本核对。native.result.open/display会开文档，旁路不允许；command.preview虽metadata readOnly仍禁止。Root接Host只读调用入口，worker只Runner两文件及新测试。
+- 顺序3只读准备已完成：WF09现有pause边界可复用，但Stage9增益/限幅无任何hot update路径；controllerRevision是固定代码/参数文件指纹，不应重载为参数版本。需独立accepted参数事务/版本/历史/rollback/checkpoint协议决定。WF14旧TetGen按输出slot复用physical IDs，必须fresh node/element IDs；旧MeshGenerator直接Session modelID发布、无实际cancel/progress，不能当冻结后台mesh。地图结果在子代理wf09_boundary_map/wf14_geometry_map；尚未实施/验收。
+- 下一步WF07独立存储/权限及Root界面接线→源/权限反例→真实同时write+solver+readonly/接替/重开→独立审查/回归/安装/冻结验收，再WF08、09、10、14及WF11→12。外部clean Windows/remoteCI/fullsupplier仍按WF13保留，不用本机成绩冒称全部产品完成。
+
 ## 2026-10-09 10:02 当前入口：实现冻结与完整132项验收
 
 - 目标仍active到顺序4，WF05/06尚未done；所有当前实现/审查代理已完成。Root配置/skill/凭据/记忆保持原样，不push。执行Luna max，reviewer Root继承；没有新增不必要升级。
