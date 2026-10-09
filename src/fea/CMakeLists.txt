@@ -719,6 +719,12 @@ if(RANGE_BUILD_TESTS)
         "RANGE_RUNTIME_PYTHON=\"${Python3_EXECUTABLE}\";RANGE_RUNTIME_WIDGET_BOOTSTRAP=\"${CMAKE_SOURCE_DIR}/range-workflow/tests/runtime_widget_bootstrap.py\";RANGE_RUNTIME_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_RUNTIME_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_RUNTIME_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_RUNTIME_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
     set_source_files_properties(tests/tst_series_workbench_widget.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_SERIES_PYTHON=\"${Python3_EXECUTABLE}\";RANGE_SERIES_WIDGET_BOOTSTRAP=\"${CMAKE_SOURCE_DIR}/range-workflow/tests/series_widget_bootstrap.py\";RANGE_SERIES_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_SERIES_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_SERIES_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_SERIES_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
+    set(_wf14_test_python "${Python3_EXECUTABLE}")
+    if(RANGE_PRIVATE_PYTHON_DIRECTORY)
+        set(_wf14_test_python "${RANGE_PRIVATE_PYTHON_DIRECTORY}/python.exe")
+    endif()
+    set_source_files_properties(tests/tst_mesh_binding_widget.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_WF14_GEOMETRY_CONTROL_BOOTSTRAP=\"${CMAKE_SOURCE_DIR}/range-workflow/tests/wf14_geometry_control_bootstrap.py\";RANGE_WF14_PYTHON=\"${_wf14_test_python}\";RANGE_WF14_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_WF14_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_WF14_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_WF14_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
     set_source_files_properties(tests/tst_current_model_workflow.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_CURRENT_MODEL_TEST_FIXTURE=\"$<TARGET_FILE:range-workflow-native-import-fixture>\"")
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)

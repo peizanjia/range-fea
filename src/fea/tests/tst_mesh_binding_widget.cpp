@@ -13,6 +13,7 @@
 #include <QMessageBox>
 #include <QOpenGLContext>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QScrollArea>
@@ -30,6 +31,7 @@
 #include <rmesh_rebind_service.h>
 #include "application.h"
 #include "central_tab_widget.h"
+#include "geometry_command_widget.h"
 #include "main_window.h"
 #include "material_manager_tree.h"
 #include "mesh_binding_widget.h"
@@ -45,6 +47,7 @@
 #include "solver_setup_checker.h"
 #include "sub_window.h"
 #include "value_scale.h"
+#include "workflow_process.h"
 
 namespace {
 const RMaterial &bindingMaterial()
@@ -311,6 +314,13 @@ private slots:
         auto *session = Application::instance()->getSession();
         auto *host = session->getModelCommandHost(); QString error;
         QVERIFY2(session->openProject(workspace.path(),&error),qPrintable(error));
+        QJsonObject geometryControlEvidence;
+        if (publicationMutation.isEmpty()) {
+            if (qEnvironmentVariableIntValue("RANGE_WF14_VISIBLE_GUI")) workspace.setAutoRemove(false);
+            geometryControlPrelude(session,workspace.path(),geometryControlEvidence);
+            QVERIFY2(!geometryControlEvidence.isEmpty(),"Actual GUI geometry/native control prelude did not complete");
+            QCOMPARE(session->getNModels(),0u);
+        }
         session->addModel(shellFixture()); session->setModelSelected(0,true);
         const auto sourceStamp = session->modelCommandStamp(0);
         const auto sourceProject = session->documentProjectContext(0);
@@ -615,6 +625,24 @@ private slots:
             QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(0)),sourceHash);
             QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(1)),solvedHash);
         }
+        if (publicationMutation.isEmpty()) {
+            geometryControlEvidence.insert("meshDocument",QJsonObject{
+                {"sourceDocumentId",sourceStamp.first},{"sourceHash",sourceHash},
+                {"candidateDocumentId",candidateStamp.first},{"boundHash",boundHash},
+                {"meshAttemptId",attempt},{"nativeJob",job},{"resultDocumentId",resultId},
+                {"nodeCount",int(artifactModel.getNNodes())},
+                {"resultArtifactSha256",job.value("resultArtifactSha256")},
+                {"scope","Independent closed convex TRI shell; geometry beam is a separate supported document"}});
+            const auto bytes=QJsonDocument(geometryControlEvidence).toJson();
+            QFile proof(QDir(workspace.path()).filePath("wf14-joint-evidence.json"));
+            QVERIFY(proof.open(QIODevice::WriteOnly)); QCOMPARE(proof.write(bytes),qint64(bytes.size()));
+            if (qEnvironmentVariableIntValue("RANGE_WF14_VISIBLE_GUI")) {
+                QFile visibleProof(QDir(qEnvironmentVariable("RANGE_WF14_SCREENSHOT_DIR"))
+                    .filePath("04-geometry-mesh-control-joint.json"));
+                QVERIFY(visibleProof.open(QIODevice::WriteOnly));
+                QCOMPARE(visibleProof.write(bytes),qint64(bytes.size()));
+            }
+        }
     }
     void loadedBindingPreservesFileIdentityAndRejectsStaleApproval()
     {
@@ -680,6 +708,129 @@ private slots:
         }
     }
 private:
+    void geometryControlPrelude(Session *session,const QString &project,QJsonObject &evidence)
+    {
+        const QDir bin(QCoreApplication::applicationDirPath());
+#ifdef Q_OS_WIN
+        const QString suffix=".exe";
+#else
+        const QString suffix;
+#endif
+        const QString generator=bin.filePath("range-workflow-native-import-fixture"+suffix);
+        QVERIFY2(QFileInfo(generator).isFile(),qPrintable(generator));
+        const QString originalPath=QDir(project).filePath("wf14-original-beam.ram");
+        QProcess fixture; fixture.start(generator,{"beam",originalPath});
+        QVERIFY(fixture.waitForFinished(30000));
+        QCOMPARE(fixture.exitStatus(),QProcess::NormalExit); QCOMPARE(fixture.exitCode(),0);
+        Model original;
+        try { ModelIO::open(original,originalPath); }
+        catch (const RError &exception) { QFAIL(qPrintable(exception.getMessage())); }
+        QCOMPARE(original.getNNodes(),2u); QCOMPARE(original.getNodePhysicalId(1),117u);
+        QCOMPARE(original.getNode(1).getX(),3.3);
+        session->addModel(original); session->setModelSelected(0,true);
+        const Model before=session->getModel(0);
+        const auto beforeStamp=session->modelCommandStamp(0);
+        const auto beforeHash=RModelCommandService::stateFingerprint(before);
+        GeometryCommandWidget geometry; geometry.setSession(session); geometry.resize(900,600); geometry.show();
+        auto *preview=geometry.findChild<QPushButton *>("geometryPreview");
+        auto *apply=geometry.findChild<QPushButton *>("geometryApproveApply");
+        QVERIFY(preview && apply); QTRY_VERIFY(preview->isEnabled()); QVERIFY(!apply->isEnabled());
+        geometry.findChild<QLineEdit *>("geometryNodeId")->setText("117");
+        const double afterX=before.getNode(1).getX()*1.01;
+        geometry.findChild<QLineEdit *>("geometryCoordinates0")->setText(QString::number(afterX,'g',17));
+        geometry.findChild<QLineEdit *>("geometryCoordinates1")->setText("1.25");
+        geometry.findChild<QLineEdit *>("geometryCoordinates2")->setText("-0.5");
+        clickButton(preview);
+        QVERIFY2(apply->isEnabled(),qPrintable(geometry.findChild<QLabel *>("geometryStatus")->text()));
+        QCOMPARE(geometry.findChild<QTableWidget *>("geometryChanges")->rowCount(),1);
+        QCOMPARE(session->modelCommandStamp(0),beforeStamp);
+        QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(0)),beforeHash);
+        QCOMPARE(session->getModel(0).getUndoStackSize(),0u);
+        capture(geometry,"00-geometry-preview");
+        clickButton(apply);
+        QCOMPARE(session->getModel(0).getNode(1).getX(),afterX);
+        QCOMPARE(session->getModel(0).getUndoStackSize(),1u); QVERIFY(!apply->isEnabled());
+        const auto afterStamp=session->modelCommandStamp(0);
+        QCOMPARE(afterStamp.first,beforeStamp.first); QVERIFY(afterStamp.second>beforeStamp.second);
+        const QString receipt=geometry.findChild<QLabel *>("geometryReceipt")->text();
+        QVERIFY(receipt.contains("one_gui_undo_group"));
+        // Restore only the edited coordinates on a detached copy: all physical
+        // IDs, global directions, conditions, material and control inputs must match.
+        RModel restored(session->getModel(0));
+        restored.getNode(1).set(before.getNode(1).getX(),before.getNode(1).getY(),before.getNode(1).getZ());
+        QCOMPARE(RModelCommandService::stateFingerprint(restored),beforeHash);
+        const auto editedHash=RModelCommandService::stateFingerprint(session->getModel(0));
+        QVERIFY(editedHash!=beforeHash);
+        capture(geometry,"00-geometry-applied");
+        QString error;
+        const auto snapshot=session->createDocumentSnapshot(0,&error);
+        QVERIFY2(!snapshot.isEmpty(),qPrintable(error));
+        QCOMPARE(snapshot.value("instanceRef").toObject().value("documentRevision").toDouble(),double(afterStamp.second));
+        Model frozen;
+        ModelIO::open(frozen,QDir(project).filePath(snapshot.value("relativePath").toString()));
+        QCOMPARE(frozen.getNodePhysicalId(1),117u); QCOMPARE(frozen.getNode(1).getX(),afterX);
+        const QJsonObject input{{"snapshot",snapshot},{"originalFixture",originalPath},
+            {"beforeHash",beforeHash},{"editedHash",editedHash},{"geometryReceipt",receipt},
+            {"documentId",afterStamp.first},{"sessionEpoch",session->getModelCommandHost()->sessionEpoch()},
+            {"beforeRevision",double(beforeStamp.second)},{"editedRevision",double(afterStamp.second)},
+            {"geometryDelta",QJsonObject{{"physicalNodeId",117},
+                {"before",QJsonArray{3.3,1.25,-0.5}},{"after",QJsonArray{afterX,1.25,-0.5}}}}};
+        const QString inputPath=QDir(project).filePath("wf14-geometry-input.json");
+        QFile inputFile(inputPath); QVERIFY(inputFile.open(QIODevice::WriteOnly));
+        QVERIFY(inputFile.write(QJsonDocument(input).toJson())>0); inputFile.close();
+        auto config=WorkflowProcess::defaultConfiguration(QDir(project).filePath("control-workspace"));
+#ifdef RANGE_WF14_PYTHON
+        config.python=QStringLiteral(RANGE_WF14_PYTHON);
+        config.packageDirectory=QStringLiteral(RANGE_WF14_PACKAGE);
+        config.solver=QStringLiteral(RANGE_WF14_SOLVER);
+        config.native=QStringLiteral(RANGE_WF14_NATIVE);
+        config.examples=QStringLiteral(RANGE_WF14_EXAMPLES);
+#endif
+        const auto overridePath=[](const char *name,QString &path) {
+            const auto value=qEnvironmentVariable(name); if (!value.isEmpty()) path=value;
+        };
+        overridePath("RANGE_TEST_SCIENTIFIC_PYTHON",config.python);
+        overridePath("RANGE_TEST_SCIENTIFIC_PACKAGE",config.packageDirectory);
+        overridePath("RANGE_TEST_SCIENTIFIC_SOLVER",config.solver);
+        overridePath("RANGE_TEST_SCIENTIFIC_NATIVE",config.native);
+        overridePath("RANGE_TEST_SCIENTIFIC_EXAMPLES",config.examples);
+        for (auto *path:{&config.python,&config.packageDirectory,&config.solver,&config.native,&config.examples}) {
+            QVERIFY2(QFileInfo(*path).isAbsolute() && QFileInfo::exists(*path),qPrintable(*path));
+            *path=QFileInfo(*path).canonicalFilePath();
+        }
+#ifdef RANGE_WF14_GEOMETRY_CONTROL_BOOTSTRAP
+        const QString bootstrap=QStringLiteral(RANGE_WF14_GEOMETRY_CONTROL_BOOTSTRAP);
+#else
+        const QString bootstrap=QDir(config.packageDirectory).filePath("../tests/wf14_geometry_control_bootstrap.py");
+#endif
+        QVERIFY2(QFileInfo(bootstrap).isFile(),qPrintable(bootstrap));
+        const QString outputPath=QDir(project).filePath("wf14-control-evidence.json");
+        QProcess control;
+        control.setWorkingDirectory(config.packageDirectory);
+        control.start(config.python,{"-B",QFileInfo(bootstrap).canonicalFilePath(),
+            "--package",config.packageDirectory,"--python",config.python,"--solver",config.solver,
+            "--native",config.native,"--examples",config.examples,"--catalog",project,
+            "--input",inputPath,"--output",outputPath});
+        QVERIFY2(control.waitForStarted(10000),qPrintable(control.errorString()));
+        QTRY_COMPARE_WITH_TIMEOUT(control.state(),QProcess::NotRunning,240000);
+        const QByteArray diagnostics=control.readAllStandardError()+control.readAllStandardOutput();
+        QCOMPARE(control.exitStatus(),QProcess::NormalExit);
+        QVERIFY2(control.exitCode()==0,diagnostics.constData());
+        QFile proof(outputPath); QVERIFY(proof.open(QIODevice::ReadOnly));
+        QJsonParseError parseError;
+        const auto document=QJsonDocument::fromJson(proof.readAll(),&parseError);
+        QCOMPARE(parseError.error,QJsonParseError::NoError); QVERIFY(document.isObject());
+        evidence=document.object(); QVERIFY(!evidence.value("controlJob").toString().isEmpty());
+        QCOMPARE(evidence.value("registeredSource").toObject().value("registeredModelSha256"),snapshot.value("modelSha256"));
+        QCOMPARE(session->modelCommandStamp(0),afterStamp);
+        QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(0)),editedHash);
+        QCOMPARE(session->getModel(0).getUndoStackSize(),1u);
+        QVERIFY(sameResultValues(session->getModel(0),before));
+        // The supported geometry and shell meshing domains are intentionally
+        // separate. Keep this Session/project and remove only the beam runtime
+        // document after the real source/control receipt has been persisted.
+        session->removeModel(0); QCOMPARE(session->getNModels(),0u);
+    }
     void displayNativeResult(uint modelId, const QString &documentId, const Model &artifact)
     {
         auto *window=Application::instance()->getMainWindow();

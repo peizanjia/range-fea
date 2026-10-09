@@ -2,14 +2,19 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QDir>
 #include <QImage>
 #include <QMouseEvent>
 #include <QPalette>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStyle>
+#include <QStyleFactory>
+#include <QStyleHints>
 #include <QTest>
 #include <QToolTip>
 #include <QWheelEvent>
+#include <QWindow>
 
 #include <limits>
 
@@ -55,6 +60,44 @@ bool samePoints(const QVector<QPointF> &left, const QVector<QPointF> &right)
 {
     return left == right;
 }
+
+class ApplicationPaletteScope
+{
+    QPalette previous = QApplication::palette();
+    Qt::ColorScheme previousScheme = QGuiApplication::styleHints()->colorScheme();
+    QString previousStyle = QApplication::style()->name();
+public:
+    explicit ApplicationPaletteScope(Qt::ColorScheme scheme)
+    {
+        // Match the application's RStyle::applyStyle ordering: native styles
+        // also consult the color scheme, independently of canvas palette roles.
+        QGuiApplication::styleHints()->setColorScheme(scheme);
+        QApplication::setPalette(QPalette());
+        if (auto *style = QStyleFactory::create(previousStyle)) QApplication::setStyle(style);
+    }
+    ~ApplicationPaletteScope()
+    {
+        QGuiApplication::styleHints()->setColorScheme(previousScheme);
+        QApplication::setPalette(QPalette());
+        if (auto *style = QStyleFactory::create(previousStyle)) QApplication::setStyle(style);
+        QApplication::setPalette(previous);
+    }
+};
+
+int foregroundPixels(const QImage &image, const QRect &region, const QColor &foreground)
+{
+    int count = 0;
+    const QRect bounded = region.intersected(image.rect());
+    for (int y = bounded.top(); y <= bounded.bottom(); ++y)
+        for (int x = bounded.left(); x <= bounded.right(); ++x)
+        {
+            const QColor pixel = image.pixelColor(x, y);
+            if (qAbs(pixel.red() - foreground.red()) < 32
+                && qAbs(pixel.green() - foreground.green()) < 32
+                && qAbs(pixel.blue() - foreground.blue()) < 32) ++count;
+        }
+    return count;
+}
 }
 
 class TestSeriesPlotWidget : public QObject
@@ -69,7 +112,174 @@ private slots:
     void hugeFiniteValuesRenderWithoutChangingSourceSamples();
     void visibleRangeUsesRawUnitsAndRejectsUnsupportedBounds();
     void segmentsAreClippedBeforeProjection();
+    void keyboardFitAndHoldChangeDisplayedState();
+    void paletteLabelsAndLegendRemainVisible_data();
+    void paletteLabelsAndLegendRemainVisible();
+    void distinctPhysicalUnitsRequireSeparateCharts();
 };
+
+void TestSeriesPlotWidget::keyboardFitAndHoldChangeDisplayedState()
+{
+    SeriesPlotWidget widget;
+    QString error;
+    const auto first = sampleDataset();
+    QVERIFY2(widget.setDataset(first, &error), qPrintable(error));
+    const auto fitted = widget.visibleRange();
+    QVERIFY(widget.setVisibleRange({0.2, 1.2, 1.2, 2.4}, &error));
+    widget.resize(380, 700);
+    widget.show(); widget.activateWindow();
+    auto *hold = widget.findChild<QCheckBox *>(QStringLiteral("seriesPlotHold"));
+    auto *fit = widget.findChild<QPushButton *>(QStringLiteral("seriesPlotFit"));
+    QVERIFY(hold); QVERIFY(fit);
+    hold->setFocus(Qt::TabFocusReason);
+    QTRY_VERIFY(hold->hasFocus());
+    QTest::keyClick(hold, Qt::Key_Tab);
+    QTRY_VERIFY(fit->hasFocus());
+    QTest::keyClick(fit, Qt::Key_Space);
+    const auto restored = widget.visibleRange();
+    QCOMPARE(restored.xMinimum, fitted.xMinimum);
+    QCOMPARE(restored.xMaximum, fitted.xMaximum);
+    QCOMPARE(restored.yMinimum, fitted.yMinimum);
+    QCOMPARE(restored.yMaximum, fitted.yMaximum);
+    QTest::keyClick(fit, Qt::Key_Backtab);
+    QTRY_VERIFY(hold->hasFocus());
+    QTest::keyClick(hold, Qt::Key_Space);
+    QVERIFY(widget.isDisplayHeld());
+    const auto pending = sampleDataset(QStringLiteral("keyboard-pending"), QStringLiteral("Latest keyboard update"));
+    QVERIFY(widget.setDataset(pending, &error));
+    QCOMPARE(widget.dataset().title, first.title);
+    QTest::keyClick(hold, Qt::Key_Space);
+    QVERIFY(!widget.isDisplayHeld());
+    QCOMPARE(widget.dataset().title, pending.title);
+    QCOMPARE(widget.dataset().traces.first().sourceId, pending.traces.first().sourceId);
+}
+
+void TestSeriesPlotWidget::paletteLabelsAndLegendRemainVisible_data()
+{
+    QTest::addColumn<bool>("dark");
+    QTest::addColumn<int>("width");
+    QTest::newRow("light-wide") << false << 760;
+    QTest::newRow("dark-wide") << true << 760;
+    QTest::newRow("light-narrow") << false << 380;
+    QTest::newRow("dark-narrow") << true << 380;
+}
+
+void TestSeriesPlotWidget::paletteLabelsAndLegendRemainVisible()
+{
+    QFETCH(bool, dark); QFETCH(int, width);
+    ApplicationPaletteScope restorePalette(dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
+    QPalette palette = QApplication::palette();
+    const QColor background = dark ? QColor(24, 26, 30) : QColor(250, 250, 250);
+    const QColor foreground = dark ? QColor(240, 240, 240) : QColor(20, 20, 20);
+    for (const auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled})
+    {
+        palette.setColor(group, QPalette::Base, background);
+        palette.setColor(group, QPalette::Window, background);
+        palette.setColor(group, QPalette::Button, background);
+        palette.setColor(group, QPalette::Text, foreground);
+        palette.setColor(group, QPalette::WindowText, foreground);
+        palette.setColor(group, QPalette::ButtonText, foreground);
+        palette.setColor(group, QPalette::Midlight, dark ? QColor(55, 55, 55) : QColor(220, 220, 220));
+    }
+    QApplication::setPalette(palette);
+    SeriesPlotWidget widget;
+    auto dataset = sampleDataset();
+    QString error;
+    QVERIFY2(widget.setDataset(dataset, &error), qPrintable(error));
+    widget.resize(width, 700); widget.show();
+    QApplication::processEvents();
+    QWidget *canvas = plotCanvas(widget); QVERIFY(canvas);
+    auto *fit = widget.findChild<QPushButton *>(QStringLiteral("seriesPlotFit"));
+    QVERIFY(fit); QVERIFY(fit->isEnabled());
+    const QImage fitWithText = renderCanvas(fit);
+    const QString fitText = fit->text();
+    fit->setText(QString());
+    const QImage fitWithoutText = renderCanvas(fit);
+    fit->setText(fitText);
+    // Compare the same enabled button with/without its label, excluding borders.
+    // A nonblank button or a matching palette property cannot prove readable text.
+    int readableGlyphPixels = 0;
+    const QRect glyphRegion = fitWithText.rect().adjusted(4, 4, -4, -4);
+    for (int y = glyphRegion.top(); y <= glyphRegion.bottom(); ++y)
+        for (int x = glyphRegion.left(); x <= glyphRegion.right(); ++x)
+        {
+            const QColor ink = fitWithText.pixelColor(x, y);
+            const QColor bare = fitWithoutText.pixelColor(x, y);
+            if (qAbs(ink.red() - foreground.red()) < 64
+                && qAbs(ink.green() - foreground.green()) < 64
+                && qAbs(ink.blue() - foreground.blue()) < 64
+                && qMax(qAbs(ink.red() - bare.red()),
+                    qMax(qAbs(ink.green() - bare.green()), qAbs(ink.blue() - bare.blue()))) > 96)
+                ++readableGlyphPixels;
+        }
+    QVERIFY2(readableGlyphPixels > 8, "Enabled Fit must paint contrasting foreground glyphs under the selected native theme.");
+    QCOMPARE(canvas->palette().color(QPalette::Base), background);
+    QCOMPARE(canvas->palette().color(QPalette::Text), foreground);
+    if (qEnvironmentVariableIntValue("RANGE_SERIES_REQUIRE_HIGH_DPI") == 1)
+    {
+        QVERIFY2(QGuiApplication::platformName() == QStringLiteral("windows"), "High-DPI acceptance requires the actual Windows platform.");
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+        QVERIFY(widget.windowHandle());
+        QVERIFY2(widget.windowHandle()->devicePixelRatio() > 1.0, "Run with QT_SCALE_FACTOR=2 for actual high-DPI acceptance.");
+    }
+    const QImage labeled = renderCanvas(canvas);
+    const QRect title(8, 3, canvas->width() - 16, 22);
+    const QRect legend(30, 29, canvas->width() - 40, 18);
+    const QRect xLabel(78, canvas->height() - 21, canvas->width() - 94, 18);
+    const QRect yLabel(5, 52, 20, canvas->height() - 110);
+    for (const auto &region : {title, legend, xLabel, yLabel})
+        QVERIFY2(foregroundPixels(labeled, region, foreground) > 8, "Rendered label/legend must contain visible palette foreground pixels.");
+    // Change each label independently: prove its actual painted region responds,
+    // rather than counting unrelated axes or trace pixels in a nonblank image.
+    auto changed = dataset; changed.title = QStringLiteral("Different title");
+    QVERIFY(widget.setDataset(changed, &error));
+    QVERIFY(renderCanvas(canvas).copy(title) != labeled.copy(title));
+    changed = dataset; changed.traces[0].label = QStringLiteral("Other response");
+    QVERIFY(widget.setDataset(changed, &error));
+    QVERIFY(renderCanvas(canvas).copy(legend) != labeled.copy(legend));
+    changed = dataset; changed.xLabel = QStringLiteral("Elapsed time");
+    QVERIFY(widget.setDataset(changed, &error));
+    QVERIFY(renderCanvas(canvas).copy(xLabel) != labeled.copy(xLabel));
+    changed = dataset; changed.yLabel = QStringLiteral("Position");
+    QVERIFY(widget.setDataset(changed, &error));
+    QVERIFY(renderCanvas(canvas).copy(yLabel) != labeled.copy(yLabel));
+    QVERIFY(widget.setDataset(dataset, &error));
+    QCOMPARE(widget.dataset().traces.first().points, dataset.traces.first().points);
+    const QString evidence = qEnvironmentVariable("RANGE_SERIES_GUI_EVIDENCE_DIRECTORY");
+    if (!evidence.isEmpty())
+    {
+        QVERIFY(QDir().mkpath(evidence));
+        QVERIFY(widget.grab().save(evidence + QStringLiteral("/series-palette-%1.png").arg(QString::fromLatin1(QTest::currentDataTag()))));
+    }
+}
+
+void TestSeriesPlotWidget::distinctPhysicalUnitsRequireSeparateCharts()
+{
+    SeriesPlotWidget displacement, force;
+    const auto metres = sampleDataset();
+    auto newtons = sampleDataset(QStringLiteral("force-source"), QStringLiteral("Force"));
+    newtons.yLabel = QStringLiteral("Force"); newtons.yUnit = QStringLiteral("N");
+    newtons.traces[0].id = QStringLiteral("force-trace");
+    newtons.traces[0].label = QStringLiteral("Force response"); newtons.traces[0].unit = QStringLiteral("N");
+    QString error;
+    QVERIFY(displacement.setDataset(metres, &error));
+    displacement.resize(760, 480); displacement.show(); QApplication::processEvents();
+    const QImage before = renderCanvas(plotCanvas(displacement));
+    const auto range = displacement.visibleRange();
+    auto mixed = metres; mixed.traces.append(newtons.traces.first());
+    QVERIFY(!displacement.setDataset(mixed, &error));
+    QCOMPARE(error, QStringLiteral("All traces must use the dataset y-axis unit."));
+    QCOMPARE(displacement.dataset().traces.size(), 1);
+    QCOMPARE(displacement.dataset().yUnit, QStringLiteral("m"));
+    QCOMPARE(displacement.dataset().traces.first().points, metres.traces.first().points);
+    QCOMPARE(displacement.visibleRange().yMinimum, range.yMinimum);
+    QCOMPARE(displacement.visibleRange().yMaximum, range.yMaximum);
+    QVERIFY(renderCanvas(plotCanvas(displacement)) == before);
+    QVERIFY2(force.setDataset(newtons, &error), qPrintable(error));
+    QCOMPARE(force.dataset().yUnit, QStringLiteral("N"));
+    QCOMPARE(force.dataset().traces.first().unit, QStringLiteral("N"));
+    QCOMPARE(displacement.dataset().traces.first().unit, QStringLiteral("m"));
+}
 
 void TestSeriesPlotWidget::rejectsInvalidDatasetWithoutChangingDisplay()
 {

@@ -16,6 +16,7 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QWindow>
 #include <QtTest>
 #include <cmath>
 
@@ -99,6 +100,50 @@ private slots:
         QCOMPARE(plots.last().toObject().value("parameters").toObject().value("options").toObject().value("limit").toInt(),1000);
         QVERIFY(control<QLabel>(w,"seriesDisplayedSources")->text().contains("independent-reference"));
         QVERIFY(w.minimumSizeHint().width() < 600);
+        p.stop(); QTRY_VERIFY(p.isStopped());
+    }
+    void keyboardSelectorsAndQueryUseSelectedSourceAndView()
+    {
+        // Fixed transport fixture: this checks Qt keyboard routing and source
+        // binding, not FE numerical correctness.
+        WorkflowProcess p; SeriesWorkbenchWidget w(&p); start(p,w);
+        w.activateWindow();
+        auto *channels = control<QComboBox>(w,"seriesChannelChoice");
+        auto *view = control<QComboBox>(w,"seriesViewChoice");
+        auto *add = control<QPushButton>(w,"seriesAddNative");
+        auto *query = control<QPushButton>(w,"seriesQuery");
+        QVERIFY(channels); QVERIFY(view); QVERIFY(add); QVERIFY(query);
+        const auto first = channels->currentData().toJsonObject();
+        channels->setFocus(Qt::TabFocusReason); QTRY_VERIFY(channels->hasFocus());
+        QTest::keyClick(channels,Qt::Key_Down);
+        QCOMPARE(channels->currentIndex(),1);
+        const auto chosen = channels->currentData().toJsonObject();
+        QVERIFY(chosen != first);
+        QTest::keyClick(channels,Qt::Key_Up);
+        QCOMPARE(channels->currentData().toJsonObject(),first);
+        QTest::keyClick(channels,Qt::Key_Down);
+        QTest::keyClick(channels,Qt::Key_Tab); QTRY_VERIFY(view->hasFocus());
+        for (int i=0;i<3;++i) QTest::keyClick(view,Qt::Key_Down);
+        QCOMPARE(view->currentData().toString(),QString("amplitude"));
+        QTest::keyClick(view,Qt::Key_Up);
+        QCOMPARE(view->currentData().toString(),QString("phase"));
+        QTest::keyClick(view,Qt::Key_Down);
+        add->setFocus(Qt::TabFocusReason); QTRY_VERIFY(add->hasFocus());
+        QTest::keyClick(add,Qt::Key_Space);
+        auto *selected = control<QListWidget>(w,"seriesSourceSelection");
+        QCOMPARE(selected->count(),1);
+        QCOMPARE(selected->item(0)->data(Qt::UserRole).toJsonObject(),chosen);
+        query->setFocus(Qt::TabFocusReason); QTRY_VERIFY(query->hasFocus());
+        QTest::keyClick(query,Qt::Key_Space);
+        QTRY_COMPARE(w.displayedDto().value("view").toString(),QString("amplitude"));
+        const auto parameters = calls(p,"result.plot.query").last().toObject().value("parameters").toObject();
+        QCOMPARE(parameters.value("view").toString(),QString("amplitude"));
+        QCOMPARE(parameters.value("sources").toArray().first().toObject(),chosen);
+        auto displayedSource = w.displayedDto().value("traces").toArray().first().toObject()
+            .value("sources").toArray().first().toObject().value("selector").toObject();
+        QVERIFY(!displayedSource.take("sourceHash").toString().isEmpty());
+        QCOMPARE(displayedSource,chosen);
+        QVERIFY(!w.plotWidget()->dataset().traces.first().points.isEmpty());
         p.stop(); QTRY_VERIFY(p.isStopped());
     }
     void completeRawExportChecksCountHashAndChunks()
@@ -274,6 +319,13 @@ private slots:
         QFile manifest(actualFixture.path()+"/fixture.json"); QVERIFY(manifest.open(QIODevice::ReadOnly));
         const auto source=QJsonDocument::fromJson(manifest.readAll()).object();
         WorkflowProcess p; SeriesWorkbenchWidget w(&p); w.resize(1200,950); w.show(); p.start(actual);
+        if (qEnvironmentVariableIntValue("RANGE_SERIES_REQUIRE_HIGH_DPI") == 1)
+        {
+            QVERIFY2(QGuiApplication::platformName() == QStringLiteral("windows"), "High-DPI acceptance requires the actual Windows platform.");
+            QVERIFY(QTest::qWaitForWindowExposed(&w));
+            QVERIFY(w.windowHandle());
+            QVERIFY2(w.windowHandle()->devicePixelRatio() > 1.0, "Run with QT_SCALE_FACTOR=2 for actual high-DPI acceptance.");
+        }
         QTRY_VERIFY_WITH_TIMEOUT(p.isReady(),30000);
         auto execute=[&](const QString &command,const QJsonObject &arguments) {
             const auto project=request(p,"project.query");

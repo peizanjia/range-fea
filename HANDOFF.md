@@ -1,5 +1,12 @@
 # 续作交接
 
+## 2026-10-10 逐条验收补充冻结前检查点
+
+- 产品实现冻结仍为c83bf5a4ebd5fde57420e281c2b1c2a3b63b254b，完整179/179 PASS1569.51s；XML显示CTest0fail/0disabled/0skip（Qt内部提供商opt-in跳过不代替真实provider验收）。新私有安装stage12-integrated-c83bf5a完成，缩减PATH下installedTaskScan1/1 32.678s、runtimeControl1/1 20.656s、MeshSDK9/9 1.880s、scienceWindows3/3零skip173.146s；runtime后0缓存，Root查看科学图与清空截图，最终meshViewport3/3零skip11.905s。
+- 最终AID审查发现WF14A08缺联合/真实修改后控制证据、WF10A07缺键盘/主题/DPI。只添加测试和测试源文件编译定义，无新产品实现变更。WF14 baseline新增真实GeometryWidget改梁端117 X3.3→3.333、人工应用、Session真实快照注册、active/passive20accepted后独立TRI壳网格/重绑/求解/真实结果视口，同一GUI会话两份支持文档，不冒称同文档CAD几何→网格。Windows联合3/3零skip23.958s；主/被动终态q约2.8e-15m、v约2.9e-12m/s；完整20点独立比较仅active Y速度，其余history检查有限/数量/时网，不夸大全轨迹独立验证。
+- 图表native主题测试初次仅改palette导致light画布与dark Windows按钮混合，已按真实RStyle顺序切native colorScheme/重建相同style并scopedrestore，不替换Fusion。最终Windows actualDPR>1图表16/16零skip2.084s含Fit文字对比；Workbench键盘选择/Add/Query+真正双原生job故事4/4零skip23.190s。混合单位直接叠图拒绝且分图接受，未添加伪多轴能力。Root查看浅色窄窗口Fit/坐标/图例可读。
+- 下一步冻补充测试并完整运行3个受影响必跑目标，再整理逐条记录/Hash清单/计划JSON/独立终审/本地验收提交。完整产品179证据绑定产品实现c83，不把测试-only变化冒称产品新实现。WF10A08/WF11provider/WF12LPAC仍未通过，ordinaryOFF；quota monitor48342仍active，任务最后必须stop。
+
 ## 2026-10-10 冻结后完整回归修复（验收未结束）
 
 - 54d82ff完整179实际运行1647.25s，176PASS、3失败：project_session两个sourceRevision多+1，native_job_registry重启来源INVALID_HISTORY_PROVENANCE后300.04s超时，workflow_runtime旧测试访问已取消内嵌manifest导致KeyError。XML/log均在WF11/frozen-54d82ff-full-179.*，不可用后续局部通过覆盖该轮。
