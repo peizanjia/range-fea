@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-10",
+  "implementationCommit": "c83bf5a4ebd5fde57420e281c2b1c2a3b63b254b",
+  "supplementalTestsCommit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+  "submoduleCommits": {
+    "src/range-ai-lib": "a28bfecbe094d4e15cb5ccfceeb55bb25d21be05",
+    "src/range-base-lib": "53dee04a1ffe4b4487535ed554a371f5a68bd10d",
+    "src/range-model-lib": "3f7da639895d3abd4fd060e720c93b04bca5dcaa",
+    "src/range-solver-lib": "03c2a4365e9730435cde0c9f4006350b9f66415b"
+  },
+  "productRegression": {
+    "registeredTargets": 179,
+    "failedTargets": 0,
+    "ctestSkippedTargets": 0,
+    "artifact": {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-full-179.xml",
+      "sha256": "041f29bad4a2a907210b01b93e41947aa4e9a6c4ad6d74cff21abe1381503ecd",
+      "bytes": 147012
+    }
+  },
+  "supplementalRegression": {
+    "registeredTargets": 3,
+    "failedTargets": 0,
+    "ctestSkippedTargets": 0,
+    "artifact": {
+      "path": "build/audit-20261009/WF-11/frozen-664ea7b-supplemental-three.xml",
+      "sha256": "0fb48b4b0696f0ca8567850f5a971d3afe235b64287d56171ceab6ff32d572ba",
+      "bytes": 4099
+    }
+  },
+  "installPrefix": "build/stage12-integrated-c83bf5a",
+  "installedBinaries": [
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/fea-solver.exe",
+      "sha256": "adedc81da6d770a8f2557765aa94c18f52ff32d3681f1f5d37aa44ea6b43a1dc",
+      "bytes": 3008512,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/fea.exe",
+      "sha256": "72a6741ac9544056fee79ae2bb902de8b8fcf92b96515abbf7f2ad4091b84c0f",
+      "bytes": 10010112,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-control-velocity.exe",
+      "sha256": "88c51e9350c192c0850f94a7bfd30960dcb988d91dabb592ba86b8d6fdd1e3d7",
+      "bytes": 45568,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-mesh-worker.exe",
+      "sha256": "860f6b3b69683e019f0c84ca8778e9850bba7c6fccf19fb8d7a3975a17be667c",
+      "bytes": 1320448,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-model-command.exe",
+      "sha256": "b45c94b02eff08b65884cbf832cd4e10efe2f383a8e0cd2c8242bb745bf02e5d",
+      "bytes": 1276928,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-native-results.exe",
+      "sha256": "25bed7bd6744daa93e1da7400c8a094047aacb173997238d3cf3a7972c13d8da",
+      "bytes": 834048,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-project.exe",
+      "sha256": "0cfa0608bca4e2d10932a8a9f28224485fabf07313f3f5fa4f3ab4ffcaf613a5",
+      "bytes": 819712,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-workflow-isolation-launcher.exe",
+      "sha256": "94d00d855a70162926675f3ca1750496ff6900c103e496ff63f6c64a74f6ce9c",
+      "bytes": 138752,
+      "matchesBuiltBinary": true
+    },
+    {
+      "path": "build/stage12-integrated-c83bf5a/bin/range-workflow-native.exe",
+      "sha256": "c4f95b6a457d0535dbf91238d5bf6180dedb640b576513f4b26d60620293f51e",
+      "bytes": 806912,
+      "matchesBuiltBinary": true
+    }
+  ],
+  "privateRuntime": {
+    "bytecodeFileCount": 0,
+    "cacheDirectoryCount": 0,
+    "metadata": [
+      {
+        "path": "build/stage12-integrated-c83bf5a/runtime/python/runtime-lock.json",
+        "sha256": "2e71d9c57a8bb986f65fe25ef328d3011a3c6be9ef791629fe2daf424dca04e8",
+        "bytes": 1184
+      },
+      {
+        "path": "build/stage12-integrated-c83bf5a/runtime/python/runtime-files.json",
+        "sha256": "1379dd1eaa4e749f50df684789f01e8d76f55a59f00682c14a0970a802b655be",
+        "bytes": 319241
+      },
+      {
+        "path": "build/stage12-integrated-c83bf5a/runtime/python/python313._pth",
+        "sha256": "745d539a81e483101a66b7e50c328687155c0c297d743f7c3043a42c26e071f1",
+        "bytes": 65
+      }
+    ]
+  },
+  "hardGates": {
+    "WF-10-A08": "fail: 20k first plot exceeded original 5s gate; complete export/peak unverified",
+    "WF-11-A02": "fail: actual provider generation did not reach staging/approval",
+    "WF-12-A01": "fail: LPAC class46 readback Win32 87; worker not resumed",
+    "WF-12-A02..A09": "unverified; ordinary generated execution remains off"
+  },
+  "limits": [
+    "Local Windows evidence; not external clean-install or human UX acceptance",
+    "Qt optional-provider skips inside passing CTest targets do not satisfy actual provider gate",
+    "GUI harness comes from reviewed tests; installed SDK/Python/Qt/native tools are used",
+    "WF14 joint story uses separate supported beam and TRI-shell documents in one Session",
+    "Full trajectory independent numeric comparison in joint proof covers active Y velocity only"
+  ],
+  "artifacts": [
+    {
+      "path": "build/audit-20261009/WF-11/frozen-54d82ff-full-179.log",
+      "sha256": "630ae48310525ac918cb30f87fd5f1a3a810ea89b8cd838040d0885d3e99a0f1",
+      "bytes": 132976
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-54d82ff-full-179.xml",
+      "sha256": "1bc7af9fb1145c29db7974c8a0a2c912f4d3eb553796e26c4a34b518034a892a",
+      "bytes": 251631
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-all-build.log",
+      "sha256": "1749414a28c8ad41c2d17380ba82ea4b8142cbeb5c4badd3e9ee27823ac78873",
+      "bytes": 29393
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-full-179.log",
+      "sha256": "063ba36fd1bed1eb6813325ccb04c534fff6967c21e0922c47c634356db98b8b",
+      "bytes": 24860
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-inventory.json",
+      "sha256": "3bdeb3fc0ef5b8754b8ab4a3e557c391ad646e0ec3826e0c4be2f29b0eef105b",
+      "bytes": 159159
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-private-install.log",
+      "sha256": "4a6632419e9ab5773a68be4b832324bbad988de4346529b36195c19768a90e34",
+      "bytes": 489448
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-task-scan-final.log",
+      "sha256": "604282a9bd5a44fc07261aba01e1f819db38b6cf8647e8214de348c77644d5d8",
+      "bytes": 323
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-runtime-control-final.log",
+      "sha256": "1ef5e20ff9ac1350edae9121f3e6dc59589403880bfb478d25ddb98a881469ff",
+      "bytes": 593
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-mesh-sdk.log",
+      "sha256": "92e6c32521d3be25f393fa20e15cc51960f38c897b6d2f357a9cf968869c9186",
+      "bytes": 1633
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-science-window.txt",
+      "sha256": "a6d4df19cfa6cccf0bc0b18fedaa231421a07b28539c89f03669c7a9c98d1007",
+      "bytes": 498
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-mesh-result-window-final.txt",
+      "sha256": "91652ede45c83493d032256f4ee336ccf6c3cdbb48d1d19cc586d5b82e27c7ba",
+      "bytes": 821
+    },
+    {
+      "path": "build/audit-20261009/WF-11/runtime-document-next-zero-expansion.txt",
+      "sha256": "d81fe5480cba1849c7f74fe40f9a551535ebd78d693b6286627fb97194ef2f19",
+      "bytes": 522
+    },
+    {
+      "path": "build/audit-20261009/WF-11/wf14-joint-geometry-control-window.txt",
+      "sha256": "81425b8363361a79d3af45e7b5cecc5145cec16a3f16d369ce87f0f7b643b156",
+      "bytes": 525
+    },
+    {
+      "path": "build/audit-20261009/WF-11/series-native-theme-final.txt",
+      "sha256": "c621ff60d669aaa2b2d911e2c106ea8aec9b605b7bb5fc4a044651063a4ad61b",
+      "bytes": 1481
+    },
+    {
+      "path": "build/audit-20261009/WF-11/series-workbench-keyboard-high-dpi.txt",
+      "sha256": "1123a4058c1470eba33c54b0c289500cb448f858a84b51c9b20628ed8fa330eb",
+      "bytes": 627
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-664ea7b-supplemental-three.log",
+      "sha256": "2919915f710453eb80bbcac8546d96cfa04483dfeb2e0b27313e8b93a1c2849c",
+      "bytes": 488
+    },
+    {
+      "path": "build/audit-20261009/WF-11/provider-high-final-unclosed.txt",
+      "sha256": "da43d02f2ee72bd2c947dd3e245d819c0e7a2b34d68b21fb59ed501c18045045",
+      "bytes": 1868
+    },
+    {
+      "path": "build/audit-20261009/WF-11/private-runtime-ci-builder-final.log",
+      "sha256": "81ffbb47eed6bd3aee5af269c98d00c69397abf8515935f8c07d81db0ed75299",
+      "bytes": 213
+    },
+    {
+      "path": "build/audit-20261009/WF-11/scientific-contract-final-no-bytecode.log",
+      "sha256": "6603dbd028de21225f0f542c3d1522b88664750200424a5d15f09576ee3d006f",
+      "bytes": 2040
+    },
+    {
+      "path": "build/audit-20261009/WF-11/wf14-joint-geometry-control-window/04-geometry-mesh-control-joint.json",
+      "sha256": "d27abee81d680dea71c97e420a54d49799a9256918a7be6505b84c1d037066ce",
+      "bytes": 538821
+    },
+    {
+      "path": "build/audit-20261009/WF-11/wf14-joint-geometry-control-window/00-geometry-preview.png",
+      "sha256": "4d2cd2395a12d0bea0b780142c02c16f12efe393cf56cea885bf15a6a6534276",
+      "bytes": 56493
+    },
+    {
+      "path": "build/audit-20261009/WF-11/wf14-joint-geometry-control-window/03-native-result-display.json",
+      "sha256": "c5c46d195526ebe78738e3c93b53b439a5afa0534b7cc0d6f435a24e383c89f4",
+      "bytes": 513
+    },
+    {
+      "path": "build/audit-20261009/WF-11/wf14-joint-geometry-control-window/03-native-result-display-root.png",
+      "sha256": "14ecba4e4cb80d932c02898d2f9c573783d1a0ce610bb384ccae6d54cdfef166",
+      "bytes": 226636
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-science-window/scientific-native-amplitude.png",
+      "sha256": "84b69abf21a43f6628cb62a91ee2ac005e4de229ab4c7fb75271de92c270a171",
+      "bytes": 91751
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-science-window/scientific-native-filtered-time.png",
+      "sha256": "1062e6134ec3e02d0c131ad8a0f8640bc5b0c6bdf17e053e382ca9245cfe28b3",
+      "bytes": 95453
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-science-window/scientific-native-psd.png",
+      "sha256": "a15c06db5985b1746f5d612ca27a85086cc9e6fbc29c4854c1b76010304c6815",
+      "bytes": 88979
+    },
+    {
+      "path": "build/audit-20261009/WF-11/frozen-c83bf5a-installed-science-window/scientific-same-bundle-workspace-cleared.png",
+      "sha256": "b05ce97bf743e5f8640526ebce8806cedc9241c3926370c1f19fef4c5d38d271",
+      "bytes": 67235
+    },
+    {
+      "path": "build/audit-20261009/WF-11/series-native-theme-final/series-palette-light-narrow.png",
+      "sha256": "d61625075dc04bd51c55aecf48a0ace7e76fcb12823a3b76b1e8094f5b7d1cb0",
+      "bytes": 66447
+    },
+    {
+      "path": "build/audit-20261009/WF-11/series-native-theme-final/series-palette-dark-wide.png",
+      "sha256": "a173dec3bf3d08b4a3abaf00cbe129c8c4a94d15ff711ac732f64b338c66702d",
+      "bytes": 97492
+    }
+  ]
+}

@@ -1,5 +1,15 @@
 # 续作交接
 
+## 2026-10-10 最终交付检查点
+
+- **本轮开发/验证已到本地验收收尾**：实现冻结`c83bf5a4ebd5fde57420e281c2b1c2a3b63b254b`，完整179/179通过1569.51s；测试补充冻结`664ea7b43dcebad5f423e85a877f0e12211267e2`，三个受影响完整目标3/3通过104.59s，仅测试/测试编译定义变化。安装9个exe与构建SHA逐项一致，私有运行时0字节码/0缓存。哈希、原始结果及边界见`docs/acceptance/integrated-20261010.json`。本地提交，不push。
+- **状态**：WF01–09及WF14 done；WF10/WF11/WF12 blocked，WF13 planned。10完成/3阻塞/1待发布，119条AID逐条登记，不把blocked写成done。WF08任务树/持久恢复/安装扫描，WF09接受步调参/实际中断恢复/运行与文档下一版分离，WF14几何/凸壳网格/显式静态重绑/真实位移视口均在明确支持矩阵内验收。
+- **安装与GUI**：`build/stage12-integrated-c83bf5a`私有安装，缩减PATH SDK扫描32.678s、调参20.656s、MeshSDK9/9 1.880s、科学Windows3/3零skip173.146s。GUI由受控测试程序承载，产品SDK/Python/Qt/原生工具用安装路径。补充Windows图表16/16、键盘/真双原生高DPI4/4、几何控制网格联合3/3通过；Root查看可见预览/图表/结果截图。联合故事同GUI会话的梁与独立TRI壳两份支持文档，不能冒称同文档CAD链；完整独立20点数值对照限active Y速度，不泛化全物理场/全轨迹。
+- **按授权记录跳过的硬项**：WF10 A08真实20k首次图未达5s，完整CSV30s/峰值未验；WF11 A02真实DeepSeek高effort生成71.714s失败、stage/approval0，核心受信候选不代替模型生成；WF12 A01 LPAC class46读回Win32 87，worker未Resume，权限拒绝矩阵/隔离科学运行/干净Windows未验。各原始证据/影响/恢复路径在`docs/agent_playbooks/wf10_long_series_unclosed.md`、`wf11_provider_generation_unclosed.md`、`wf12_lpac_unclosed.md`。ordinary生成执行OFF，无隔离降级，阈值不改。
+- **后续**：先按上述各独立问题记录恢复，WF13外部干净安装/真实用户体验/发布汇合仍未完成；不要重复已知无证据的性能/提供商/LPAC盲试。用户`.agents/`、`.codex/`、`AGENTS.md`、凭据及记忆保持原样，当前调度skill已应用。本轮额度在1% fallback成功用1张重置卡，回执used99→0、cards2→1；最后已确认97%/1卡、无pending兑换。任务监控48342已退出且无helper进程，stop标记已写；尾日志最后账户元数据RPC报-32603，finally已清理app-server，不声称正常stop回覆。未购买或再次兑换。
+
+以下为保留的阶段过程记录；最新状态以上述检查点和计划JSON为准。
+
 ## 2026-10-10 逐条验收补充冻结前检查点
 
 - 产品实现冻结仍为c83bf5a4ebd5fde57420e281c2b1c2a3b63b254b，完整179/179 PASS1569.51s；XML显示CTest0fail/0disabled/0skip（Qt内部提供商opt-in跳过不代替真实provider验收）。新私有安装stage12-integrated-c83bf5a完成，缩减PATH下installedTaskScan1/1 32.678s、runtimeControl1/1 20.656s、MeshSDK9/9 1.880s、scienceWindows3/3零skip173.146s；runtime后0缓存，Root查看科学图与清空截图，最终meshViewport3/3零skip11.905s。
