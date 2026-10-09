@@ -2,6 +2,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -13,6 +14,8 @@
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMap>
+#include <QMenu>
+#include <QSaveFile>
 #include <QNetworkReply>
 #include <QPalette>
 #include <QPlainTextEdit>
@@ -41,6 +44,8 @@
 #include "application_settings.h"
 #include "main_window.h"
 #include "model_command_host.h"
+#include "session.h"
+#include <ragent_conversation_store.h>
 #include <rai_agent.h>
 #include <rai_tool_stream.h>
 
@@ -121,12 +126,15 @@ QString optionValue(const QJsonValue &option)
 }
 
 AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent,
-                         QNetworkAccessManager *networkAccessManager)
-    : QWidget(parent), runner(host, workflow, this), defaultNetwork(this),
+                         QNetworkAccessManager *networkAccessManager,
+                         AgentTaskRunner::AccessPolicy policy, bool restoreLastConversation)
+    : QWidget(parent), accessPolicy(policy), runner(host, workflow, this, policy), defaultNetwork(this),
       network(networkAccessManager ? networkAccessManager : &defaultNetwork), commandHost(host),
+      connectedWorkflow(workflow),
       providerSettings(RAgentSettings::Type::DeepSeek)
 {
-    setObjectName(QStringLiteral("agentTaskWidget"));
+    setObjectName(policy == AgentTaskRunner::AccessPolicy::ReadOnly
+        ? QStringLiteral("agentReadOnlyTaskWidget") : QStringLiteral("agentTaskWidget"));
     if (QSettings *preferences = agentPreferences())
     {
         const auto requestedType = static_cast<RAgentSettings::Type>(preferences->value(providerTypeKey, int(RAgentSettings::Type::DeepSeek)).toInt());
@@ -152,7 +160,7 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     layout->setSpacing(6);
 
     auto *header = new QHBoxLayout;
-    auto *title = new QLabel(tr("Assistant"));
+    auto *title = new QLabel(policy == AgentTaskRunner::AccessPolicy::ReadOnly ? tr("Read-only question") : tr("Assistant"));
     QFont titleFont = title->font();
     titleFont.setBold(true);
     title->setFont(titleFont);
@@ -172,6 +180,59 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     settingsButton->setAccessibleName(tr("Open assistant settings"));
     header->addWidget(settingsButton);
     layout->addLayout(header);
+
+    auto *historyRow = new QHBoxLayout;
+    conversationChoice = new QComboBox(this);
+    conversationChoice->setObjectName(QStringLiteral("agentConversationChoice"));
+    conversationChoice->setAccessibleName(tr("Saved conversation"));
+    conversationChoice->setMinimumWidth(0);
+    historyRow->addWidget(conversationChoice, 1);
+    branchConversation = new QToolButton(this);
+    branchConversation->setObjectName(QStringLiteral("agentBranchConversation"));
+    branchConversation->setText(tr("Branch"));
+    branchConversation->setToolTip(tr("Create an independent conversation at the selected historical message. Past actions remain historical facts."));
+    historyRow->addWidget(branchConversation);
+    historyMenu = new QToolButton(this);
+    historyMenu->setObjectName(QStringLiteral("agentConversationMenu"));
+    historyMenu->setText(tr("More"));
+    historyMenu->setPopupMode(QToolButton::InstantPopup);
+    auto *conversationMenu = new QMenu(historyMenu);
+    auto *exportAction = conversationMenu->addAction(tr("Export conversation…"));
+    exportAction->setObjectName(QStringLiteral("agentExportConversation"));
+    auto *deleteAction = conversationMenu->addAction(tr("Delete conversation"));
+    deleteAction->setObjectName(QStringLiteral("agentDeleteConversation"));
+    historyMenu->setMenu(conversationMenu);
+    historyRow->addWidget(historyMenu);
+    layout->addLayout(historyRow);
+    auto *historyNavigation = new QHBoxLayout;
+    branchMessageChoice = new QComboBox(this);
+    branchMessageChoice->setObjectName(QStringLiteral("agentBranchMessage"));
+    branchMessageChoice->setAccessibleName(tr("Historical message for branching"));
+    branchMessageChoice->setMinimumWidth(0);
+    historyNavigation->addWidget(branchMessageChoice, 1);
+    historyPrevious = new QPushButton(tr("Earlier"), this);
+    historyPrevious->setObjectName(QStringLiteral("agentHistoryPrevious"));
+    historyNext = new QPushButton(tr("Later"), this);
+    historyNext->setObjectName(QStringLiteral("agentHistoryNext"));
+    historyNavigation->addWidget(historyPrevious);
+    historyNavigation->addWidget(historyNext);
+    layout->addLayout(historyNavigation);
+    historyStatus = new QLabel(this);
+    historyStatus->setObjectName(QStringLiteral("agentHistoryStatus"));
+    historyStatus->setWordWrap(true);
+    historyStatus->setTextFormat(Qt::PlainText);
+    layout->addWidget(historyStatus);
+    connect(conversationChoice, &QComboBox::activated, this, [this](int index) {
+        if (runner.isActive()) return;
+        const QString id = conversationChoice->itemData(index).toString();
+        if (id.isEmpty()) createConversation();
+        else loadConversation(id);
+    });
+    connect(branchConversation, &QToolButton::clicked, this, &AgentWidget::branchFromMessage);
+    connect(exportAction, &QAction::triggered, this, &AgentWidget::exportConversation);
+    connect(deleteAction, &QAction::triggered, this, &AgentWidget::deleteConversation);
+    connect(historyPrevious, &QPushButton::clicked, this, [this] { renderHistoryPage(qMax(0, historyOffset - 50)); });
+    connect(historyNext, &QPushButton::clicked, this, [this] { renderHistoryPage(historyOffset + 50); });
 
     auto *hint = new QLabel(tr("Ask about the selected model or supported analysis tasks."));
     hint->setWordWrap(true);
@@ -341,6 +402,14 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     if (QSettings *preferences = agentPreferences())
         authorize->setChecked(preferences->value(automaticChangesKey, false).toBool());
     modelRow->addWidget(authorize);
+    if (policy == AgentTaskRunner::AccessPolicy::ReadOnly)
+    {
+        authorize->setChecked(false);
+        authorize->hide();
+        streamResponses->setChecked(false);
+        streamResponses->hide();
+        settingsButton->hide();
+    }
 
     goal = new QPlainTextEdit;
     goal->setObjectName(QStringLiteral("agentGoal"));
@@ -368,12 +437,21 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     stop->setAccessibleName(tr("Stop assistant work"));
     composerButtons->addWidget(send, 1);
     composerButtons->addWidget(stop);
+    readOnlyQuestion = new QPushButton(tr("Read-only question"), this);
+    readOnlyQuestion->setObjectName(QStringLiteral("agentAskReadOnly"));
+    readOnlyQuestion->setAccessibleName(tr("Ask independently without taking over the current task"));
+    readOnlyQuestion->setVisible(policy == AgentTaskRunner::AccessPolicy::ReadWrite);
+    composerButtons->addWidget(readOnlyQuestion);
     layout->addLayout(composerButtons);
     layout->addLayout(modelRow);
 
     connect(newChat, &QToolButton::clicked, this, [this] {
         if (runner.isActive()) return;
         runner.clearConversation();
+        currentConversationId.clear();
+        conversationRevision.clear();
+        conversationMessageCount = 0;
+        createConversation();
         transcript->clear();
         for (const QString &cardKey : activityCardOrder)
         {
@@ -394,6 +472,7 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     });
     connect(settingsButton, &QToolButton::clicked, this, &AgentWidget::openSettings);
     connect(send, &QPushButton::clicked, this, &AgentWidget::submitDraft);
+    connect(readOnlyQuestion, &QPushButton::clicked, this, [this] { startReadOnlyQuestion(goal->toPlainText()); });
     connect(goal, &QPlainTextEdit::textChanged, this, [this] { updateAvailability(); });
     auto *sendShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), goal);
     connect(sendShortcut, &QShortcut::activated, this, &AgentWidget::submitDraft);
@@ -427,6 +506,51 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     connect(authorize, &QCheckBox::toggled, this, [this] { persistConversationPreferences(); });
 
     connect(&runner, &AgentTaskRunner::turnRequested, this, &AgentWidget::requestTurn);
+    connect(&runner, &AgentTaskRunner::taskStarted, this, [this](const QString &taskId, const QString &text, bool) {
+        recordMessage(QStringLiteral("user"), text, taskId);
+        pruneConversationTaskRoutes();
+        if (lastMessagePersisted && taskConversationRoutes.size() < 128)
+        {
+            taskConversationRoutes.insert(taskId, QJsonObject{{QStringLiteral("workspace"), storeWorkspace},
+                {QStringLiteral("projectId"), storeProjectId}, {QStringLiteral("conversationId"), currentConversationId}});
+            conversationTaskOrder.append(taskId);
+        }
+    });
+    runner.setExecutionRecorder([this](const QString &taskId, const QString &origin, const QJsonObject &reference) {
+        return recordExecutionIntent(taskId, origin, reference);
+    });
+    connect(&runner, &AgentTaskRunner::executionObserved, this, &AgentWidget::recordExecutionObservation);
+    connect(&runner, &AgentTaskRunner::executionObservationUnknown, this,
+        [this](const QString &taskId, const QString &, const QJsonObject &reference, const QString &code) {
+            auto facts = reference;
+            const bool notSubmitted = code == QStringLiteral("NOT_SUBMITTED");
+            const bool rejected = notSubmitted || code.startsWith(QStringLiteral("REJECTED:"));
+            facts.insert(QStringLiteral("status"), rejected ? QStringLiteral("rejected") : QStringLiteral("unknown"));
+            facts.insert(QStringLiteral("code"), notSubmitted ? code : rejected ? code.mid(9).left(128)
+                                                                               : QStringLiteral("RESULT_RECONCILE_REQUIRED"));
+            if (appendExecutionFact(taskConversationRoutes.value(taskId), taskId,
+                notSubmitted ? tr("The recorded execution was not submitted; no action was retried.")
+                    : rejected ? tr("The host rejected the recorded execution. No retry was authorized.")
+                               : tr("The execution outcome is unknown. Query its recorded reference before another action."), facts)
+                && rejected)
+                pendingExecutionReferences.remove(taskId + QStringLiteral(":")
+                    + reference.value(QStringLiteral("idempotencyKey")).toString(reference.value(QStringLiteral("requestSha256")).toString()));
+        });
+    if (workflow)
+        connect(workflow, &WorkflowProcess::replyReceived, this,
+            [this](const QString &id, const QString &operation, const QJsonObject &result) {
+                const auto pending = receiptQueries.take(id);
+                if (pending.isEmpty() || operation != QStringLiteral("execution.query")) return;
+                const auto reference = pending.value(QStringLiteral("reference")).toObject();
+                if (result.value(QStringLiteral("projectId")) != reference.value(QStringLiteral("workflowProjectId"))
+                    || result.value(QStringLiteral("requestSha256")) != reference.value(QStringLiteral("requestSha256"))) return;
+                if (result.value(QStringLiteral("accepted")).toBool())
+                    recordReceiptObservation(pending.value(QStringLiteral("route")).toObject(),
+                        pending.value(QStringLiteral("taskId")).toString(), reference, result);
+            });
+    if (workflow)
+        connect(workflow, &WorkflowProcess::requestFailed, this,
+            [this](const QString &id, const QString &, const QString &, const QString &) { receiptQueries.remove(id); });
     connect(&runner, &AgentTaskRunner::providerCancellationRequested, this, [this](const QString &id) {
         retireProviderRequest(id);
     });
@@ -444,6 +568,11 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::assistantMessage, this, [this](const QString &message) {
+        const QString previousProjectId = storeProjectId;
+        const QString previousWorkspace = storeWorkspace;
+        const bool bound = bindConversationStore();
+        if (!previousProjectId.isEmpty() && (!bound || previousProjectId != storeProjectId || previousWorkspace != storeWorkspace)) return;
+        recordMessage(QStringLiteral("assistant"), message, runner.taskId());
         if (finalizingStreamMessage && message == finalizingStreamText)
         {
             const QString requestId = liveStreamRequestId;
@@ -456,8 +585,13 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     });
     connect(&runner, &AgentTaskRunner::userInputRequested, this,
             [this](const QString &id, const QString &question, const QJsonArray &options) {
+        const QString previousProjectId = storeProjectId;
+        const QString previousWorkspace = storeWorkspace;
+        const bool bound = bindConversationStore();
+        if (!previousProjectId.isEmpty() && (!bound || previousProjectId != storeProjectId || previousWorkspace != storeWorkspace)) return;
         presentedQuestionId = id;
         questionText->setText(question);
+        recordMessage(QStringLiteral("assistant"), question, runner.taskId());
         appendText(tr("Assistant"), question);
         while (QLayoutItem *item = questionOptionsLayout->takeAt(0))
         {
@@ -538,6 +672,8 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::finished, this, [this](const QString &status, const QString &message) {
+        recordMessage(QStringLiteral("fact"), tr("Assistant task ended: %1. This does not determine a solver job's result.").arg(status),
+                      runner.taskId(), QJsonObject{{QStringLiteral("status"), status}});
         if (status != QStringLiteral("completed") && !message.isEmpty()) appendText(status, message);
         if (status == QStringLiteral("completed")) state->setText(tr("Completed"));
         presentedProposalId.clear();
@@ -549,6 +685,10 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     eventPollTimer.setInterval(750);
     connect(&eventPollTimer, &QTimer::timeout, this, &AgentWidget::refreshHostEvents);
     eventPollTimer.start();
+    refreshConversationList();
+    if (restoreLastConversation)
+        if (QSettings *preferences = agentPreferences())
+            loadConversation(preferences->value(lastConversationPreferenceKey()).toString());
     refreshHostEvents();
     updateAvailability();
 }
@@ -556,6 +696,490 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
 AgentWidget::~AgentWidget()
 {
     retireProviderRequest();
+}
+
+QString AgentWidget::lastConversationPreferenceKey() const
+{
+    return QStringLiteral("aiAgent/lastConversation/") + storeProjectId
+        + (accessPolicy == AgentTaskRunner::AccessPolicy::ReadOnly ? QStringLiteral("/readOnly") : QStringLiteral("/primary"));
+}
+
+void AgentWidget::pruneConversationTaskRoutes()
+{
+    QSet<QString> protectedTasks;
+    for (const auto &task : pendingExecutionReferences) protectedTasks.insert(task);
+    for (const auto &pending : receiptQueries) protectedTasks.insert(pending.value(QStringLiteral("taskId")).toString());
+    if (runner.isActive()) protectedTasks.insert(runner.taskId());
+    for (qsizetype index = 0; taskConversationRoutes.size() >= 96 && index < conversationTaskOrder.size();)
+    {
+        const QString task = conversationTaskOrder.at(index);
+        if (protectedTasks.contains(task)) { ++index; continue; }
+        taskConversationRoutes.remove(task);
+        conversationTaskOrder.removeAt(index);
+        for (auto it = observedExecutionReferences.begin(); it != observedExecutionReferences.end();)
+            if (it->contains(QStringLiteral(":") + task + QStringLiteral(":"))) it = observedExecutionReferences.erase(it);
+            else ++it;
+    }
+}
+
+void AgentWidget::clearConversationView()
+{
+    runner.clearConversation();
+    transcript->clear();
+    preview->clear();
+    presentedProposalId.clear(); presentedQuestionId.clear();
+    questionText->clear(); approvalCard->hide(); questionCard->hide();
+    branchMessageChoice->clear();
+    for (const auto &key : activityCardOrder)
+        if (activityCardFrames.value(key)) activityCardFrames.value(key)->deleteLater();
+    activityCardFrames.clear(); activityCardLabels.clear(); activityCardOrder.clear();
+    activityScroll->hide();
+}
+
+bool AgentWidget::bindConversationStore()
+{
+    if (rebindingStore || !commandHost) return false;
+    const auto projectResponse = hostRequest(QStringLiteral("project.query"));
+    const auto project = projectResponse.value(QStringLiteral("result")).toObject();
+    const QString workspace = commandHost->projectWorkspace();
+    const QString projectId = project.value(QStringLiteral("projectId")).toString();
+    if (projectResponse.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("ok"))
+        || workspace.isEmpty() || projectId.isEmpty())
+    {
+        if (conversationStore)
+        {
+            rebindingStore = true;
+            if (runner.isActive()) runner.cancel();
+            retireProviderRequest();
+            clearConversationView();
+            conversationStore.reset(); storeWorkspace.clear(); storeProjectId.clear();
+            currentConversationId.clear(); conversationRevision.clear(); conversationMessageCount = 0;
+            const QSignalBlocker blocker(conversationChoice);
+            conversationChoice->clear();
+            historyStatus->setText(tr("Project history is unavailable. Previous records were preserved."));
+            rebindingStore = false;
+        }
+        return false;
+    }
+    if (conversationStore && workspace == storeWorkspace && projectId == storeProjectId) return true;
+    rebindingStore = true;
+    if (conversationStore && runner.isActive()) runner.cancel();
+    retireProviderRequest();
+    clearConversationView();
+    conversationStore = std::make_unique<RAgentConversationStore>();
+    QString error;
+    const bool configured = conversationStore->configure(workspace, projectId, &error);
+    storeWorkspace = configured ? workspace : QString();
+    storeProjectId = configured ? projectId : QString();
+    currentConversationId.clear();
+    conversationRevision.clear();
+    conversationMessageCount = 0;
+    if (!configured)
+    {
+        conversationStore.reset();
+        historyStatus->setText(tr("Conversation storage is unavailable. Visible messages remain in this window."));
+    }
+    rebindingStore = false;
+    return configured;
+}
+
+void AgentWidget::refreshConversationList()
+{
+    if (!bindConversationStore()) return;
+    QString error;
+    const auto listing = conversationStore->list(0, 32, &error);
+    if (!error.isEmpty())
+    {
+        historyStatus->setText(tr("Saved history could not be verified. Existing records were preserved."));
+        return;
+    }
+    const QSignalBlocker blocker(conversationChoice);
+    conversationChoice->clear();
+    conversationChoice->addItem(tr("New conversation"), QString());
+    for (const auto &value : listing.value(QStringLiteral("conversations")).toArray())
+    {
+        const auto summary = value.toObject();
+        const QString id = summary.value(QStringLiteral("conversationId")).toString();
+        conversationChoice->addItem(summary.value(QStringLiteral("title")).toString().left(100)
+            + QStringLiteral(" · ") + id.left(8), id);
+    }
+    const int current = conversationChoice->findData(currentConversationId);
+    if (current >= 0) conversationChoice->setCurrentIndex(current);
+}
+
+void AgentWidget::createConversation()
+{
+    if (runner.isActive() || !bindConversationStore()) return;
+    QString error;
+    const auto summary = conversationStore->create(accessPolicy == AgentTaskRunner::AccessPolicy::ReadOnly
+        ? tr("Read-only question") : tr("Conversation"), &error);
+    if (summary.isEmpty())
+    {
+        historyStatus->setText(tr("A new conversation could not be saved. Existing history was preserved."));
+        return;
+    }
+    clearConversationView();
+    currentConversationId = summary.value(QStringLiteral("conversationId")).toString();
+    conversationRevision = summary.value(QStringLiteral("revision")).toString();
+    conversationMessageCount = summary.value(QStringLiteral("messageCount")).toInt();
+    if (QSettings *preferences = agentPreferences()) preferences->setValue(lastConversationPreferenceKey(), currentConversationId);
+    historyOffset = 0;
+    branchMessageChoice->clear();
+    refreshConversationList();
+    updateAvailability();
+}
+
+void AgentWidget::recordMessage(const QString &role, const QString &text, const QString &taskId,
+                                const QJsonObject &facts)
+{
+    lastMessagePersisted = false;
+    if (restoringHistory || rebindingStore || text.isEmpty()) return;
+    const QString previousProjectId = storeProjectId;
+    const QString previousWorkspace = storeWorkspace;
+    if (!bindConversationStore() || (!previousProjectId.isEmpty()
+        && (previousProjectId != storeProjectId || previousWorkspace != storeWorkspace))) return;
+    conversationStore->setSensitiveValues({getProviderSettings().getApiKey(), requestSettingsSnapshot.getApiKey()});
+    if (currentConversationId.isEmpty())
+    {
+        QString error;
+        const auto summary = conversationStore->create(accessPolicy == AgentTaskRunner::AccessPolicy::ReadOnly
+            ? tr("Read-only question") : tr("Conversation"), &error);
+        if (summary.isEmpty()) { historyStatus->setText(tr("This conversation could not be saved.")); return; }
+        currentConversationId = summary.value(QStringLiteral("conversationId")).toString();
+        conversationRevision = summary.value(QStringLiteral("revision")).toString();
+        conversationMessageCount = summary.value(QStringLiteral("messageCount")).toInt();
+    }
+    QJsonObject entry{{QStringLiteral("messageId"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                      {QStringLiteral("role"), role}, {QStringLiteral("text"), text}};
+    if (!taskId.isEmpty()) entry.insert(QStringLiteral("taskId"), taskId);
+    if (!facts.isEmpty()) entry.insert(QStringLiteral("facts"), facts);
+    QString error;
+    QJsonObject summary;
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        summary = conversationStore->append(currentConversationId, conversationRevision, QJsonArray{entry}, &error);
+        if (!summary.isEmpty()) break;
+        const auto current = conversationStore->page(currentConversationId, 0, 1, &error);
+        const QString revision = current.value(QStringLiteral("revision")).toString();
+        if (current.isEmpty() || revision == conversationRevision) break;
+        conversationRevision = revision;
+    }
+    if (summary.isEmpty())
+    {
+        historyStatus->setText(tr("This message remains visible but could not be persisted. Existing history was preserved."));
+        return;
+    }
+    conversationRevision = summary.value(QStringLiteral("revision")).toString();
+    conversationMessageCount = summary.value(QStringLiteral("messageCount")).toInt();
+    lastMessagePersisted = true;
+    historyOffset = qMax(0, conversationMessageCount - 50);
+    branchMessageChoice->addItem(role + QStringLiteral(": ") + text.left(60), entry.value(QStringLiteral("messageId")).toString());
+    if (branchMessageChoice->count() > 50) branchMessageChoice->removeItem(0);
+    branchMessageChoice->setCurrentIndex(branchMessageChoice->count() - 1);
+    if (QSettings *preferences = agentPreferences()) preferences->setValue(lastConversationPreferenceKey(), currentConversationId);
+    historyStatus->setText(tr("Saved conversation · %1 messages. Historical text grants no approval.").arg(conversationMessageCount));
+    refreshConversationList();
+    updateAvailability();
+}
+
+bool AgentWidget::appendExecutionFact(const QJsonObject &route, const QString &taskId,
+                                     const QString &text, const QJsonObject &facts)
+{
+    if (route.isEmpty() || taskId.isEmpty()) return false;
+    RAgentConversationStore store;
+    QString error;
+    if (!store.configure(route.value(QStringLiteral("workspace")).toString(),
+                         route.value(QStringLiteral("projectId")).toString(), &error)) return false;
+    const QString id = route.value(QStringLiteral("conversationId")).toString();
+    const auto page = store.page(id, 0, 1, &error);
+    if (page.isEmpty()) return false;
+    const QJsonObject entry{{QStringLiteral("messageId"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
+        {QStringLiteral("taskId"), taskId}, {QStringLiteral("role"), QStringLiteral("fact")},
+        {QStringLiteral("text"), text}, {QStringLiteral("facts"), facts}};
+    const auto summary = store.append(id, page.value(QStringLiteral("revision")).toString(), QJsonArray{entry}, &error);
+    if (summary.isEmpty()) return false;
+    if (route.value(QStringLiteral("workspace")).toString() == storeWorkspace
+        && route.value(QStringLiteral("projectId")).toString() == storeProjectId && id == currentConversationId)
+    {
+        conversationRevision = summary.value(QStringLiteral("revision")).toString();
+        conversationMessageCount = summary.value(QStringLiteral("messageCount")).toInt();
+        historyStatus->setText(tr("Execution evidence was recorded in this conversation. Historical references grant no permission."));
+    }
+    return true;
+}
+
+bool AgentWidget::recordExecutionIntent(const QString &taskId, const QString &, const QJsonObject &reference)
+{
+    auto facts = reference;
+    facts.insert(QStringLiteral("status"), QStringLiteral("pending"));
+    facts.insert(QStringLiteral("code"), QStringLiteral("OUTCOME_NOT_OBSERVED"));
+    const bool recorded = appendExecutionFact(taskConversationRoutes.value(taskId), taskId,
+        tr("Execution intent recorded; acceptance is not yet observed. Query this reference before retrying."), facts);
+    if (recorded) pendingExecutionReferences.insert(taskId + QStringLiteral(":")
+        + reference.value(QStringLiteral("idempotencyKey")).toString(reference.value(QStringLiteral("requestSha256")).toString()), taskId);
+    return recorded;
+}
+
+void AgentWidget::recordExecutionObservation(const QString &taskId, const QString &,
+                                             const QJsonObject &reference, const QJsonObject &result)
+{
+    recordReceiptObservation(taskConversationRoutes.value(taskId), taskId, reference, result);
+}
+
+void AgentWidget::recordReceiptObservation(const QJsonObject &route, const QString &taskId,
+                                            const QJsonObject &reference, const QJsonObject &result)
+{
+    if (route.isEmpty()) return;
+    const QString key = route.value(QStringLiteral("workspace")).toString() + QStringLiteral(":")
+        + route.value(QStringLiteral("conversationId")).toString() + QStringLiteral(":")
+        + taskId + QStringLiteral(":") + reference.value(QStringLiteral("idempotencyKey"))
+        .toString(reference.value(QStringLiteral("requestSha256")).toString());
+    if (observedExecutionReferences.contains(key)) return;
+    QJsonObject facts = reference;
+    facts.insert(QStringLiteral("status"), QStringLiteral("accepted"));
+    facts.insert(QStringLiteral("code"), QStringLiteral("OK"));
+    for (const auto &field : {QStringLiteral("command"), QStringLiteral("operationId"), QStringLiteral("jobId"),
+                             QStringLiteral("sourceDocumentId"), QStringLiteral("sourceRevision"),
+                             QStringLiteral("acceptedModelSha256")})
+        if (result.contains(field) && !result.value(field).toVariant().toString().isEmpty())
+            facts.insert(field, result.value(field).toVariant().toString());
+    const auto snapshot = result.value(QStringLiteral("acceptedSnapshotRef")).toObject();
+    if (!snapshot.value(QStringLiteral("modelSha256")).toString().isEmpty())
+        facts.insert(QStringLiteral("acceptedModelSha256"), snapshot.value(QStringLiteral("modelSha256")));
+    if (appendExecutionFact(route, taskId,
+        tr("The host accepted the referenced action. A submitted job's numerical result must be queried separately."), facts))
+    {
+        observedExecutionReferences.insert(key);
+        pendingExecutionReferences.remove(taskId + QStringLiteral(":")
+            + reference.value(QStringLiteral("idempotencyKey")).toString(reference.value(QStringLiteral("requestSha256")).toString()));
+        runner.resolveExecutionObservation(taskId, reference);
+    }
+}
+
+void AgentWidget::reconcileHistoryFacts(const QJsonArray &messages)
+{
+    const QJsonObject route{{QStringLiteral("workspace"), storeWorkspace}, {QStringLiteral("projectId"), storeProjectId},
+                            {QStringLiteral("conversationId"), currentConversationId}};
+    QString error;
+    const auto complete = conversationStore ? conversationStore->exportConversation(currentConversationId, &error) : QJsonObject{};
+    QSet<QString> resolved;
+    for (const auto &value : complete.value(QStringLiteral("messages")).toArray())
+    {
+        const auto entry = value.toObject();
+        const auto facts = entry.value(QStringLiteral("facts")).toObject();
+        if (facts.value(QStringLiteral("status")) == QJsonValue(QStringLiteral("accepted"))
+            || facts.value(QStringLiteral("status")) == QJsonValue(QStringLiteral("rejected")))
+            resolved.insert(entry.value(QStringLiteral("taskId")).toString() + QStringLiteral(":")
+                + facts.value(QStringLiteral("idempotencyKey")).toString(facts.value(QStringLiteral("requestSha256")).toString()));
+    }
+    for (const auto &value : messages)
+    {
+        const auto entry = value.toObject();
+        const auto facts = entry.value(QStringLiteral("facts")).toObject();
+        if (entry.value(QStringLiteral("role")) != QJsonValue(QStringLiteral("fact"))
+            || (facts.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("pending"))
+                && facts.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("unknown")))) continue;
+        const QString taskId = entry.value(QStringLiteral("taskId")).toString();
+        if (taskId.isEmpty() || resolved.contains(taskId + QStringLiteral(":")
+            + facts.value(QStringLiteral("idempotencyKey")).toString(facts.value(QStringLiteral("requestSha256")).toString()))) continue;
+        QJsonObject reference;
+        for (const auto &field : {QStringLiteral("command"), QStringLiteral("idempotencyKey"),
+                                 QStringLiteral("requestSha256"), QStringLiteral("workflowProjectId")})
+            if (facts.contains(field)) reference.insert(field, facts.value(field));
+        if (reference.contains(QStringLiteral("idempotencyKey")))
+        {
+            const QJsonObject request{{QStringLiteral("apiVersion"), QStringLiteral("range.host/v1")},
+                {QStringLiteral("requestId"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                {QStringLiteral("operation"), QStringLiteral("operation.query")},
+                {QStringLiteral("parameters"), QJsonObject{{QStringLiteral("idempotencyKey"), reference.value(QStringLiteral("idempotencyKey"))}}}};
+            const auto reply = commandHost ? commandHost->handleReadOnly(request) : QJsonObject{};
+            const auto operation = reply.value(QStringLiteral("result")).toObject();
+            const auto observation = operation.value(QStringLiteral("observation")).toObject();
+            if (observation.value(QStringLiteral("status")) == QJsonValue(QStringLiteral("accepted")))
+                recordReceiptObservation(route, taskId, reference, observation.value(QStringLiteral("result")).toObject());
+            else if (operation.value(QStringLiteral("phase")) == QJsonValue(QStringLiteral("observed"))
+                && observation.value(QStringLiteral("status")) == QJsonValue(QStringLiteral("rejected")))
+            {
+                auto rejected = reference;
+                rejected.insert(QStringLiteral("status"), QStringLiteral("rejected"));
+                rejected.insert(QStringLiteral("code"), observation.value(QStringLiteral("code")));
+                if (appendExecutionFact(route, taskId, tr("The durable host record confirms this execution was rejected."), rejected))
+                {
+                    runner.resolveExecutionObservation(taskId, reference);
+                    pendingExecutionReferences.remove(taskId + QStringLiteral(":") + reference.value(QStringLiteral("idempotencyKey")).toString());
+                }
+            }
+        }
+        else if (reference.contains(QStringLiteral("requestSha256")) && connectedWorkflow && connectedWorkflow->isReady()
+                 && receiptQueries.size() < 16)
+        {
+            const QString id = connectedWorkflow->request(QStringLiteral("execution.query"),
+                {{QStringLiteral("requestSha256"), reference.value(QStringLiteral("requestSha256"))}});
+            if (!id.isEmpty()) receiptQueries.insert(id, QJsonObject{{QStringLiteral("taskId"), taskId},
+                {QStringLiteral("reference"), reference}, {QStringLiteral("route"), route}});
+        }
+    }
+}
+
+bool AgentWidget::loadConversation(const QString &id, QString *error)
+{
+    if (id.isEmpty() || runner.isActive() || !bindConversationStore()) return false;
+    QString localError;
+    const auto page = conversationStore->page(id, 0, 1, &localError);
+    if (page.isEmpty())
+    {
+        if (error) *error = localError;
+        historyStatus->setText(tr("This history is unavailable or invalid; existing records were preserved."));
+        return false;
+    }
+    clearConversationView();
+    currentConversationId = id;
+    conversationRevision = page.value(QStringLiteral("revision")).toString();
+    conversationMessageCount = page.value(QStringLiteral("messageCount")).toInt();
+    { const QSignalBlocker blocker(authorize); authorize->setChecked(false); }
+    renderHistoryPage(qMax(0, conversationMessageCount - 50));
+    if (QSettings *preferences = agentPreferences()) preferences->setValue(lastConversationPreferenceKey(), id);
+    refreshConversationList();
+    updateAvailability();
+    if (error) error->clear();
+    return true;
+}
+
+void AgentWidget::renderHistoryPage(int offset)
+{
+    if (runner.isActive() || currentConversationId.isEmpty() || !bindConversationStore()) return;
+    QString error;
+    const auto page = conversationStore->page(currentConversationId, qMax(0, offset), 50, &error);
+    if (page.isEmpty()) { historyStatus->setText(tr("Historical messages could not be verified.")); return; }
+    restoringHistory = true;
+    transcript->clear();
+    branchMessageChoice->clear();
+    QJsonArray context, historicalFacts;
+    for (const auto &value : page.value(QStringLiteral("messages")).toArray())
+    {
+        const auto entry = value.toObject();
+        const QString role = entry.value(QStringLiteral("role")).toString();
+        const QString text = entry.value(QStringLiteral("text")).toString();
+        QString visibleText = text;
+        if (role == QStringLiteral("fact"))
+        {
+            const auto facts = entry.value(QStringLiteral("facts")).toObject();
+            for (const auto &field : {QStringLiteral("command"), QStringLiteral("operationId"), QStringLiteral("jobId"),
+                                     QStringLiteral("sourceRevision"), QStringLiteral("acceptedModelSha256"),
+                                     QStringLiteral("idempotencyKey"), QStringLiteral("requestSha256")})
+                if (facts.contains(field)) visibleText += QStringLiteral("\n") + field + QStringLiteral(": ") + facts.value(field).toString();
+            QJsonObject historical{{QStringLiteral("type"), QStringLiteral("history_fact")},
+                {QStringLiteral("text"), tr("Historical evidence; query its reference before relying on it: %1").arg(visibleText).left(2000)}};
+            if (facts.contains(QStringLiteral("jobId")))
+                historical.insert(QStringLiteral("artifactRef"), QJsonObject{{QStringLiteral("jobId"), facts.value(QStringLiteral("jobId"))}});
+            const auto sourceRefs = entry.value(QStringLiteral("sourceRefs")).toArray();
+            if (!sourceRefs.isEmpty())
+            {
+                const auto source = sourceRefs.first().toObject();
+                historical.insert(QStringLiteral("sourceRef"), QJsonObject{{QStringLiteral("sourceId"), source.value(QStringLiteral("sourceId"))},
+                    {QStringLiteral("sourceRevision"), source.value(QStringLiteral("revision"))},
+                    {QStringLiteral("modelSha256"), source.value(QStringLiteral("sha256"))}});
+            }
+            historicalFacts.append(historical);
+        }
+        appendText(role == QStringLiteral("user") ? tr("Historical user")
+            : role == QStringLiteral("fact") ? tr("Historical host fact") : tr("Historical assistant"),
+            visibleText, role == QStringLiteral("assistant"));
+        branchMessageChoice->addItem(role + QStringLiteral(": ") + text.left(60), entry.value(QStringLiteral("messageId")).toString());
+        if (role == QStringLiteral("user") || role == QStringLiteral("assistant"))
+            context.append(QJsonObject{{QStringLiteral("role"), role}, {QStringLiteral("content"), text.left(2000)}});
+    }
+    QJsonArray boundedHistory;
+    for (const auto &fact : historicalFacts)
+    {
+        if (boundedHistory.size() >= 8) break;
+        boundedHistory.append(fact);
+    }
+    const qsizetype remaining = 12 - boundedHistory.size();
+    for (qsizetype index = qMax(qsizetype(0), context.size() - remaining); index < context.size(); ++index)
+        boundedHistory.append(context.at(index));
+    runner.restoreObservableConversation(boundedHistory);
+    historyOffset = page.value(QStringLiteral("offset")).toInt();
+    conversationRevision = page.value(QStringLiteral("revision")).toString();
+    conversationMessageCount = page.value(QStringLiteral("messageCount")).toInt();
+    restoringHistory = false;
+    historyStatus->setText(tr("Historical messages %1–%2 of %3. No pending proposal or approval was restored.")
+        .arg(conversationMessageCount ? historyOffset + 1 : 0)
+        .arg(historyOffset + page.value(QStringLiteral("messages")).toArray().size()).arg(conversationMessageCount));
+    reconcileHistoryFacts(page.value(QStringLiteral("messages")).toArray());
+    updateAvailability();
+}
+
+void AgentWidget::branchFromMessage()
+{
+    if (runner.isActive() || currentConversationId.isEmpty() || !bindConversationStore()) return;
+    const QString messageId = branchMessageChoice->currentData().toString();
+    if (messageId.isEmpty()) return;
+    QString error;
+    const auto summary = conversationStore->branch(currentConversationId, messageId, tr("Conversation branch"), &error);
+    if (summary.isEmpty()) { historyStatus->setText(tr("The branch could not be created. Existing history was preserved.")); return; }
+    loadConversation(summary.value(QStringLiteral("conversationId")).toString());
+    goal->setFocus(Qt::OtherFocusReason);
+}
+
+void AgentWidget::deleteConversation()
+{
+    if (runner.isActive() || currentConversationId.isEmpty() || !bindConversationStore()) return;
+    QString error;
+    if (!conversationStore->remove(currentConversationId, conversationRevision, &error))
+    { historyStatus->setText(tr("This conversation could not be deleted. Existing data was preserved.")); return; }
+    currentConversationId.clear(); conversationRevision.clear(); conversationMessageCount = 0;
+    runner.clearConversation(); transcript->clear(); branchMessageChoice->clear();
+    historyStatus->setText(tr("Conversation deleted. Its historical actions and independent branches remain unchanged."));
+    refreshConversationList(); updateAvailability();
+}
+
+void AgentWidget::exportConversation()
+{
+    if (currentConversationId.isEmpty() || !bindConversationStore()) return;
+    QString error;
+    const auto snapshot = conversationStore->exportConversation(currentConversationId, &error);
+    if (snapshot.isEmpty()) { historyStatus->setText(tr("This history could not be verified for export.")); return; }
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export conversation"), QString(), tr("Conversation JSON (*.json)"));
+    if (path.isEmpty()) return;
+    const QByteArray bytes = QJsonDocument(snapshot).toJson(QJsonDocument::Indented);
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+    { historyStatus->setText(tr("The export could not be published.")); return; }
+    historyStatus->setText(tr("Exported verified historical messages and facts; no execution permissions are included."));
+}
+
+void AgentWidget::startReadOnlyQuestion(const QString &text)
+{
+    if (accessPolicy != AgentTaskRunner::AccessPolicy::ReadWrite || text.trimmed().isEmpty()) return;
+    if (!readOnlySidecar)
+    {
+        auto *dialog = new QDialog(this);
+        dialog->setObjectName(QStringLiteral("agentReadOnlyDialog"));
+        dialog->setWindowTitle(tr("Read-only question · current task continues"));
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->resize(600, 850);
+        auto *layout = new QVBoxLayout(dialog);
+        auto *sidecar = new AgentWidget(commandHost, connectedWorkflow, dialog, network,
+                                        AgentTaskRunner::AccessPolicy::ReadOnly);
+        layout->addWidget(sidecar);
+        readOnlyDialog = dialog; readOnlySidecar = sidecar;
+        connect(dialog, &QDialog::finished, this, [this] { if (goal) goal->setFocus(Qt::OtherFocusReason); });
+    }
+    auto *sidecar = readOnlySidecar.data();
+    if (!sidecar) return;
+    sidecar->setProviderSettings(getProviderSettings());
+    sidecar->selectedEffort = selectedEffort;
+    sidecar->updateEffortChoices();
+    sidecar->streamResponses->setChecked(streamResponses->isChecked());
+    sidecar->streamResponses->setChecked(false);
+    readOnlyDialog->show(); readOnlyDialog->raise(); readOnlyDialog->activateWindow();
+    if (sidecar->runner.isActive())
+    {
+        sidecar->goal->setPlainText(text);
+        sidecar->submitDraft();
+    }
+    else sidecar->startTask(text, false);
 }
 
 RAgentSettings AgentWidget::getProviderSettings() const
@@ -621,11 +1245,12 @@ void AgentWidget::startTask(const QString &text, bool authorized)
         return;
     }
     requestSettingsSnapshot = getProviderSettings();
+    bindConversationStore();
     requestEffortSnapshot = selectedEffort;
-    requestStreamingSnapshot = streamResponses->isChecked()
+    requestStreamingSnapshot = accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && streamResponses->isChecked()
         && providerSupportsStreaming(requestSettingsSnapshot.getType());
     appendText(tr("You"), text);
-    runner.startTask(text, authorized);
+    runner.startTask(text, accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && authorized);
 }
 
 void AgentWidget::submitDraft()
@@ -644,12 +1269,13 @@ void AgentWidget::submitDraft()
         return;
     }
     requestSettingsSnapshot = getProviderSettings();
+    bindConversationStore();
     requestEffortSnapshot = selectedEffort;
-    requestStreamingSnapshot = streamResponses->isChecked()
+    requestStreamingSnapshot = accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && streamResponses->isChecked()
         && providerSupportsStreaming(requestSettingsSnapshot.getType());
     appendText(tr("You"), message);
     goal->clear();
-    runner.submitMessage(message, authorize->isChecked());
+    runner.submitMessage(message, accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && authorize->isChecked());
     updateAvailability();
 }
 
@@ -658,6 +1284,7 @@ void AgentWidget::answerQuestion(const QString &questionId, const QString &answe
     if (questionId.isEmpty() || questionId != runner.pendingQuestionId() || answer.trimmed().isEmpty()) return;
     if (clearDraft && goal->toPlainText().trimmed() != answer.trimmed()) return;
     appendText(tr("You"), answer);
+    recordMessage(QStringLiteral("user"), answer, runner.taskId());
     if (clearDraft) goal->clear();
     runner.answerQuestion(questionId, answer);
     updateAvailability();
@@ -915,6 +1542,7 @@ void AgentWidget::openSettings()
 
 void AgentWidget::persistConversationPreferences()
 {
+    if (accessPolicy == AgentTaskRunner::AccessPolicy::ReadOnly) return;
     QSettings *preferences = agentPreferences();
     if (!preferences) return;
     if (model) providerSettings.setModel(model->currentText().trimmed());
@@ -1097,11 +1725,18 @@ void AgentWidget::updateAvailability()
     goal->setEnabled(true);
     model->setEnabled(true);
     effort->setEnabled(providerSettings.getType() == RAgentSettings::Type::DeepSeek);
-    streamResponses->setEnabled(providerSupportsStreaming(providerSettings.getType()));
+    streamResponses->setEnabled(accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && providerSupportsStreaming(providerSettings.getType()));
     streamResponses->setToolTip(providerSupportsStreaming(providerSettings.getType())
         ? tr("When enabled, supported Chat Completions providers stream text. Complete JSON responses remain available when streaming is off.")
         : tr("This provider does not support streaming Chat Completions."));
-    authorize->setEnabled(true);
+    authorize->setEnabled(accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite);
+    readOnlyQuestion->setEnabled(accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && !goal->toPlainText().trimmed().isEmpty());
+    conversationChoice->setEnabled(!busy);
+    branchConversation->setEnabled(!busy && !currentConversationId.isEmpty() && branchMessageChoice->count() > 0);
+    branchMessageChoice->setEnabled(!busy);
+    historyMenu->setEnabled(!currentConversationId.isEmpty());
+    historyPrevious->setEnabled(!busy && historyOffset > 0);
+    historyNext->setEnabled(!busy && historyOffset + 50 < conversationMessageCount);
 
     const bool pendingProposal = busy && !runner.pendingProposal().isEmpty() && !presentedProposalId.isEmpty();
     approvalCard->setVisible(pendingProposal);
@@ -1120,13 +1755,17 @@ void AgentWidget::updateAvailability()
         questionCard->setVisible(false);
         send->setText(busy ? tr("Send now") : tr("Send"));
     }
-}QJsonObject AgentWidget::hostRequest(const QString &operation, const QJsonObject &parameters) const
+}
+
+QJsonObject AgentWidget::hostRequest(const QString &operation, const QJsonObject &parameters) const
 {
     if (!commandHost) return {};
-    return commandHost->handle({{QStringLiteral("apiVersion"), QStringLiteral("range.host/v1")},
+    const QJsonObject request{{QStringLiteral("apiVersion"), QStringLiteral("range.host/v1")},
                                 {QStringLiteral("requestId"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
                                 {QStringLiteral("operation"), operation},
-                                {QStringLiteral("parameters"), parameters}});
+                                {QStringLiteral("parameters"), parameters}};
+    return accessPolicy == AgentTaskRunner::AccessPolicy::ReadOnly
+        ? commandHost->handleReadOnly(request) : commandHost->handle(request);
 }
 
 bool AgentWidget::queryFreshContext()
@@ -1223,6 +1862,7 @@ void AgentWidget::appendHostEvent(const QJsonObject &event)
 
 void AgentWidget::refreshHostEvents()
 {
+    if (isVisible()) bindConversationStore();
     auto *eventBody = findChild<QWidget *>(QStringLiteral("agentEventHistoryBody"));
     if (!commandHost || QThread::currentThread() != thread() || !isVisible()
         || !eventBody || !eventBody->isVisible()) return;

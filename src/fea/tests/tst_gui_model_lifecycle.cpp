@@ -12,6 +12,7 @@
 #include <QUuid>
 
 #include <rmodel_command_session.h>
+#include <ragent_conversation_store.h>
 #include <rbl_utils.h>
 #include "application.h"
 #include "action.h"
@@ -177,6 +178,10 @@ private slots:
         }
         QVERIFY(!apiKey.isEmpty());
         auto *session = Application::instance()->getSession();
+        QTemporaryDir conversationWorkspace;
+        QVERIFY(conversationWorkspace.isValid());
+        QString workspaceError;
+        QVERIFY2(session->openProject(conversationWorkspace.path(), &workspaceError), qPrintable(workspaceError));
         session->addModel(fixture("Remote model acceptance"));
         session->setModelSelected(0, true);
         auto *widget = Application::instance()->getMainWindow()->findChild<AgentWidget *>();
@@ -206,6 +211,37 @@ private slots:
         QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 53u);
         QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNModesToExtract(), 2u);
         QVERIFY(session->getModel(0).getUndoStackSize() > 0);
+        if (qEnvironmentVariableIsSet("RANGE_TEST_DEEPSEEK_READONLY"))
+        {
+            const auto acceptedStamp = session->modelCommandStamp(0);
+            const auto acceptedProposal = widget->taskRunner()->pendingProposal();
+            auto *composer = widget->findChild<QPlainTextEdit *>("agentGoal");
+            QVERIFY(composer);
+            composer->setPlainText(QStringLiteral("Preserved main draft during the independent question."));
+            widget->startReadOnlyQuestion(QStringLiteral("Using the selected GUI document's current supplied context or document_query, report its modal iteration count. Reply with the decimal integer only. Do not propose or execute changes."));
+            auto *readOnly = widget->readOnlyWidget();
+            QVERIFY(readOnly);
+            QSignalSpy readOnlyFinished(readOnly->taskRunner(), &AgentTaskRunner::finished);
+            QSignalSpy readOnlyActions(readOnly->taskRunner(), &AgentTaskRunner::actionCompleted);
+            QTRY_COMPARE_WITH_TIMEOUT(readOnlyFinished.size(), 1, 180000);
+            QCOMPARE(readOnlyFinished.last().at(0).toString(), QStringLiteral("completed"));
+            QCOMPARE(readOnlyFinished.last().at(1).toString().trimmed(), QStringLiteral("53"));
+            QCOMPARE(readOnlyActions.size(), 0);
+            QCOMPARE(session->modelCommandStamp(0), acceptedStamp);
+            QCOMPARE(widget->taskRunner()->pendingProposal(), acceptedProposal);
+            QCOMPARE(composer->toPlainText(), QStringLiteral("Preserved main draft during the independent question."));
+            QVERIFY(readOnly->conversationId() != widget->conversationId());
+            RAgentConversationStore store;
+            const auto identity = session->getModelCommandHost()->handle(
+                {{"apiVersion", "range.host/v1"}, {"requestId", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                 {"operation", "project.query"}, {"parameters", QJsonObject{}}}).value("result").toObject();
+            QVERIFY2(store.configure(session->getModelCommandHost()->projectWorkspace(),
+                                    identity.value("projectId").toString(), &workspaceError), qPrintable(workspaceError));
+            const auto saved = store.exportConversation(readOnly->conversationId(), &workspaceError);
+            QVERIFY2(!saved.isEmpty(), qPrintable(workspaceError));
+            QVERIFY(!QJsonDocument(saved).toJson(QJsonDocument::Compact).contains(apiKey.toUtf8()));
+            qInfo("DeepSeek live read-only answer: source unchanged, no action, independent conversation persisted.");
+        }
         if (qEnvironmentVariableIsSet("RANGE_TEST_DEEPSEEK_FOLLOWUP"))
         {
             finished.clear();
@@ -784,6 +820,9 @@ private slots:
 
 int runGuiHostContextTests(int argc, char **argv);
 int runAgentTaskRunnerTests(int argc, char **argv);
+int runAgentReadOnlyRunnerTests(int argc, char **argv);
+int runAgentConversationHistoryWidgetTests(int argc, char **argv);
+int runAgentObservationBoundaryTests(int argc, char **argv);
 int runSolverSnapshotTests(int argc, char **argv);
 int runExtensionWidgetTests(int argc, char **argv);
 int runAgentEventViewTests(int argc, char **argv);
@@ -817,6 +856,9 @@ int main(int argc, char **argv)
     TestGuiModelLifecycle test;
     const bool hostContext = argc > 1 && QByteArray(argv[1]) == "--host-context";
     const bool agentRunner = argc > 1 && QByteArray(argv[1]) == "--agent-runner";
+    const bool agentReadOnly = argc > 1 && QByteArray(argv[1]) == "--agent-readonly-runner";
+    const bool agentHistory = argc > 1 && QByteArray(argv[1]) == "--agent-conversation-history";
+    const bool observationBoundaries = argc > 1 && QByteArray(argv[1]) == "--agent-observation-boundaries";
     const bool solverSnapshot = argc > 1 && QByteArray(argv[1]) == "--solver-snapshot";
     const bool extensionWidget = argc > 1 && QByteArray(argv[1]) == "--extension-widget";
     const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
@@ -828,13 +870,16 @@ int main(int argc, char **argv)
     const bool currentModelWorkflow = argc > 1 && QByteArray(argv[1]) == "--current-model-workflow";
     const bool recoveryInteraction = argc > 1 && QByteArray(argv[1]) == "--recovery-interaction";
     const bool modelCommitRecovery = argc > 1 && QByteArray(argv[1]) == "--model-commit-recovery";
-    if (hostContext || agentRunner || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
+    if (hostContext || agentRunner || agentReadOnly || agentHistory || observationBoundaries || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
     }
     const int result = hostContext ? runGuiHostContextTests(argc, argv)
         : agentRunner ? runAgentTaskRunnerTests(argc, argv)
+        : agentReadOnly ? runAgentReadOnlyRunnerTests(argc, argv)
+        : agentHistory ? runAgentConversationHistoryWidgetTests(argc, argv)
+        : observationBoundaries ? runAgentObservationBoundaryTests(argc, argv)
         : solverSnapshot ? runSolverSnapshotTests(argc, argv)
         : extensionWidget ? runExtensionWidgetTests(argc, argv)
         : agentEventView ? runAgentEventViewTests(argc, argv)

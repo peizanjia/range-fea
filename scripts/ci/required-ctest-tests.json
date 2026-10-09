@@ -42,6 +42,7 @@
       "tst_model_command_session",
       "tst_model_command_cli",
       "tst_project_catalog",
+      "tst_agent_conversation_store",
       "tst_model_command_service",
       "tst_native_result_broker"
     ],
@@ -117,6 +118,9 @@
       "tst_gui_model_lifecycle",
       "tst_gui_host_context",
       "tst_agent_task_runner",
+      "tst_agent_readonly_runner",
+      "tst_agent_conversation_history_widget",
+      "tst_agent_observation_boundaries",
       "tst_solver_snapshot",
       "tst_extension_widget",
       "tst_agent_event_view",

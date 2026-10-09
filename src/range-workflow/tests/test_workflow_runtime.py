@@ -65,6 +65,31 @@ class ContractTest(unittest.TestCase):
         self.service.close()
         self.temporary.cleanup()
 
+    def test_execution_receipt_lookup_survives_reopen_without_authority(self):
+        preview = request(self.service, "command.preview", {"command": "workflow.configure",
+            "parameters": {"dt": .005, "steps": 20, "targetDamping": .1},
+            "expectedRevision": request(self.service, "project.query")["revision"]})
+        lookup = {"requestSha256": preview["previewHash"]}
+        self.assertFalse(request(self.service, "execution.query", lookup)["accepted"])
+        approval = request(self.service, "host.approve",
+            {"previewId": preview["previewId"], "previewHash": preview["previewHash"]})
+        with mock.patch.object(self.service, "_run_job", return_value=None):
+            accepted = request(self.service, "command.execute",
+                {"previewId": preview["previewId"], "approvalToken": approval["approvalToken"]})
+        before = self.service.state_snapshot()
+        receipt = request(self.service, "execution.query", lookup)
+        self.assertTrue(receipt["accepted"])
+        self.assertEqual(receipt["jobId"], accepted["jobId"])
+        self.assertEqual(self.service.state_snapshot(), before)
+        self.assertNotIn("approvalToken", json.dumps(receipt))
+        self.assertNotIn("previewId", json.dumps(receipt))
+        self.assertNotIn(approval["approvalToken"], json.dumps(receipt))
+        self.service.close()
+        self.service = self.open()
+        self.assertEqual(request(self.service, "execution.query", lookup)["jobId"], accepted["jobId"])
+        self.assertFalse(request(self.service, "execution.query", {"requestSha256": "f" * 64})["accepted"])
+        self.assertCode("INVALID_PARAMETERS", request, self.service, "execution.query",
+                        {"requestSha256": preview["previewHash"], "approvalToken": approval["approvalToken"]})
     def assertCode(self, code, callable, *args):
         with self.assertRaises(WorkflowError) as captured:
             callable(*args)

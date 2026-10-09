@@ -663,13 +663,17 @@ if(RANGE_BUILD_TESTS)
     list(FILTER _fea_lifecycle_sources EXCLUDE REGEX "\\.rc$")
     qt_add_executable(tst_gui_model_lifecycle
         tests/tst_gui_model_lifecycle.cpp tests/tst_gui_host_context.cpp
-        tests/tst_agent_task_runner.cpp tests/tst_solver_snapshot.cpp tests/tst_extension_widget.cpp
+        tests/tst_agent_task_runner.cpp tests/tst_agent_readonly_runner.cpp tests/tst_solver_snapshot.cpp tests/tst_extension_widget.cpp
         tests/tst_agent_event_view.cpp tests/tst_agent_conversation_widget.cpp tests/tst_project_session.cpp
+        tests/tst_agent_conversation_history_widget.cpp
+        tests/tst_agent_observation_boundaries.cpp
         tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp tests/tst_native_results_widget.cpp
         tests/tst_current_model_workflow.cpp tests/tst_recovery_interaction.cpp
         tests/tst_model_commit_recovery.cpp ${_fea_lifecycle_sources})
     set_source_files_properties(tests/tst_recovery_interaction.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_RECOVERY_INTERACTION_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
+    set_source_files_properties(tests/tst_agent_conversation_history_widget.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_WORKFLOW_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\";RANGE_WF07_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
     set_source_files_properties(tests/tst_current_model_workflow.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_CURRENT_MODEL_TEST_FIXTURE=\"$<TARGET_FILE:range-workflow-native-import-fixture>\"")
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
@@ -688,6 +692,27 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_gui_model_lifecycle COMMAND tst_gui_model_lifecycle -o -,txt)
     add_test(NAME tst_gui_host_context COMMAND tst_gui_model_lifecycle --host-context -o -,txt)
     add_test(NAME tst_agent_task_runner COMMAND tst_gui_model_lifecycle --agent-runner -o -,txt)
+    add_test(NAME tst_agent_readonly_runner COMMAND tst_gui_model_lifecycle --agent-readonly-runner -o -,txt)
+    add_test(NAME tst_agent_conversation_history_widget COMMAND tst_gui_model_lifecycle --agent-conversation-history -o -,txt)
+    add_test(NAME tst_agent_observation_boundaries COMMAND tst_gui_model_lifecycle --agent-observation-boundaries -o -,txt)
+    set_tests_properties(tst_agent_observation_boundaries PROPERTIES TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_agent_observation_boundaries PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_agent_conversation_history_widget PROPERTIES TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_agent_conversation_history_widget PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_agent_readonly_runner PROPERTIES TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_agent_readonly_runner PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME tst_solver_snapshot COMMAND tst_gui_model_lifecycle --solver-snapshot -o -,txt)
     add_test(NAME tst_extension_widget COMMAND tst_gui_model_lifecycle --extension-widget -o -,txt)
     add_test(NAME tst_agent_event_view COMMAND tst_gui_model_lifecycle --agent-event-view -o -,txt)

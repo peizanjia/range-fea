@@ -638,6 +638,100 @@ QJsonObject ModelCommandHost::execute(uint modelID, const QJsonObject &request)
     return result;
 }
 
+QString ModelCommandHost::projectWorkspace() const
+{
+    return QThread::currentThread() == thread() && session ? session->projectWorkspace() : QString();
+}
+
+QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const QJsonArray &pinnedDocuments)
+{
+    const auto requestId = request.value(QStringLiteral("requestId"));
+    const auto denied = [&](const QString &code, const QString &message) {
+        return hostRejected(requestId, code, message);
+    };
+    if (QThread::currentThread() != thread())
+        return denied(QStringLiteral("WRONG_THREAD"), tr("GUI host reads require the GUI thread."));
+    const QSet<QString> reads{QStringLiteral("capabilities.query"), QStringLiteral("context.query"),
+        QStringLiteral("events.read"), QStringLiteral("project.query"), QStringLiteral("document.project.query"),
+        QStringLiteral("document.targets.query"), QStringLiteral("document.inputs.query"),
+        QStringLiteral("document.source.validate"), QStringLiteral("native.jobs.query"),
+        QStringLiteral("native.job.query"), QStringLiteral("native.job.recovery.query"),
+        QStringLiteral("native.result.catalog.query"), QStringLiteral("native.result.channels.query"),
+        QStringLiteral("native.result.series.query"), QStringLiteral("native.result.summary.query"),
+        QStringLiteral("operation.query"), QStringLiteral("operations.query")};
+    const QString operation = request.value(QStringLiteral("operation")).toString();
+    if (!reads.contains(operation))
+        return denied(QStringLiteral("READ_ONLY_DENIED"), tr("This question cannot prepare, approve or execute an action."));
+    if (pinnedDocuments.size() > 256)
+        return denied(QStringLiteral("INVALID_SOURCE_SNAPSHOT"), tr("The question source snapshot exceeds its limit."));
+    QSet<QString> pinnedIds;
+    const auto sourceIsCurrent = [&]() {
+        if (pinnedDocuments.isEmpty()) return true;
+        TrySessionLock guard(session);
+        if (!guard.ownsLock() || isMutationBlocked() || activeModalInteraction()) return false;
+        for (const auto &value : pinnedDocuments)
+        {
+            if (!value.isObject()) return false;
+            const auto pin = value.toObject();
+            const QString documentId = pin.value(QStringLiteral("documentId")).toString();
+            const QString epoch = pin.value(QStringLiteral("sessionEpoch")).toString();
+            quint64 revision = 0;
+            if (documentId.isEmpty() || epoch != state->sessionEpoch
+                || !unsignedInteger(pin.value(QStringLiteral("documentRevision")), &revision)) return false;
+            const uint modelId = session->findModelByCommandIdentity(documentId);
+            if (modelId == RConstants::eod || session->modelCommandStamp(modelId) != qMakePair(documentId, revision)) return false;
+            const auto project = pin.value(QStringLiteral("project")).toObject();
+            const auto currentProject = session->documentProjectContext(modelId);
+            for (const auto &field : {QStringLiteral("projectId"), QStringLiteral("persistentDocumentId"),
+                                     QStringLiteral("modelSha256"), QStringLiteral("sourceRevision")})
+                if (project.contains(field) && project.value(field) != currentProject.value(field)) return false;
+        }
+        return true;
+    };
+    for (const auto &value : pinnedDocuments)
+    {
+        const QString id = value.toObject().value(QStringLiteral("documentId")).toString();
+        if (id.isEmpty() || pinnedIds.contains(id))
+            return denied(QStringLiteral("INVALID_SOURCE_SNAPSHOT"), tr("The question source snapshot is invalid."));
+        pinnedIds.insert(id);
+    }
+    if (!sourceIsCurrent())
+        return denied(QStringLiteral("STALE_SOURCE_SNAPSHOT"), tr("The question source changed; ask again with a fresh context."));
+    const auto parameters = request.value(QStringLiteral("parameters")).toObject();
+    const QString targetId = parameters.value(QStringLiteral("target")).toObject().value(QStringLiteral("documentId")).toString();
+    if (!pinnedIds.isEmpty() && !targetId.isEmpty() && !pinnedIds.contains(targetId))
+        return denied(QStringLiteral("READ_ONLY_SCOPE_DENIED"), tr("The requested document is outside this question's source snapshot."));
+    QJsonObject response;
+    if (operation == QStringLiteral("context.query") && parameters.isEmpty() && !pinnedDocuments.isEmpty())
+    {
+        QJsonArray documents, ids;
+        QJsonObject context;
+        for (const auto &pin : pinnedDocuments)
+        {
+            const QString id = pin.toObject().value(QStringLiteral("documentId")).toString();
+            auto fixedRequest = request;
+            fixedRequest.insert(QStringLiteral("parameters"), QJsonObject{{QStringLiteral("target"),
+                QJsonObject{{QStringLiteral("documentId"), id}, {QStringLiteral("sessionEpoch"), state->sessionEpoch}}}});
+            const auto previousSelection = state->lastSelection;
+            response = handle(fixedRequest);
+            state->lastSelection = previousSelection;
+            if (response.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("ok"))) return response;
+            context = response.value(QStringLiteral("result")).toObject();
+            for (const auto &document : context.value(QStringLiteral("documents")).toArray()) documents.append(document);
+            ids.append(id);
+        }
+        context.insert(QStringLiteral("documents"), documents);
+        context.insert(QStringLiteral("selection"), QJsonObject{{QStringLiteral("availability"), QStringLiteral("query-snapshot")},
+            {QStringLiteral("documents"), ids}, {QStringLiteral("entities"), QJsonArray{}}});
+        response.insert(QStringLiteral("result"), context);
+    }
+    else response = handle(request);
+    if (!sourceIsCurrent())
+        return denied(QStringLiteral("STALE_SOURCE_SNAPSHOT"), tr("The question source changed while it was being read."));
+    response.insert(QStringLiteral("accessPolicy"), QStringLiteral("read-only"));
+    return response;
+}
+
 QJsonObject ModelCommandHost::handle(const QJsonObject &request)
 {
     const QJsonValue requestId = request.value(QStringLiteral("requestId"));
@@ -2034,8 +2128,22 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
 
     if (operation == QStringLiteral("operation.query"))
     {
+        if (exactKeys(parameters, {QStringLiteral("idempotencyKey")})
+            && validToken(parameters.value(QStringLiteral("idempotencyKey"))))
+        {
+            auto *catalog = session->getProjectCatalog();
+            if (!catalog) return invalid(QStringLiteral("PERSISTENCE_UNAVAILABLE"),
+                tr("The project operations ledger is unavailable."));
+            QString error;
+            const auto persisted = catalog->queryOperationByIdempotencyKey(
+                parameters.value(QStringLiteral("idempotencyKey")).toString(), {}, &error);
+            if (!error.isEmpty()) return invalid(QStringLiteral("PERSISTENCE_ERROR"), error);
+            if (!persisted) return invalid(QStringLiteral("OPERATION_NOT_FOUND"),
+                tr("No durable operation has been observed for this lookup reference."));
+            return ok(durableOperationJson(*persisted));
+        }
         if (!exactKeys(parameters, {QStringLiteral("operationId")}) || !validToken(parameters.value(QStringLiteral("operationId"))))
-            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("operation.query requires an operationId."));
+            return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("operation.query requires an operation ID or a lookup reference."));
         const auto found = state->operations.find(parameters.value(QStringLiteral("operationId")).toString());
         if (found == state->operations.end())
         {

@@ -1,5 +1,38 @@
 # 续作交接
 
+## 2026-10-09 WF07源码冻结前：实测及终审闭合
+
+- 持续目标active到顺序4，根待冻结WF07实现；WF07尚非done。Root配置/凭据/记忆未改，不push。所有WF07worker与终审已完成停止，无实施代理写入。
+- final-all-build.log全Release成功，final-inventory.json必跑136/136、9组，CI工具14/14通过。byte-reservation-test.txt真实20MiB边界3/3、零skip11.251s；新边界6/6、零skip17.075s。最后独立reviewer wf07_final_acceptance_review无materialP1/P2，三P2闭合；截图实际已查看。
+- Windows窗口全故事6pass1fail、零skip274.162s（windows-history-first.txt）：四业务case通过含真实native暂停10+其他doc修改+RO、source/packageSHA不变，唯系统native保存对话框自动化失败。改为测试作用域Qt保存对话框后windows-export-fixed.txt3/3、零skip5.422s通过；历史测试本地nThreads=4并恢复原设置。旧失败保留，full当前binary待冻结回归。
+- 真实DeepSeek live-readonly-provider.txt3/3、零skip17.581s：主编辑53/核对后旁路答53、源stamp/主草稿不变且独立history脱敏保存，再主追问。主窗口4请求30267tokens（不含RO请求），不冒称供应商全并行native故事；native并行使用fixtureprovider，二者互补证据。
+- final-install.log安装成功；installed-receipt-sdk.log仅installedbin+Windows PATH/privatePython+安装SDK导入断言，receipt核对重开unit1/1PASS0.068s。audit脚本剔除源unit唯一checkout-bootstrap后原合同未改，用mock_run_job，明确不是FE数值验收。
+- 下一条Root提交授权WF07sourcefreeze（排除用户.agents/.codex/AGENTS及build），随后OMP_NUM_THREADS=4完整136ctest，日志frozen-full-ctest.log，先核对结果再验收commit/status。此刻无共享runtime活动；续作不要等待旧39572/18882/54520/51191/56832/84857（都已结束）。
+- WF08只读Sol medium设计已完成，建议service单state/audit同commit+纯JSONDAG/reducer+knowledge.registry，细节在agent wf08_design_map结果；尚未实施或标inprogress，等07done。WF09/WF14依赖已满足，可独立只读准备。之后顺序3及11→12持续推进。
+
+
+## 2026-10-09 WF07：观察边界已通过，容量终审修复中
+
+- 持续目标 active 至顺序4；HEAD d314afa，WF01–06 done，WF07/10 in_progress。没有 push，用户配置、凭据、记忆未改。最新 astra-orchestrator 已重读：需要诊断/设计可直接 Sol medium，明确执行 Luna max，reviewer Root 创建继承；旧的“两次失败才 Sol”记录不再适用。
+- 新 observation boundary 测试最终 6/6、零skip、17.075s，`build/audit-20261009/WF-07/observation-boundaries-fixed.txt`。实际来源变更阻止提交并保存拒绝、账本锁/损坏不误报不存在、双Widget stableID rebase、64未知引用精确释放及正常成功回包尚未持久保存保留引用均通过。首轮4/5日志保留，finished假设修为真实工具失败反馈后明确final回复，不改变副作用拒绝条件。
+- 独立 reviewer wf07_closure_review 静态闭合 Runner 回包在持久保存前释放引用与 Host queryByKey 隐藏账本错误两项P2。最后P2：20MiB每会话字节上限漏算unknown receipts预留；worker wf07_byte_reservation (Luna max)仅拥有 conversation_store.cpp及对应store测试，修参数/三调用和逼近字节上限反例，不运行共享测试。
+- Root当前串行 Windows history 全5业务故事，exec session39572，`windows-history-first.txt` / `windows-history-first-console.log`，evidence目录 windows-history/evidence。先核对结束再build/test/install。此前 observation/ledger build成功；registered136，full136、安装/截图查看/冻结验收仍待完成，不能将WF07称done。
+- Root拥有其余Widget/Host/Runner/GUI新测试/文档/CMake/manifest/计划。WF08只读design探索两次因 agent thread limit 无法创建，未修改用户并发配置、未冒称执行。等待有界当前worker结束可重新安排，不能并发重叠修改。
+- 下一步：确认39572实际结果；收取byte worker修复并build store+GUI；针对回归和终审闭合；真实供应商RO与安装故事/全136/sourcefreeze/验收后WF08、09、10、14及WF11→12继续。下方旧运行session84371/54557等已结束，不能重新等待。
+
+
+## 2026-10-09 12:12 WF07进行中：真实只读与持久事实整合
+
+- 持续目标active到顺序4；HEAD `d314afa`。WF01–06 done，WF07/10 in_progress；顺序3/4未交付。用户配置/skill/凭据/记忆未改，不push。WF05/06冻结ed57d60、完整132/132及安装/窗口/真实DeepSeek验收保持有效，下方历史记录不覆盖本节。
+- WF07新增RAgentConversationStore三个文件（application-lib）及新store测试；immutable event+exclusive commit marker+QLock，strict observable user/assistant/fact，literal/assignment redaction，无rawRunner history/private reasoning/token/pending preview。512messages、16KiB/text、32live conv、20MiB/conv、128MiB/project；branch新ID/copy事实，分页50、导出/删除验证owned路径。
+- Root owns Widget/Host/Runner后续小修/CMake和新GUI测试。Runner/Luna初版只读围栏已停止写入；新GUI测试tester也已完成并interrupt pending_init，Root接管其编译与历史断言修正。Store reservation worker已完成停止。调度器两次拒绝readonly worker followup(agent thread limit)，Root直接接管，未改model/effort。不要假设pending_init表示必需工作仍在推进。
+- 独立review实质修复：项目/新chat切换clear raw/history/cards；workspace+project路由旧callback拒绝；原task执行观察与toolchain cancellation分开，intent recorder beforeeffect可阻止未持久提交；64late workflow request map、Doc结果在finishTool前emit且核对副作用前generation保护newproposal。Widget按originaltask/conversation写safe refs，Host operation.query可idempotencyKey，Workflow execution.query可requestSha256；只读lookup不恢复批准。未知事实可重开核对。原模型提交信号内同步steer的新测试已窄跑通过（上一readonly-detail7/13时此casepass）。
+- 容量修复已实现并编译：pending/unknown带lookupRef按task+ref预留outcome message与8KiB；ordinary messages不能消耗reserved容量，匹配accepted/rejected释放；branch保留独立reservation，拒绝超过512 logical+reserved，不删除旧记录。128task route改回收无pending/receipt的旧route，保护late callbacks。
+- UI primary明确agentTaskWidget，旁路agentReadOnlyTaskWidget独立QNetworkReply/request/generation。RO只在完整final source validation后显示（本轮RO强制nonstream，primarySSE保持）；Auto不可开启/生成/执行/开结果文档。Main自动恢复last conversation，standalone默认fresh；历史typedfacts优先最多8+recent文本总12，含可核对op/job/源refs，旧批准不恢复。
+- 关键真实失败已保留：store firstcompile Qt QJsonObject.cbegin不存在+constant qualification已修；firststore9pass2fail为branch fixture index和redaction placeholder不幂等，均修；GUI firstcompile少括号/params及QFileDialog protected accept已修。firstintegrated4/6 PASS，readonlyfixture把故意dot操作名送provider parser致qFatal，改normalized伪造验证第二围栏；history五case均失败主要因错误假设project.query含workspace，修用trusted C++ getter不向模型加路径。readonly capture误用capabilities也修project.query。不能把这些旧fail日志称passed。
+- 当前最新Build `project-binding-fixed-build.log`及`readonly-bootstrap-fixed-build.log`成功。窄真实只读恶意写/批准/注册围栏3/3、零skip13.268s（readonly-bootstrap-detail.txt）；真实双Widget primaryproposal/draft保持、ROcancel/deny3/3、零skip15.174s（history-binding-detail.txt）。新Python receiptlookup reopen/noauthority unit1/1通过（execution-receipt-fixed-unit.log）。还不是WF07验收。
+- 此刻Root串行CTest exec session84371，`build/audit-20261009/WF-07/binding-fixed-integrated-test.log`，三目标store/readonly/history（含真实native pause10+另doc edit/RO）；续作先核对结束与报告，不并行build/tests/native/install。registered现在135，完整135尚未跑，安装/Windows截图/真实供应商readonly/WF07终审/源码冻结尚待完成。然后WF08/09/10/14及WF11→12持续推进。
+
 ## 2026-10-09 WF05/WF06验收闭合，启动WF07
 
 - 持续目标active到顺序4，未退出/暂停。WF05与WF06现done，实现冻结 `ed57d6025ee5f1316ca172a4c635e32dcf14a7e6`；逐条结论 `docs/acceptance/WF-05.md`、`WF-06.md`。完整132/132、零失败1193.01s（`WF-05/frozen-full-ctest.log`），必跑132/9组、Release、Windows4/4、安装private SDK恢复5/5、DeepSeek真实stream3/3及独立终审通过。旧127/129失败保留，未降低门槛。User配置/skill/凭据/记忆不改，不push。

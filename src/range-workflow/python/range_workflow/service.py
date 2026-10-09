@@ -514,6 +514,26 @@ class WorkflowService:
         if operation == "project.query":
             exact(p, set())
             return self.project_snapshot()
+        if operation == "execution.query":
+            exact(p, {"requestSha256"})
+            request_sha = p["requestSha256"]
+            if type(request_sha) is not str or not re.fullmatch(r"[0-9a-f]{64}", request_sha):
+                raise WorkflowError("INVALID_PARAMETERS", "Execution lookup requires a SHA-256 reference")
+            # This digest is a receipt lookup, never an approval or retry token.
+            matches = [v for v in self._state["previews"].values()
+                       if v.get("previewHash") == request_sha and "jobId" in v]
+            result = {"projectId": self._state["projectId"], "requestSha256": request_sha,
+                      "state": "unobserved", "accepted": False}
+            if len(matches) > 1:
+                raise WorkflowError("AMBIGUOUS_EXECUTION", "Execution receipt identity is ambiguous")
+            if matches:
+                preview = matches[0]
+                job_id = identifier(preview["jobId"], "jobId")
+                job = self._job(job_id)
+                result.update(state="accepted", accepted=True, jobId=job_id,
+                              command=preview["normalized"]["command"],
+                              currentJobState=job["state"])
+            return result
         if operation == "project.catalog.query":
             exact(p, set(), {"persistentDocumentId"})
             from .project_catalog import query_project_catalog
@@ -906,6 +926,7 @@ class WorkflowService:
         revision_schema = {"type": "integer", "minimum": 0, "maximum": 2**53 - 1}
         operation_parameters = {
             "capabilities.query": schema({}), "project.query": schema({}),
+            "execution.query": schema({"requestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}),
             "project.catalog.query": schema({"persistentDocumentId": id_schema}, []),
             "project.snapshot.query": schema({"persistentDocumentId": id_schema}),
             "jobs.query": schema({"jobId": id_schema}, []), "results.query": schema({"jobId": id_schema}, []),

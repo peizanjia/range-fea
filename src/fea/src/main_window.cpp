@@ -146,7 +146,8 @@ MainWindow::MainWindow(Session *session,
     auto *agentDock = new QDockWidget(tr("Assistant"), this);
     agentDock->setObjectName("agentDock");
     agentDock->setMinimumWidth(340);
-    agentDock->setWidget(new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), agentDock));
+    agentDock->setWidget(new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), agentDock,
+                                         nullptr, AgentTaskRunner::AccessPolicy::ReadWrite, true));
     addDockWidget(Qt::RightDockWidgetArea, agentDock);
     tabifyDockWidget(solverDock, agentDock);
     setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);

@@ -23,6 +23,8 @@ public:
     //! Versioned GUI facade for read queries and approved modal/history commands.
     //! Requests and callbacks are currently confined to the GUI thread.
     QJsonObject handle(const QJsonObject &request);
+    //! Trusted read-only route. Metadata cannot grant proposal or execution rights.
+    QJsonObject handleReadOnly(const QJsonObject &request, const QJsonArray &pinnedDocuments = {});
     //! Trusted GUI approval boundary. This is deliberately not a handle operation.
     bool approvePreview(const QString &previewId);
     bool configureModal(const QList<uint> &modelIDs, const RModalSetup &setup, QString *error = nullptr);
@@ -33,6 +35,8 @@ public:
     QString journalPath() const;
     //! Runtime session namespace. Persistent project/document identities are separate.
     QString sessionEpoch() const;
+    //! Trusted local storage identity; not exposed as a model-callable path.
+    QString projectWorkspace() const;
     bool closeDurableSessions(QString *error = nullptr);
     static bool isBusy();
     static bool isMutationBlocked();

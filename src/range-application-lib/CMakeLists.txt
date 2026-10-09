@@ -5,6 +5,8 @@ qt_add_library(range-application-lib STATIC
     include/rmodel_command_session.h
     src/rproject_catalog.cpp
     include/rproject_catalog.h
+    src/ragent_conversation_store.cpp
+    include/ragent_conversation_store.h
     src/rnative_result_broker.cpp
     include/rnative_result_broker.h)
 target_include_directories(range-application-lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -27,6 +29,14 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/PROJECT_CATALOG.md DESTINAT
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/NATIVE_MODEL_OPERATIONS.md DESTINATION doc COMPONENT Application)
 
 if(RANGE_BUILD_TESTS)
+    qt_add_executable(tst_agent_conversation_store tests/tst_agent_conversation_store.cpp)
+    target_link_libraries(tst_agent_conversation_store PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_agent_conversation_store COMMAND tst_agent_conversation_store -o -,txt)
+    set_tests_properties(tst_agent_conversation_store PROPERTIES TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(tst_agent_conversation_store PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     qt_add_executable(tst_native_result_broker tests/tst_native_result_broker.cpp)
     target_link_libraries(tst_native_result_broker PRIVATE range-application-lib Qt6::Test)
     add_dependencies(tst_native_result_broker range-native-results)
