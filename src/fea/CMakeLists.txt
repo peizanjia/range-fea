@@ -359,9 +359,15 @@ qt_add_executable(fea
 add_dependencies(fea range-base-lib range-model-lib range-solver-lib range-cloud-lib range-gui-lib)
 
 target_sources(fea PRIVATE src/model_command_host.cpp src/model_command_host.h)
+target_sources(fea PRIVATE src/geometry_command_widget.cpp src/geometry_command_widget.h)
+target_sources(fea PRIVATE src/mesh_job_controller.cpp src/mesh_job_controller.h src/mesh_command_widget.cpp src/mesh_command_widget.h)
+target_sources(fea PRIVATE src/mesh_binding_widget.cpp src/mesh_binding_widget.h)
 target_sources(fea PRIVATE src/workflow_process.cpp src/workflow_process.h
                            src/workflow_widget.cpp src/workflow_widget.h
                            src/task_plan_widget.cpp src/task_plan_widget.h
+                           src/runtime_control_widget.cpp src/runtime_control_widget.h
+                           src/series_workbench_widget.cpp src/series_workbench_widget.h
+                           src/series_plot_widget.cpp src/series_plot_widget.h
                            src/control_monitor_widget.cpp src/control_monitor_widget.h)
 target_sources(fea PRIVATE src/native_results_widget.cpp src/native_results_widget.h)
 target_sources(fea PRIVATE src/agent_task_runner.cpp src/agent_task_runner.h
@@ -668,6 +674,15 @@ if(RANGE_BUILD_TESTS)
         set_tests_properties(tst_series_plot_widget PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
+    qt_add_executable(tst_workflow_transport tests/tst_workflow_transport.cpp src/workflow_process.cpp src/workflow_process.h)
+    target_include_directories(tst_workflow_transport PRIVATE src)
+    target_link_libraries(tst_workflow_transport PRIVATE Qt6::Core Qt6::Test)
+    set_target_properties(tst_workflow_transport PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
+    add_test(NAME tst_workflow_transport COMMAND tst_workflow_transport -o -,txt)
+    set_tests_properties(tst_workflow_transport PROPERTIES TIMEOUT 60)
+    if(WIN32)
+        set_tests_properties(tst_workflow_transport PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     # Exercise the actual Application/MainWindow/Session instead of substituting
     # a lightweight widget fixture for the complete document lifecycle.
     get_target_property(_fea_lifecycle_sources fea SOURCES)
@@ -680,15 +695,30 @@ if(RANGE_BUILD_TESTS)
         tests/tst_agent_conversation_history_widget.cpp
         tests/tst_agent_observation_boundaries.cpp
         tests/tst_task_plan_widget.cpp
+        tests/tst_runtime_control_widget.cpp
+        tests/tst_series_workbench_widget.cpp
+        tests/tst_geometry_command_widget.cpp
+        tests/tst_mesh_job_controller.cpp
+        tests/tst_mesh_binding_widget.cpp
+        tests/tst_scientific_provider.cpp
         tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp tests/tst_native_results_widget.cpp
         tests/tst_current_model_workflow.cpp tests/tst_recovery_interaction.cpp
         tests/tst_model_commit_recovery.cpp ${_fea_lifecycle_sources})
+    add_dependencies(tst_gui_model_lifecycle range-mesh-worker)
     set_source_files_properties(tests/tst_recovery_interaction.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_RECOVERY_INTERACTION_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
     set_source_files_properties(tests/tst_agent_conversation_history_widget.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_WORKFLOW_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\";RANGE_WF07_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
     set_source_files_properties(tests/tst_task_plan_widget.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_TASK_WIDGET_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_TASK_WIDGET_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_TASK_WIDGET_PYTHON=\"${Python3_EXECUTABLE}\";RANGE_TASK_WIDGET_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_TASK_WIDGET_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
+    if(RANGE_PRIVATE_PYTHON_DIRECTORY)
+        set_source_files_properties(tests/tst_extension_widget.cpp PROPERTIES COMPILE_DEFINITIONS
+            "RANGE_SCIENTIFIC_PYTHON=\"${RANGE_PRIVATE_PYTHON_DIRECTORY}/python.exe\";RANGE_SCIENTIFIC_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_SCIENTIFIC_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_SCIENTIFIC_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_SCIENTIFIC_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
+    endif()
+    set_source_files_properties(tests/tst_runtime_control_widget.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_RUNTIME_PYTHON=\"${Python3_EXECUTABLE}\";RANGE_RUNTIME_WIDGET_BOOTSTRAP=\"${CMAKE_SOURCE_DIR}/range-workflow/tests/runtime_widget_bootstrap.py\";RANGE_RUNTIME_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_RUNTIME_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_RUNTIME_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_RUNTIME_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
+    set_source_files_properties(tests/tst_series_workbench_widget.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_SERIES_PYTHON=\"${Python3_EXECUTABLE}\";RANGE_SERIES_WIDGET_BOOTSTRAP=\"${CMAKE_SOURCE_DIR}/range-workflow/tests/series_widget_bootstrap.py\";RANGE_SERIES_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_SERIES_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_SERIES_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_SERIES_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
     set_source_files_properties(tests/tst_current_model_workflow.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_CURRENT_MODEL_TEST_FIXTURE=\"$<TARGET_FILE:range-workflow-native-import-fixture>\"")
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
@@ -711,6 +741,44 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_agent_conversation_history_widget COMMAND tst_gui_model_lifecycle --agent-conversation-history -o -,txt)
     add_test(NAME tst_agent_observation_boundaries COMMAND tst_gui_model_lifecycle --agent-observation-boundaries -o -,txt)
     add_test(NAME tst_task_plan_widget COMMAND tst_gui_model_lifecycle --task-plans-widget -o -,txt)
+    add_test(NAME tst_runtime_control_widget COMMAND tst_gui_model_lifecycle --runtime-control-widget -o -,txt)
+    add_test(NAME tst_series_workbench_widget COMMAND tst_gui_model_lifecycle --series-workbench-widget -o -,txt)
+    add_test(NAME tst_geometry_command_widget COMMAND tst_gui_model_lifecycle --geometry-command-widget -o -,txt)
+    add_test(NAME tst_mesh_job_controller COMMAND tst_gui_model_lifecycle --mesh-job-controller -o -,txt)
+    add_test(NAME tst_mesh_binding_widget COMMAND tst_gui_model_lifecycle --mesh-binding-widget -o -,txt)
+    add_test(NAME tst_scientific_provider COMMAND tst_gui_model_lifecycle --scientific-provider -o -,txt)
+    set_tests_properties(tst_scientific_provider PROPERTIES TIMEOUT 600
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_scientific_provider PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_mesh_binding_widget PROPERTIES TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_mesh_binding_widget PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_mesh_job_controller PROPERTIES TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_mesh_job_controller PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_geometry_command_widget PROPERTIES TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_geometry_command_widget PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_series_workbench_widget PROPERTIES TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_series_workbench_widget PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_runtime_control_widget PROPERTIES TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_runtime_control_widget PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(tst_task_plan_widget PROPERTIES TIMEOUT 240
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
     if(WIN32)

@@ -239,7 +239,8 @@ bool NativeExecutionGate::acceptedBoundary(quint64 acceptedSequence,
 
     if (!this->configured)
         return fail(QStringLiteral("Native execution gate reached an accepted step before its range was configured."));
-    if (!std::isfinite(timeS) || acceptedSequence != this->lastAcceptedSequence + 1 ||
+    if (!std::isfinite(timeS) || timeS <= this->lastAcceptedTimeS ||
+        acceptedSequence != this->lastAcceptedSequence + 1 ||
         acceptedSequence > this->targetSequence)
         return fail(QStringLiteral("Native execution accepted boundary is non-contiguous or outside the configured range."));
     if (latestCheckpoint.available &&
@@ -356,6 +357,16 @@ bool NativeExecutionGate::requestCancel()
         return false;
     }
     this->condition.notify_all();
+    return true;
+}
+
+bool NativeExecutionGate::requestPauseNext()
+{
+    std::lock_guard<std::mutex> locker(this->mutex);
+    if (!this->configured || this->runState != RunState::Armed ||
+        this->cancellationRequested || this->lastAcceptedSequence >= this->targetSequence)
+        return false;
+    this->requestedPauseSequence = this->lastAcceptedSequence + 1;
     return true;
 }
 

@@ -228,7 +228,7 @@ void TestSeriesPlotWidget::wheelDragFitAndHoverUseDisplayedSamples()
     QTest::mouseMove(canvas, QPoint(canvas->width() / 2, canvas->height() / 2));
     QTRY_VERIFY(QToolTip::text().contains(QStringLiteral("x = 3.5 s")));
     QVERIFY(QToolTip::text().contains(QStringLiteral("y = -2.25 m")));
-    QVERIFY(QToolTip::text().contains(QStringLiteral("Original record = 73")));
+    QVERIFY(QToolTip::text().contains(QStringLiteral("Raw sample index = 73")));
     QVERIFY(QToolTip::text().contains(QStringLiteral("&lt;src&gt;&amp;")));
     QVERIFY(QToolTip::text().contains(QString(64, QLatin1Char('a'))));
 

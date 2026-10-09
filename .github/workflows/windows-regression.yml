@@ -100,6 +100,12 @@ jobs:
             Tee-Object -FilePath build/ci-windows/ci-logs/workflow-plan.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Assemble frozen scientific runtime
+        shell: pwsh
+        run: |
+          python scripts/packaging/build_private_python.py --cache build/private-runtime-cache --output build/private-python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Configure numeric tests
         shell: pwsh
         run: |
@@ -108,6 +114,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DRANGE_BUILD_TESTS=ON `
             -DRANGE_REQUIRE_NUMERIC_TESTS=ON `
+            "-DRANGE_PRIVATE_PYTHON_DIRECTORY=$((Resolve-Path build/private-python).Path)" `
             "-DPython3_EXECUTABLE=$pythonExe" `
             "-DRANGE_MSVC_LLVM_OPENMP_RUNTIME=$env:RANGE_MSVC_LLVM_OPENMP_RUNTIME" *>&1 |
             Tee-Object -FilePath build/ci-windows/ci-logs/configure.log

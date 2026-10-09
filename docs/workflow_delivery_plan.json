@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "range-fea",
-  "updatedAt": "2026-10-09",
+  "updatedAt": "2026-10-10",
   "baseline": {
     "rootCommit": "15297a966da27e501fb66fb6b37d13e3c1df3af3",
     "submodules": [
@@ -866,8 +866,8 @@
     {
       "id": "WF-14",
       "title": "Geometry and mesh command migration",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "几何/网格核心、真实CLI/SDK、GUI后台候选接受与显式静态重绑已实现并完成局部验证；当前闭合原子GUI历史、实际窗口完整求解、安装及冻结后全回归。尚不登记完成。",
       "priority": "P1",
       "effort": "XL",
       "dependsOn": [

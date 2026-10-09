@@ -403,6 +403,14 @@ void MaterialManagerTree::onModelSelectionChanged(uint)
 void MaterialManagerTree::onModelAdded(uint modelID)
 {
     R_LOG_TRACE_IN;
+    // These materials belong to a verified generated or native-result artifact;
+    // database import reconciliation must not rewrite its scientific content.
+    if (Application::instance()->getSession()->isVerifiedArtifactPublication(modelID))
+    {
+        this->onProblemChanged(modelID);
+        R_LOG_TRACE_OUT;
+        return;
+    }
     QMap<QString,RMaterial> unknownMaterials;
     QMap<QString,RMaterial> differentMaterials;
 

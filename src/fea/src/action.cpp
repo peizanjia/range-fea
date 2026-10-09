@@ -1,6 +1,7 @@
 #include <QString>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <exception>
 
 #include <rbl_error.h>
 #include <rbl_logger.h>
@@ -677,11 +678,30 @@ void Action::onGeometryUndo()
         {
             auto *host = Application::instance()->getSession()->getModelCommandHost();
             if (host->query(selectedModelIDs[i]).value("status") == QJsonValue("rejected")) return;
-            Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i]);
-            rModel.undo(0);
+            const bool staticBinding = rModel.hasStaticMeshBindingHistory(true);
+            try { rModel.undo(0); }
+            catch (const RError &error)
+            {
+                RLogger::error("Could not undo the model (%s).\n", error.getMessage().toUtf8().constData());
+                continue;
+            }
+            catch (const std::exception &error)
+            {
+                RLogger::error("Could not undo the model (%s).\n", error.what());
+                continue;
+            }
+            catch (...)
+            {
+                RLogger::error("Could not undo the model.\n");
+                continue;
+            }
+            if (staticBinding)
+                Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i], R_ENTITY_GROUP_POINT);
+            else
+                Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i]);
             host->recordExternalChange(selectedModelIDs[i], "undo");
+            Application::instance()->getSession()->setModelChanged(selectedModelIDs[i]);
         }
-        Application::instance()->getSession()->setModelChanged(selectedModelIDs[i]);
     }
     R_LOG_TRACE_OUT;
 }
@@ -698,11 +718,28 @@ void Action::onGeometryRedo()
         {
             auto *host = Application::instance()->getSession()->getModelCommandHost();
             if (host->query(selectedModelIDs[i]).value("status") == QJsonValue("rejected")) return;
-            Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i]);
-            rModel.redo(0);
+            const bool staticBinding = rModel.hasStaticMeshBindingHistory(false);
+            try { rModel.redo(0); }
+            catch (const RError &error)
+            {
+                RLogger::error("Could not redo the model (%s).\n", error.getMessage().toUtf8().constData());
+                continue;
+            }
+            catch (const std::exception &error)
+            {
+                RLogger::error("Could not redo the model (%s).\n", error.what());
+                continue;
+            }
+            catch (...)
+            {
+                RLogger::error("Could not redo the model.\n");
+                continue;
+            }
+            if (!staticBinding)
+                Application::instance()->getSession()->getPickList().removeItems(selectedModelIDs[i]);
             host->recordExternalChange(selectedModelIDs[i], "redo");
+            Application::instance()->getSession()->setModelChanged(selectedModelIDs[i]);
         }
-        Application::instance()->getSession()->setModelChanged(selectedModelIDs[i]);
     }
     R_LOG_TRACE_OUT;
 }

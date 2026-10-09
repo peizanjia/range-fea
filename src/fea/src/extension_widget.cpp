@@ -1,6 +1,11 @@
 #include "extension_widget.h"
 
 #include "workflow_process.h"
+#include "series_plot_widget.h"
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QUuid>
+#include <algorithm>
 
 #include <QComboBox>
 #include <QFileInfo>
@@ -15,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSet>
 #include <QSplitter>
@@ -60,6 +66,18 @@ QPlainTextEdit *readOnlyText(QWidget *parent, const QString &objectName)
 QString jsonText(const QJsonObject &object)
 {
     return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
+}
+
+QJsonObject supportedScientificGui()
+{
+    return {{"form", QJsonArray{
+        QJsonObject{{"id", "sources"}, {"type", "channel-select"}, {"minimum", 1}, {"maximum", 4}},
+        QJsonObject{{"id", "window"}, {"type", "enum"}, {"values", QJsonArray{"rectangular", "hann"}}},
+        QJsonObject{{"id", "removeMean"}, {"type", "enum"}, {"values", QJsonArray{false, true}}},
+        QJsonObject{{"id", "filter"}, {"type", "enum"}, {"values", QJsonArray{"none", "butterworth-lowpass"}}},
+        QJsonObject{{"id", "cutoffHz"}, {"type", "number"}, {"unit", "Hz"}}}},
+        {"table", QJsonObject{{"columns", QJsonArray{"channel", "unit", "sampleCount", "binCount"}}}},
+        {"plots", QJsonArray{"filtered-time", "amplitude", "psd", "real", "imag", "phase"}}};
 }
 
 QString jsonValueText(const QJsonValue &value)
@@ -194,6 +212,19 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     actions->addWidget(rollbackButton);
     layout->addLayout(actions);
 
+    // Keep input, plots, provenance and approval reachable on small/high-DPI
+    // desktops instead of allowing their combined minimum heights to grow the
+    // top-level window beyond the available screen.
+    auto *featureScroll = new QScrollArea(this);
+    featureScroll->setObjectName("extensionFeatureScroll");
+    featureScroll->setWidgetResizable(true);
+    featureScroll->setMinimumHeight(120);
+    featureScroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    auto *featureContent = new QWidget(featureScroll);
+    auto *featureContentLayout = new QVBoxLayout(featureContent);
+    featureScroll->setWidget(featureContent);
+    layout->addWidget(featureScroll, 3);
+
     auto *featureGroup = new QGroupBox(tr("Active extension feature"), this);
     featureGroup->setObjectName(QStringLiteral("extensionFeature"));
     auto *featureLayout = new QVBoxLayout(featureGroup);
@@ -240,6 +271,28 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     seriesForm->addRow(tr("Value unit"), valueUnitInput);
     featureLayout->addLayout(seriesForm);
 
+    scientificForm = new QWidget(featureGroup);
+    scientificForm->setObjectName("extensionScientificForm");
+    auto *scienceLayout = new QFormLayout(scientificForm);
+    windowInput = new QComboBox(scientificForm); windowInput->setObjectName("extensionWindow");
+    windowInput->addItems({"rectangular", "hann"});
+    removeMeanInput = new QCheckBox(tr("Remove mean"), scientificForm); removeMeanInput->setObjectName("extensionRemoveMean");
+    filterInput = new QComboBox(scientificForm); filterInput->setObjectName("extensionFilter");
+    filterInput->addItems({"none", "butterworth-lowpass"});
+    cutoffInput = new QDoubleSpinBox(scientificForm); cutoffInput->setObjectName("extensionCutoffHz");
+    cutoffInput->setDecimals(6); cutoffInput->setRange(0.000001, 1e12); cutoffInput->setValue(1.0); cutoffInput->setSuffix(" Hz");
+    scienceLayout->addRow(tr("Window"), windowInput); scienceLayout->addRow(removeMeanInput);
+    scienceLayout->addRow(tr("Filter (order 1, causal, zero initial condition)"), filterInput);
+    scienceLayout->addRow(tr("Cutoff"), cutoffInput);
+    sourcesTable = new QTableWidget(0, 4, scientificForm); sourcesTable->setObjectName("extensionSources");
+    sourcesTable->setHorizontalHeaderLabels({tr("Job"), tr("Mode"), tr("Artifact"), tr("Channel")});
+    sourcesTable->setEditTriggers(QAbstractItemView::NoEditTriggers); sourcesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    scienceLayout->addRow(sourcesTable);
+    addSourceButton = new QPushButton(tr("Add verified native channel"), scientificForm); addSourceButton->setObjectName("extensionAddSource");
+    removeSourceButton = new QPushButton(tr("Remove selected source"), scientificForm); removeSourceButton->setObjectName("extensionRemoveSource");
+    scienceLayout->addRow(addSourceButton, removeSourceButton);
+    featureLayout->addWidget(scientificForm); scientificForm->hide();
+
     auto *provenanceNote = new QLabel(tr("Native FE channels use published MODEL frames and a registered manifest. Independent reference histories and manually entered series retain their own source labels. The service revalidates the selected source before and after execution."), featureGroup);
     provenanceNote->setObjectName(QStringLiteral("extensionProvenanceNote"));
     provenanceNote->setWordWrap(true);
@@ -247,7 +300,7 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     runButton = new QPushButton(tr("Preview feature run"), featureGroup);
     runButton->setObjectName(QStringLiteral("extensionRun"));
     featureLayout->addWidget(runButton, 0, Qt::AlignRight);
-    layout->addWidget(featureGroup);
+    featureContentLayout->addWidget(featureGroup);
 
     metricsTable = new QTableWidget(0, 3, this);
     metricsTable->setObjectName(QStringLiteral("extensionMetrics"));
@@ -255,7 +308,15 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     metricsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     metricsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     metricsTable->setAccessibleName(tr("Extension metrics with units"));
-    layout->addWidget(metricsTable, 1);
+    featureContentLayout->addWidget(metricsTable, 1);
+
+    scienceView = new QComboBox(this); scienceView->setObjectName("extensionScienceView");
+    scienceView->addItems({"filtered-time", "amplitude", "psd", "real", "imag", "phase"});
+    pendingSciencePlots = new QTabWidget(this); pendingSciencePlots->hide();
+    sciencePlots = new QTabWidget(this); sciencePlots->setObjectName("extensionSciencePlots");
+    scienceProvenance = new QLabel(this); scienceProvenance->setObjectName("extensionScienceProvenance"); scienceProvenance->setWordWrap(true);
+    featureContentLayout->addWidget(scienceView); featureContentLayout->addWidget(sciencePlots); featureContentLayout->addWidget(scienceProvenance);
+    scienceView->hide(); sciencePlots->hide(); scienceProvenance->hide();
 
     auto *previewGroup = new QGroupBox(tr("Command preview and result"), this);
     previewGroup->setObjectName(QStringLiteral("extensionApproval"));
@@ -274,16 +335,24 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
     resultView = readOnlyText(previewGroup, QStringLiteral("extensionResult"));
     resultView->setMaximumHeight(110);
     previewLayout->addWidget(resultView);
-    layout->addWidget(previewGroup, 1);
+    featureContentLayout->addWidget(previewGroup, 1);
 
     refreshTimer = new QTimer(this);
     refreshTimer->setInterval(1800);
     jobPollTimer = new QTimer(this);
     jobPollTimer->setInterval(500);
+    runtimeVerificationTimer = new QTimer(this);
+    runtimeVerificationTimer->setInterval(1000);
+    connect(runtimeVerificationTimer, &QTimer::timeout, this, &ExtensionWidget::pollRuntimeVerification);
 
     connect(refreshButton, &QPushButton::clicked, this, [this] {
         refreshExtensions();
         refreshJobs();
+        if (!runtimeVerificationReady && !runtimeVerificationTimer->isActive() && runtimeVerificationRequest.isEmpty())
+        {
+            runtimeVerificationGeneration.clear(); runtimeVerificationId.clear(); startRuntimeVerification();
+        }
+        else if (!runtimeVerificationId.isEmpty()) pollRuntimeVerification();
     });
     connect(loadMoreButton, &QPushButton::clicked, this, &ExtensionWidget::loadMoreCandidates);
     connect(validateButton, &QPushButton::clicked, this, &ExtensionWidget::validateSelectedCandidate);
@@ -307,6 +376,7 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
             deferredSelectionKey.clear();
             deferredSelectionExtensionId.clear();
         }
+        scientificGeneration.clear();
         clearPreview(tr("Selection changed. Create a new preview before applying an action."));
         requestSelectedDetails(current);
         updateAvailability();
@@ -323,6 +393,17 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
         if (!currentPreview.isEmpty()) clearPreview(tr("Run input changed. Create a new preview."));
         updateAvailability();
     };
+    connect(windowInput, &QComboBox::currentIndexChanged, this, invalidateRunPreview);
+    connect(removeMeanInput, &QCheckBox::toggled, this, invalidateRunPreview);
+    connect(filterInput, &QComboBox::currentIndexChanged, this, invalidateRunPreview);
+    connect(cutoffInput, &QDoubleSpinBox::valueChanged, this, invalidateRunPreview);
+    connect(addSourceButton, &QPushButton::clicked, this, &ExtensionWidget::addScientificSource);
+    connect(removeSourceButton, &QPushButton::clicked, this, [this] {
+        const int row = sourcesTable->currentRow(); if (row < 0 || row >= scientificSources.size()) return;
+        scientificSources.removeAt(row); refreshScientificSources();
+        clearPreview(tr("Sources changed. Create a new preview.")); updateAvailability();
+    });
+    connect(scienceView, &QComboBox::currentIndexChanged, this, &ExtensionWidget::loadScientificView);
     connect(timesInput, &QPlainTextEdit::textChanged, this, invalidateRunPreview);
     connect(valuesInput, &QPlainTextEdit::textChanged, this, invalidateRunPreview);
     connect(timeUnitInput, &QComboBox::currentTextChanged, this, invalidateRunPreview);
@@ -346,9 +427,12 @@ ExtensionWidget::ExtensionWidget(WorkflowProcess *service, QWidget *parent)
             onRequestFailed(id, operation, code, message);
         });
         connect(this->service, &QObject::destroyed, this, [this] {
+            runtimeVerificationTimer->stop(); runtimeVerificationReady = false;
+            runtimeVerificationGeneration.clear(); runtimeVerificationId.clear(); runtimeVerificationRequest.clear();
             refreshTimer->stop();
             jobPollTimer->stop();
-            pendingRequests.clear();
+            scientificGeneration.clear();
+        pendingRequests.clear();
             this->service.clear();
             commandInFlight = false;
             runtimeCapabilityKnown = false;
@@ -420,6 +504,9 @@ void ExtensionWidget::handleReadyChanged(bool ready)
 {
     if (!ready)
     {
+        runtimeVerificationTimer->stop();
+        runtimeVerificationGeneration.clear(); runtimeVerificationId.clear(); runtimeVerificationRequest.clear();
+        runtimeVerificationReady = false; runtimeVerificationAvailable = false; runtimeVerificationMessage.clear();
         refreshTimer->stop();
         jobPollTimer->stop();
         pendingRequests.clear();
@@ -442,6 +529,7 @@ void ExtensionWidget::handleReadyChanged(bool ready)
     const QString workspace = normalizedWorkspace(service->configuration().workspace);
     if (!observedWorkspace.isEmpty() && observedWorkspace != workspace)
     {
+        resetScientificWorkspace();
         pendingJobId.clear();
         pendingJobCommand.clear();
         jobPollTimer->stop();
@@ -465,6 +553,7 @@ void ExtensionWidget::handleReadyChanged(bool ready)
     numericSeriesSchema = {};
     refreshSelectedDetailsAfterList = true;
     status->setText(tr("Workflow service connected; loading extension state."));
+    request("schema.get", {{"schemaId", "range.extension/v2/manifest"}}, PendingRequest{RequestKind::ScientificSchema});
     request(QStringLiteral("capabilities.query"), {}, PendingRequest{RequestKind::Capabilities});
     request(QStringLiteral("schema.get"), {{QStringLiteral("schemaId"), QStringLiteral("range.extension/v1/manifest")}},
             PendingRequest{RequestKind::ManifestSchema});
@@ -549,6 +638,60 @@ void ExtensionWidget::onReply(const QString &requestId, const QString &operation
 
     switch (context.kind)
     {
+        case RequestKind::ScientificSchema:
+            if (result.value("apiVersion") == QJsonValue("range.extension/v2") && result.value("schemaId") == QJsonValue("range.extension/v2/manifest"))
+                scientificGui = result.value("schema").toObject().value("supportedGui").toObject();
+            if (selectedVersion.value("manifest").toObject().value("sdkVersion") == QJsonValue("range.extension/v2"))
+                renderFormAndMetrics(selectedVersion.value("manifest").toObject());
+            startRuntimeVerification(); updateAvailability(); break;
+        case RequestKind::RuntimeVerifyStart:
+        case RequestKind::RuntimeVerifyPoll:
+        {
+            if (context.intent != runtimeVerificationGeneration || context.extensionId != observedWorkspace ||
+                observedWorkspace != normalizedWorkspace(service->configuration().workspace)) break;
+            runtimeVerificationRequest.clear();
+            const QString id = result.value("verificationId").toString();
+            const QString state = result.value("state").toString();
+            if (id.isEmpty() || (!runtimeVerificationId.isEmpty() && id != runtimeVerificationId))
+            {
+                runtimeVerificationTimer->stop(); runtimeVerificationReady = false;
+                runtimeVerificationMessage = tr("Private scientific environment verification returned an inconsistent identity.");
+            }
+            else
+            {
+                runtimeVerificationId = id;
+                if (state == "ready" && result.value("isCurrent").toBool() &&
+                    !result.value("runtimeHash").toString().isEmpty() &&
+                    result.value("profile") == QJsonValue("packaged") &&
+                    !result.value("expectedEnvironmentStamp").isNull() && !result.value("expectedEnvironmentStamp").isUndefined() &&
+                    result.value("fullFileVerify").toObject().value("verifiedFiles").toBool() &&
+                    result.value("fullFileVerify").toObject().value("runtimeHash") == result.value("runtimeHash") &&
+                    result.value("fullFileVerify").toObject().value("environmentStamp") == result.value("expectedEnvironmentStamp"))
+                {
+                    runtimeVerificationReady = true; runtimeVerificationTimer->stop();
+                    runtimeVerificationMessage = tr("Private scientific environment checked at %1. Currentity checks cover the environment stamp; execution rechecks all frozen file bytes. This does not establish an OS sandbox.")
+                        .arg(result.value("verifiedAt").toVariant().toString());
+                }
+                else if (state == "queued" || state == "running")
+                {
+                    runtimeVerificationReady = false; runtimeVerificationTimer->start();
+                    runtimeVerificationMessage = tr("Checking private scientific environment…");
+                }
+                else
+                {
+                    runtimeVerificationReady = false; runtimeVerificationTimer->stop();
+                    runtimeVerificationMessage = tr("Private scientific environment verification failed: %1")
+                        .arg(jsonValueText(result.value("error")));
+                    clearPreview(runtimeVerificationMessage);
+                }
+            }
+            updateTrustStatus(); updateAvailability(); break;
+        }
+        case RequestKind::ScientificResult:
+            if (context.intent == scientificGeneration && context.extensionId == scientificJobId &&
+                scientificSelection == currentSelectionKey() && context.bundleHash == selectedBundleHash)
+                consumeScientificPage(result);
+            break;
         case RequestKind::Capabilities:
         {
             const QJsonValue runtimeValue = result.value(QStringLiteral("extensionRuntime"));
@@ -556,7 +699,11 @@ void ExtensionWidget::onReply(const QString &requestId, const QString &operation
             activeRuntimeCapability = runtimeValue.toObject();
             trustEnabled = runtimeCapabilityKnown &&
                 activeRuntimeCapability.value(QStringLiteral("protocolVersion")).toString() == QStringLiteral("range.extension/v1") &&
-                activeRuntimeCapability.value(QStringLiteral("trustedExtensions")).toBool();
+                  activeRuntimeCapability.value(QStringLiteral("trustedExtensions")).toBool();
+            QSet<QString> operations;
+            for (const auto &value : result.value("operations").toArray()) operations.insert(value.toObject().value("id").toString());
+            runtimeVerificationAvailable = operations.contains("extension.runtime.verify") && operations.contains("extension.runtime.verification.query");
+            startRuntimeVerification();
             updateTrustStatus();
             updateAvailability();
             break;
@@ -789,9 +936,24 @@ void ExtensionWidget::onRequestFailed(const QString &requestId, const QString &o
             trustEnabled = false;
             updateTrustStatus();
             break;
+        case RequestKind::ScientificSchema:
         case RequestKind::ManifestSchema:
         case RequestKind::NumericSeriesSchema:
             status->setText(tr("Extension schema query failed: %1").arg(detail));
+            break;
+        case RequestKind::RuntimeVerifyStart:
+        case RequestKind::RuntimeVerifyPoll:
+            if (context.intent == runtimeVerificationGeneration && context.extensionId == observedWorkspace)
+            {
+                runtimeVerificationRequest.clear(); runtimeVerificationReady = false; runtimeVerificationTimer->stop();
+                runtimeVerificationMessage = tr("Could not verify private scientific environment: %1 (%2)").arg(detail, code);
+                clearPreview(runtimeVerificationMessage); updateTrustStatus();
+            }
+            break;
+        case RequestKind::ScientificResult:
+            if (context.intent == scientificGeneration) {
+                scientificGeneration.clear(); status->setText(tr("Could not read scientific results: %1. Last complete display retained.").arg(detail));
+            }
             break;
         case RequestKind::Jobs:
             status->setText(tr("Could not refresh reference job sources: %1").arg(detail));
@@ -813,6 +975,15 @@ void ExtensionWidget::onRequestFailed(const QString &requestId, const QString &o
         case RequestKind::CommandPreview:
         case RequestKind::HostApproval:
         case RequestKind::CommandExecute:
+            if (code == "RUNTIME_CHANGED" || code == "RUNTIME_NOT_VERIFIED"
+                || code == "RUNTIME_VERIFICATION_REQUIRED" || code == "RUNTIME_VERIFICATION_IN_PROGRESS")
+            {
+                runtimeVerificationReady = false;
+                runtimeVerificationTimer->stop();
+                runtimeVerificationGeneration.clear(); runtimeVerificationId.clear(); runtimeVerificationRequest.clear();
+                runtimeVerificationMessage = tr("Private scientific environment changed. Refresh to check it again before using v2 actions.");
+                updateTrustStatus();
+            }
             commandInFlight = false;
             clearPreview(tr("The extension action did not complete: %1").arg(detail));
             status->setText(tr("%1 (%2)").arg(detail, code));
@@ -1140,6 +1311,36 @@ void ExtensionWidget::renderVersion(const QJsonObject &version)
 
 void ExtensionWidget::renderFormAndMetrics(const QJsonObject &manifest)
 {
+    const QString identity = observedWorkspace + ":" + selectedExtensionId + ":" + selectedBundleHash + ":" + jsonText(manifest);
+    const bool sameForm = formIdentity == identity; formIdentity = identity;
+    scientificFormSupported = manifest.value("sdkVersion") == QJsonValue("range.extension/v2") &&
+        manifest.value("kind") == QJsonValue("multichannel-spectral-filter") &&
+        scientificGui == supportedScientificGui() && manifest.value("gui").toObject() == scientificGui;
+    for (QWidget *input : {static_cast<QWidget *>(timesInput), static_cast<QWidget *>(valuesInput), static_cast<QWidget *>(timeUnitInput), static_cast<QWidget *>(valueUnitInput)})
+        input->setVisible(!scientificFormSupported);
+    scientificForm->setVisible(scientificFormSupported); scienceView->setVisible(scientificFormSupported);
+    sciencePlots->setVisible(scientificFormSupported); scienceProvenance->setVisible(scientificFormSupported);
+    if (scientificFormSupported)
+    {
+        featureFormSupported = true;
+        if (!sameForm)
+        {
+            scientificSources = {}; refreshScientificSources();
+            windowInput->setCurrentIndex(0); removeMeanInput->setChecked(false); filterInput->setCurrentIndex(0);
+            sourceMode->setCurrentIndex(sourceMode->findData("native-active"));
+            scientificGeneration.clear(); displayedScientificResult = {}; scientificJobId.clear();
+            scientificPoints = {}; scientificPageIdentity = {};
+            pendingScienceRows = {}; scientificChannel = 0; scientificSelection.clear();
+            scienceProvenance->clear();
+            while (sciencePlots->count()) delete sciencePlots->widget(0);
+            while (pendingSciencePlots->count()) delete pendingSciencePlots->widget(0);
+            metricsTable->setRowCount(0);
+        }
+        metricsTable->setColumnCount(4);
+        metricsTable->setHorizontalHeaderLabels({tr("Channel"), tr("Unit"), tr("Samples"), tr("Bins")});
+        return;
+    }
+    metricsTable->setColumnCount(3); metricsTable->setHorizontalHeaderLabels({tr("Metric"), tr("Value"), tr("Unit")});
     featureFormSupported = false;
     const QJsonObject gui = manifest.value(QStringLiteral("gui")).toObject();
     const QJsonArray form = gui.value(QStringLiteral("form")).toArray();
@@ -1280,7 +1481,12 @@ void ExtensionWidget::renderJob(const QJsonObject &job)
     {
         const QJsonObject result = job.value(QStringLiteral("result")).toObject();
         resultView->setPlainText(jsonText(result));
-        renderMetrics(result);
+        if (result.value("sdkVersion") == QJsonValue("range.extension/v2") && pendingJobCommand == "extension.run")
+        {
+            displayedScientificResult = result; scientificJobId = pendingJobId;
+            scientificSelection = currentSelectionKey(); loadScientificView();
+        }
+        else renderMetrics(result);
         status->setText(tr("Extension job %1 succeeded. The service-provided result and provenance are shown below.").arg(pendingJobId));
         if (pendingJobCommand == QStringLiteral("extension.validate") && result.contains(QStringLiteral("validation")))
             reportView->setPlainText(jsonText(result.value(QStringLiteral("validation")).toObject()));
@@ -1359,7 +1565,7 @@ void ExtensionWidget::clearDetails(const QString &message)
     if (diffView) diffView->clear();
     if (testsView) testsView->clear();
     if (reportView) reportView->clear();
-    if (metricsTable) metricsTable->setRowCount(0);
+    if (metricsTable && !scientificFormSupported) metricsTable->setRowCount(0);
     updateAvailability();
 }
 
@@ -1376,7 +1582,35 @@ void ExtensionWidget::updateTrustStatus()
     const bool sandboxed = activeRuntimeCapability.value(QStringLiteral("osSandbox")).toBool();
     trustStatus->setText(tr("Runtime trust: %1 (%2). OS sandbox: %3. Extension protocol: %4.")
         .arg(trustEnabled ? tr("trusted developer mode") : tr("disabled"), trustMode,
-             sandboxed ? tr("enabled") : tr("not enabled"), protocol));
+               sandboxed ? tr("enabled") : tr("not enabled"), protocol));
+    if (!runtimeVerificationMessage.isEmpty()) trustStatus->setText(trustStatus->text() + "\n" + runtimeVerificationMessage);
+}
+
+void ExtensionWidget::startRuntimeVerification()
+{
+    if (!service || !service->isReady() || !trustEnabled || scientificGui.isEmpty() ||
+        !runtimeVerificationAvailable || !runtimeVerificationGeneration.isEmpty()) return;
+    runtimeVerificationGeneration = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    runtimeVerificationClock.start(); runtimeVerificationReady = false;
+    runtimeVerificationMessage = tr("Checking private scientific environment…");
+    PendingRequest context{RequestKind::RuntimeVerifyStart, observedWorkspace};
+    context.intent = runtimeVerificationGeneration;
+    runtimeVerificationRequest = request("extension.runtime.verify", {{"sdkVersion", "range.extension/v2"}, {"force", true}}, context);
+    updateTrustStatus();
+}
+
+void ExtensionWidget::pollRuntimeVerification()
+{
+    if (!service || !service->isReady() || runtimeVerificationId.isEmpty() || !runtimeVerificationRequest.isEmpty()) return;
+    if (!runtimeVerificationReady && runtimeVerificationClock.elapsed() > 360000)
+    {
+        runtimeVerificationTimer->stop();
+        runtimeVerificationMessage = tr("Private scientific environment verification exceeded its six-minute phase budget.");
+        updateTrustStatus(); updateAvailability(); return;
+    }
+    PendingRequest context{RequestKind::RuntimeVerifyPoll, observedWorkspace};
+    context.intent = runtimeVerificationGeneration;
+    runtimeVerificationRequest = request("extension.runtime.verification.query", {{"verificationId", runtimeVerificationId}}, context);
 }
 
 void ExtensionWidget::syncRollbackTargets()
@@ -1453,6 +1687,17 @@ bool ExtensionWidget::buildRunParameters(QJsonObject *parameters, QString *error
     }
     *parameters = {{QStringLiteral("extensionId"), selectedExtensionId},
                    {QStringLiteral("bundleHash"), activeHash}};
+    if (scientificFormSupported)
+    {
+        if (scientificSources.isEmpty() || scientificSources.size() > 4)
+        { if (error) *error = tr("Add one to four verified native channels."); return false; }
+        QJsonObject filter{{"kind", filterInput->currentText()}};
+        if (filterInput->currentText() == "butterworth-lowpass")
+            filter = {{"kind", "butterworth-lowpass"}, {"order", 1}, {"cutoffHz", cutoffInput->value()}, {"phase", "causal"}, {"initialCondition", "zero"}};
+        parameters->insert("sources", scientificSources);
+        parameters->insert("options", QJsonObject{{"window", windowInput->currentText()}, {"removeMean", removeMeanInput->isChecked()}, {"filter", filter}});
+        return true;
+    }
     if (sourceMode->currentData().toString() == QStringLiteral("series"))
     {
         QJsonObject series;
@@ -1557,15 +1802,23 @@ void ExtensionWidget::updateAvailability()
             if (it.key().startsWith(selectedExtensionId + QLatin1Char('\n'))) { detailRequestInFlight = true; break; }
         loadMoreButton->setEnabled(idle && !selectedExtensionId.isEmpty() && nextOffset.isDouble() && !detailRequestInFlight);
     }
-    if (validateButton) validateButton->setEnabled(idle && kind == CandidateSelection && trustEnabled && runtimeCapabilityKnown && schemaReady && !candidate.isEmpty());
+    const bool scientificCandidate = selectedCandidate.value("manifest").toObject().value("sdkVersion") == QJsonValue("range.extension/v2");
+    if (validateButton) validateButton->setEnabled(idle && kind == CandidateSelection && trustEnabled && runtimeCapabilityKnown && schemaReady && !candidate.isEmpty() && (!scientificCandidate || runtimeVerificationReady));
     if (activateButton) activateButton->setEnabled(idle && kind == CandidateSelection && selectedCandidateValidated() &&
         candidate.value(QStringLiteral("bundleHash")).toString() != extension.value(QStringLiteral("activeBundleHash")).toString());
     if (rollbackTarget) rollbackTarget->setEnabled(idle && !extension.value(QStringLiteral("activeBundleHash")).toString().isEmpty() && rollbackTarget->count() > 0);
     if (rollbackButton) rollbackButton->setEnabled(idle && !extension.value(QStringLiteral("activeBundleHash")).toString().isEmpty() &&
         !rollbackTarget->currentData().toString().isEmpty() && rollbackTarget->currentData().toString() != extension.value(QStringLiteral("activeBundleHash")).toString());
-    const bool runEnabled = idle && trustEnabled && runtimeCapabilityKnown && schemaReady && featureFormSupported && selectedVersionActive();
+    const bool scientificRuntimeReady = !scientificFormSupported ||
+        (runtimeVerificationReady && activeRuntimeCapability.value("supportedProtocols").toArray().contains("range.extension/v2") &&
+         activeRuntimeCapability.value("scientificV2").toObject().value("maximumChannels").toInt() == 4);
+    const bool runEnabled = scientificRuntimeReady && idle && trustEnabled && runtimeCapabilityKnown && schemaReady && featureFormSupported && selectedVersionActive();
     if (runButton) runButton->setEnabled(runEnabled);
     if (sourceMode) sourceMode->setEnabled(runEnabled && !commandInFlight);
+    scientificForm->setEnabled(runEnabled);
+    addSourceButton->setEnabled(runEnabled && scientificSources.size() < 4 && sourceMode->currentData().toString().startsWith("native-") &&
+        !sourceSignal->currentData().toString().isEmpty() && nativeChannelRequest.isEmpty() && !nativeSourceDescriptor.value("artifactId").toString().isEmpty());
+    cutoffInput->setEnabled(runEnabled && filterInput->currentText() == "butterworth-lowpass");
     const bool manual = sourceMode && sourceMode->currentData().toString() == QStringLiteral("series");
     if (timesInput) timesInput->setEnabled(runEnabled && manual);
     if (valuesInput) valuesInput->setEnabled(runEnabled && manual);
@@ -1575,4 +1828,171 @@ void ExtensionWidget::updateAvailability()
     if (sourceJob) sourceJob->setEnabled(provenance && sourceJob->count() > 0);
     if (sourceSignal) sourceSignal->setEnabled(provenance);
     if (approveButton) approveButton->setEnabled(ready && !commandInFlight && !currentPreview.isEmpty());
+}
+
+
+void ExtensionWidget::addScientificSource()
+{
+    if (!scientificFormSupported || scientificSources.size() >= 4 || !nativeChannelRequest.isEmpty() ||
+        !sourceMode->currentData().toString().startsWith("native-") || nativeSourceDescriptor.value("artifactId").toString().isEmpty() ||
+        sourceSignal->currentData().toString().isEmpty() || sourceJob->currentData().toString().isEmpty()) return;
+    const QJsonObject source{{"kind", "native"}, {"jobId", sourceJob->currentData().toString()},
+        {"mode", sourceMode->currentData().toString().mid(7)}, {"artifactId", nativeSourceDescriptor.value("artifactId")},
+        {"channelId", sourceSignal->currentData().toString()}};
+    for (const auto &value : scientificSources) if (value.toObject() == source) return;
+    scientificSources.append(source); refreshScientificSources();
+    clearPreview(tr("Sources changed. Create a new preview.")); updateAvailability();
+}
+
+void ExtensionWidget::resetScientificWorkspace()
+{
+    scientificGeneration.clear(); scientificSelection.clear(); scientificJobId.clear();
+    scientificSources = {}; displayedScientificResult = {}; scientificPoints = {}; scientificPageIdentity = {};
+    pendingScienceRows = {}; scientificChannel = 0; formIdentity.clear(); scientificFormSupported = false;
+    while (sciencePlots->count()) delete sciencePlots->widget(0);
+    while (pendingSciencePlots->count()) delete pendingSciencePlots->widget(0);
+    refreshScientificSources(); metricsTable->setRowCount(0); scienceProvenance->clear();
+    scientificForm->hide(); scienceView->hide(); sciencePlots->hide(); scienceProvenance->hide();
+}
+
+void ExtensionWidget::refreshScientificSources()
+{
+    sourcesTable->setRowCount(int(scientificSources.size()));
+    const QStringList keys{"jobId", "mode", "artifactId", "channelId"};
+    for (int row = 0; row < scientificSources.size(); ++row)
+        for (int column = 0; column < keys.size(); ++column)
+            sourcesTable->setItem(row, column, new QTableWidgetItem(scientificSources[row].toObject().value(keys[column]).toString()));
+}
+
+void ExtensionWidget::loadScientificView()
+{
+    if (scientificJobId.isEmpty() || displayedScientificResult.isEmpty() || scientificSelection != currentSelectionKey()) return;
+    scientificGeneration = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    scientificChannel = 0; scientificPoints = {}; scientificPageIdentity = {};
+    while (pendingSciencePlots->count()) delete pendingSciencePlots->widget(0);
+    pendingScienceRows = {};
+    // Keep the last complete view until its replacement has passed validation.
+    requestScientificPage(0);
+}
+
+void ExtensionWidget::requestScientificPage(int offset)
+{
+    PendingRequest context{RequestKind::ScientificResult, scientificJobId, {}, selectedBundleHash, scientificGeneration};
+    request("extension.result.query", {{"jobId", scientificJobId}, {"channel", scientificChannel},
+        {"offset", offset}, {"limit", 1000}, {"view", scienceView->currentText()}}, context);
+}
+
+void ExtensionWidget::consumeScientificPage(const QJsonObject &page)
+{
+    auto reject = [this] {
+        scientificGeneration.clear(); scientificPoints = {};
+        status->setText(tr("Scientific result page is inconsistent or exceeds the 10,000 point limit; the last complete display is retained."));
+    };
+    if (page.value("jobId").toString() != scientificJobId || page.value("bundleHash").toString() != selectedBundleHash ||
+        page.value("view").toString() != scienceView->currentText() || page.value("offset").toInt(-1) != scientificPoints.size() ||
+        page.value("pointCount").toInt(-1) < 1 || page.value("pointCount").toInt() > 10000 ||
+        page.value("channelCount").toInt() < 1 || page.value("channelCount").toInt() > 4 ||
+        page.value("resultSha256").toString().isEmpty() || page.value("runtimeHash").toString().isEmpty() ||
+        page.value("sourceSha256").toString().isEmpty()) { reject(); return; }
+    const QJsonObject artifact = displayedScientificResult.value("scientificResult").toObject();
+    if (!artifact.isEmpty() && (page.value("resultSha256") != artifact.value("sha256") ||
+        page.value("runtimeHash") != displayedScientificResult.value("runtimeHash") ||
+        page.value("sourceSha256") != displayedScientificResult.value("seriesSha256") ||
+        page.value("verificationProfile") != displayedScientificResult.value("verificationProfile") ||
+        page.value("sampleCount") != artifact.value("sampleCount") || page.value("binCount") != artifact.value("binCount") ||
+        scientificChannel >= artifact.value("channels").toArray().size() ||
+        page.value("channel") != artifact.value("channels").toArray().at(scientificChannel))) { reject(); return; }
+    QJsonObject identity = page;
+    for (const QString &key : {QString("offset"), QString("nextOffset"), QString("points"), QString("frequenciesHz"), QString("fft"), QString("amplitude"), QString("psd")}) identity.remove(key);
+    if (!scientificPageIdentity.isEmpty() && identity != scientificPageIdentity) { reject(); return; }
+    scientificPageIdentity = identity;
+    const auto points = page.value("points").toArray();
+    if (points.isEmpty() || points.size() > 1000 || scientificPoints.size() + points.size() > page.value("pointCount").toInt()) { reject(); return; }
+    for (const auto &value : points)
+    {
+        const auto point = value.toObject();
+        if (!point.value("x").isDouble() || !point.value("y").isDouble() || !std::isfinite(point.value("x").toDouble()) ||
+            !std::isfinite(point.value("y").toDouble()) || point.value("rawOrdinal").toDouble(-1) != scientificPoints.size() ||
+            (!scientificPoints.isEmpty() && point.value("x").toDouble() <= scientificPoints.last().toObject().value("x").toDouble())) { reject(); return; }
+        scientificPoints.append(point);
+    }
+    if (!page.value("nextOffset").isNull())
+    {
+        if (!page.value("nextOffset").isDouble() || page.value("nextOffset").toInt(-1) != scientificPoints.size() || scientificPoints.size() >= page.value("pointCount").toInt()) { reject(); return; }
+        requestScientificPage(int(scientificPoints.size())); return;
+    }
+    if (scientificPoints.size() != page.value("pointCount").toInt()) { reject(); return; }
+    SeriesPlotWidget::Dataset dataset;
+    dataset.viewKind = page.value("domain") == QJsonValue("time") ? SeriesPlotWidget::ViewKind::Time : SeriesPlotWidget::ViewKind::Spectrum;
+    dataset.title = scienceView->currentText(); dataset.xLabel = page.value("xLabel").toString(); dataset.xUnit = page.value("xUnit").toString();
+    dataset.yLabel = page.value("yLabel").toString(); dataset.yUnit = page.value("yUnit").toString();
+    SeriesPlotWidget::Trace trace;
+    trace.id = page.value("channel").toObject().value("id").toString();
+    if (trace.id.isEmpty()) trace.id = QString::number(scientificChannel);
+    trace.label = trace.id; trace.unit = dataset.yUnit; trace.sourceId = scientificJobId;
+    const QJsonArray originalSources = page.value("inputSources").toArray();
+    if (scientificChannel < originalSources.size())
+    {
+        const auto origin = originalSources.at(scientificChannel).toObject();
+        const auto selector = origin.value("selector").toObject();
+        trace.label = tr("%1/%2 · %3").arg(selector.value("jobId").toString().left(8),
+            selector.value("mode").toString(), selector.value("channelId").toString());
+    }
+    trace.artifactSha256 = page.value("resultSha256").toString();
+    // Display only: each contiguous bucket keeps its extrema in original order.
+    QVector<int> ordinals;
+    if (scientificPoints.size() <= 1000) for (int i = 0; i < scientificPoints.size(); ++i) ordinals.append(i);
+    else
+    {
+        ordinals.append(0);
+        const int size = int(scientificPoints.size());
+        for (int bucket = 0; bucket < 499; ++bucket)
+        {
+            const int begin = 1 + (size - 2) * bucket / 499, end = 1 + (size - 2) * (bucket + 1) / 499;
+            int minimum = begin, maximum = begin;
+            for (int i = begin + 1; i < end; ++i)
+            {
+                const double y = scientificPoints[i].toObject().value("y").toDouble();
+                if (y < scientificPoints[minimum].toObject().value("y").toDouble()) minimum = i;
+                if (y > scientificPoints[maximum].toObject().value("y").toDouble()) maximum = i;
+            }
+            ordinals.append(std::min(minimum, maximum));
+            if (minimum != maximum) ordinals.append(std::max(minimum, maximum));
+        }
+        ordinals.append(size - 1);
+    }
+    for (int ordinal : ordinals)
+    {
+        const auto point = scientificPoints[ordinal].toObject();
+        trace.points.append({point.value("x").toDouble(), point.value("y").toDouble()});
+        trace.originalOrdinals.append(quint64(point.value("rawOrdinal").toDouble()));
+    }
+    dataset.traces.append(trace);
+    auto *plot = new SeriesPlotWidget(sciencePlots); QString error;
+    if (!plot->setDataset(dataset, &error)) { delete plot; reject(); return; }
+    pendingSciencePlots->addTab(plot, trace.label + " [" + trace.unit + "]");
+    pendingScienceRows.append(QJsonArray{trace.label, page.value("channel").toObject().value("unit").toString(),
+        QString::number(page.value("sampleCount").toInt()), QString::number(page.value("binCount").toInt())});
+    const int channelCount = page.value("channelCount").toInt();
+    ++scientificChannel;
+    if (scientificChannel < channelCount)
+    {
+        scientificPoints = {}; scientificPageIdentity = {}; requestScientificPage(0); return;
+    }
+    while (sciencePlots->count()) delete sciencePlots->widget(0);
+    while (pendingSciencePlots->count())
+    {
+        QWidget *complete = pendingSciencePlots->widget(0); const QString label = pendingSciencePlots->tabText(0);
+        pendingSciencePlots->removeTab(0); sciencePlots->addTab(complete, label);
+    }
+    metricsTable->setRowCount(channelCount);
+    for (int row = 0; row < pendingScienceRows.size(); ++row)
+        for (int column = 0; column < 4; ++column)
+            metricsTable->setItem(row, column, new QTableWidgetItem(pendingScienceRows[row].toArray()[column].toString()));
+    scienceProvenance->setText(tr("Job: %1\nBundle: %2\nRuntime: %3\nSource: %4\nResult: %5\nVerification profile: %6\nHost verification covers the frozen numerical contract and accepted native frames. It does not establish arbitrary code isolation or physical model accuracy. NumPy 2.2.6 / SciPy 1.15.3; ordinary generated execution is disabled, OS sandbox is not enabled. Display reduction only; all %7 points were read before reduction.")
+        .arg(scientificJobId, selectedBundleHash, page.value("runtimeHash").toString(), page.value("sourceSha256").toString(),
+             page.value("resultSha256").toString(), jsonValueText(page.value("verificationProfile")), QString::number(scientificPoints.size())));
+    scienceProvenance->setText(scienceProvenance->text() + tr("\nApplied input options: %1")
+        .arg(jsonValueText(page.value("inputOptions"))));
+    scientificPoints = {}; scientificPageIdentity = {};
 }

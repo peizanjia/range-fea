@@ -931,7 +931,8 @@ class VelocityControllerRuntime:
                                  "actuatorIds": [self.actuator_id]},
                 **self.identity}
 
-    def _compute(self, request: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
+    def _compute(self, request: dict[str, Any], base: dict[str, Any],
+                 *, effective_gain: float | None = None) -> dict[str, Any]:
         if self.identity is None:
             raise ControllerError("handshake is required before compute")
         for key, value in self.identity.items():
@@ -974,7 +975,7 @@ class VelocityControllerRuntime:
             previous = _step_number(previous_step)
             if step <= previous:
                 raise ControllerError("stepId must advance beyond the last accepted controller step")
-        force = -self.gain * velocity
+        force = -(self.gain if effective_gain is None else effective_gain) * velocity
         if not math.isfinite(force):
             raise ControllerError("requested force is non-finite")
         next_state = {"sampleCount": count + 1, "lastStepId": step_text}

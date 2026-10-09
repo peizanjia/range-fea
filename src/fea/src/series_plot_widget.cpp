@@ -19,6 +19,7 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <functional>
 
 namespace
 {
@@ -83,6 +84,8 @@ QString axisTitle(const QString &label, const QString &unit)
 class SeriesPlotCanvas : public QWidget
 {
 public:
+    std::function<void(const QString &, quint64)> cursorObserved;
+    std::optional<QPointF> cursorPoint;
     explicit SeriesPlotCanvas(QWidget *parent = nullptr) : QWidget(parent)
     {
         setObjectName(QStringLiteral("seriesPlotCanvas"));
@@ -187,7 +190,7 @@ protected:
             painter.drawLine(QPointF(px, area.top()), QPointF(px, area.bottom()));
             painter.drawLine(QPointF(area.left(), py), QPointF(area.right(), py));
             painter.setPen(text);
-            painter.drawText(QRectF(2, py - 8, area.left() - 9, 16), Qt::AlignRight | Qt::AlignVCenter,
+            painter.drawText(QRectF(32, py - 8, area.left() - 41, 16), Qt::AlignRight | Qt::AlignVCenter,
                              axisValue(normalizedY, yScale));
             painter.drawText(QRectF(px - 42, area.bottom() + 4, 84, 16), Qt::AlignHCenter | Qt::AlignVCenter,
                              axisValue(normalizedX, xScale));
@@ -207,6 +210,13 @@ protected:
         {
             painter.setPen(palette().color(QPalette::PlaceholderText));
             painter.drawText(area, Qt::AlignCenter, tr("No displayed samples"));
+        }
+        if (cursorPoint && pointInView(*cursorPoint))
+        {
+            const auto point = screenPoint(normalizedPoint(*cursorPoint), area);
+            painter.setPen(QPen(palette().color(QPalette::Text), 1, Qt::DashLine));
+            painter.drawLine(QPointF(point.x(), area.top()), QPointF(point.x(), area.bottom()));
+            painter.drawEllipse(point, 4, 4);
         }
     }
 
@@ -331,7 +341,13 @@ private:
 
     QRectF plotRect() const
     {
-        constexpr qreal left = 78.0, right = 16.0, top = 52.0, bottom = 58.0;
+        const QFontMetrics metrics(font());
+        qreal tickWidth = 0;
+        for (int tick=0;tick<=4;++tick)
+            tickWidth=qMax(tickWidth,qreal(metrics.horizontalAdvance(axisValue(
+                yMaximum+(tick/4.0)*(yMinimum-yMaximum),yScale))));
+        const qreal left=qMax(78.0,tickWidth+44.0);
+        constexpr qreal right = 16.0, top = 52.0, bottom = 58.0;
         return QRectF(left, top, qMax(1.0, width() - left - right), qMax(1.0, height() - top - bottom));
     }
 
@@ -509,8 +525,9 @@ private:
 
     std::array<QColor, kMaximumTraces> traceColors() const
     {
-        return {palette().color(QPalette::Highlight), palette().color(QPalette::Link),
-                palette().color(QPalette::BrightText), palette().color(QPalette::Mid)};
+        if (palette().color(QPalette::Base).lightness() < 128)
+            return {QColor("#56b4e9"), QColor("#e69f00"), QColor("#009e73"), QColor("#cc79a7")};
+        return {QColor("#0072b2"), QColor("#d55e00"), QColor("#009e73"), QColor("#882255")};
     }
 
     void drawLegend(QPainter &painter, const QColor &text) const
@@ -610,9 +627,10 @@ private:
         }
 
         const auto &trace = dataset->traces[nearestTrace];
+        if (cursorObserved) cursorObserved(trace.id, trace.originalOrdinals[nearestPoint]);
         const QPointF &point = trace.points[nearestPoint];
         const QString ordinalName = dataset->viewKind == SeriesPlotWidget::ViewKind::Spectrum
-            ? tr("Frequency bin") : tr("Original record");
+            ? tr("Frequency bin") : tr("Raw sample index");
         const QString html = QStringLiteral("<b>")
             + (trace.label.isEmpty() ? trace.id : trace.label).toHtmlEscaped()
             + QStringLiteral("</b><br>x = ") + QString::number(point.x(), 'g', 10).toHtmlEscaped()
@@ -655,6 +673,7 @@ SeriesPlotWidget::SeriesPlotWidget(QWidget *parent) : QWidget(parent)
     layout->addLayout(toolbar);
 
     canvas = new SeriesPlotCanvas(this);
+    canvas->cursorObserved = [this](const QString &id, quint64 ordinal) { setCursor({id, ordinal}); };
     layout->addWidget(canvas, 1);
     connect(holdCheck, &QCheckBox::toggled, this, &SeriesPlotWidget::setDisplayHeld);
     connect(fitButton, &QPushButton::clicked, this, &SeriesPlotWidget::fitToData);
@@ -698,6 +717,23 @@ SeriesPlotWidget::VisibleRange SeriesPlotWidget::visibleRange() const
     return canvas->visibleRange();
 }
 
+bool SeriesPlotWidget::setCursor(const Cursor &next, QString *error)
+{
+    for (const auto &trace : displayedDataset.traces)
+        if (trace.id == next.traceId)
+            for (qsizetype i = 0; i < trace.originalOrdinals.size(); ++i)
+                if (trace.originalOrdinals[i] == next.ordinal)
+                {
+                    const bool changed = !displayedCursor || displayedCursor->traceId != next.traceId || displayedCursor->ordinal != next.ordinal;
+                    displayedCursor = next; canvas->cursorPoint = trace.points[i]; canvas->update();
+                    if (error) error->clear();
+                    if (changed) emit cursorChanged(next.traceId, next.ordinal);
+                    return true;
+                }
+    if (error) *error = QStringLiteral("The cursor does not identify a displayed raw sample or frequency bin.");
+    return false;
+}
+
 void SeriesPlotWidget::setFullExportAvailable(bool available)
 {
     fullExportAvailable = available;
@@ -726,6 +762,7 @@ void SeriesPlotWidget::setDisplayHeld(bool held)
         pendingDataset.reset();
         presentDataset(latest);
     }
+    emit displayHoldChanged(held);
 }
 
 void SeriesPlotWidget::fitToData()
@@ -811,5 +848,9 @@ void SeriesPlotWidget::presentDataset(const Dataset &nextDataset)
     displayedDataset = nextDataset;
     datasetAvailable = true;
     canvas->setDataset(&displayedDataset, preserveView);
+    if (!preserveView || (displayedCursor && !setCursor(*displayedCursor)))
+    {
+        displayedCursor.reset(); canvas->cursorPoint.reset(); canvas->update();
+    }
     updateExportAvailability();
 }

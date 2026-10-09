@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <vector>
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -31,11 +34,16 @@ namespace
 constexpr qint64 MaxManifestBytes = 16 * 1024 * 1024;
 constexpr qint64 MaxFrameBytes = 256 * 1024 * 1024;
 constexpr int MaxFrames = 10000;
+constexpr qint64 MaxExpandedOriginBytes = 128 * 1024 * 1024;
 constexpr uint MaxNodes = 100000;
 constexpr int MaxPageSize = 200;
+constexpr int MaxSnapshotChannels = 16;
+constexpr qint64 MaxSnapshotBytes = 32 * 1024 * 1024;
+constexpr int MaxSnapshotValidatedFiles = 100000;
 const QString ManifestName = QStringLiteral("native-result.manifest.json");
 const QString ManifestApiVersion = QStringLiteral("range.native-results/v1");
 const QString RequiredProofScope = QStringLiteral("solver-and-declared-controller-runtime/v1");
+const QString OriginEncoding = QStringLiteral("range.native-origin-table/v1");
 
 struct BrokerFailure
 {
@@ -72,8 +80,95 @@ bool isSha256(const QString &value)
     return true;
 }
 
+struct ValidatedFileHash
+{
+    QString sha256;
+    QString canonicalPath;
+    qint64 maximumBytes = 0;
+};
+using ValidatedHashLedger = QHash<QString, ValidatedFileHash>;
+thread_local ValidatedHashLedger *snapshotHashLedger = nullptr;
+
+// Explicit diagnostic opt-in: one bounded, path-free stderr record per query.
+// Timings are inclusive (for example manifest validation contains hashing).
+enum ProfilePhase { ProfileManifest, ProfileHash, ProfilePath, ProfileModelRead,
+                    ProfileFrame, ProfileFinal, ProfileLedger, ProfileHashData, ProfilePhaseCount };
+struct QueryProfile
+{
+    qint64 nanoseconds[ProfilePhaseCount] = {};
+    qint64 calls[ProfilePhaseCount] = {};
+    QElapsedTimer total;
+};
+thread_local QueryProfile *queryProfile = nullptr;
+struct ProfileTimer
+{
+    QueryProfile *profile;
+    ProfilePhase phase;
+    QElapsedTimer timer;
+    explicit ProfileTimer(ProfilePhase value) : profile(queryProfile), phase(value)
+    { if (profile) timer.start(); }
+    ~ProfileTimer()
+    { if (profile) { profile->nanoseconds[phase] += timer.nsecsElapsed(); ++profile->calls[phase]; } }
+};
+struct QueryProfileGuard
+{
+    QueryProfile profile;
+    QueryProfile *previous = queryProfile;
+    bool enabled = qEnvironmentVariable("RANGE_NATIVE_RESULTS_PROFILE") == QLatin1String("1");
+    QueryProfileGuard() { if (enabled) { profile.total.start(); queryProfile = &profile; } }
+    ~QueryProfileGuard()
+    {
+        queryProfile = previous;
+        if (!enabled) return;
+        const QStringList names{QStringLiteral("manifest"), QStringLiteral("hash"), QStringLiteral("path"),
+            QStringLiteral("modelRead"), QStringLiteral("frame"), QStringLiteral("final"),
+            QStringLiteral("ledger"), QStringLiteral("hashData")};
+        QJsonObject phases;
+        for (int i = 0; i < ProfilePhaseCount; ++i)
+            phases.insert(names[i], QJsonObject{{QStringLiteral("seconds"), double(profile.nanoseconds[i]) / 1.0e9},
+                {QStringLiteral("calls"), double(profile.calls[i])}});
+        const QByteArray bytes = QJsonDocument(QJsonObject{{QStringLiteral("nativeResultsProfile"), phases},
+            {QStringLiteral("totalSeconds"), double(profile.total.nsecsElapsed()) / 1.0e9}}).toJson(QJsonDocument::Compact) + '\n';
+        std::fwrite(bytes.constData(), 1, size_t(bytes.size()), stderr);
+    }
+};
+
+struct SnapshotHashGuard
+{
+    ValidatedHashLedger *previous;
+    explicit SnapshotHashGuard(ValidatedHashLedger *ledger) : previous(snapshotHashLedger)
+    { snapshotHashLedger = ledger; }
+    ~SnapshotHashGuard() { snapshotHashLedger = previous; }
+};
+
+void recordValidatedHash(const QString &path, const QString &sha256, qint64 maximumBytes)
+{
+    ProfileTimer timing(ProfileLedger);
+    if (!snapshotHashLedger) return;
+    const QFileInfo info(path);
+    const QString absolutePath = QDir::cleanPath(info.absoluteFilePath());
+    auto existing = snapshotHashLedger->find(absolutePath);
+    if (existing != snapshotHashLedger->end())
+    {
+        if (existing->sha256 != sha256)
+            fail(QStringLiteral("RESULT_CHANGED_DURING_READ"), QStringLiteral("A validated snapshot file changed during extraction."));
+        existing->maximumBytes = std::min(maximumBytes, existing->maximumBytes);
+        // Keep the INITIAL canonical identity. Every observation still hashes
+        // the file; safeChildPath rejects links before MODEL reads and the
+        // final ledger pass verifies every original canonical path again.
+        return;
+    }
+    const QString canonicalPath = info.canonicalFilePath();
+    if (info.isSymLink() || canonicalPath.isEmpty())
+        fail(QStringLiteral("RESULT_CHANGED_DURING_READ"), QStringLiteral("A validated snapshot file changed its path identity."));
+    if (snapshotHashLedger->size() >= MaxSnapshotValidatedFiles)
+        fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot ancestry exceeds the 100000 validated-file limit."));
+    snapshotHashLedger->insert(absolutePath, {sha256, canonicalPath, maximumBytes});
+}
+
 QString hashFile(const QString &path, qint64 maximumBytes, const QString &code)
 {
+    ProfileTimer timing(ProfileHash);
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         fail(code, QStringLiteral("Could not read a published result file."));
@@ -83,18 +178,24 @@ QString hashFile(const QString &path, qint64 maximumBytes, const QString &code)
 
     QCryptographicHash hash(QCryptographicHash::Sha256);
     qint64 totalBytes = 0;
-    while (!file.atEnd())
+    QString sha256;
     {
-        const QByteArray chunk = file.read(1024 * 1024);
-        if (chunk.isEmpty() && file.error() != QFile::NoError)
-            fail(code, QStringLiteral("Could not read a published result file."));
-        totalBytes += chunk.size();
-        if (totalBytes > maximumBytes)
-            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"),
-                 QStringLiteral("A result file grew beyond the broker's explicit size limit while being read."));
-        hash.addData(chunk);
+        ProfileTimer dataTiming(ProfileHashData);
+        while (!file.atEnd())
+        {
+            const QByteArray chunk = file.read(1024 * 1024);
+            if (chunk.isEmpty() && file.error() != QFile::NoError)
+                fail(code, QStringLiteral("Could not read a published result file."));
+            totalBytes += chunk.size();
+            if (totalBytes > maximumBytes)
+                fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"),
+                     QStringLiteral("A result file grew beyond the broker's explicit size limit while being read."));
+            hash.addData(chunk);
+        }
+        sha256 = QString::fromLatin1(hash.result().toHex());
     }
-    return QString::fromLatin1(hash.result().toHex());
+    recordValidatedHash(path, sha256, maximumBytes);
+    return sha256;
 }
 
 QString canonicalDirectory(const QString &path)
@@ -115,6 +216,7 @@ QString safeChildPath(const QString &canonicalRoot,
                       const QString &code,
                       bool mustExist = true)
 {
+    ProfileTimer timing(ProfilePath);
     const QFileInfo info(path);
     if (info.isSymLink())
         fail(code, QStringLiteral("A result artifact cannot be a symbolic link."));
@@ -494,6 +596,7 @@ ModelInfo inspectModel(const QString &path,
     RModel &model = parsedModel ? *parsedModel : temporaryModel;
     try
     {
+        ProfileTimer timing(ProfileModelRead);
         model.read(path);
     }
     catch (...)
@@ -681,7 +784,16 @@ struct Channel
     QString quantity;
     QString axis;
     QString unit;
+    QString nodeTarget = QStringLiteral("persistent-node-physical-id");
 };
+
+bool hasControlWorkChannel(const QJsonObject &manifest)
+{
+    return manifest.value(QStringLiteral("analysis")).toObject().value(QStringLiteral("type")).toString() ==
+               QLatin1String("structural-dynamics") &&
+           manifest.value(QStringLiteral("sourceKind")).toString() == QLatin1String("native-active-fe") &&
+           manifest.value(QStringLiteral("control")).toObject().value(QStringLiteral("enabled")).toBool(false);
+}
 
 QVector<FieldDefinition> availableChannelFields(const QJsonObject &manifest)
 {
@@ -706,6 +818,7 @@ int totalChannelCount(const QJsonObject &manifest)
     for (const FieldDefinition &field : availableChannelFields(manifest))
         count += 3 * qint64(manifest.value(field.angular ? QStringLiteral("rotationNodePhysicalIds")
                                                        : QStringLiteral("translationNodePhysicalIds")).toArray().size());
+    if (hasControlWorkChannel(manifest)) ++count;
     if (count > std::numeric_limits<int>::max())
         fail(QStringLiteral("UNSUPPORTED_CHANNEL_LIMIT"), QStringLiteral("The channel catalog exceeds its explicit index limit."));
     return int(count);
@@ -738,6 +851,10 @@ QVector<Channel> channelPage(const QJsonObject &manifest, int offset, int limit)
         }
         fieldOffset += fieldCount;
     }
+    if (hasControlWorkChannel(manifest) && fieldOffset >= offset && fieldOffset < offset + limit)
+        page.append(Channel{QStringLiteral("control:work"), QStringLiteral("control-cumulative-work"),
+            QStringLiteral("controlWork"), QStringLiteral("scalar"), QStringLiteral("J"),
+            QStringLiteral("accepted-control-ledger")});
     return page;
 }
 
@@ -846,10 +963,179 @@ void requireOnlyKeys(const QJsonObject &arguments, const QStringList &keys)
 
 void validateManifestShape(const QString &root, const QJsonObject &manifest);
 
+// Entries retain the exact original Qt JSON bytes, so origin/proof identities
+// do not depend on a consumer's JSON number formatting. The table hash uses
+// sorted SHA keys and length-delimited UTF-8 entries (also mirrored in Python).
+QString originTableIdentity(const QJsonObject &table)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    hash.addData(QByteArrayLiteral("range.native-origin-table/v1\n"));
+    for (auto it = table.constBegin(); it != table.constEnd(); ++it)
+    {
+        const QByteArray bytes = it.value().toString().toUtf8();
+        hash.addData(it.key().toLatin1() + '\n' + QByteArray::number(bytes.size()) + ':' + bytes + '\n');
+    }
+    return QString::fromLatin1(hash.result().toHex());
+}
+
+void rejectUndeclaredOriginReferences(const QJsonValue &value, int depth = 0)
+{
+    if (depth > 64)
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Origin metadata exceeds its nesting bound."));
+    if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        if (object.contains(QStringLiteral("originRef")))
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("An origin reference occurs outside the declared records."));
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it)
+            rejectUndeclaredOriginReferences(it.value(), depth + 1);
+    }
+    else if (value.isArray())
+        for (const QJsonValue &item : value.toArray()) rejectUndeclaredOriginReferences(item, depth + 1);
+}
+
+QJsonObject mapManifestOrigins(QJsonObject manifest,
+                              const std::function<QJsonObject(QJsonObject)> &map)
+{
+    const auto mapArray = [&map](const QJsonArray &array, bool frames)
+    {
+        QJsonArray mapped;
+        for (const QJsonValue &raw : array)
+        {
+            if (!raw.isObject())
+                fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("An origin-bearing record must be an object."));
+            QJsonObject entry = map(raw.toObject());
+            if (frames && entry.contains(QStringLiteral("historyProof")))
+            {
+                if (!entry.value(QStringLiteral("historyProof")).isObject())
+                    fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A frame history proof must be an object."));
+                const QJsonObject proof = map(entry.value(QStringLiteral("historyProof")).toObject());
+                for (auto it = proof.constBegin(); it != proof.constEnd(); ++it)
+                    if (it.key() != QLatin1String("origin") && it.key() != QLatin1String("originRef"))
+                        rejectUndeclaredOriginReferences(it.value());
+                entry.insert(QStringLiteral("historyProof"), proof);
+            }
+            for (auto it = entry.constBegin(); it != entry.constEnd(); ++it)
+                if (it.key() != QLatin1String("origin") && it.key() != QLatin1String("originRef") &&
+                    !(frames && it.key() == QLatin1String("historyProof")))
+                    rejectUndeclaredOriginReferences(it.value());
+            mapped.append(entry);
+        }
+        return mapped;
+    };
+    if (!manifest.value(QStringLiteral("frames")).isArray() ||
+        manifest.value(QStringLiteral("frames")).toArray().size() > MaxFrames ||
+        (manifest.contains(QStringLiteral("reusedHistory")) &&
+         (!manifest.value(QStringLiteral("reusedHistory")).isArray() ||
+          manifest.value(QStringLiteral("reusedHistory")).toArray().size() > MaxFrames)))
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The origin index exceeds the bounded frame count or is malformed."));
+    manifest.insert(QStringLiteral("frames"), mapArray(manifest.value(QStringLiteral("frames")).toArray(), true));
+    if (manifest.contains(QStringLiteral("reusedHistory")))
+        manifest.insert(QStringLiteral("reusedHistory"), mapArray(manifest.value(QStringLiteral("reusedHistory")).toArray(), false));
+    return manifest;
+}
+
+QJsonObject compactManifestOrigins(const QJsonObject &manifest)
+{
+    QJsonObject table;
+    QJsonObject compact = mapManifestOrigins(manifest, [&table](QJsonObject entry)
+    {
+        const QJsonValue origin = entry.value(QStringLiteral("origin"));
+        if (entry.contains(QStringLiteral("originRef")) || (!origin.isObject() && !origin.isNull()))
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A compact origin must be an unambiguous object or null."));
+        const QByteArray bytes = origin.isNull() ? QByteArrayLiteral("null") :
+            QJsonDocument(origin.toObject()).toJson(QJsonDocument::Compact);
+        rejectUndeclaredOriginReferences(origin);
+        const QString key = digestBytes(bytes);
+        const QString encoded = QString::fromUtf8(bytes);
+        if (table.contains(key) && table.value(key).toString() != encoded)
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Origin identities collide."));
+        table.insert(key, encoded);
+        entry.remove(QStringLiteral("origin"));
+        entry.insert(QStringLiteral("originRef"), key);
+        return entry;
+    });
+    // Static/modal terminal results have no time-frame origin records. Their
+    // existing legacy representation requires no origin-table encoding.
+    if (table.isEmpty()) return manifest;
+    compact.insert(QStringLiteral("originEncoding"), OriginEncoding);
+    compact.insert(QStringLiteral("originTable"), table);
+    compact.insert(QStringLiteral("originTableSha256"), originTableIdentity(table));
+    return compact;
+}
+
+QJsonObject normalizeManifestOrigins(QJsonObject manifest)
+{
+    const bool compact = manifest.contains(QStringLiteral("originEncoding")) ||
+        manifest.contains(QStringLiteral("originTable")) || manifest.contains(QStringLiteral("originTableSha256"));
+    if (!compact)
+    {
+        rejectUndeclaredOriginReferences(manifest);
+        return manifest;
+    }
+    if (manifest.value(QStringLiteral("originEncoding")).toString() != OriginEncoding ||
+        !manifest.value(QStringLiteral("originTable")).isObject() ||
+        !isSha256(manifest.value(QStringLiteral("originTableSha256")).toString()))
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The compact origin encoding is invalid."));
+    const QJsonObject table = manifest.value(QStringLiteral("originTable")).toObject();
+    if (table.isEmpty() || table.size() > MaxFrames)
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The compact origin table exceeds its bounded entry count."));
+    QHash<QString, QJsonValue> origins;
+    QHash<QString, qint64> originBytes;
+    for (auto it = table.constBegin(); it != table.constEnd(); ++it)
+    {
+        if (!isSha256(it.key()) || !it.value().isString())
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A compact origin table entry is invalid."));
+        const QByteArray bytes = it.value().toString().toUtf8();
+        if (digestBytes(bytes) != it.key())
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A compact origin no longer matches its original SHA-256."));
+        QJsonValue origin(QJsonValue::Null);
+        if (bytes != QByteArrayLiteral("null"))
+        {
+            QJsonParseError error;
+            const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
+            if (error.error != QJsonParseError::NoError || !document.isObject() ||
+                document.toJson(QJsonDocument::Compact) != bytes)
+                fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A compact origin must retain canonical original JSON bytes."));
+            origin = document.object();
+        }
+        origins.insert(it.key(), origin);
+        rejectUndeclaredOriginReferences(origin);
+        originBytes.insert(it.key(), bytes.size());
+    }
+    if (originTableIdentity(table) != manifest.value(QStringLiteral("originTableSha256")).toString())
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The compact origin table SHA-256 does not match."));
+    QSet<QString> used;
+    qint64 expandedBytes = 0;
+    manifest = mapManifestOrigins(manifest, [&origins, &originBytes, &used, &expandedBytes](QJsonObject entry)
+    {
+        const QString key = entry.value(QStringLiteral("originRef")).toString();
+        if (entry.contains(QStringLiteral("origin")) || !entry.value(QStringLiteral("originRef")).isString() || !origins.contains(key))
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A compact record has ambiguous or missing origin references."));
+        expandedBytes += originBytes.value(key);
+        if (expandedBytes > MaxExpandedOriginBytes)
+            fail(QStringLiteral("UNSUPPORTED_MANIFEST_SIZE"), QStringLiteral("Expanded origin references exceed the 128 MiB budget."));
+        used.insert(key);
+        entry.remove(QStringLiteral("originRef"));
+        entry.insert(QStringLiteral("origin"), origins.value(key));
+        return entry;
+    });
+    if (used.size() != table.size())
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("The compact origin table contains unreferenced entries."));
+    manifest.remove(QStringLiteral("originEncoding"));
+    manifest.remove(QStringLiteral("originTable"));
+    manifest.remove(QStringLiteral("originTableSha256"));
+    for (auto it = manifest.constBegin(); it != manifest.constEnd(); ++it)
+        if (it.key() != QLatin1String("frames") && it.key() != QLatin1String("reusedHistory"))
+            rejectUndeclaredOriginReferences(it.value());
+    return manifest;
+}
+
 QJsonObject loadManifest(const QString &manifestPath,
                          const QString &expectedSha256,
                          QString *canonicalRoot)
 {
+    ProfileTimer timing(ProfileManifest);
     static thread_local int ancestryDepth = 0;
     if (ancestryDepth >= 64)
         fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Result history ancestry exceeds the bounded depth or contains a cycle."));
@@ -873,12 +1159,20 @@ QJsonObject loadManifest(const QString &manifestPath,
         fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The manifest exceeds 16 MiB while being read."));
     if (file.error() != QFile::NoError || digestBytes(bytes) != expectedSha256)
         fail(QStringLiteral("STALE_MANIFEST_SHA256"), QStringLiteral("The manifest bytes do not match expectedSha256."));
+    recordValidatedHash(info.absoluteFilePath(), expectedSha256, MaxManifestBytes);
 
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
         fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The hash-bound manifest is not a JSON object."));
-    const QJsonObject manifest = document.object();
+    // New storage is canonical. This also rejects duplicate/ambiguous JSON
+    // keys without changing the legacy expanded-v1 reader's accepted syntax.
+    if ((document.object().contains(QStringLiteral("originEncoding")) ||
+         document.object().contains(QStringLiteral("originTable")) ||
+         document.object().contains(QStringLiteral("originTableSha256"))) &&
+        document.toJson(QJsonDocument::Compact) != bytes)
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Compact manifest storage is not canonical JSON."));
+    const QJsonObject manifest = normalizeManifestOrigins(document.object());
     if (manifest.value(QStringLiteral("apiVersion")).toString() != ManifestApiVersion ||
         manifest.value(QStringLiteral("validationScope")).toString() != QLatin1String("caller-file-owner"))
         fail(QStringLiteral("UNSUPPORTED_MANIFEST_SCHEMA"), QStringLiteral("The manifest schema or validation scope is unsupported."));
@@ -1195,12 +1489,26 @@ struct ParsedQueryChannel
     uint component = 0;
     QString unit;
     bool angular = false;
+    bool controlWork = false;
 };
 
 ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonObject &arguments)
 {
     const QString id = arguments.value(QStringLiteral("channelId")).toString();
     ParsedQueryChannel channel;
+    if (id == QLatin1String("control:work"))
+    {
+        if (!hasControlWorkChannel(manifest))
+            fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("Actual control work is available only for controlled dynamics results."));
+        if (arguments.contains(QStringLiteral("nodePhysicalId")))
+            fail(QStringLiteral("INVALID_ARGUMENTS"), QStringLiteral("The control work scalar has no node physical identifier."));
+        channel.controlWork = true;
+        channel.quantity = QStringLiteral("controlWork");
+        channel.variableId = QStringLiteral("control-cumulative-work");
+        channel.axis = QStringLiteral("scalar");
+        channel.unit = QStringLiteral("J");
+        return channel;
+    }
     if (!parseChannelId(id, &channel.nodeId, &channel.quantity, &channel.axis))
         fail(QStringLiteral("INVALID_CHANNEL_ID"), QStringLiteral("channelId must identify a known node, quantity, and global axis."));
     channel.variableId = variableIdForQuantity(channel.quantity);
@@ -1234,20 +1542,20 @@ ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonO
     return channel;
 }
 
-double valueAt(const QString &root,
-               const QJsonObject &manifest,
-               const QJsonObject &frame,
-               const ParsedQueryChannel &channel)
+ModelInfo readQueryFrame(const QString &root,
+                         const QJsonObject &manifest,
+                         const QJsonObject &frame,
+                         RModel *model)
 {
+    ProfileTimer timing(ProfileFrame);
     const QString framePath = safeChildPath(root,
         QDir(root).filePath(frame.value(QStringLiteral("relativePath")).toString()),
         QStringLiteral("UNSAFE_RESULT_PATH"));
-    RModel model;
     const int recordNo = frame.value(QStringLiteral("recordNo")).toInt(-1);
     const ModelInfo info = inspectModel(framePath, recordNo,
         validateProvenance(frame.value(QStringLiteral("origin")).isObject()
             ? frame.value(QStringLiteral("origin")).toObject() : frameOrigin(manifest)),
-        true, &model, frame.value(QStringLiteral("sha256")).toString());
+        true, model, frame.value(QStringLiteral("sha256")).toString());
     if (info.analysisType != QLatin1String("structural-dynamics") ||
         !closeTime(info.timeS, frame.value(QStringLiteral("timeS")).toDouble()) ||
         info.nodeMapSha256 != frame.value(QStringLiteral("nodePhysicalIdMapSha256")).toString() ||
@@ -1255,7 +1563,42 @@ double valueAt(const QString &root,
         info.translationNodeIds != idsFromJson(manifest.value(QStringLiteral("translationNodePhysicalIds")).toArray()) ||
         info.rotationNodeIds != idsFromJson(manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray()))
         fail(QStringLiteral("RESULT_FRAME_METADATA_CHANGED"), QStringLiteral("A MODEL frame's persisted time or domain changed."));
+    return info;
+}
 
+double valueFromModel(const RModel &model, const ModelInfo &info,
+                      const ParsedQueryChannel &channel)
+{
+    if (channel.controlWork)
+    {
+        const RStructuralDynamicsRestartData &checkpoint = model.getProblemSetup().getStructuralDynamicsRestartData();
+        if (!checkpoint.controlAvailable || checkpoint.controlChannelIds.empty() ||
+            checkpoint.cumulativeControlWork.size() != checkpoint.controlChannelIds.size())
+            fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("This persisted accepted frame has no complete control work ledger."));
+        // cumulativeControlWork is already physical joules (restart contract),
+        // ordered by controlChannelIds. Aggregate every actuator without nodal
+        // unit conversion, synthetic passive zeros, or controller recomputation.
+        double scale = 0.0;
+        for (double work : checkpoint.cumulativeControlWork)
+        {
+            if (!std::isfinite(work))
+                fail(QStringLiteral("NONFINITE_RESULT_FIELD"), QStringLiteral("The persisted control work ledger contains a non-finite value."));
+            scale = std::max(scale, std::fabs(work));
+        }
+        double sum = 0.0;
+        double compensation = 0.0;
+        for (double work : checkpoint.cumulativeControlWork)
+        {
+            const double adjusted = (scale == 0.0 ? 0.0 : work / scale) - compensation;
+            const double next = sum + adjusted;
+            compensation = (next - sum) - adjusted;
+            sum = next;
+        }
+        const double value = scale * sum;
+        if (!std::isfinite(value))
+            fail(QStringLiteral("NONFINITE_RESULT_FIELD"), QStringLiteral("The aggregate persisted control work cannot be represented as finite joules."));
+        return value;
+    }
     const QVector<uint> &availableNodeIds = channel.angular ? info.rotationNodeIds : info.translationNodeIds;
     if (!availableNodeIds.contains(channel.nodeId))
         fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("The requested node does not carry the queried physical degrees of freedom."));
@@ -1274,6 +1617,184 @@ double valueAt(const QString &root,
     if (!std::isfinite(value))
         fail(QStringLiteral("NONFINITE_RESULT_FIELD"), QStringLiteral("A requested native result value is non-finite."));
     return value;
+}
+
+double valueAt(const QString &root,
+               const QJsonObject &manifest,
+               const QJsonObject &frame,
+               const ParsedQueryChannel &channel)
+{
+    RModel model;
+    const ModelInfo info = readQueryFrame(root, manifest, frame, &model);
+    return valueFromModel(model, info, channel);
+}
+
+// Hash scopes are the exact QJsonDocument::Compact bytes of the ORIGINAL
+// manifest origin/proof object, including private proof paths. Missing proof
+// and unavailable legacy origin hash the literal UTF-8 bytes "null". These
+// identities bind to the owned manifest; they are not hashes of sanitized DTOs.
+QString snapshotIdentity(const QJsonValue &value)
+{
+    if (value.isUndefined() || value.isNull()) return digestBytes(QByteArrayLiteral("null"));
+    if (!value.isObject())
+        fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("A snapshot origin or proof must be an object or null."));
+    return digestBytes(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
+}
+
+// sourceSnapshotRef is the only caller-shaped object crossing the snapshot
+// boundary. Retain its frozen identity exactly, rejecting paths and excessive
+// nesting/strings rather than silently rewriting or truncating provenance.
+bool snapshotStringIsPath(const QString &value)
+{
+    const QString text = value.trimmed();
+    // Use an explicit platform-independent policy: QFileInfo alone would let
+    // Windows paths through on another host, and relative paths on all hosts.
+    static const QRegularExpression drivePrefix(QStringLiteral("^[A-Za-z]:"));
+    static const QRegularExpression versionedIdentifier(QStringLiteral("^[A-Za-z][A-Za-z0-9_.-]*/v[1-9][0-9]*$"));
+    static const QRegularExpression fileName(QStringLiteral("^[^/\\\\]+\\.[A-Za-z0-9]{1,16}$"));
+    if (text.startsWith(QStringLiteral("file:"), Qt::CaseInsensitive) ||
+        drivePrefix.match(text).hasMatch() || text.contains(QLatin1Char('\\')) ||
+        text.startsWith(QLatin1Char('/')) || text == QLatin1String(".") || text == QLatin1String(".."))
+        return true;
+    // Versioned schema/kind identities are inert identifiers, not filenames.
+    // All other separators (including ./, ../ and nested relative files) are
+    // rejected, identically in object keys, nested arrays, and string values.
+    if (text.contains(QLatin1Char('/')))
+        return !versionedIdentifier.match(text).hasMatch();
+    return fileName.match(text).hasMatch();
+}
+
+void validateSnapshotReference(const QJsonValue &value, int depth = 0)
+{
+    if (depth > 16)
+        fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot source metadata exceeds its bounded nesting limit."));
+    if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        if (object.size() > 128)
+            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot source metadata has too many fields."));
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it)
+        {
+            if (it.key().size() > 256 || it.key().contains(QStringLiteral("path"), Qt::CaseInsensitive) ||
+                snapshotStringIsPath(it.key()))
+                fail(QStringLiteral("INVALID_SNAPSHOT_PROVENANCE"), QStringLiteral("Snapshot source metadata cannot expose path fields."));
+            validateSnapshotReference(it.value(), depth + 1);
+        }
+    }
+    else if (value.isArray())
+    {
+        const QJsonArray array = value.toArray();
+        if (array.size() > 128)
+            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot source metadata has too many entries."));
+        for (const QJsonValue &entry : array) validateSnapshotReference(entry, depth + 1);
+    }
+    else if (value.isString())
+    {
+        const QString text = value.toString();
+        if (text.size() > 4096)
+            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot source metadata contains an oversized string."));
+        if (snapshotStringIsPath(text))
+            fail(QStringLiteral("INVALID_SNAPSHOT_PROVENANCE"), QStringLiteral("Snapshot source metadata cannot expose filesystem paths."));
+    }
+    else if (value.isDouble() && !std::isfinite(value.toDouble()))
+        fail(QStringLiteral("INVALID_SNAPSHOT_PROVENANCE"), QStringLiteral("Snapshot source metadata must contain finite numbers."));
+}
+
+QJsonObject querySnapshot(const QString &root, const QJsonObject &manifest,
+                          const QString &manifestPath, const QString &manifestSha256,
+                          const QJsonObject &arguments, const ValidatedHashLedger &validatedHashes)
+{
+    requireOnlyKeys(arguments, {QStringLiteral("channelIds")});
+    const QJsonValue rawIds = arguments.value(QStringLiteral("channelIds"));
+    const QJsonArray ids = rawIds.toArray();
+    if (!rawIds.isArray() || ids.isEmpty() || ids.size() > MaxSnapshotChannels)
+        fail(QStringLiteral("INVALID_ARGUMENTS"), QStringLiteral("channelIds must contain 1 through 16 unique existing channel IDs."));
+
+    QSet<QString> seen;
+    QVector<ParsedQueryChannel> channels;
+    QJsonArray channelMetadata;
+    for (const QJsonValue &rawId : ids)
+    {
+        const QString id = rawId.toString();
+        if (!rawId.isString() || id.size() > 128 || seen.contains(id))
+            fail(QStringLiteral("INVALID_ARGUMENTS"), QStringLiteral("channelIds must contain unique bounded strings."));
+        const ParsedQueryChannel channel = resolveQueryChannel(manifest, {{QStringLiteral("channelId"), id}});
+        channels.append(channel);
+        seen.insert(id);
+        channelMetadata.append(QJsonObject{{QStringLiteral("channelId"), id},
+            {QStringLiteral("variableId"), channel.variableId},
+            {QStringLiteral("quantity"), channel.quantity},
+            {QStringLiteral("axis"), channel.axis}, {QStringLiteral("unit"), channel.unit},
+            {QStringLiteral("nodeTarget"), channel.controlWork ? QStringLiteral("accepted-control-ledger")
+                                                               : QStringLiteral("persistent-node-physical-id")}});
+    }
+    const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
+    if (frames.isEmpty() || frames.size() > MaxFrames)
+        fail(QStringLiteral("UNSUPPORTED_FRAME_LIMIT"), QStringLiteral("Snapshot requires 1 through 10000 persisted frames."));
+    const QJsonValue sourceRef = manifest.value(QStringLiteral("sourceSnapshotRef"));
+    validateSnapshotReference(sourceRef);
+    if (QJsonDocument(sourceRef.toObject()).toJson(QJsonDocument::Compact).size() > 64 * 1024)
+        fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot source reference exceeds 64 KiB."));
+
+    QJsonObject response{{QStringLiteral("valid"), true}, {QStringLiteral("operation"), QStringLiteral("snapshot")},
+        {QStringLiteral("apiVersion"), QStringLiteral("range.native-series-snapshot/v1")},
+        {QStringLiteral("schemaId"), QStringLiteral("range.native-series-snapshot/v1")},
+        {QStringLiteral("completed"), true}, {QStringLiteral("live"), false},
+        {QStringLiteral("artifactId"), manifest.value(QStringLiteral("artifactId"))},
+        {QStringLiteral("jobId"), manifest.value(QStringLiteral("jobId"))},
+        {QStringLiteral("sourceKind"), manifest.value(QStringLiteral("sourceKind"))},
+        {QStringLiteral("sourceSnapshotRef"), sourceRef},
+        {QStringLiteral("proofScope"), manifest.value(QStringLiteral("proofScope"))},
+        {QStringLiteral("manifestSha256"), manifestSha256},
+        {QStringLiteral("frameCount"), frames.size()}, {QStringLiteral("channels"), channelMetadata}};
+    qint64 outputBytes = QJsonDocument(response).toJson(QJsonDocument::Compact).size() + 12;
+    QJsonArray samples;
+    for (const QJsonValue &rawFrame : frames)
+    {
+        const QJsonObject frame = rawFrame.toObject();
+        // loadManifest validated record/time/order, all original hashes, and
+        // ancestry before any sample is read. Parse each MODEL once for ALL
+        // requested channels, retaining the existing checkpoint/domain checks.
+        const QString originSha = snapshotIdentity(frame.value(QStringLiteral("origin")));
+        const QString proofSha = snapshotIdentity(frame.value(QStringLiteral("historyProof")));
+        RModel model;
+        const ModelInfo info = readQueryFrame(root, manifest, frame, &model);
+        QJsonArray values;
+        for (const ParsedQueryChannel &channel : channels)
+            values.append(valueFromModel(model, info, channel));
+        // inspectModel hashes immediately before and after its only MODEL
+        // read. Extraction below uses that parsed object; the final ledger
+        // rechecks all files, including ancestry, before returning any DTO.
+        const QJsonObject sample{{QStringLiteral("recordNo"), frame.value(QStringLiteral("recordNo"))},
+            {QStringLiteral("timeS"), frame.value(QStringLiteral("timeS"))}, {QStringLiteral("modelSha256"), info.sha256},
+            {QStringLiteral("originKind"), frame.value(QStringLiteral("originKind"))},
+            {QStringLiteral("originSha256"), originSha}, {QStringLiteral("historyProofSha256"), proofSha},
+            {QStringLiteral("values"), values}};
+        outputBytes += QJsonDocument(sample).toJson(QJsonDocument::Compact).size() + 1;
+        if (outputBytes > MaxSnapshotBytes)
+            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot exceeds its 32 MiB output limit."));
+        samples.append(sample);
+    }
+    // Recheck every unique file validated in this invocation, including the
+    // original ancestor MODELs/manifests of reused history and the latest LINK.
+    // The ledger is scoped to this call and never trusts timestamps. Capturing
+    // is disabled so later observations cannot replace the initial identity.
+    SnapshotHashGuard disableCapture(nullptr);
+    ProfileTimer finalTiming(ProfileFinal);
+    for (auto it = validatedHashes.constBegin(); it != validatedHashes.constEnd(); ++it)
+    {
+        const QFileInfo current(it.key());
+        if (current.isSymLink() || !current.isFile() || current.canonicalFilePath() != it.value().canonicalPath ||
+            hashFile(it.key(), it.value().maximumBytes, QStringLiteral("RESULT_CHANGED_DURING_READ")) != it.value().sha256)
+            fail(QStringLiteral("RESULT_CHANGED_DURING_READ"), QStringLiteral("A validated snapshot artifact changed during extraction."));
+    }
+    const QString checkedManifest = safeChildPath(root, manifestPath, QStringLiteral("INVALID_MANIFEST_PATH"));
+    if (hashFile(checkedManifest, MaxManifestBytes, QStringLiteral("INVALID_MANIFEST")) != manifestSha256)
+        fail(QStringLiteral("STALE_MANIFEST_SHA256"), QStringLiteral("The manifest changed during snapshot extraction."));
+    response.insert(QStringLiteral("frames"), samples);
+    if (QJsonDocument(response).toJson(QJsonDocument::Compact).size() > MaxSnapshotBytes)
+        fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"), QStringLiteral("Snapshot exceeds its 32 MiB output limit."));
+    return response;
 }
 
 QJsonObject failureJson(const QString &code, const QString &message)
@@ -1495,7 +2016,11 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
             {QStringLiteral("frames"), framesArray}
         };
         validateManifestShape(root, manifest);
-        const QByteArray manifestBytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+        const QJsonObject compactManifest = compactManifestOrigins(manifest);
+        // Apply the same bounded normalization before publication as on reads.
+        if (normalizeManifestOrigins(compactManifest) != manifest)
+            fail(QStringLiteral("INVALID_HISTORY_PROVENANCE"), QStringLiteral("Compact publication changed original provenance."));
+        const QByteArray manifestBytes = QJsonDocument(compactManifest).toJson(QJsonDocument::Compact);
         if (manifestBytes.size() > MaxManifestBytes)
             fail(QStringLiteral("UNSUPPORTED_MANIFEST_SIZE"),
                  QStringLiteral("The validated frame index exceeds the 16 MiB manifest limit."));
@@ -1607,7 +2132,7 @@ static QJsonObject queryManifest(const QString &root,
                     {QStringLiteral("quantity"), channel.quantity},
                     {QStringLiteral("axis"), channel.axis},
                     {QStringLiteral("unit"), channel.unit},
-                    {QStringLiteral("nodeTarget"), QStringLiteral("persistent-node-physical-id")}});
+                    {QStringLiteral("nodeTarget"), channel.nodeTarget}});
             }
             const bool more = offset + page.size() < count;
             QJsonObject response{{QStringLiteral("valid"), true},
@@ -1627,6 +2152,8 @@ static QJsonObject queryManifest(const QString &root,
             requireOnlyKeys(arguments, {QStringLiteral("channelId"), QStringLiteral("nodePhysicalId"),
                                         QStringLiteral("offset"), QStringLiteral("limit"), QStringLiteral("cursor")});
             const ParsedQueryChannel channel = resolveQueryChannel(manifest, arguments);
+            if (channel.controlWork)
+                fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("Control work scalars require the snapshot operation."));
             const int offset = pageOffset(arguments, artifactId, totalFrames);
             const int limit = pageLimit(arguments);
             QJsonArray samples;
@@ -1662,6 +2189,8 @@ static QJsonObject queryManifest(const QString &root,
         {
             requireOnlyKeys(arguments, {QStringLiteral("channelId"), QStringLiteral("nodePhysicalId")});
             const ParsedQueryChannel channel = resolveQueryChannel(manifest, arguments);
+            if (channel.controlWork)
+                fail(QStringLiteral("CHANNEL_UNAVAILABLE"), QStringLiteral("Control work scalars require the snapshot operation."));
             QVector<double> values;
             values.reserve(frames.size());
             double minimum = std::numeric_limits<double>::infinity();
@@ -1736,10 +2265,15 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
                                      const QString &operation,
                                      const QJsonObject &arguments)
 {
+    QueryProfileGuard profiling;
     try
     {
+        ValidatedHashLedger validatedHashes;
+        SnapshotHashGuard capture(operation == QLatin1String("snapshot") ? &validatedHashes : nullptr);
         QString root;
         const QJsonObject manifest = loadManifest(manifestPath, expectedSha256, &root);
+        if (operation == QLatin1String("snapshot"))
+            return querySnapshot(root, manifest, manifestPath, expectedSha256, arguments, validatedHashes);
         QJsonObject result = queryManifest(root, manifest, operation, arguments);
         result.insert(QStringLiteral("completed"), true);
         result.insert(QStringLiteral("live"), false);
@@ -1757,6 +2291,8 @@ QJsonObject RNativeResultBroker::queryLive(const QString &resultDirectory,
 {
     try
     {
+        if (operation == QLatin1String("snapshot"))
+            fail(QStringLiteral("UNSUPPORTED_OPERATION"), QStringLiteral("Snapshot requires a completed hash-bound result manifest."));
         const QString root = canonicalDirectory(resultDirectory);
         const Provenance provenance = validateProvenance(provenanceObject);
         const QHash<int, QJsonObject> reused = validateReusedHistory(provenanceObject);

@@ -4,9 +4,12 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMap>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QWidget>
 
+class QCheckBox;
+class QDoubleSpinBox;
 class QComboBox;
 class QLabel;
 class QPlainTextEdit;
@@ -45,10 +48,15 @@ private slots:
     void loadMoreCandidates();
 
 private:
+    friend class TestExtensionWidget;
     enum class RequestKind
     {
         Capabilities,
         ManifestSchema,
+        ScientificSchema,
+        RuntimeVerifyStart,
+        RuntimeVerifyPoll,
+        ScientificResult,
         NumericSeriesSchema,
         ExtensionList,
         ExtensionDetails,
@@ -77,6 +85,14 @@ private:
     QPointer<WorkflowProcess> service;
     QTimer *refreshTimer = nullptr;
     QTimer *jobPollTimer = nullptr;
+    QTimer *runtimeVerificationTimer = nullptr;
+    QElapsedTimer runtimeVerificationClock;
+    QString runtimeVerificationGeneration, runtimeVerificationId, runtimeVerificationRequest;
+    QString runtimeVerificationMessage;
+    bool runtimeVerificationAvailable = false;
+    bool runtimeVerificationReady = false;
+    void startRuntimeVerification();
+    void pollRuntimeVerification();
     QTreeWidget *extensionTree = nullptr;
     QLabel *status = nullptr;
     QLabel *trustStatus = nullptr;
@@ -101,6 +117,36 @@ private:
     QComboBox *sourceMode = nullptr;
     QComboBox *sourceJob = nullptr;
     QComboBox *sourceSignal = nullptr;
+    QWidget *scientificForm = nullptr;
+    QComboBox *windowInput = nullptr;
+    QCheckBox *removeMeanInput = nullptr;
+    QComboBox *filterInput = nullptr;
+    QDoubleSpinBox *cutoffInput = nullptr;
+    QPushButton *addSourceButton = nullptr;
+    QPushButton *removeSourceButton = nullptr;
+    QTableWidget *sourcesTable = nullptr;
+    QComboBox *scienceView = nullptr;
+    QTabWidget *sciencePlots = nullptr;
+    QTabWidget *pendingSciencePlots = nullptr;
+    QJsonArray pendingScienceRows;
+    QLabel *scienceProvenance = nullptr;
+    QJsonObject scientificGui;
+    QJsonArray scientificSources;
+    QJsonObject displayedScientificResult;
+    QJsonArray scientificPoints;
+    QJsonObject scientificPageIdentity;
+    QString scientificJobId;
+    QString scientificSelection;
+    QString scientificGeneration;
+    QString formIdentity;
+    int scientificChannel = 0;
+    bool scientificFormSupported = false;
+    void addScientificSource();
+    void refreshScientificSources();
+    void loadScientificView();
+    void requestScientificPage(int offset);
+    void consumeScientificPage(const QJsonObject &page);
+    void resetScientificWorkspace();
     QTableWidget *metricsTable = nullptr;
     QPlainTextEdit *previewView = nullptr;
     QPlainTextEdit *resultView = nullptr;

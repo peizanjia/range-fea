@@ -9,6 +9,8 @@
 
 #include "solver_input.h"
 
+class RuntimeControlBridge;
+
 class SolverTask : public QObject
 {
 
@@ -39,6 +41,7 @@ class SolverTask : public QObject
         QString nativeCheckpointDirectory;
         QByteArray nativeCheckpointContextJson;
         std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
+        RuntimeControlBridge *runtimeControlBridge = nullptr; // Main application owns lifetime.
         //! Force to restart solver
         bool restart;
         //! Pointer to application object.
@@ -48,6 +51,7 @@ class SolverTask : public QObject
 
         //! Constructor.
         explicit SolverTask(const SolverInput &solverInput, QCoreApplication *app, QObject *parent = nullptr);
+        void setRuntimeControlBridge(RuntimeControlBridge *bridge) { runtimeControlBridge = bridge; }
 
     signals:
 

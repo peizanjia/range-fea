@@ -30,6 +30,7 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 # The set of supported groups is intentionally closed. Prefixes are applied
 # only after the runtime catalog has supplied an actual operation or command.
 _GROUP_PREFIXES = {
+    "runtime": ("runtime.parameters.", "runtime.execution."),
     "workflow": ("workflow.",),
     "project": ("project.",),
     "model.source": ("model.source.", "model.sources."),

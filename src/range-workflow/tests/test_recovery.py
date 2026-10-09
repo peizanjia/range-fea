@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from range_workflow.service import WorkflowError, canonical, file_hash
 from range_workflow.recovery import (
     CHECKPOINT_SCHEMA, CONTEXT_SCHEMA, NO_CONTROL_SHA256, POINTER_SCHEMA, RESULT_FRAME_SCHEMA, SCHEMA,
-    checkpoint_context, controller_revision, qualify, record_progress,
+    checkpoint_context, controller_revision, control_arguments, qualify, record_progress,
 )
 from range_workflow.jobs import _native_history_proof, _seed_recovery_checkpoint
 
@@ -122,6 +122,24 @@ class RecoveryTest(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_controller_bytecode_policy_binds_revision_without_changing_legacy(self):
+        legacy = control_arguments(self.source)
+        self.assertEqual(legacy[0], str(self.controller_host))
+        self.assertEqual(checkpoint_context(self.binding, self.source, "active", self.prepared["active"]),
+                         self.contexts["active"])
+        clean = copy.deepcopy(self.source)
+        clean["controllerInterpreterFlags"] = ["-B"]
+        argv = control_arguments(clean)
+        self.assertEqual(argv, ["-B", *legacy])
+        context = checkpoint_context(self.binding, clean, "active", self.prepared["active"])
+        self.assertEqual(context["controlSha256"], controller_revision(Path(self.runtime["python"]["path"]), argv))
+        self.assertNotEqual(context["controlSha256"], self.contexts["active"]["controlSha256"])
+        self.assertEqual(control_arguments(copy.deepcopy(clean)), argv)
+        for flags in (["-c", "pass"], ["-B", "-B"], "-B", None):
+            clean["controllerInterpreterFlags"] = flags
+            with self.assertRaises(WorkflowError):
+                control_arguments(clean)
 
     @staticmethod
     def _write_checkpoint(directory, context, *, accepted_seq):

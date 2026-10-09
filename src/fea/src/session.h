@@ -47,6 +47,8 @@ class Session : public QObject
         mutable QMutex commandStampMutex;
         QList<QPair<QString, quint64>> commandStamps;
         ModelCommandHost *commandHost;
+        QSet<QString> verifiedMeshPublicationIdentities;
+        QSet<QString> verifiedNativeResultPublicationIdentities;
         struct ProjectDocumentBinding
         {
             QString persistentDocumentId;
@@ -102,6 +104,13 @@ class Session : public QObject
         ModelCommandHost *getModelCommandHost() const;
         QPair<QString, quint64> modelCommandStamp(uint modelID) const;
         uint findModelByCommandIdentity(const QString &identity) const;
+        //! Trusted, immediate mesh-candidate append; never queues a retry.
+        bool appendMeshCandidate(const QString &sourceDocumentId, const QString &sourceSessionEpoch,
+                                 quint64 sourceRevision, const QString &sourceStateSha256,
+                                 const RModel &candidate, uint *newModelId, QString *error = nullptr,
+                                 QString *createdDocumentId = nullptr, bool *documentMayExist = nullptr);
+        bool isVerifiedMeshPublication(uint modelId) const;
+        bool isVerifiedArtifactPublication(uint modelId) const;
         void invalidateModelCommands(uint modelID);
         //! Called on the GUI thread after a successful native save.
         bool recordModelSaved(uint modelID, const QString &path, QString *error = nullptr);
@@ -492,6 +501,16 @@ class Session : public QObject
 
         //! Catch file saved signal for software update file.
         void onSoftwareUpdateFileSaved(uint downloadID, const QString &fileName);
+
+    private:
+
+        friend class ModelCommandHost;
+        //! Only the host's verified native artifact route may use this immediate append.
+        bool appendVerifiedNativeResult(const Model &model,
+                                        const RProjectCatalog::SourceBinding &sourceBinding,
+                                        QString *createdDocumentId, bool *documentMayExist,
+                                        QString *error);
+        static QByteArray nativeResultValuesDigest(const RModel &model);
 
     protected:
 

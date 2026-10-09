@@ -9,6 +9,7 @@
 #include <rproject_catalog.h>
 
 class Session;
+class MeshJobController;
 
 // GUI-thread owner of persistent command snapshots. No Model pointer survives a
 // call: QList<Model> can move when another document is opened or closed.
@@ -37,6 +38,7 @@ public:
     QString sessionEpoch() const;
     //! Trusted local storage identity; not exposed as a model-callable path.
     QString projectWorkspace() const;
+    MeshJobController *meshController() const;
     bool closeDurableSessions(QString *error = nullptr);
     static bool isBusy();
     static bool isMutationBlocked();

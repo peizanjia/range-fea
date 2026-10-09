@@ -27,7 +27,7 @@ public:
         QString sourceId;
         QString artifactSha256;
         QVector<QPointF> points;
-        // Time/Phase store source record ordinals; Spectrum stores frequency-bin indices.
+        // Time/Phase store zero-based raw sample indices; Spectrum stores FFT-bin indices.
         QVector<quint64> originalOrdinals;
     };
 
@@ -50,6 +50,7 @@ public:
         double yMinimum = 0.0;
         double yMaximum = 0.0;
     };
+    struct Cursor { QString traceId; quint64 ordinal = 0; };
 
     explicit SeriesPlotWidget(QWidget *parent = nullptr);
 
@@ -63,6 +64,8 @@ public:
     bool setVisibleRange(VisibleRange range, QString *error = nullptr);
     //! Return the canvas's current visible range in raw dataset units.
     VisibleRange visibleRange() const;
+    std::optional<Cursor> cursor() const { return displayedCursor; }
+    bool setCursor(const Cursor &cursor, QString *error = nullptr);
 
     //! The caller must verify that a complete raw-series export is available.
     void setFullExportAvailable(bool available);
@@ -73,10 +76,13 @@ public slots:
 
 signals:
     void exportFullSeriesRequested();
+    void displayHoldChanged(bool held);
+    void cursorChanged(const QString &traceId, quint64 ordinal);
 
 private:
     Dataset displayedDataset;
     std::optional<Dataset> pendingDataset;
+    std::optional<Cursor> displayedCursor;
     bool datasetAvailable = false;
     bool displayHeld = false;
     bool fullExportAvailable = false;

@@ -1,7 +1,9 @@
 #include <QString>
 #include <QCryptographicHash>
+#include <QUuid>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include <rbl_progress.h>
 
@@ -36,6 +38,9 @@ const double Model::SliverElementEdgeRatio = 30.0;
 
 namespace
 {
+
+static_assert(noexcept(std::declval<QStack<Model> &>().swap(std::declval<QStack<Model> &>())),
+              "Atomic binding publication requires noexcept GUI history swaps.");
 
 QByteArray surfaceConnectivityHash(const RModel &model)
 {
@@ -102,6 +107,8 @@ void Model::_init(const Model *pModel)
         this->viewFactorMatrix = pModel->viewFactorMatrix;
         this->patchColors = pModel->patchColors;
         this->actionDescription = pModel->actionDescription;
+        this->staticBindingHistoryDelta = pModel->staticBindingHistoryDelta;
+        this->staticBindingHistoryId = pModel->staticBindingHistoryId;
     }
     else
     {
@@ -3633,6 +3640,19 @@ void Model::undo(uint revision)
     {
         return;
     }
+    for (uint i = 0; i <= revision; ++i)
+    {
+        if (!this->undoStack[this->undoStack.size() - 1 - i].staticBindingHistoryDelta) continue;
+        QString error;
+        QString fingerprint;
+        if (revision != 0)
+            throw RError(RError::Type::InvalidInput, R_ERROR_REF,
+                         "Static binding history must be restored one operation at a time.");
+        if (!previewStaticMeshBindingHistory(true, &fingerprint, &error)
+            || !applyStaticMeshBindingHistory(true, staticMeshBindingHistoryIdentity(true), fingerprint, &error))
+            throw RError(RError::Type::InvalidInput, R_ERROR_REF, error);
+        return;
+    }
     for (uint i=0;i<revision;i++)
     {
         this->redoStack.push(this->undoStack.pop());
@@ -3661,6 +3681,19 @@ void Model::redo(uint revision)
     {
         return;
     }
+    for (uint i = 0; i <= revision; ++i)
+    {
+        if (!this->redoStack[this->redoStack.size() - 1 - i].staticBindingHistoryDelta) continue;
+        QString error;
+        QString fingerprint;
+        if (revision != 0)
+            throw RError(RError::Type::InvalidInput, R_ERROR_REF,
+                         "Static binding history must be restored one operation at a time.");
+        if (!previewStaticMeshBindingHistory(false, &fingerprint, &error)
+            || !applyStaticMeshBindingHistory(false, staticMeshBindingHistoryIdentity(false), fingerprint, &error))
+            throw RError(RError::Type::InvalidInput, R_ERROR_REF, error);
+        return;
+    }
     for (uint i=0;i<revision;i++)
     {
         this->undoStack.push(this->redoStack.pop());
@@ -3681,6 +3714,8 @@ QString Model::getRedoActionMessage() const
 void Model::storeCurentVersion(uint maxDepth, const QString &actionDescription)
 {
     this->actionDescription = actionDescription;
+    this->staticBindingHistoryDelta.reset();
+    this->staticBindingHistoryId.clear();
     this->redoStack.clear();
     if (maxDepth > 0)
     {
@@ -3700,6 +3735,122 @@ void Model::copyHistoryFrom(const Model &model)
 {
     undoStack = model.undoStack;
     redoStack = model.redoStack;
+}
+
+bool Model::commitStaticMeshBindingWithHistory(const RModel &candidate,
+    const RModelCommandService::Delta &delta, uint maxDepth, const QString &description,
+    QString *error, const std::function<bool(const RModel &)> &validatePrepared)
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    try
+    {
+        if (delta.kind != RModelCommandService::Delta::Kind::MeshRebind
+            || delta.meshRebind.beforeStateSha256.isEmpty() || delta.meshRebind.afterStateSha256.isEmpty()
+            || RModelCommandService::stateFingerprint(*this) != delta.meshRebind.beforeStateSha256
+            || RModelCommandService::stateFingerprint(candidate) != delta.meshRebind.afterStateSha256)
+            return fail(QStringLiteral("Static binding no longer matches its approved source and candidate."));
+        QStack<Model> nextUndo = undoStack;
+        QStack<Model> nextRedo;
+        if (maxDepth)
+        {
+            Model snapshot(*this);
+            snapshot.actionDescription = description;
+            snapshot.staticBindingHistoryDelta = delta;
+            snapshot.staticBindingHistoryId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            nextUndo.push(snapshot);
+            while (nextUndo.size() > int(maxDepth)) nextUndo.pop_front();
+        }
+        else nextUndo.clear();
+        if (!applyStaticMeshBindingCandidate(candidate, [&](const RModel &prepared) {
+                return RModelCommandService::stateFingerprint(prepared) == delta.meshRebind.afterStateSha256
+                    && (!validatePrepared || validatePrepared(prepared));
+            }, error)) return false;
+        undoStack.swap(nextUndo);
+        redoStack.swap(nextRedo);
+        return true;
+    }
+    catch (const RError &failure) { return fail(failure.getMessage()); }
+    catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
+    catch (...) { return fail(QStringLiteral("Static binding history preparation failed before publication.")); }
+}
+
+bool Model::hasStaticMeshBindingHistory(bool undo) const
+{
+    const auto &stack = undo ? undoStack : redoStack;
+    return !stack.empty() && stack.top().staticBindingHistoryDelta.has_value();
+}
+
+QString Model::staticMeshBindingHistoryIdentity(bool undo) const
+{
+    const auto &stack = undo ? undoStack : redoStack;
+    return hasStaticMeshBindingHistory(undo) ? stack.top().staticBindingHistoryId : QString();
+}
+
+bool Model::previewStaticMeshBindingHistory(bool undo, QString *candidateFingerprint, QString *error) const
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    try
+    {
+        if (!hasStaticMeshBindingHistory(undo))
+            return fail(QStringLiteral("No typed static binding history entry is available."));
+        const auto &target = (undo ? undoStack : redoStack).top();
+        const auto &delta = *target.staticBindingHistoryDelta;
+        const auto evaluated = RModelCommandService::applyDelta(*this, delta, !undo);
+        if (!evaluated.valid) return fail(evaluated.message);
+        const QString expected = undo ? delta.meshRebind.beforeStateSha256 : delta.meshRebind.afterStateSha256;
+        if (expected.isEmpty() || RModelCommandService::stateFingerprint(target) != expected)
+            return fail(QStringLiteral("Static binding history does not match its accepted state hash."));
+        RModel staged(*this);
+        if (!staged.applyStaticMeshBindingCandidate(target, [&](const RModel &prepared) {
+                return RModelCommandService::stateFingerprint(prepared) == expected;
+            }, error)) return false;
+        if (candidateFingerprint) *candidateFingerprint = expected;
+        return true;
+    }
+    catch (const RError &failure) { return fail(failure.getMessage()); }
+    catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
+    catch (...) { return fail(QStringLiteral("Static binding history preview failed without changing the model.")); }
+}
+
+bool Model::applyStaticMeshBindingHistory(bool undo, const QString &expectedIdentity,
+    const QString &expectedFingerprint, QString *error,
+    const std::function<bool(const RModel &)> &validatePrepared)
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    try
+    {
+        if (expectedIdentity.isEmpty() || expectedFingerprint.isEmpty()
+            || staticMeshBindingHistoryIdentity(undo) != expectedIdentity)
+            return fail(QStringLiteral("The approved static binding history item is no longer current."));
+        const auto &target = (undo ? undoStack : redoStack).top();
+        const auto &delta = *target.staticBindingHistoryDelta;
+        const QString accepted = undo ? delta.meshRebind.beforeStateSha256 : delta.meshRebind.afterStateSha256;
+        if (accepted != expectedFingerprint || RModelCommandService::stateFingerprint(target) != accepted)
+            return fail(QStringLiteral("The approved static binding history hash changed."));
+        const auto evaluated = RModelCommandService::applyDelta(*this, delta, !undo);
+        if (!evaluated.valid) return fail(evaluated.message);
+        // Copy/detach/pop/push both stacks before the atomic binding body runs.
+        QStack<Model> nextUndo = undoStack;
+        QStack<Model> nextRedo = redoStack;
+        Model snapshot(*this);
+        snapshot.actionDescription = target.actionDescription;
+        snapshot.staticBindingHistoryDelta = delta;
+        snapshot.staticBindingHistoryId = target.staticBindingHistoryId;
+        if (undo) { nextUndo.pop(); nextRedo.push(snapshot); }
+        else { nextRedo.pop(); nextUndo.push(snapshot); }
+        // The validated captured tail restores its original identities. Publishing
+        // applyDelta's temporary redo allocations would consume fresh IDs each time.
+        if (!applyStaticMeshBindingCandidate(target, [&](const RModel &prepared) {
+                return RModelCommandService::stateFingerprint(prepared) == expectedFingerprint
+                    && (!validatePrepared || validatePrepared(prepared));
+            }, error)) return false;
+        undoStack.swap(nextUndo);
+        redoStack.swap(nextRedo);
+        return true;
+    }
+    catch (const RError &failure) { return fail(failure.getMessage()); }
+    catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
+    catch (...) { return fail(QStringLiteral("Static binding history preparation failed before publication.")); }
 }
 
 void Model::updateHistoryStackSize(uint maxDepth)

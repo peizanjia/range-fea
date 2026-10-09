@@ -11,6 +11,7 @@
 #include <rml_model.h>
 #include <rbl_limit_box.h>
 #include <rproject_catalog.h>
+#include <rmodel_command_service.h>
 
 #include "pick_item.h"
 #include "pick_value.h"
@@ -76,6 +77,9 @@ class Model : public RModel
         QStack<Model> redoStack;
         //! Action description.
         QString actionDescription;
+        //! Explicit command provenance for atomic static binding history entries.
+        std::optional<RModelCommandService::Delta> staticBindingHistoryDelta;
+        QString staticBindingHistoryId;
 
     private:
 
@@ -512,6 +516,22 @@ class Model : public RModel
         //! Explicitly retain document history when preparing a transactional replacement.
         //! Ordinary model snapshots intentionally do not copy history recursively.
         void copyHistoryFrom(const Model &model);
+
+        //! Publish a static binding and its prepared GUI history together.
+        bool commitStaticMeshBindingWithHistory(const RModel &candidate,
+            const RModelCommandService::Delta &delta, uint maxDepth, const QString &description,
+            QString *error = nullptr,
+            const std::function<bool(const RModel &)> &validatePrepared = {});
+
+        bool hasStaticMeshBindingHistory(bool undo) const;
+        QString staticMeshBindingHistoryIdentity(bool undo) const;
+        //! Validate the next typed entry without mutating model or history.
+        bool previewStaticMeshBindingHistory(bool undo, QString *candidateFingerprint,
+                                             QString *error = nullptr) const;
+        //! Publish only the binding fields, preserving GUI state and allocator high-water marks.
+        bool applyStaticMeshBindingHistory(bool undo, const QString &expectedIdentity,
+            const QString &expectedFingerprint, QString *error = nullptr,
+            const std::function<bool(const RModel &)> &validatePrepared = {});
 
         //! Perform undo.
         void undo(uint revision);

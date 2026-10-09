@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QJsonDocument>
 #include <QStringList>
+#include <QSignalBlocker>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUuid>
@@ -15,16 +16,76 @@
 #include <rai_agent.h>
 #include <rml_model.h>
 #include <rml_time_solver.h>
+#include <rmodel_command_service.h>
 
 #include "agent_task_runner.h"
 #include "application.h"
 #include "model_command_host.h"
+#include "mesh_job_controller.h"
 #include "session.h"
 #include "model_io.h"
 #include "solver_manager.h"
 
 namespace
 {
+Model meshSurfaceFixture()
+{
+    Model model; model.setNNodes(4); model.setNSurfaces(1);
+    const double xyz[4][3]{{0,0,0},{1,0,0},{0,1,0},{0,0,1}};
+    for (uint n=0;n<4;++n)
+    { model.getNode(n).set(xyz[n][0],xyz[n][1],xyz[n][2]); model.setNodePhysicalId(n,101+10*n); }
+    const uint faces[4][3]{{0,2,1},{0,1,3},{0,3,2},{1,2,3}};
+    for (const auto &face : faces)
+    {
+        RElement element(R_ELEMENT_TRI1);
+        for (uint n=0;n<3;++n) element.setNodeId(n,face[n]);
+        model.addElement(element,true,0);
+    }
+    model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS)); return model;
+}
+QJsonObject meshOptions()
+{ return {{"unit","m"},{"volumeUnit","m^3"},{"maxVolume",0.08},{"radiusEdgeRatio",1.6}}; }
+
+Model unboundTetraFixture()
+{
+    Model model;
+    model.setNNodes(4); model.setNSurfaces(1); model.setNVolumes(1);
+    const double xyz[4][3] = {{0,0,0},{1,0,0},{0,1,0},{0,0,1}};
+    for (uint n = 0; n < 4; ++n)
+    {
+        model.getNode(n).set(xyz[n][0], xyz[n][1], xyz[n][2]);
+        model.setNodePhysicalId(n, 101 + 10*n);
+    }
+    const uint faces[4][3] = {{0,2,1},{0,1,3},{0,3,2},{1,2,3}};
+    for (const auto &face : faces)
+    {
+        RElement triangle(R_ELEMENT_TRI1);
+        for (uint j = 0; j < 3; ++j) triangle.setNodeId(j, face[j]);
+        model.addElement(triangle, true, 0);
+    }
+    RElement tetra(R_ELEMENT_TETRA1);
+    for (uint j = 0; j < 4; ++j) tetra.setNodeId(j, j);
+    model.addElement(tetra, true, 0);
+    model.setProblemTaskTree(RProblemTaskItem()); model.setProblemSetup(RProblemSetup());
+    model.setTimeSolver(RTimeSolver()); model.clearResults(); model.clearBoundaryConditions();
+    model.clearInitialConditions(); model.clearEntityVariableData();
+    for (uint g = 0; g < model.getNElementGroups(); ++g)
+        while (model.getElementGroupPtr(g)->getNEnvironmentConditions())
+            model.getElementGroupPtr(g)->removeEnvironmentCondition(0u);
+    return model;
+}
+
+QJsonObject staticBindingArguments()
+{
+    return {{"unitSI", true}, {"staticStress", true},
+        {"material", QJsonObject{{"youngModulusPa", 1000}, {"poissonRatio", 0.25}, {"densityKgM3", 1}}},
+        {"constraints", QJsonArray{
+            QJsonObject{{"nodePhysicalId", 101}, {"values", QJsonArray{0,0,0}}},
+            QJsonObject{{"nodePhysicalId", 111}, {"values", QJsonArray{QJsonValue(QJsonValue::Null),0,0}}},
+            QJsonObject{{"nodePhysicalId", 121}, {"values", QJsonArray{QJsonValue(QJsonValue::Null),QJsonValue(QJsonValue::Null),0}}}}},
+        {"loads", QJsonArray{QJsonObject{{"nodePhysicalId", 131}, {"forceN", QJsonArray{0,0,-1}}}}}};
+}
+
 Model modalFixture()
 {
     Model model;
@@ -287,6 +348,100 @@ class TestAgentTaskRunner : public QObject
 {
     Q_OBJECT
 private slots:
+    void meshGenerationAndAcceptanceAlwaysNeedFreshManualApprovalInAuto()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost(); QString error;
+        QVERIFY2(session->openProject(workspace.path(),&error),qPrintable(error));
+        session->addModel(meshSurfaceFixture()); session->setModelSelected(0,true);
+        const auto sourceStamp = session->modelCommandStamp(0);
+        const QString sourceFingerprint = RModelCommandService::stateFingerprint(session->getModel(0));
+        WorkflowProcess workflow;
+        AgentTaskRunner generate(host,&workflow);
+        QSignalSpy requested(&generate,&AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&generate,&AgentTaskRunner::proposalReady);
+        QSignalSpy applied(&generate,&AgentTaskRunner::actionCompleted);
+        generate.startTask("Generate a mesh and accept the candidate.",true);
+        const QJsonObject proposal{{"documentId",sourceStamp.first},{"documentRevision",double(sourceStamp.second)},
+            {"command","mesh.generate"},{"arguments",meshOptions()}};
+        generate.receiveTurn(requested.first().at(0).toString(),parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall("mesh-generate","document_propose",proposal)})));
+        QCOMPARE(ready.size(),1); QCOMPARE(applied.size(),0);
+        QVERIFY(host->meshController()->jobs().isEmpty());
+        generate.authorizePending(ready.first().at(1).toString(),true);
+        QCOMPARE(applied.size(),1);
+        const QString attempt = applied.first().at(1).toJsonObject().value("attemptId").toString();
+        QVERIFY(!attempt.isEmpty()); generate.cancel();
+        QTRY_COMPARE_WITH_TIMEOUT(host->meshController()->query(attempt).value("result").toObject().value("status").toString(),
+                                  QStringLiteral("candidate_ready"),30000);
+        AgentTaskRunner accept(host,&workflow);
+        QSignalSpy acceptRequested(&accept,&AgentTaskRunner::turnRequested);
+        QSignalSpy acceptReady(&accept,&AgentTaskRunner::proposalReady);
+        QSignalSpy acceptApplied(&accept,&AgentTaskRunner::actionCompleted);
+        accept.startTask("Accept the verified mesh into a new document.",true);
+        auto acceptProposal = proposal; acceptProposal.insert("command","mesh.accept");
+        acceptProposal.insert("arguments",QJsonObject{{"attemptId",attempt}});
+        accept.receiveTurn(acceptRequested.first().at(0).toString(),parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall("mesh-accept","document_propose",acceptProposal)})));
+        QCOMPARE(acceptReady.size(),1); QCOMPARE(acceptApplied.size(),0); QCOMPARE(session->getNModels(),1u);
+        const auto exactPreview = acceptReady.first().at(2).toJsonObject().value("meshPreview").toObject();
+        QCOMPARE(exactPreview.value("attemptId"),QJsonValue(attempt));
+        QCOMPARE(exactPreview.value("acceptanceMode"),QJsonValue("new_document_from_current_source"));
+        accept.authorizePending(acceptReady.first().at(1).toString(),true);
+        QCOMPARE(acceptApplied.size(),1); QCOMPARE(session->getNModels(),2u);
+        QCOMPARE(session->modelCommandStamp(0),sourceStamp);
+        QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(0)),sourceFingerprint);
+        QVERIFY(session->modelCommandStamp(1).first != sourceStamp.first);
+        QCOMPARE(session->getModel(1).getProblemTaskTree().getProblemTypeMask(),R_PROBLEM_NONE);
+        QCOMPARE(acceptApplied.first().at(1).toJsonObject().value("bindingState"),QJsonValue("REQUIRES_REBINDING"));
+        for (uint n=0;n<session->getModel(1).getNNodes();++n)
+            for (uint old=0;old<session->getModel(0).getNNodes();++old)
+                QVERIFY(session->getModel(1).getNodePhysicalId(n) != session->getModel(0).getNodePhysicalId(old));
+        accept.cancel();
+        session->setModelSelected(0,true); session->setModelSelected(1,false);
+
+        AgentTaskRunner readOnly(host,&workflow,nullptr,AgentTaskRunner::AccessPolicy::ReadOnly);
+        QSignalSpy reads(&readOnly,&AgentTaskRunner::turnRequested);
+        QSignalSpy readReady(&readOnly,&AgentTaskRunner::proposalReady);
+        readOnly.startTask("Inspect the candidate without changing it.");
+        readOnly.receiveTurn(reads.first().at(0).toString(),parseProviderBody(providerBody(QString(),QJsonArray{
+            providerCall("mesh-read","mesh_job",{{"documentId",sourceStamp.first},{"documentRevision",double(sourceStamp.second)},{"attemptId",attempt}}),
+            providerCall("mesh-denied","document_propose",acceptProposal)})));
+        QTRY_COMPARE_WITH_TIMEOUT(reads.size(),2,1000);
+        const auto readHistory = reads.last().at(1).toJsonArray();
+        QVERIFY(toolResultContent(readHistory,"mesh-read").contains("accepted"));
+        QVERIFY(toolResultContent(readHistory,"mesh-denied").contains("READ_ONLY_TOOL_DENIED"));
+        QCOMPARE(readReady.size(),0); readOnly.cancel();
+    }
+
+    void meshToolsRejectUnknownMalformedAndExtraArguments()
+    {
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        QList<QPair<QString,QJsonObject>> cases;
+        auto options = meshOptions(); options.insert("approval",true); cases.append({"mesh.generate",options});
+        options = meshOptions(); options.insert("maxVolume",0); cases.append({"mesh.generate",options});
+        options = meshOptions(); options.insert("unit","mm"); cases.append({"mesh.generate",options});
+        cases.append({"mesh.accept",{{"attemptId","unknown"},{"remapOldIds",true}}});
+        cases.append({"mesh.cancel",{{"attemptId",42}}});
+        cases.append({"mesh.approve",{{"previewId","host-preview"}}});
+        for (const auto &invalid : cases)
+        {
+            WorkflowProcess workflow; AgentTaskRunner runner(host,&workflow);
+            QSignalSpy requested(&runner,&AgentTaskRunner::turnRequested);
+            QSignalSpy ready(&runner,&AgentTaskRunner::proposalReady);
+            QSignalSpy finished(&runner,&AgentTaskRunner::finished);
+            runner.startTask("Inspect exact mesh schema.",true);
+            runner.receiveTurn(requested.first().at(0).toString(),parseProviderBody(providerBody(QString(),QJsonArray{
+                providerCall("invalid-mesh","document_propose",{{"documentId","source"},{"documentRevision",0},
+                    {"command",invalid.first},{"arguments",invalid.second}})})));
+            QCOMPARE(finished.size(),1);
+            QCOMPARE(finished.first().at(0).toString(),QStringLiteral("failed"));
+            QCOMPARE(ready.size(),0); runner.cancel();
+        }
+    }
+
     void changedRegisteredSourceCannotApproveFreshRun_data()
     {
         QTest::addColumn<QString>("change");
@@ -684,6 +839,7 @@ private slots:
             QVERIFY(hostTools.contains(toolName));
         for (const QString &command : {QStringLiteral("analysis.structural_dynamics.configure"),
              QStringLiteral("entity.material.set"), QStringLiteral("entity.boundary.set"),
+             QStringLiteral("geometry.node_coordinates.set"), QStringLiteral("geometry.rigid_transform"),
              QStringLiteral("analysis.run"), QStringLiteral("analysis.cancel")})
             QVERIFY(documentCommands.contains(QJsonValue(command)));
 
@@ -694,6 +850,420 @@ private slots:
         runner.receiveTurn(requestId, turn);
         QCOMPARE(finished.size(), 1);
         QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+    }
+
+    void runtimeParameterToolArgumentsRejectMalformedRequests()
+    {
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        WorkflowProcess workflow;
+        const QJsonObject validArguments{{QStringLiteral("jobId"), QStringLiteral("runtime-job-1")},
+            {QStringLiteral("velocityGainNsm"), 3.0},
+            {QStringLiteral("actuatorLimits"), QJsonArray{QJsonObject{
+                {QStringLiteral("actuatorId"), QStringLiteral("actuator-1")},
+                {QStringLiteral("minN"), -10.0}, {QStringLiteral("maxN"), 10.0},
+                {QStringLiteral("rateNPerS"), 0.0}}}}};
+
+        auto rejected = [&](const QString &callId, const QJsonObject &arguments) {
+            AgentTaskRunner runner(host, &workflow);
+            QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+            QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+            QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+            runner.startTask(QStringLiteral("Validate a runtime parameter preview."), true);
+            runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+                QJsonArray{providerCall(callId, QStringLiteral("runtime_parameters_propose"), arguments)})));
+            QCOMPARE(finished.size(), 1);
+            QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
+            QVERIFY(finished.first().at(1).toString().contains(QStringLiteral("arguments do not match its supported schema")));
+            QCOMPARE(proposals.size(), 0);
+            QCOMPARE(actions.size(), 0);
+        };
+
+        QJsonObject reversedLimits = validArguments;
+        reversedLimits.insert(QStringLiteral("actuatorLimits"), QJsonArray{QJsonObject{
+            {QStringLiteral("actuatorId"), QStringLiteral("actuator-1")},
+            {QStringLiteral("minN"), 11.0}, {QStringLiteral("maxN"), 10.0},
+            {QStringLiteral("rateNPerS"), 0.0}}});
+        rejected(QStringLiteral("reversed-limits"), reversedLimits);
+
+        QJsonObject malformedActuator = validArguments;
+        malformedActuator.insert(QStringLiteral("actuatorLimits"), QJsonArray{QJsonObject{
+            {QStringLiteral("actuatorId"), QStringLiteral("actuator-1")},
+            {QStringLiteral("minN"), -10.0}, {QStringLiteral("maxN"), 10.0}}});
+        rejected(QStringLiteral("malformed-actuator"), malformedActuator);
+
+        QJsonObject nonFiniteGain = validArguments;
+        nonFiniteGain.insert(QStringLiteral("velocityGainNsm"), std::numeric_limits<double>::quiet_NaN());
+        rejected(QStringLiteral("non-finite-gain"), nonFiniteGain);
+
+        QJsonObject booleanGain = validArguments;
+        booleanGain.insert(QStringLiteral("velocityGainNsm"), true);
+        rejected(QStringLiteral("boolean-gain"), booleanGain);
+
+        QJsonObject unknownField = validArguments;
+        unknownField.insert(QStringLiteral("filesystemPath"), QStringLiteral("C:/model.ram"));
+        rejected(QStringLiteral("unknown-field"), unknownField);
+    }
+
+    void runtimeParameterToolsOnlyPreviewAndQueryAndRemainDeniedInReadOnly()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto config = WorkflowProcess::defaultConfiguration(directory.filePath(QStringLiteral("workspace")));
+        config.solver = config.python;
+        config.native = config.python;
+        config.examples = directory.path();
+        config.packageDirectory = directory.filePath(QStringLiteral("package"));
+        const QString packagePath = config.packageDirectory + QStringLiteral("/range_workflow");
+        QVERIFY(QDir().mkpath(packagePath));
+        QFile packageInit(packagePath + QStringLiteral("/__init__.py"));
+        QVERIFY(packageInit.open(QIODevice::WriteOnly));
+        packageInit.close();
+
+#ifdef RANGE_WORKFLOW_SOURCE_ROOT
+        QFile fixtureSource(QDir(QStringLiteral(RANGE_WORKFLOW_SOURCE_ROOT)).filePath(
+            QStringLiteral("range-workflow/tests/runtime_widget_bootstrap.py")));
+        QVERIFY(fixtureSource.open(QIODevice::ReadOnly));
+        QByteArray fixtureScript = fixtureSource.readAll();
+#else
+        QFAIL("RANGE_WORKFLOW_SOURCE_ROOT must identify the isolated runtime fixture");
+        return;
+#endif
+        const QByteArray originalCounts = "counts = {\"preview\": 0, \"approve\": 0, \"submit\": 0, \"pause\": 0}";
+        QVERIFY(fixtureScript.contains(originalCounts));
+        fixtureScript.replace(originalCounts,
+            "counts = {\"preview\": 0, \"approve\": 0, \"submit\": 0, \"pause\": 0, \"query\": 0}");
+        const QByteArray fixtureQueryRoute = "    if op == \"fixture.query\":";
+        QVERIFY(fixtureScript.contains(fixtureQueryRoute));
+        fixtureScript.replace(fixtureQueryRoute,
+            "    if op == \"project.query\":\n"
+            "        return dict(projectId=\"fixture-project\", modelId=\"fixture-model\", sessionId=\"fixture-session\",\n"
+            "                    configuration={}, modelBinding=dict(kind=\"template\"))\n"
+            "    if op == \"fixture.query\":");
+        const QByteArray runtimeQueryRoute = "    if op == \"runtime.parameters.query\":";
+        QVERIFY(fixtureScript.contains(runtimeQueryRoute));
+        fixtureScript.replace(runtimeQueryRoute,
+            "    if op == \"runtime.parameters.query\":\n"
+            "        counts[\"query\"] += 1");
+        QFile fixtureMain(packagePath + QStringLiteral("/__main__.py"));
+        QVERIFY(fixtureMain.open(QIODevice::WriteOnly));
+        QCOMPARE(fixtureMain.write(fixtureScript), qint64(fixtureScript.size()));
+        fixtureMain.close();
+
+        QVERIFY(QFileInfo::exists(config.python));
+        WorkflowProcess workflow;
+        workflow.start(config);
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isReady(), 15000);
+
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        const QString jobId = QStringLiteral("00000000-0000-4000-8000-000000000001");
+        const QJsonObject limits{ {QStringLiteral("actuatorId"), QStringLiteral("actuator")},
+            {QStringLiteral("minN"), -20.0}, {QStringLiteral("maxN"), 20.0},
+            {QStringLiteral("rateNPerS"), 0.0}};
+        const QJsonObject proposalArguments{{QStringLiteral("jobId"), jobId},
+            {QStringLiteral("velocityGainNsm"), 4.5},
+            {QStringLiteral("actuatorLimits"), QJsonArray{limits}}};
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Preview current-run runtime parameters and query their actual state."), true);
+        QCOMPARE(requested.size(), 1);
+
+        QJsonObject proposalDefinition;
+        QJsonObject queryDefinition;
+        QStringList definedToolNames;
+        for (const QJsonValue &toolValue : requested.first().at(2).toJsonArray())
+        {
+            const QJsonObject function = toolValue.toObject().value(QStringLiteral("function")).toObject();
+            definedToolNames.append(function.value(QStringLiteral("name")).toString());
+            if (function.value(QStringLiteral("name")) == QJsonValue(QStringLiteral("runtime_parameters_propose")))
+                proposalDefinition = function;
+            if (function.value(QStringLiteral("name")) == QJsonValue(QStringLiteral("runtime_parameters_query")))
+                queryDefinition = function;
+        }
+        QVERIFY(!proposalDefinition.isEmpty());
+        QVERIFY(!queryDefinition.isEmpty());
+        for (const QString &forbiddenTool : {QStringLiteral("runtime_parameters_approve"),
+             QStringLiteral("runtime_parameters_submit"), QStringLiteral("runtime_execution_pause"),
+             QStringLiteral("runtime_execution_resume"), QStringLiteral("runtime_execution_cancel")})
+            QVERIFY(!definedToolNames.contains(forbiddenTool));
+        const QJsonObject proposalSchema = proposalDefinition.value(QStringLiteral("parameters")).toObject();
+        QCOMPARE(proposalSchema.value(QStringLiteral("additionalProperties")).toBool(), false);
+        const QJsonArray expectedProposalFields{QStringLiteral("jobId"), QStringLiteral("velocityGainNsm"),
+            QStringLiteral("actuatorLimits")};
+        QCOMPARE(proposalSchema.value(QStringLiteral("required")).toArray(), expectedProposalFields);
+        const QJsonObject proposalProperties = proposalSchema.value(QStringLiteral("properties")).toObject();
+        QCOMPARE(proposalProperties.value(QStringLiteral("velocityGainNsm")).toObject().value(QStringLiteral("minimum")).toDouble(), 1e-9);
+        QCOMPARE(proposalProperties.value(QStringLiteral("velocityGainNsm")).toObject().value(QStringLiteral("maximum")).toDouble(), 1e12);
+        const QJsonObject limitsSchema = proposalProperties.value(QStringLiteral("actuatorLimits")).toObject();
+        QCOMPARE(limitsSchema.value(QStringLiteral("minItems")).toInt(), 1);
+        QCOMPARE(limitsSchema.value(QStringLiteral("maxItems")).toInt(), 1);
+        const QJsonObject querySchema = queryDefinition.value(QStringLiteral("parameters")).toObject();
+        QCOMPARE(querySchema.value(QStringLiteral("additionalProperties")).toBool(), false);
+        const QJsonArray expectedQueryFields{QStringLiteral("jobId")};
+        QCOMPARE(querySchema.value(QStringLiteral("required")).toArray(), expectedQueryFields);
+        const QString proposalDescription = proposalDefinition.value(QStringLiteral("description")).toString();
+        QVERIFY(proposalDescription.contains(QStringLiteral("N*s/m")));
+        QVERIFY(proposalDescription.contains(QStringLiteral("N/s")));
+        QVERIFY(proposalDescription.contains(QStringLiteral("trusted user approval")));
+        QVERIFY(queryDefinition.value(QStringLiteral("description")).toString().contains(QStringLiteral("accepted native receipt")));
+        const QString systemPrompt = requested.first().at(1).toJsonArray().first().toObject()
+            .value(QStringLiteral("content")).toString();
+        QVERIFY(systemPrompt.contains(QStringLiteral("Run parameters")));
+        QVERIFY(systemPrompt.contains(QStringLiteral("later document revision")));
+        QVERIFY(systemPrompt.contains(QStringLiteral("knowledge_query")));
+
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(), QJsonArray{
+            providerCall(QStringLiteral("runtime-current-before"), QStringLiteral("runtime_parameters_query"),
+                {{QStringLiteral("jobId"), jobId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 5000);
+        const QJsonObject initialCurrent = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("runtime-current-before")).toUtf8()).object();
+        const QJsonObject initialAttempts = initialCurrent.value(QStringLiteral("runtimeControl")).toObject()
+            .value(QStringLiteral("attempts")).toObject();
+        QCOMPARE(initialAttempts.size(), 1);
+        const QJsonObject initialAttempt = initialAttempts.constBegin().value().toObject();
+        const QJsonObject identity = initialAttempt.value(QStringLiteral("identity")).toObject();
+        QCOMPARE(identity.value(QStringLiteral("jobId")).toString(), jobId);
+        QVERIFY(!identity.value(QStringLiteral("runId")).toString().isEmpty());
+        QVERIFY(!identity.value(QStringLiteral("modelSha256")).toString().isEmpty());
+        QCOMPARE(initialAttempt.value(QStringLiteral("acceptedState")).toObject().value(QStringLiteral("parameters")).toObject()
+                     .value(QStringLiteral("velocityGainNsm")).toDouble(), 2.0);
+
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall(QStringLiteral("runtime-preview"), QStringLiteral("runtime_parameters_propose"), proposalArguments)})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 5000);
+        const QJsonObject previewResult = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("runtime-preview")).toUtf8()).object();
+        const QString proposalId = previewResult.value(QStringLiteral("proposalId")).toString();
+        QVERIFY(!proposalId.isEmpty());
+        QCOMPARE(previewResult.value(QStringLiteral("status")).toString(), QStringLiteral("previewed"));
+        QCOMPARE(previewResult.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("velocityGainNsm")).toDouble(), 4.5);
+        QCOMPARE(previewResult.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("actuatorLimits")).toArray().first().toObject(), limits);
+        QCOMPARE(previewResult.value(QStringLiteral("identity")).toObject(), identity);
+        QVERIFY(!previewResult.contains(QStringLiteral("receipt")));
+
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(QString(), QJsonArray{
+            providerCall(QStringLiteral("runtime-current"), QStringLiteral("runtime_parameters_query"),
+                {{QStringLiteral("jobId"), jobId}}),
+            providerCall(QStringLiteral("runtime-preview-query"), QStringLiteral("runtime_parameters_query"),
+                {{QStringLiteral("jobId"), jobId}, {QStringLiteral("proposalId"), proposalId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 4, 5000);
+        const QJsonArray queryHistory = requested.last().at(1).toJsonArray();
+        const QJsonObject currentResult = QJsonDocument::fromJson(toolResultContent(
+            queryHistory, QStringLiteral("runtime-current")).toUtf8()).object();
+        const QJsonObject queriedProposal = QJsonDocument::fromJson(toolResultContent(
+            queryHistory, QStringLiteral("runtime-preview-query")).toUtf8()).object();
+        const QJsonObject currentAttempt = currentResult.value(QStringLiteral("runtimeControl")).toObject()
+            .value(QStringLiteral("attempts")).toObject().value(identity.value(QStringLiteral("runId")).toString()).toObject();
+        QCOMPARE(currentAttempt.value(QStringLiteral("identity")).toObject(), identity);
+        QCOMPARE(currentAttempt.value(QStringLiteral("acceptedState")).toObject().value(QStringLiteral("parameters")).toObject()
+                     .value(QStringLiteral("velocityGainNsm")).toDouble(), 2.0);
+        QCOMPARE(queriedProposal.value(QStringLiteral("proposalId")).toString(), proposalId);
+        QCOMPARE(queriedProposal.value(QStringLiteral("status")).toString(), QStringLiteral("previewed"));
+        QVERIFY(!queriedProposal.contains(QStringLiteral("receipt")));
+        QJsonObject counters = workflowRequest(workflow, QStringLiteral("fixture.query"))
+            .value(QStringLiteral("counts")).toObject();
+        QCOMPARE(counters.value(QStringLiteral("preview")).toInt(), 1);
+        QCOMPARE(counters.value(QStringLiteral("query")).toInt(), 3);
+        QCOMPARE(counters.value(QStringLiteral("approve")).toInt(), 0);
+        QCOMPARE(counters.value(QStringLiteral("submit")).toInt(), 0);
+        QCOMPARE(proposals.size(), 0);
+        QCOMPARE(actions.size(), 0);
+
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The saved preview remains unapproved and unapplied."))));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+
+        AgentTaskRunner readOnly(host, &workflow, nullptr, AgentTaskRunner::AccessPolicy::ReadOnly);
+        QSignalSpy readOnlyRequested(&readOnly, &AgentTaskRunner::turnRequested);
+        QSignalSpy readOnlyProposals(&readOnly, &AgentTaskRunner::proposalReady);
+        QSignalSpy readOnlyActions(&readOnly, &AgentTaskRunner::actionCompleted);
+        QSignalSpy readOnlyFinished(&readOnly, &AgentTaskRunner::finished);
+        readOnly.startTask(QStringLiteral("Inspect this current runtime read-only."));
+        QTRY_COMPARE_WITH_TIMEOUT(readOnlyRequested.size(), 1, 5000);
+        for (const QJsonValue &toolValue : readOnlyRequested.first().at(2).toJsonArray())
+        {
+            const QString toolName = toolValue.toObject().value(QStringLiteral("function")).toObject()
+                .value(QStringLiteral("name")).toString();
+            QVERIFY(toolName != QStringLiteral("runtime_parameters_propose"));
+            QVERIFY(toolName != QStringLiteral("runtime_parameters_query"));
+        }
+        readOnly.receiveTurn(readOnlyRequested.first().at(0).toString(), parseProviderBody(providerBody(QString(), QJsonArray{
+            providerCall(QStringLiteral("hostile-runtime-preview"), QStringLiteral("runtime_parameters_propose"), proposalArguments),
+            providerCall(QStringLiteral("hostile-runtime-query"), QStringLiteral("runtime_parameters_query"),
+                {{QStringLiteral("jobId"), jobId}, {QStringLiteral("proposalId"), proposalId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(readOnlyRequested.size(), 2, 5000);
+        const QJsonArray deniedHistory = readOnlyRequested.last().at(1).toJsonArray();
+        QVERIFY(toolResultContent(deniedHistory, QStringLiteral("hostile-runtime-preview")).contains(QStringLiteral("READ_ONLY_TOOL_DENIED")));
+        QVERIFY(toolResultContent(deniedHistory, QStringLiteral("hostile-runtime-query")).contains(QStringLiteral("READ_ONLY_TOOL_DENIED")));
+        counters = workflowRequest(workflow, QStringLiteral("fixture.query")).value(QStringLiteral("counts")).toObject();
+        QCOMPARE(counters.value(QStringLiteral("preview")).toInt(), 1);
+        QCOMPARE(counters.value(QStringLiteral("query")).toInt(), 3);
+        QCOMPARE(counters.value(QStringLiteral("approve")).toInt(), 0);
+        QCOMPARE(counters.value(QStringLiteral("submit")).toInt(), 0);
+        QCOMPARE(readOnlyProposals.size(), 0);
+        QCOMPARE(readOnlyActions.size(), 0);
+        readOnly.receiveTurn(readOnlyRequested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("No runtime action was available to this read-only task."))));
+        QTRY_COMPARE_WITH_TIMEOUT(readOnlyFinished.size(), 1, 5000);
+        QCOMPARE(readOnlyFinished.first().at(0).toString(), QStringLiteral("completed"));
+        workflow.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.isStopped(), 5000);
+    }
+
+    void staticBindingRequiresManualApprovalEvenInAutoAndDeniesReadOnly()
+    {
+        static QTemporaryDir workspace;
+        static QTemporaryDir sources;
+        QVERIFY(workspace.isValid() && sources.isValid());
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        // Suppress ordinary import UI only when seeding the unbound source;
+        // actual command publication and candidate acceptance keep their GUI callbacks.
+        Model source=unboundTetraFixture();
+        source.initializeMeshInput();
+        const double minimumSeed=source.getProblemSetup().getMeshSetup().getMinEdgeLength();
+        const double maximumSeed=source.getProblemSetup().getMeshSetup().getMaxEdgeLength();
+        const QString sourcePath=sources.filePath("agent-unbound.ram");
+        ModelIO::save(source,sourcePath,false);
+        Model loaded; ModelIO::open(loaded,sourcePath);
+        QCOMPARE(loaded.getProblemTaskTree().getProblemTypeMask(),int(R_PROBLEM_NONE));
+        QVERIFY(loaded.getLoadedSourceBinding().has_value());
+        QVERIFY(loaded.getProblemSetup().getMeshSetup().getMinEdgeLength()>0);
+        QVERIFY(loaded.getProblemSetup().getMeshSetup().getMaxEdgeLength()>0);
+        QCOMPARE(loaded.getProblemSetup().getMeshSetup().getMinEdgeLength(),minimumSeed);
+        QCOMPARE(loaded.getProblemSetup().getMeshSetup().getMaxEdgeLength(),maximumSeed);
+        { const QSignalBlocker initialImport(session); session->addModel(loaded); }
+        session->setModelSelected(0, true);
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy applied(&runner, &AgentTaskRunner::actionCompleted);
+        runner.startTask("Bind this mesh for static Stress.", true);
+        const auto stamp = session->modelCommandStamp(0);
+        QJsonObject proposal{{"documentId", stamp.first}, {"documentRevision", double(stamp.second)},
+            {"command", "mesh.rebind.static"}, {"arguments", staticBindingArguments()}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall("bind-static", "document_propose", proposal)})));
+        QCOMPARE(ready.size(), 1); QCOMPARE(applied.size(), 0);
+        QCOMPARE(session->getModel(0).getNPoints(), 0u);
+        runner.authorizePending(ready.first().at(1).toString(), true);
+        QCOMPARE(applied.size(), 1); QCOMPARE(session->getModel(0).getNPoints(), 4u);
+        runner.cancel();
+        AgentTaskRunner readOnly(host, &workflow, nullptr, AgentTaskRunner::AccessPolicy::ReadOnly);
+        QSignalSpy reads(&readOnly, &AgentTaskRunner::turnRequested);
+        QSignalSpy readReady(&readOnly, &AgentTaskRunner::proposalReady);
+        readOnly.startTask("Inspect static binding without editing.");
+        proposal.insert("documentRevision", double(session->modelCommandStamp(0).second));
+        readOnly.receiveTurn(reads.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall("denied-static", "document_propose", proposal)})));
+        QTRY_COMPARE_WITH_TIMEOUT(reads.size(), 2, 1000);
+        QVERIFY(toolResultContent(reads.last().at(1).toJsonArray(), "denied-static").contains("READ_ONLY_TOOL_DENIED"));
+        QCOMPARE(readReady.size(), 0); readOnly.cancel();
+    }
+
+    void staticBindingRejectsUnknownAndMalformedTypedArguments()
+    {
+        auto *host = Application::instance()->getSession()->getModelCommandHost();
+        WorkflowProcess workflow;
+        QList<QJsonObject> bad;
+        auto arguments = staticBindingArguments(); arguments.insert("oldMapper", "legacy-target"); bad.append(arguments);
+        arguments = staticBindingArguments(); arguments.insert("unitSI", "true"); bad.append(arguments);
+        arguments = staticBindingArguments(); arguments.insert("staticStress", false); bad.append(arguments);
+        arguments = staticBindingArguments(); arguments.insert("loads", QJsonArray{QJsonObject{
+            {"nodePhysicalId", 131}, {"forceN", QJsonArray{0,0,QJsonValue(QJsonValue::Null)}}}}); bad.append(arguments);
+        arguments = staticBindingArguments(); arguments.insert("constraints", QJsonArray{QJsonObject{
+            {"nodePhysicalId", 0}, {"values", QJsonArray{0,0,0}}}}); bad.append(arguments);
+        arguments = staticBindingArguments(); auto material = arguments.value("material").toObject();
+        material.insert("poissonRatio", 0.5); arguments.insert("material", material); bad.append(arguments);
+        arguments = staticBindingArguments(); arguments.insert("loads", QJsonArray{QJsonObject{
+            {"nodePhysicalId", 131}, {"forceN", QJsonArray{0,0,-1}}, {"code", "execute"}}}); bad.append(arguments);
+        for (const auto &invalid : bad)
+        {
+            AgentTaskRunner runner(host, &workflow);
+            QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+            QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+            runner.startTask("Validate static binding input.");
+            runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+                QJsonArray{providerCall("invalid-static", "document_propose", {{"documentId", "document-test"},
+                    {"documentRevision", 0}, {"command", "mesh.rebind.static"}, {"arguments", invalid}})})));
+            QCOMPARE(finished.size(), 1); QCOMPARE(ready.size(), 0);
+            QCOMPARE(finished.first().at(0).toString(), QString("failed"));
+        }
+    }
+
+    void geometryToolsUseHostPreviewApprovalAndRemainDeniedReadOnly()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        Model fixture = stressFixture();
+        fixture.setNodePhysicalId(1, 73);
+        session->addModel(fixture); session->setModelSelected(0, true);
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy applied(&runner, &AgentTaskRunner::actionCompleted);
+        runner.startTask("Change the physical node coordinates after preview.");
+        const auto stamp = session->modelCommandStamp(0);
+        QJsonObject proposal{{"documentId", stamp.first}, {"documentRevision", double(stamp.second)},
+            {"command", "geometry.node_coordinates.set"}, {"arguments", QJsonObject{{"unit", "m"},
+                {"directionPolicy", "preserve_global"}, {"nodes", QJsonArray{QJsonObject{
+                    {"physicalNodeId", 73}, {"coordinates", QJsonArray{2, 0, 0}}}}}}}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall("geometry-node", "document_propose", proposal)})));
+        QCOMPARE(ready.size(), 1); QCOMPARE(applied.size(), 0);
+        QCOMPARE(session->getModel(0).getNode(1).getX(), 1.0);
+        runner.authorizePending(ready.first().at(1).toString(), true);
+        QCOMPARE(applied.size(), 1);
+        QCOMPARE(session->getModel(0).getNode(1).getX(), 2.0);
+        runner.cancel();
+
+        AgentTaskRunner readOnly(host, &workflow, nullptr, AgentTaskRunner::AccessPolicy::ReadOnly);
+        QSignalSpy readRequested(&readOnly, &AgentTaskRunner::turnRequested);
+        QSignalSpy readReady(&readOnly, &AgentTaskRunner::proposalReady);
+        QSignalSpy readApplied(&readOnly, &AgentTaskRunner::actionCompleted);
+        readOnly.startTask("Describe geometry without making changes.");
+        proposal.insert("documentRevision", double(session->modelCommandStamp(0).second));
+        proposal.insert("command", "geometry.rigid_transform");
+        proposal.insert("arguments", QJsonObject{{"unit", "m"}, {"angleUnit", "deg"},
+            {"directionPolicy", "preserve_global"}, {"center", QJsonArray{0, 0, 0}},
+            {"axis", QJsonArray{0, 0, 1}}, {"angle", 90}, {"translation", QJsonArray{0, 0, 0}}});
+        readOnly.receiveTurn(readRequested.first().at(0).toString(), parseProviderBody(providerBody(QString(),
+            QJsonArray{providerCall("denied-geometry", "document_propose", proposal)})));
+        QTRY_COMPARE_WITH_TIMEOUT(readRequested.size(), 2, 1000);
+        QVERIFY(toolResultContent(readRequested.last().at(1).toJsonArray(), "denied-geometry").contains("READ_ONLY_TOOL_DENIED"));
+        QCOMPARE(readReady.size(), 0); QCOMPARE(readApplied.size(), 0);
+        QCOMPARE(session->getModel(0).getNode(1).getX(), 2.0);
+        readOnly.cancel();
+    }
+
+    void extensionV2SchemasAreAdvertisedWithV1Preserved()
+    {
+        QJsonArray ids;
+        for (const auto &tool : AgentTaskRunner::toolDefinitions())
+        {
+            const auto function = tool.toObject().value("function").toObject();
+            if (function.value("name") == QJsonValue("schema_get"))
+                ids = function.value("parameters").toObject().value("properties").toObject()
+                    .value("schemaId").toObject().value("enum").toArray();
+        }
+        for (const auto &id : {"range.extension/v1/manifest", "range.extension/v1/numeric-series",
+            "range.extension/v1/statistics", "range.extension/v2/manifest", "range.extension/v2/multichannel-series",
+            "range.extension/v2/spectral-result", "range.task-plan/v1"})
+            QVERIFY(ids.contains(QJsonValue(id)));
     }
 
     void guiDocumentQueriesAndStructuralDynamicsUseTheVersionedHost()
@@ -782,6 +1352,25 @@ private slots:
             QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
             QCOMPARE(ready.size(), 0);
         };
+
+        QJsonObject geometry{{"unit", "m"}, {"directionPolicy", "preserve_global"},
+            {"nodes", QJsonArray{QJsonObject{{"physicalNodeId", 73}, {"coordinates", QJsonArray{2, 0, 0}}}}}};
+        auto invalidGeometry = geometry; invalidGeometry.insert("unit", "mm");
+        rejected("geometry-unit", "geometry.node_coordinates.set", invalidGeometry);
+        invalidGeometry = geometry; invalidGeometry.insert("selectedOnly", true);
+        rejected("geometry-extra", "geometry.node_coordinates.set", invalidGeometry);
+        invalidGeometry = geometry;
+        invalidGeometry.insert("nodes", QJsonArray{QJsonObject{{"physicalNodeId", "73"}, {"coordinates", QJsonArray{2, 0, 0}}}});
+        rejected("geometry-id", "geometry.node_coordinates.set", invalidGeometry);
+        invalidGeometry = geometry;
+        invalidGeometry.insert("nodes", QJsonArray{QJsonObject{{"physicalNodeId", 73}, {"coordinates", QJsonArray{1000001, 0, 0}}}});
+        rejected("geometry-range", "geometry.node_coordinates.set", invalidGeometry);
+        rejected("geometry-axis", "geometry.rigid_transform", {{"unit", "m"}, {"angleUnit", "deg"},
+            {"directionPolicy", "preserve_global"}, {"center", QJsonArray{0, 0, 0}}, {"axis", QJsonArray{0, 0, 0}},
+            {"angle", 90}, {"translation", QJsonArray{0, 0, 0}}});
+        rejected("geometry-angle", "geometry.rigid_transform", {{"unit", "m"}, {"angleUnit", "deg"},
+            {"directionPolicy", "preserve_global"}, {"center", QJsonArray{0, 0, 0}}, {"axis", QJsonArray{0, 0, 1}},
+            {"angle", 361}, {"translation", QJsonArray{0, 0, 0}}});
 
         QJsonObject dynamics = structuralDynamicsArguments();
         dynamics.insert(QStringLiteral("timeUnit"), QStringLiteral("ms"));
@@ -1744,7 +2333,10 @@ private slots:
         const auto guidanceItems = guidanceDocument.object().value(QStringLiteral("items")).toArray();
         QVERIFY(!guidanceItems.isEmpty());
         const auto guidanceItem = guidanceItems.first().toObject();
-        QVERIFY(guidanceItem.value(QStringLiteral("sourcePath")).toString().startsWith(QStringLiteral("doc/")));
+        QVERIFY(guidanceItem.value(QStringLiteral("sourcePath")).toString().startsWith(
+            QStringLiteral("package:range_workflow/knowledge/core-v1.json#")));
+        QCOMPARE(guidanceItem.value(QStringLiteral("version")).toString(), QStringLiteral("1.0.0"));
+        QCOMPARE(guidanceItem.value(QStringLiteral("schemaHash")).toString().size(), 64);
         QVERIFY(!guidanceItem.value(QStringLiteral("text")).toString().trimmed().isEmpty());
         QCOMPARE(guidanceItem.value(QStringLiteral("sha256")).toString().size(), 64);
         QVERIFY(toolResultContent(messages, QStringLiteral("extension-summary")).contains(QStringLiteral("extensions")));

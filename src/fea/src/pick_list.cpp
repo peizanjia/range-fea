@@ -269,6 +269,22 @@ void PickList::removeModelItemsAndReindex(uint removedModelID)
     emit this->pickListChanged();
 }
 
+void PickList::removeItems(uint modelID, REntityGroupType entityType)
+{
+    bool changed = false;
+    auto iter = this->items.begin();
+    while (iter != this->items.end())
+    {
+        if (iter->getEntityID().getMid() == modelID && iter->getEntityID().getType() == entityType)
+        {
+            iter = this->items.erase(iter);
+            changed = true;
+        }
+        else ++iter;
+    }
+    if (changed) emit this->pickListChanged();
+}
+
 bool PickList::hasItem(const PickItem &pickItem)
 {
     R_LOG_TRACE;

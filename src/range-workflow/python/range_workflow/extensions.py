@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import sys
 import threading
 import uuid
@@ -164,6 +165,9 @@ def _validate_gui(value: Any) -> dict:
 
 
 def validate_manifest(value: Any) -> dict:
+    if isinstance(value, dict) and value.get("manifestVersion") == 2:
+        from .scientific_extensions import validate_manifest as scientific_manifest
+        return scientific_manifest(value)
     exact(value, {"manifestVersion", "extensionId", "version", "sdkVersion", "kind",
                   "entryPoint", "dependencies", "inputSchema", "outputSchema", "gui"})
     if type(value["manifestVersion"]) is not int or value["manifestVersion"] != 1:
@@ -186,7 +190,10 @@ def validate_manifest(value: Any) -> dict:
             "gui": _validate_gui(value["gui"])}
 
 
-def _validate_cases(value: Any) -> dict:
+def _validate_cases(value: Any, manifest: dict | None = None) -> dict:
+    if manifest is not None and manifest.get("sdkVersion") == "range.extension/v2":
+        from .scientific_extensions import validate_cases
+        return validate_cases(value)
     exact(value, {"cases"})
     cases = value["cases"]
     if not isinstance(cases, list) or not 1 <= len(cases) <= MAX_TEST_CASES:
@@ -215,48 +222,64 @@ def _hash_text(value: str) -> str:
 def _hash_bundle(manifest: dict, source: str, tests: dict) -> dict:
     values = {"manifest": hashlib.sha256(canonical(manifest)).hexdigest(),
               "source": _hash_text(source), "tests": hashlib.sha256(canonical(tests)).hexdigest()}
-    bundle_hash = digest({"sdkVersion": PROTOCOL_VERSION, **values})
+    bundle_hash = digest({"sdkVersion": manifest["sdkVersion"], **values})
     return {**values, "bundle": bundle_hash}
 
 
 def _runtime_stat_token(path: Path) -> tuple:
-    info = path.stat()
+    return _runtime_info_token(path.stat())
+
+
+def _runtime_info_token(info) -> tuple:
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
             info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _runtime_manifest_snapshot(root: Path, file_hashes: dict[str, str]) -> tuple:
+def _runtime_manifest_snapshot(root: Path, file_hashes: dict[str, str], *, reject_bytecode=False) -> tuple:
     listed = set(file_hashes)
-    actual = set()
+    actual = {}
     try:
-        for path in root.rglob("*"):
-            if path.is_symlink():
-                _fail("RUNTIME_CHANGED", "Packaged Python runtime contains a symbolic link")
-            if path.is_dir():
-                continue
-            if not path.is_file():
-                _fail("RUNTIME_CHANGED", "Packaged Python runtime contains a non-file entry")
-            relative = path.relative_to(root).as_posix()
-            if relative == "runtime-files.json" or "__pycache__" in path.parts:
-                continue
-            actual.add(relative)
-        if actual != listed:
+        # Inspect each entry once, without following links. Repeated pathlib
+        # ancestor checks/resolution multiply Windows metadata operations for
+        # the thousands of private runtime files. Reject all reparse points,
+        # including junctions, before descending into a directory.
+        pending = [(root, "", _runtime_info_token(root.stat())[:3])]
+        while pending:
+            directory, prefix, directory_token = pending.pop()
+            if (directory.resolve(strict=True) != directory or
+                    _runtime_info_token(directory.lstat())[:3] != directory_token):
+                _fail("RUNTIME_CHANGED", "Packaged Python runtime directory changed during inspection")
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    info = entry.stat(follow_symlinks=False)
+                    if (stat.S_ISLNK(info.st_mode) or
+                            getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+                        _fail("RUNTIME_CHANGED", "Packaged Python runtime contains a symbolic link or reparse point")
+                    # Windows DirEntry caches omit file identity fields on
+                    # supported Python versions. Retain the inode/device
+                    # fingerprint by making one explicit no-follow stat.
+                    if os.name == "nt":
+                        info = os.stat(entry.path, follow_symlinks=False)
+                        if (stat.S_ISLNK(info.st_mode) or
+                                getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                            _fail("RUNTIME_CHANGED", "Packaged Python runtime entry changed to a reparse point")
+                    relative = prefix + entry.name
+                    if reject_bytecode and (entry.name.casefold() == "__pycache__" or
+                                            entry.name.casefold().endswith(".pyc")):
+                        _fail("RUNTIME_CHANGED", "Scientific runtime contains unverified disk bytecode")
+                    if stat.S_ISDIR(info.st_mode):
+                        pending.append((Path(entry.path), relative + "/", _runtime_info_token(info)[:3]))
+                    elif not stat.S_ISREG(info.st_mode):
+                        _fail("RUNTIME_CHANGED", "Packaged Python runtime contains a non-file entry")
+                    elif relative != "runtime-files.json" and "__pycache__" not in relative.split("/"):
+                        if info.st_size > MAX_RUNTIME_FILE_BYTES:
+                            _fail("RUNTIME_CHANGED", "Packaged Python runtime file exceeds its size limit")
+                        actual[relative] = _runtime_info_token(info)
+            if _runtime_info_token(directory.lstat())[:3] != directory_token:
+                _fail("RUNTIME_CHANGED", "Packaged Python runtime directory changed during inspection")
+        if set(actual) != listed:
             _fail("RUNTIME_CHANGED", "Packaged Python runtime file set differs from its manifest")
-        tokens = []
-        for relative in sorted(listed):
-            path = root
-            for part in PurePosixPath(relative).parts:
-                path = path / part
-                if path.is_symlink():
-                    _fail("RUNTIME_CHANGED", "Packaged Python runtime contains a symbolic link")
-            resolved = path.resolve(strict=True)
-            if not resolved.is_relative_to(root) or not resolved.is_file():
-                _fail("RUNTIME_CHANGED", "Packaged Python runtime path escaped its root")
-            size = resolved.stat().st_size
-            if size > MAX_RUNTIME_FILE_BYTES:
-                _fail("RUNTIME_CHANGED", "Packaged Python runtime file exceeds its size limit")
-            tokens.append((relative, *_runtime_stat_token(resolved)))
-        return tuple(tokens)
+        return tuple((relative, *actual[relative]) for relative in sorted(listed))
     except WorkflowError:
         raise
     except (OSError, ValueError, RuntimeError):
@@ -264,7 +287,8 @@ def _runtime_manifest_snapshot(root: Path, file_hashes: dict[str, str]) -> tuple
 
 
 def _verify_packaged_runtime(executable: Path, executable_sha: str,
-                             lock_path: Path, files_path: Path, *, force_verify: bool = False) -> tuple[str, str]:
+                             lock_path: Path, files_path: Path, *, force_verify: bool = False,
+                             require_cached=False, reject_bytecode=False) -> tuple[str, str]:
     if (not lock_path.is_file() or lock_path.is_symlink() or
             not files_path.is_file() or files_path.is_symlink()):
         _fail("RUNTIME_CHANGED", "Packaged Python runtime is missing its lock or file manifest")
@@ -272,8 +296,10 @@ def _verify_packaged_runtime(executable: Path, executable_sha: str,
     try:
         if not executable.resolve(strict=True).is_relative_to(root):
             _fail("RUNTIME_CHANGED", "Configured Python interpreter is outside its runtime root")
-        lock_raw = lock_path.read_bytes()
-        files_raw = files_path.read_bytes()
+        with lock_path.open("rb") as stream:
+            lock_raw = stream.read(1024 * 1024 + 1)
+        with files_path.open("rb") as stream:
+            files_raw = stream.read(MAX_RUNTIME_MANIFEST_BYTES + 1)
         if len(lock_raw) > 1024 * 1024 or len(files_raw) > MAX_RUNTIME_MANIFEST_BYTES:
             _fail("RUNTIME_CHANGED", "Packaged Python runtime metadata exceeds its size limit")
         lock = json.loads(lock_raw.decode("utf-8", "strict"), object_pairs_hook=_pairs,
@@ -302,26 +328,45 @@ def _verify_packaged_runtime(executable: Path, executable_sha: str,
     lock_sha = hashlib.sha256(lock_raw).hexdigest()
     if file_hashes.get(executable_relative) != executable_sha or file_hashes.get(lock_relative) != lock_sha:
         _fail("RUNTIME_CHANGED", "Packaged Python executable or lock differs from its manifest")
-    fingerprint = _runtime_manifest_snapshot(root, file_hashes)
+    fingerprint = _runtime_manifest_snapshot(root, file_hashes, reject_bytecode=reject_bytecode)
     files_sha = hashlib.sha256(files_raw).hexdigest()
     cache_key = str(root)
+    cache_id = digest({"runtimeLockSha256": lock_sha, "runtimeFilesSha256": files_sha})
+    verified = (cache_id, fingerprint)
     with _RUNTIME_CACHE_LOCK:
         cached = _RUNTIME_VERIFICATION_CACHE.get(cache_key)
-        cache_id = digest({"runtimeLockSha256": lock_sha, "runtimeFilesSha256": files_sha})
-        if force_verify or cached != (cache_id, fingerprint):
-            try:
-                for relative, expected in file_hashes.items():
-                    path = root.joinpath(*PurePosixPath(relative).parts)
-                    before = _runtime_stat_token(path)
-                    if file_hash(path) != expected or _runtime_stat_token(path) != before:
-                        _fail("RUNTIME_CHANGED", "Packaged Python file differs from its runtime manifest")
-                if _runtime_manifest_snapshot(root, file_hashes) != fingerprint:
-                    _fail("RUNTIME_CHANGED", "Packaged Python runtime changed during verification")
-            except WorkflowError:
-                raise
-            except OSError:
-                _fail("RUNTIME_CHANGED", "Packaged Python runtime file is unavailable")
-            _RUNTIME_VERIFICATION_CACHE[cache_key] = (cache_id, fingerprint)
+    if force_verify or cached != verified:
+        if require_cached and not force_verify:
+            _fail("RUNTIME_VERIFICATION_REQUIRED", "Scientific runtime requires background byte verification")
+        # Byte IO and tree scans can be slow on a cold Windows runtime. Other
+        # callers must be able to consult their independently checked snapshot
+        # while this verifier works; the cache mutex only protects publication.
+        try:
+            for relative, expected in file_hashes.items():
+                path = root.joinpath(*PurePosixPath(relative).parts)
+                before = _runtime_stat_token(path)
+                if file_hash(path) != expected or _runtime_stat_token(path) != before:
+                    _fail("RUNTIME_CHANGED", "Packaged Python file differs from its runtime manifest")
+            if _runtime_manifest_snapshot(root, file_hashes, reject_bytecode=reject_bytecode) != fingerprint:
+                _fail("RUNTIME_CHANGED", "Packaged Python runtime changed during verification")
+            # runtime-files.json is intentionally outside the file manifest;
+            # recheck both bounded metadata byte strings before publishing.
+            for path, maximum, original in ((lock_path, 1024 * 1024, lock_raw),
+                                             (files_path, MAX_RUNTIME_MANIFEST_BYTES, files_raw)):
+                if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum:
+                    _fail("RUNTIME_CHANGED", "Packaged Python metadata changed during verification")
+                with path.open("rb") as stream:
+                    if stream.read(maximum + 1) != original:
+                        _fail("RUNTIME_CHANGED", "Packaged Python metadata changed during verification")
+        except WorkflowError:
+            raise
+        except OSError:
+            _fail("RUNTIME_CHANGED", "Packaged Python runtime file is unavailable")
+        with _RUNTIME_CACHE_LOCK:
+            current = _RUNTIME_VERIFICATION_CACHE.get(cache_key)
+            if current != cached and current != verified:
+                _fail("RUNTIME_CHANGED", "Concurrent runtime verification published a different environment")
+            _RUNTIME_VERIFICATION_CACHE[cache_key] = verified
             if len(_RUNTIME_VERIFICATION_CACHE) > 16:
                 oldest = next(iter(_RUNTIME_VERIFICATION_CACHE))
                 if oldest != cache_key:
@@ -329,7 +374,9 @@ def _verify_packaged_runtime(executable: Path, executable_sha: str,
     return lock_sha, files_sha
 
 
-def runtime_identity(service, *, force_verify: bool = False) -> dict:
+def _runtime_environment_identity(service, *, force_verify: bool = False,
+                                  require_cached=False, reject_bytecode=False) -> dict:
+    """Verify the interpreter and private tree independently of the SDK harness."""
     configured = Path(service.python)
     if configured.is_symlink() or not configured.is_file():
         _fail("RUNTIME_CHANGED", "Configured extension interpreter is unavailable")
@@ -344,11 +391,23 @@ def runtime_identity(service, *, force_verify: bool = False) -> dict:
     has_files = files_path.exists() or files_path.is_symlink()
     if has_lock or has_files:
         lock_sha, files_sha = _verify_packaged_runtime(executable, executable_sha, lock_path, files_path,
-                                                       force_verify=force_verify)
+                                                       force_verify=force_verify, require_cached=require_cached,
+                                                       reject_bytecode=reject_bytecode)
         profile = "packaged"
     else:
         lock_sha = files_sha = None
         profile = "development"
+    return {"pythonPath": str(executable), "pythonSha256": executable_sha,
+            "pythonVersion": sys.version.split()[0], "runtimeLockSha256": lock_sha,
+            "runtimeFilesSha256": files_sha, "profile": profile,
+            "verifiedFiles": profile == "packaged"}
+
+
+def runtime_identity(service, *, force_verify: bool = False, manifest: dict | None = None) -> dict:
+    if manifest is not None and manifest.get("sdkVersion") == "range.extension/v2":
+        from .scientific_runtime import runtime_identity as scientific_runtime
+        return scientific_runtime(service, force_verify=force_verify)
+    environment = _runtime_environment_identity(service, force_verify=force_verify)
     child = Path(__file__).with_name("extension_child.py")
     if child.is_symlink() or not child.is_file():
         _fail("RUNTIME_CHANGED", "Extension worker harness is unavailable")
@@ -356,13 +415,10 @@ def runtime_identity(service, *, force_verify: bool = False) -> dict:
         child_sha = file_hash(child)
     except OSError:
         _fail("RUNTIME_CHANGED", "Extension worker harness is unavailable")
-    identity = {"protocolVersion": PROTOCOL_VERSION, "pythonPath": str(executable),
-                "pythonSha256": executable_sha, "pythonVersion": sys.version.split()[0],
-                "runtimeLockSha256": lock_sha, "runtimeFilesSha256": files_sha,
+    identity = {"protocolVersion": PROTOCOL_VERSION, **environment,
                 "extensionChildSha256": child_sha,
-                "profile": profile, "verifiedFiles": profile == "packaged",
                 "dependencies": [], "flags": ["-I", "-S"]}
-    return {"identity": identity, "runtimeHash": digest(identity), "profile": profile}
+    return {"identity": identity, "runtimeHash": digest(identity), "profile": environment["profile"]}
 
 
 def _extension_root(service) -> Path:
@@ -435,7 +491,7 @@ def _source_record(service, record: dict) -> tuple[dict, str, dict]:
                          max_collection_size=MAX_SERIES_POINTS)
     source = source_path.read_text(encoding="utf-8", errors="strict")
     manifest = validate_manifest(manifest)
-    tests = _validate_cases(tests)
+    tests = _validate_cases(tests, manifest)
     if (record.get("manifest") != manifest or record.get("extensionId") != manifest["extensionId"] or
             record.get("version") != manifest["version"]):
         _fail("EXTENSION_TAMPERED", "Stored manifest metadata differs from its immutable file")
@@ -603,7 +659,7 @@ def _normalize_stage(service, parameters: dict) -> dict:
         _fail("INVALID_PARAMETERS", "source must be valid UTF-8")
     if len(source_bytes) > MAX_SOURCE_BYTES or source.startswith("\ufeff"):
         _fail("EXTENSION_INPUT_LIMIT", "Extension source exceeds its byte limit or contains a BOM")
-    tests = _validate_cases(parameters["tests"])
+    tests = _validate_cases(parameters["tests"], manifest)
     if len(canonical(tests)) > MAX_TEST_BYTES:
         _fail("EXTENSION_INPUT_LIMIT", "Extension tests exceed their byte limit")
     hashes = _hash_bundle(manifest, source, tests)
@@ -674,7 +730,7 @@ def _normalize_validate(service, parameters: dict) -> dict:
         _fail("EXTENSION_STATE", "Only a staged candidate can be validated")
     if record["validation"] is not None:
         _fail("EXTENSION_STATE", "Candidate validation has already been recorded")
-    runtime = runtime_identity(service)
+    runtime = runtime_identity(service, manifest=record["manifest"])
     return {"candidateId": record["candidateId"], "extensionId": record["extensionId"],
             "bundleHash": record["bundleHash"], "runtime": runtime,
             "registryRevision": _registry_entry(service, record["extensionId"])["registryRevision"]}
@@ -684,7 +740,7 @@ def _bind_validate(service, parameters: dict) -> dict:
     record = _candidate_record(service, parameters["candidateId"], parameters["bundleHash"])
     if record["state"] != "staged":
         _fail("EXTENSION_STATE", "Only a staged candidate can be validated")
-    current = runtime_identity(service)
+    current = runtime_identity(service, manifest=record["manifest"])
     if current != parameters["runtime"]:
         _fail("RUNTIME_CHANGED", "Extension runtime changed since the validation preview")
     return {"candidateId": record["candidateId"], "extensionId": record["extensionId"],
@@ -699,9 +755,12 @@ def _execute_validate(service, job: dict, directory: Path, cancel: threading.Eve
     record = _candidate_record(service, p["candidateId"], p["bundleHash"])
     if not service.trusted_extensions:
         _fail("TRUSTED_RUNTIME_REQUIRED", "Enable trusted developer extension mode before executing Python")
-    if p["runtime"] != runtime_identity(service):
+    if p["runtime"] != runtime_identity(service, manifest=record["manifest"]):
         _fail("RUNTIME_CHANGED", "Extension runtime changed after validation preview")
     manifest, _source, candidate_tests = _source_record(service, record)
+    if manifest["sdkVersion"] == "range.extension/v2":
+        from .scientific_extensions import execute_validate
+        return execute_validate(service, job, directory, cancel, record, manifest, candidate_tests)
     all_cases = list(candidate_tests["cases"]) + _golden_cases()
     input_tests = {"cases": [{"id": item["id"], "input": item["input"]} for item in all_cases]}
     validation_record = {**record, "runtimeHash": p["runtime"]["runtimeHash"]}
@@ -768,7 +827,7 @@ def _bind_activate(service, parameters: dict) -> dict:
     _source_record(service, candidate)
     validation = candidate["validation"]
     _safe_relative(service, validation["reportPath"], validation["reportSha256"], MAX_REPORT_BYTES)
-    runtime = runtime_identity(service)
+    runtime = runtime_identity(service, manifest=candidate["manifest"])
     if runtime["runtimeHash"] != validation["runtimeHash"]:
         _fail("RUNTIME_CHANGED", "Candidate must be revalidated for the current runtime")
     if entry["registryRevision"] != parameters["registryRevision"] or entry.get("activeBundleHash") != parameters["expectedActiveBundleHash"]:
@@ -811,7 +870,7 @@ def _normalize_rollback(service, parameters: dict) -> dict:
         _fail("EXTENSION_STATE", "Requested rollback target is already active")
     version = entry["versions"][target]
     _source_record(service, version)
-    runtime_hash = runtime_identity(service)["runtimeHash"]
+    runtime_hash = runtime_identity(service, manifest=version["manifest"])["runtimeHash"]
     if runtime_hash != version["runtimeHash"]:
         _fail("RUNTIME_CHANGED", "Rollback target was validated for a different runtime")
     return {"extensionId": extension_id, "expectedActiveBundleHash": current,
@@ -822,7 +881,7 @@ def _normalize_rollback(service, parameters: dict) -> dict:
 def _bind_rollback(service, parameters: dict) -> dict:
     entry, target = _version(service, parameters["extensionId"], parameters["targetBundleHash"])
     _source_record(service, target)
-    runtime = runtime_identity(service)
+    runtime = runtime_identity(service, manifest=target["manifest"])
     if runtime["runtimeHash"] != parameters["runtimeHash"] or runtime["runtimeHash"] != target["runtimeHash"]:
         _fail("RUNTIME_CHANGED", "Rollback target was validated for a different runtime")
     if entry.get("activeBundleHash") != parameters["expectedActiveBundleHash"] or entry["registryRevision"] != parameters["registryRevision"]:
@@ -893,6 +952,11 @@ def _resolve_provenance(service, provenance: dict) -> tuple[dict, dict]:
 
 
 def _normalize_run(service, parameters: dict) -> dict:
+    if isinstance(parameters, dict) and parameters.get("extensionId") in service._state["extensions"]:
+        _entry, requested = _version(service, parameters["extensionId"], parameters.get("bundleHash"))
+        if requested["manifest"]["sdkVersion"] == "range.extension/v2":
+            from .scientific_extensions import normalize_run
+            return normalize_run(service, parameters, requested)
     exact(parameters, {"extensionId", "bundleHash"}, {"series", "provenance"})
     if ("series" in parameters) == ("provenance" in parameters):
         _fail("INVALID_PARAMETERS", "Provide exactly one of series or provenance")
@@ -916,6 +980,9 @@ def _normalize_run(service, parameters: dict) -> dict:
 
 
 def _bind_run(service, parameters: dict) -> dict:
+    if parameters.get("sdkVersion") == "range.extension/v2":
+        from .scientific_extensions import bind_run
+        return bind_run(service, parameters)
     entry, version = _version(service, parameters["extensionId"], parameters["bundleHash"])
     if entry.get("activeBundleHash") != parameters["bundleHash"]:
         _fail("EXTENSION_NOT_ACTIVE", "Run preview refers to a version that is no longer active")
@@ -945,6 +1012,9 @@ def _bind_run(service, parameters: dict) -> dict:
 
 
 def _execute_run(service, job: dict, directory: Path, cancel: threading.Event) -> dict:
+    if job["parameters"].get("sdkVersion") == "range.extension/v2":
+        from .scientific_extensions import execute_run
+        return execute_run(service, job, directory, cancel)
     p = job["parameters"]
     if not service.trusted_extensions:
         _fail("TRUSTED_RUNTIME_REQUIRED", "Enable trusted developer extension mode before executing Python")
@@ -1064,7 +1134,7 @@ def validate_registry_state(extensions: dict):
                     all(hash_value(record[key]) for key in ("manifestSha256", "sourceSha256", "testsSha256")),
                     "invalid extension content hashes")
             require(hashlib.sha256(canonical(manifest)).hexdigest() == record["manifestSha256"] and
-                    digest({"sdkVersion": PROTOCOL_VERSION, "manifest": record["manifestSha256"],
+                    digest({"sdkVersion": manifest["sdkVersion"], "manifest": record["manifestSha256"],
                             "source": record["sourceSha256"], "tests": record["testsSha256"]}) == record["bundleHash"],
                     "extension bundle identity differs from its content hashes")
             require(isinstance(record["stagedAt"], str) and len(record["stagedAt"]) <= 64,
@@ -1095,7 +1165,7 @@ def validate_registry_state(extensions: dict):
                     "runtimeHash", "validatedAt"} and validation["passed"] is True,
                     "invalid extension validation record")
                 require(type(validation["caseCount"]) is int and 1 <= validation["caseCount"] <= MAX_TEST_CASES and
-                        type(validation["independentCaseCount"]) is int and validation["independentCaseCount"] == 3 and
+                        type(validation["independentCaseCount"]) is int and validation["independentCaseCount"] == (4 if manifest["sdkVersion"] == "range.extension/v2" else 3) and
                         hash_value(validation["reportSha256"]) and hash_value(validation["runtimeHash"]) and
                         record["runtimeHash"] == validation["runtimeHash"], "invalid extension validation identity")
                 report = validation["reportPath"]
@@ -1216,6 +1286,9 @@ def _candidate_view(service, record: dict, *, include_diff: bool) -> dict:
 
 
 def read_operation(service, operation: str, parameters: dict) -> dict | None:
+    if operation == "extension.result.query":
+        from .scientific_extensions import result_query
+        return result_query(service, parameters)
     if operation == "extension.list":
         exact(parameters, set(), {"extensionId", "candidateOffset", "candidateLimit"})
         requested_id = parameters.get("extensionId")
@@ -1288,6 +1361,9 @@ def read_operation(service, operation: str, parameters: dict) -> dict | None:
         schemas = {MANIFEST_SCHEMA: _manifest_schema(), SERIES_SCHEMA: _series_schema(),
                    STATISTICS_SCHEMA: _statistics_schema()}
         schema_id = parameters["schemaId"]
+        if schema_id.startswith("range.extension/v2/"):
+            from .scientific_extensions import schema_get
+            return schema_get(schema_id)
         if schema_id == "range.task-plan/v1":
             from .task_plan import plan_schema
             return {"schemaId": schema_id, "apiVersion": "range.workflow/v1", "schema": plan_schema(),
@@ -1352,7 +1428,9 @@ def install(service):
         ("extension.run", _normalize_run, _execute_run, _bind_run,
          "Run the pinned active extension on explicit input, verified reference history, or registered native FE history", {
              "extensionId": {"type": "string"}, "bundleHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-             "series": {"$ref": SERIES_SCHEMA}, "provenance": {"type": "object"}},
+             "series": {"$ref": SERIES_SCHEMA}, "provenance": {"type": "object"},
+             "sources": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "object"}},
+             "options": {"type": "object"}},
          ["extensionId", "bundleHash"], False),
     ]
     for name, normalize, execute, bind, description, properties, required, write in commands:

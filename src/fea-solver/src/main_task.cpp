@@ -6,6 +6,7 @@
 #include <QLoggingCategory>
 #include <QSettings>
 #include <exception>
+#include <stdexcept>
 
 #include <rbl_arguments_parser.h>
 #include <rbl_error.h>
@@ -16,6 +17,7 @@
 #include "solver_task.h"
 #include "command_processor.h"
 #include "native_execution_gate.h"
+#include "runtime_control_bridge.h"
 #include "linear_model_task.h"
 #include <rparallel_execution_context.h>
 
@@ -58,6 +60,7 @@ void MainTask::run()
         validOptions.append(RArgumentOption("task-id",RArgumentOption::Path,QVariant(),"Task ID for inter process communication",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("task-server",RArgumentOption::Path,QVariant(),"Task server for inter process communication",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("log-debug",RArgumentOption::Switch,QVariant(),"Switch on debug log level",RArgumentOption::Logger,false));
+        validOptions.append(RArgumentOption("log-quiet",RArgumentOption::Switch,QVariant(),"Log warnings and errors; accepted-state journals remain complete",RArgumentOption::Logger,false));
         validOptions.append(RArgumentOption("log-trace",RArgumentOption::Switch,QVariant(),"Switch on trace log level",RArgumentOption::Logger,false));
         validOptions.append(RArgumentOption("log-ssl",RArgumentOption::Switch,QVariant(),"Enable Qt debug logging",RArgumentOption::Logger,false));
         validOptions.append(RArgumentOption("log-qt",RArgumentOption::Switch,QVariant(),"Enable Qt SSL debug logging",RArgumentOption::Logger,false));
@@ -78,6 +81,13 @@ void MainTask::run()
             return;
         }
 
+        if (argumentsParser.isSet("log-quiet"))
+        {
+            if (argumentsParser.isSet("log-debug") || argumentsParser.isSet("log-trace"))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--log-quiet cannot combine with --log-debug or --log-trace.");
+            RLogger::getInstance().setLevel(R_LOG_LEVEL_QUIET);
+        }
         if (argumentsParser.isSet("log-debug"))
         {
             RLogger::getInstance().setLevel(R_LOG_LEVEL_DEBUG);
@@ -180,16 +190,18 @@ void MainTask::run()
             if (!QFileInfo(statePath).isAbsolute())
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                              "--native-execution-state must be an absolute path.");
-            const QString jobId = qEnvironmentVariable("RANGE_NATIVE_JOB_ID");
+            const auto runtimeConfig = RuntimeControlBridge::environmentConfig();
+            const QString jobId = runtimeConfig ? runtimeConfig->jobId : qEnvironmentVariable("RANGE_NATIVE_JOB_ID");
             const QString providedTaskId = argumentsParser.getValue("task-id").toString();
             const QString taskId = providedTaskId.isEmpty() ? jobId : providedTaskId;
             const QString effectiveJobId = jobId.isEmpty() ? taskId : jobId;
             if (effectiveJobId.isEmpty() || taskId.isEmpty())
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                              "Native execution state requires RANGE_NATIVE_JOB_ID or --task-id.");
-            if (argumentsParser.getValue("task-server").toString().isEmpty())
+            if (argumentsParser.getValue("task-server").toString().isEmpty() &&
+                !RuntimeControlBridge::environmentConfig().has_value())
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
-                             "Native execution state requires --task-server for exact-task resume/cancel commands.");
+                             "Native execution state requires a task server or validated runtime control bridge for exact-task resume/cancel commands.");
 
             quint64 initialPauseSequence = 0;
             if (argumentsParser.isSet("pause-at-accepted-seq"))
@@ -323,9 +335,23 @@ void MainTask::run()
                                  : argumentsParser.getValue("task-id").toString(),
                              application,nativeExecutionGate);
 
-        // Start solver.
+        RuntimeControlBridge *runtimeBridge = nullptr;
+        if (const auto runtimeConfig = RuntimeControlBridge::environmentConfig())
+        {
+            if (!nativeExecutionGate || !argumentsParser.isSet("control-program") ||
+                argumentsParser.isSet("typed-steps") || argumentsParser.isSet("thermal-steps"))
+                throw std::invalid_argument("Runtime control requires a native checkpoint execution gate and scalar control process");
+            auto bridgeConfig=*runtimeConfig;
+            bridgeConfig.taskId=argumentsParser.getValue("task-id").toString();
+            if (bridgeConfig.taskId.isEmpty()) bridgeConfig.taskId=bridgeConfig.jobId;
+            runtimeBridge = new RuntimeControlBridge(bridgeConfig,nativeExecutionGate,application);
+        }
+
+        // Start solver. Main owns the bridge until this worker has finished;
+        // the main event loop never waits synchronously for the worker.
         QThread* thread = new QThread;
         SolverTask *solverTask = new SolverTask(solverInput, application);
+        solverTask->setRuntimeControlBridge(runtimeBridge);
 
         solverTask->moveToThread(thread);
 

@@ -336,12 +336,102 @@ bool validBoundaryArguments(const QJsonObject &arguments)
         || numberInRange(arguments.value("timeS"), 0.0, std::numeric_limits<double>::max()));
 }
 
+bool validGeometryArguments(const QString &command, const QJsonObject &arguments)
+{
+    const auto vector = [](const QJsonValue &value, double bound) {
+        if (!value.isArray() || value.toArray().size() != 3) return false;
+        for (const auto &component : value.toArray())
+            if (!numberInRange(component, -bound, bound)) return false;
+        return true;
+    };
+    if (arguments.value("unit") != QJsonValue("m")
+        || arguments.value("directionPolicy") != QJsonValue("preserve_global")) return false;
+    if (command == "geometry.node_coordinates.set")
+    {
+        if (!exactKeys(arguments, {"unit", "directionPolicy", "nodes"})
+            || !arguments.value("nodes").isArray() || arguments.value("nodes").toArray().isEmpty()) return false;
+        QSet<quint64> ids;
+        for (const auto &value : arguments.value("nodes").toArray())
+        {
+            if (!value.isObject()) return false;
+            const auto node = value.toObject();
+            quint64 id = 0;
+            if (!exactKeys(node, {"physicalNodeId", "coordinates"})
+                || !unsignedInteger(node.value("physicalNodeId"), &id)
+                || id == 0 || id >= std::numeric_limits<uint>::max() || ids.contains(id)
+                || !vector(node.value("coordinates"), 1e6)) return false;
+            ids.insert(id);
+        }
+        return true;
+    }
+    if (!exactKeys(arguments, {"unit", "angleUnit", "directionPolicy", "center", "axis", "angle", "translation"})
+        || arguments.value("angleUnit") != QJsonValue("deg")
+        || !vector(arguments.value("center"), 1e6) || !vector(arguments.value("translation"), 1e6)
+        || !vector(arguments.value("axis"), std::numeric_limits<double>::max())
+        || !numberInRange(arguments.value("angle"), -360, 360)) return false;
+    for (const auto &component : arguments.value("axis").toArray())
+        if (component.toDouble() != 0.0) return true;
+    return false;
+}
+
+bool validStaticMeshBindingArguments(const QJsonObject &arguments)
+{
+    if (!exactKeys(arguments, {"unitSI", "staticStress", "material", "constraints", "loads"})
+        || arguments.value("unitSI") != QJsonValue(true) || arguments.value("staticStress") != QJsonValue(true)
+        || !arguments.value("material").isObject()) return false;
+    const auto material = arguments.value("material").toObject();
+    if (!exactKeys(material, {"youngModulusPa", "poissonRatio", "densityKgM3"})
+        || !numberInRange(material.value("youngModulusPa"), 1e-12, 1e18)
+        || !numberInRange(material.value("densityKgM3"), 1e-12, 1e12)
+        || !numberInRange(material.value("poissonRatio"), -1, 0.5, true)
+        || material.value("poissonRatio").toDouble() >= 0.5) return false;
+    for (const QString &field : {QStringLiteral("constraints"), QStringLiteral("loads")})
+    {
+        if (!arguments.value(field).isArray()) return false;
+        const auto entries = arguments.value(field).toArray();
+        if (entries.isEmpty() || entries.size() > 1000) return false;
+        const bool load = field == QStringLiteral("loads");
+        const QString vectorField = load ? QStringLiteral("forceN") : QStringLiteral("values");
+        QSet<quint64> identities;
+        for (const auto &entry : entries)
+        {
+            if (!entry.isObject()) return false;
+            const auto target = entry.toObject(); quint64 id = 0;
+            if (!exactKeys(target, {"nodePhysicalId", vectorField})
+                || !unsignedInteger(target.value("nodePhysicalId"), &id) || !id
+                || id >= std::numeric_limits<uint>::max() || identities.contains(id)
+                || !target.value(vectorField).isArray() || target.value(vectorField).toArray().size() != 3) return false;
+            identities.insert(id);
+            bool enabled = false, nonzero = false;
+            for (const auto &component : target.value(vectorField).toArray())
+            {
+                if (!load && component.isNull()) continue;
+                const double bound = load ? 1e12 : 1e6;
+                if (!numberInRange(component, -bound, bound)) return false;
+                enabled = true; nonzero |= component.toDouble() != 0;
+            }
+            if (!enabled || (load && !nonzero)) return false;
+        }
+    }
+    return true;
+}
+
 bool validDocumentCommandArguments(const QString &command, const QJsonObject &arguments)
 {
+    if (command == "mesh.generate")
+        return exactKeys(arguments, {"unit", "volumeUnit", "maxVolume", "radiusEdgeRatio"})
+            && arguments.value("unit") == QJsonValue("m") && arguments.value("volumeUnit") == QJsonValue("m^3")
+            && numberInRange(arguments.value("maxVolume"), 1e-15, 1e18)
+            && numberInRange(arguments.value("radiusEdgeRatio"), 1.2, 2.0);
+    if (command == "mesh.accept" || command == "mesh.cancel")
+        return exactKeys(arguments, {"attemptId"}) && validIdentifier(arguments.value("attemptId"));
+    if (command == "mesh.rebind.static") return validStaticMeshBindingArguments(arguments);
     if (command == "analysis.modal.configure") return validModalArguments(arguments);
     if (command == "analysis.structural_dynamics.configure") return validStructuralDynamicsArguments(arguments);
     if (command == "entity.material.set") return validMaterialArguments(arguments);
     if (command == "entity.boundary.set") return validBoundaryArguments(arguments);
+    if (command == "geometry.node_coordinates.set" || command == "geometry.rigid_transform")
+        return validGeometryArguments(command, arguments);
     if (command == "analysis.run")
         return exactKeys(arguments, {"warningsAccepted"}) && arguments.value("warningsAccepted").isBool();
     if (command == "analysis.cancel")
@@ -406,6 +496,24 @@ bool validWorkflowArguments(const QString &command, const QJsonObject &arguments
         return exactKeys(arguments, {"jobId", "qualificationSha256"})
             && validIdentifier(arguments.value("jobId")) && validSha256(arguments.value("qualificationSha256"));
     return false;
+}
+
+bool validRuntimeParametersProposal(const QJsonObject &arguments)
+{
+    if (!exactKeys(arguments, {"jobId", "velocityGainNsm", "actuatorLimits"})
+        || !validIdentifier(arguments.value("jobId"))
+        || !numberInRange(arguments.value("velocityGainNsm"), 1e-9, 1e12)
+        || !arguments.value("actuatorLimits").isArray()) return false;
+
+    const QJsonArray limits = arguments.value("actuatorLimits").toArray();
+    if (limits.size() != 1 || !limits.first().isObject()) return false;
+    const QJsonObject limit = limits.first().toObject();
+    if (!exactKeys(limit, {"actuatorId", "minN", "maxN", "rateNPerS"})
+        || !validIdentifier(limit.value("actuatorId"))
+        || !numberInRange(limit.value("minN"), -std::numeric_limits<double>::max(), std::numeric_limits<double>::max())
+        || !numberInRange(limit.value("maxN"), -std::numeric_limits<double>::max(), std::numeric_limits<double>::max())
+        || !numberInRange(limit.value("rateNPerS"), 0.0, std::numeric_limits<double>::max())) return false;
+    return limit.value("minN").toDouble() <= limit.value("maxN").toDouble();
 }
 
 bool validToolArguments(const QString &name, const QJsonObject &arguments)
@@ -483,6 +591,10 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
         return exactKeys(arguments, {"jobId", "artifactId", "channelId"})
             && validIdentifier(arguments.value("jobId")) && validIdentifier(arguments.value("artifactId"))
             && validIdentifier(arguments.value("channelId"));
+    if (name == "mesh_job")
+        return exactKeys(arguments, {"documentId", "documentRevision", "attemptId"})
+            && validIdentifier(arguments.value("documentId")) && unsignedInteger(arguments.value("documentRevision"))
+            && validIdentifier(arguments.value("attemptId"));
     if (name == "document_propose")
     {
         if (!arguments.value("command").isString() || !arguments.value("arguments").isObject()) return false;
@@ -502,6 +614,11 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
             && QJsonDocument(arguments.value("plan").toObject()).toJson(QJsonDocument::Compact).size() <= 65536;
     if (name == "task_plan_query")
         return arguments.isEmpty() || (exactKeys(arguments, {"planId"}) && validIdentifier(arguments.value("planId")));
+    if (name == "runtime_parameters_propose") return validRuntimeParametersProposal(arguments);
+    if (name == "runtime_parameters_query")
+        return (exactKeys(arguments, {"jobId"}) || exactKeys(arguments, {"jobId", "proposalId"}))
+            && validIdentifier(arguments.value("jobId"))
+            && (!arguments.contains("proposalId") || validIdentifier(arguments.value("proposalId")));
     if (name == "workflow_propose")
     {
         return exactKeys(arguments, {"command", "arguments"}) && arguments.value("command").isString()
@@ -523,11 +640,17 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
     if (name == "extension_version_get")
         return exactKeys(arguments, {"extensionId", "bundleHash"})
             && validIdentifier(arguments.value("extensionId")) && validSha256(arguments.value("bundleHash"));
+    if (name == "scientific_input_inspect")
+        return exactKeys(arguments, {"input"}) && arguments.value("input").isObject()
+            && QJsonDocument(arguments).toJson(QJsonDocument::Compact).size() <= 128 * 1024;
     if (name == "schema_get")
         return exactKeys(arguments, {"schemaId"})
             && (arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/manifest"))
                 || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/numeric-series"))
                 || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/statistics"))
+                || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v2/manifest"))
+                || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v2/multichannel-series"))
+                || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v2/spectral-result"))
                 || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.task-plan/v1")));
     if (name == "knowledge_query")
         return (exactKeys(arguments, {"query"}) || exactKeys(arguments, {"query", "extensionId"}))
@@ -553,6 +676,7 @@ bool knownToolName(const QString &name)
         QStringLiteral("workflow_jobs"), QStringLiteral("workflow_telemetry"),
         QStringLiteral("document_propose"), QStringLiteral("document_inputs"),
         QStringLiteral("document_targets"), QStringLiteral("native_jobs"),
+        QStringLiteral("mesh_job"),
         QStringLiteral("native_job"), QStringLiteral("native_job_recovery"), QStringLiteral("workflow_recovery"), QStringLiteral("native_result_open"),
         QStringLiteral("native_result_query"), QStringLiteral("workflow_native_result"), QStringLiteral("workflow_sources"),
         QStringLiteral("native_result_display"),
@@ -560,8 +684,9 @@ bool knownToolName(const QString &name)
         QStringLiteral("workflow_result"), QStringLiteral("workflow_wait"),
         QStringLiteral("workflow_propose"), QStringLiteral("extension_candidate_get"),
         QStringLiteral("task_plan_propose"), QStringLiteral("task_plan_query"),
+        QStringLiteral("runtime_parameters_propose"), QStringLiteral("runtime_parameters_query"),
         QStringLiteral("extension_list"), QStringLiteral("extension_version_get"),
-        QStringLiteral("schema_get"), QStringLiteral("knowledge_query"),
+        QStringLiteral("schema_get"), QStringLiteral("knowledge_query"), QStringLiteral("scientific_input_inspect"),
         QStringLiteral("extension_propose")};
     return names.contains(name);
 }
@@ -634,6 +759,7 @@ bool readOnlyToolNameAllowed(const QString &name)
         QStringLiteral("ask_user"), QStringLiteral("host_capabilities"), QStringLiteral("context_query"),
         QStringLiteral("document_inputs"), QStringLiteral("document_targets"),
         QStringLiteral("native_jobs"), QStringLiteral("native_job"), QStringLiteral("native_job_recovery"),
+        QStringLiteral("mesh_job"),
         QStringLiteral("native_result_query"), QStringLiteral("workflow_sources"),
         QStringLiteral("workflow_status"), QStringLiteral("workflow_capabilities"),
         QStringLiteral("workflow_jobs"), QStringLiteral("workflow_recovery"),
@@ -641,7 +767,7 @@ bool readOnlyToolNameAllowed(const QString &name)
         QStringLiteral("workflow_native_result"),
         QStringLiteral("extension_list"), QStringLiteral("extension_candidate_get"),
         QStringLiteral("extension_version_get"), QStringLiteral("schema_get"),
-        QStringLiteral("knowledge_query")};
+        QStringLiteral("knowledge_query"), QStringLiteral("scientific_input_inspect")};
     return allowed.contains(name);
 }
 
@@ -752,6 +878,8 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
     const QJsonObject string{{"type", "string"}};
     const QJsonObject object{{"type", "object"}};
     const QJsonObject finiteNumber{{"type", "number"}};
+    const QJsonObject boundedIdentifier{{"type", "string"}, {"minLength", 1}, {"maxLength", 128},
+        {"pattern", "^[A-Za-z0-9._:-]+$"}};
     const QJsonObject targetId{{"type", "string"}, {"pattern", "^g:[1-9][0-9]*$"}};
     const QJsonObject unitSchema{{"type", "string"}, {"enum", QJsonArray{"1", "m", "N"}}};
     const QJsonObject commandMethod{{"type", "string"},
@@ -762,6 +890,22 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         {"tolerance", QJsonObject{{"type", "number"}, {"exclusiveMinimum", 0}, {"maximum", 1}}},
         {"enabled", QJsonObject{{"type", "boolean"}}}, {"timeStep", QJsonObject{{"type", "number"}, {"exclusiveMinimum", 0}}},
         {"unitSI", QJsonObject{{"type", "boolean"}, {"const", true}}},
+        {"staticStress", QJsonObject{{"type", "boolean"}, {"const", true}}},
+        {"material", schema({
+            {"youngModulusPa", QJsonObject{{"type", "number"}, {"minimum", 1e-12}, {"maximum", 1e18}}},
+            {"densityKgM3", QJsonObject{{"type", "number"}, {"minimum", 1e-12}, {"maximum", 1e12}}},
+            {"poissonRatio", QJsonObject{{"type", "number"}, {"exclusiveMinimum", -1}, {"exclusiveMaximum", 0.5}}}},
+            {"youngModulusPa", "densityKgM3", "poissonRatio"})},
+        {"constraints", QJsonObject{{"type", "array"}, {"minItems", 1}, {"maxItems", 1000},
+            {"items", schema({{"nodePhysicalId", QJsonObject{{"type", "integer"}, {"minimum", 1}, {"maximum", 4294967294.0}}},
+                {"values", QJsonObject{{"type", "array"}, {"minItems", 3}, {"maxItems", 3},
+                    {"items", QJsonObject{{"type", QJsonArray{"number", "null"}}, {"minimum", -1e6}, {"maximum", 1e6}}}}}},
+                {"nodePhysicalId", "values"})}}},
+        {"loads", QJsonObject{{"type", "array"}, {"minItems", 1}, {"maxItems", 1000},
+            {"items", schema({{"nodePhysicalId", QJsonObject{{"type", "integer"}, {"minimum", 1}, {"maximum", 4294967294.0}}},
+                {"forceN", QJsonObject{{"type", "array"}, {"minItems", 3}, {"maxItems", 3},
+                    {"items", QJsonObject{{"type", "number"}, {"minimum", -1e12}, {"maximum", 1e12}}}}}},
+                {"nodePhysicalId", "forceN"})}}},
         {"steps", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
         {"outputFrequency", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
         {"rayleighAlpha", finiteNumber}, {"rayleighBeta", finiteNumber}, {"rhoInfinity", finiteNumber},
@@ -784,7 +928,8 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         {"cursor", cursorSchema}, {"labelQuery", labelQuerySchema}}, {});
     const QJsonObject schemaId{{"type", "string"},
         {"enum", QJsonArray{"range.extension/v1/manifest", "range.extension/v1/numeric-series",
-                            "range.extension/v1/statistics", "range.task-plan/v1"}}};
+                            "range.extension/v1/statistics", "range.extension/v2/manifest",
+                            "range.extension/v2/multichannel-series", "range.extension/v2/spectral-result", "range.task-plan/v1"}}};
     const QJsonObject extensionCommand{{"type", "string"},
         {"enum", QJsonArray{"extension.stage", "extension.validate", "extension.activate",
                             "extension.rollback", "extension.run"}}};
@@ -795,9 +940,25 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         {"afterSeq", QJsonObject{{"type", "integer"}, {"minimum", 0}, {"maximum", 9007199254740991.0}}},
         {"limit", QJsonObject{{"type", "integer"}, {"minimum", 1}, {"maximum", 512}}},
         {"mode", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"active", "passive"}}}}};
+    const QJsonObject runtimeActuatorLimit = schema({
+        {"actuatorId", boundedIdentifier},
+        {"minN", QJsonObject{{"type", "number"}, {"description", "Minimum force in N; must be finite."}}},
+        {"maxN", QJsonObject{{"type", "number"}, {"description", "Maximum force in N; must be finite."}}},
+        {"rateNPerS", QJsonObject{{"type", "number"}, {"minimum", 0},
+            {"description", "Force rate in N/s; zero selects the source-defined unlimited limit only."}}}},
+        {"actuatorId", "minN", "maxN", "rateNPerS"});
+    const QJsonObject runtimeParametersProposal = schema({
+        {"jobId", boundedIdentifier},
+        {"velocityGainNsm", QJsonObject{{"type", "number"}, {"minimum", 1e-9}, {"maximum", 1e12},
+            {"description", "Velocity gain in N*s/m."}}},
+        {"actuatorLimits", QJsonObject{{"type", "array"}, {"minItems", 1}, {"maxItems", 1},
+            {"items", runtimeActuatorLimit}}}},
+        {"jobId", "velocityGainNsm", "actuatorLimits"});
+    const QJsonObject runtimeParametersQuery = schema({
+        {"jobId", boundedIdentifier}, {"proposalId", boundedIdentifier}}, {"jobId"});
     const QJsonObject documentCommandSchema{{"type", "string"},
         {"enum", QJsonArray{"analysis.modal.configure", "analysis.structural_dynamics.configure",
-            "entity.material.set", "entity.boundary.set", "analysis.run", "analysis.cancel", "analysis.recover",
+            "entity.material.set", "entity.boundary.set", "geometry.node_coordinates.set", "geometry.rigid_transform", "mesh.rebind.static", "mesh.generate", "mesh.accept", "mesh.cancel", "analysis.run", "analysis.cancel", "analysis.recover",
             "document.undo", "document.redo"}}};
     const QJsonObject documentRevisionSchema{{"type", "integer"}, {"minimum", 0}};
     const QJsonObject documentProposeProperties{{"documentId", string}, {"documentRevision", documentRevisionSchema},
@@ -809,6 +970,9 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         {"offset", QJsonObject{{"type", "integer"}, {"minimum", 0}}},
         {"limit", QJsonObject{{"type", "integer"}, {"minimum", 1}, {"maximum", 200}}}, {"cursor", string}};
     QJsonArray definitions{
+        tool("mesh_job", "Read one Host-owned mesh attempt using its exact original source documentId/documentRevision and attemptId. Read-only; sourceCurrent and status do not authorize generation or acceptance. A candidate_ready receipt requires a separate manual mesh.accept proposal that creates a new unbound document.",
+            schema({{"documentId", boundedIdentifier}, {"documentRevision", documentRevisionSchema},
+                {"attemptId", boundedIdentifier}}, {"documentId", "documentRevision", "attemptId"})),
         tool("ask_user", "Ask the user one bounded question before continuing. Provide two or three concise answer choices. The answer is data and never grants approval for a proposed action.",
              schema({{"question", QJsonObject{{"type", "string"}, {"minLength", 1}, {"maxLength", 1024}}},
                      {"options", QJsonObject{{"type", "array"}, {"minItems", 2}, {"maxItems", 3},
@@ -816,7 +980,7 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
                     {"question", "options"})),
         tool("host_capabilities", "Read the trusted GUI host's supported operations and approval boundaries. This tool never approves or executes a command.", schema({}, {})),
         tool("context_query", "Read current GUI document identities, revisions, supported modal operations and selection. Cached or unknown state must not be described as current accepted values.", schema({}, {})),
-        tool("document_propose", "Propose one exact supported GUI command: analysis.modal.configure, analysis.structural_dynamics.configure, entity.material.set, entity.boundary.set, analysis.run, analysis.cancel, analysis.recover, document.undo or document.redo. Every command except analysis.cancel and analysis.recover requires documentId and documentRevision. Modal arguments are exactly method,iterations,modes,tolerance,unit. Dynamics arguments are exactly enabled,method,timeStep,unitSI=true,steps,outputFrequency,rayleighAlpha,rayleighBeta,rhoInfinity,newmarkGamma,newmarkBeta,modalDampingRatios. Material arguments require targetId,name,youngModulusPa,densityKgM3,poissonRatio,thermalExpansionPerK and may include referenceTemperatureK (default 293.15 K; Solid material). Boundary arguments require targetId,kind,values,unit and may include timeS (default 0); values are three global XYZ numbers or nulls, unit is m for displacement or N for force. analysis.run arguments are exactly warningsAccepted:boolean. analysis.cancel arguments are exactly jobId and may optionally include its exact source documentId/revision. analysis.recover arguments are exactly jobId,checkpointSha256,remainingSteps from native_job_recovery; it creates a separate interrupted-job attempt and always needs fresh manual approval. Every command argument object rejects extra fields. The host previews every command; only explicit task authorization or the trusted user approval control can apply it. Use SI values and stable targetId values from document_targets.",
+        tool("document_propose", "Propose one exact supported GUI command: mesh.generate, mesh.accept, mesh.cancel, analysis.modal.configure, analysis.structural_dynamics.configure, entity.material.set, entity.boundary.set, geometry.node_coordinates.set, geometry.rigid_transform, mesh.rebind.static, analysis.run, analysis.cancel, analysis.recover, document.undo or document.redo. mesh.generate arguments are exactly unit=m,volumeUnit=m^3,maxVolume in [1e-15,1e18],radiusEdgeRatio in [1.2,2.0]. mesh.accept and mesh.cancel arguments are exactly attemptId from a Host-owned mesh job, matched to its original source documentId/documentRevision. All three mesh commands always require fresh manual user approval even in Auto tasks. Generation uses the shared native Host controller; acceptance creates a new unbound document and never remaps old physical IDs. Query with mesh_job. mesh.rebind.static arguments are exactly unitSI=true,staticStress=true,material (youngModulusPa,poissonRatio,densityKgM3),constraints and loads; each array has 1..1000 unique existing nodePhysicalId targets with exactly three global values (constraint axes may be null) or forceN numbers. It accepts only an unbound convex single-region linear tetrahedral mesh and always needs a fresh manual user approval, even in Auto tasks. Paths, code, old target remapping and extra fields are forbidden. Every command except analysis.cancel and analysis.recover requires documentId and documentRevision. Modal arguments are exactly method,iterations,modes,tolerance,unit. Dynamics arguments are exactly enabled,method,timeStep,unitSI=true,steps,outputFrequency,rayleighAlpha,rayleighBeta,rhoInfinity,newmarkGamma,newmarkBeta,modalDampingRatios. Material arguments require targetId,name,youngModulusPa,densityKgM3,poissonRatio,thermalExpansionPerK and may include referenceTemperatureK (default 293.15 K; Solid material). Boundary arguments require targetId,kind,values,unit and may include timeS (default 0); values are three global XYZ numbers or nulls, unit is m for displacement or N for force. Geometry coordinates arguments are exactly unit=m,directionPolicy=preserve_global,nodes (nonempty distinct physicalNodeId integers and three coordinates in metres). Rigid transform arguments are exactly unit=m,angleUnit=deg,directionPolicy=preserve_global,center,axis,angle,translation; three-component vectors, finite nonzero axis, coordinates within +/-1000000 m, right-handed angle within +/-360 deg, whole model only. Only POINT/TRUSS1/BEAM1 geometry is supported. analysis.run arguments are exactly warningsAccepted:boolean. analysis.cancel arguments are exactly jobId and may optionally include its exact source documentId/revision. analysis.recover arguments are exactly jobId,checkpointSha256,remainingSteps from native_job_recovery; it creates a separate interrupted-job attempt and always needs fresh manual approval. Every command argument object rejects extra fields. The host previews every command; only explicit task authorization or the trusted user approval control can apply it. Use SI values and stable targetId values from document_targets.",
              schema(documentProposeProperties, {"command", "arguments"})),
         tool("document_inputs", "Read accepted analysis/configuration state and one bounded target page from the GUI host. Provide a documentId from host context; optional page supports limit/offset or cursor and labelQuery.",
              schema({{"documentId", string}, {"page", pageSchema}}, {"documentId"})),
@@ -843,6 +1007,10 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         tool("workflow_status", "Read the independent rod/beam workspace configuration and revision. Its reference model is distinct from the GUI's open document.", schema({}, {})),
         tool("workflow_capabilities", "Read the connected workflow runtime's supported read operations, command parameter schemas, trusted-runtime requirements and limits.", schema({}, {})),
         tool("workflow_jobs", "Read the states of workflow jobs. Only succeeded jobs have accepted results.", schema({}, {})),
+        tool("runtime_parameters_propose", "Save a preview for the current native run using exactly jobId, velocityGainNsm (N*s/m), and one actuatorLimits entry with actuatorId, minN/maxN (N) and rateNPerS (N/s; zero means the source-defined unlimited limit only). Read the current run with runtime_parameters_query and check workflow_capabilities plus relevant knowledge_query guidance before choosing values; never borrow values from a later document revision. This calls runtime.parameters.preview only: it does not approve, submit or execute, even in Auto tasks. A separate real trusted user approval in Run parameters is required. Bind the preview to its immutable run identity. A queued request is not native acceptance; only a matching accepted native receipt proves application.",
+             runtimeParametersProposal),
+        tool("runtime_parameters_query", "Read the current native runtime attempt for jobId, or one saved proposal when proposalId is also supplied. Use the returned immutable current-run identity and actual status/receipt. Queued means intent only; only a matching status=accepted native receipt with accepted sequence, time and parameter hash proves application. This query never approves or submits.",
+             runtimeParametersQuery),
         tool("task_plan_propose", "Validate and retain a bounded persistent DAG for the configured registered native source. It does not start nodes or approve writes. Read runtime capabilities and versioned knowledge first; each write node needs separate trusted user approval in Task plans. Never include code, credentials or approval tokens.",
              schema({{"plan", object}}, {"plan"})),
         tool("task_plan_query", "Read host-owned plan/node state, source identity, budgets and job references. Historical completion text is not current authority. Do not poll this tool with repeated model calls while a solver is running.",
@@ -860,6 +1028,8 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
              schema({{"candidateId", string}}, {"candidateId"})),
         tool("extension_version_get", "Read one immutable extension bundle version by extensionId and bundleHash.",
              schema({{"extensionId", string}, {"bundleHash", string}}, {"extensionId", "bundleHash"})),
+        tool("scientific_input_inspect", "Validate your own small scientific v2 test input (2..64 samples, 1..4 channels) and return normalizedInput, inputHash and contractHash. Supply exactly input as an object following the multichannel-series schema. This only binds caller-provided test metadata; native provenance is not verified. Author expected numerical arrays yourself. It does not stage, approve, execute or validate extensions.",
+             schema(QJsonObject{{"input", object}}, QJsonArray{"input"})),
         tool("schema_get", "Read one of the authoritative extension manifest, numeric input or statistics output schemas before proposing changes.",
              schema(QJsonObject{{"schemaId", schemaId}}, QJsonArray{"schemaId"})),
         tool("knowledge_query", "Search bounded trusted guidance. Provide extensionId to include the active extension's validated manifest/form summary; source code is not returned.",
@@ -904,7 +1074,7 @@ QJsonObject AgentTaskRunner::hostRequest(const QString &operation, const QJsonOb
                 {"message", QStringLiteral("STALE_SOURCE_SNAPSHOT")}};
     }
     if (operation == QStringLiteral("document.inputs.query")
-        || operation == QStringLiteral("document.targets.query"))
+        || operation == QStringLiteral("document.targets.query") || operation == QStringLiteral("mesh.job.query"))
     {
         const QString documentId = parameters.value(QStringLiteral("target")).toObject()
             .value(QStringLiteral("documentId")).toString();
@@ -999,7 +1169,7 @@ bool AgentTaskRunner::readOnlyHostOperationAllowed(const QString &operation) con
         QStringLiteral("capabilities.query"), QStringLiteral("context.query"),
         QStringLiteral("document.inputs.query"), QStringLiteral("document.targets.query"),
         QStringLiteral("native.jobs.query"), QStringLiteral("native.job.query"),
-        QStringLiteral("native.job.recovery.query"), QStringLiteral("document.source.validate"),
+        QStringLiteral("native.job.recovery.query"), QStringLiteral("mesh.job.query"), QStringLiteral("document.source.validate"),
         QStringLiteral("events.read"), QStringLiteral("native.result.catalog.query"),
         QStringLiteral("native.result.channels.query"), QStringLiteral("native.result.series.query"),
         QStringLiteral("native.result.summary.query")};
@@ -1017,7 +1187,7 @@ bool AgentTaskRunner::readOnlyWorkflowOperationAllowed(const QString &operation)
         QStringLiteral("result.summary.query"), QStringLiteral("extension.list"),
         QStringLiteral("extension.candidate.get"), QStringLiteral("extension.version.get"),
         QStringLiteral("schema.get"), QStringLiteral("knowledge.query"),
-        QStringLiteral("execution.query")};
+        QStringLiteral("execution.query"), QStringLiteral("extension.scientific.input.inspect")};
     return allowed.contains(operation);
 }
 
@@ -1464,7 +1634,9 @@ void AgentTaskRunner::beginTask(const QString &goal, bool executeRequestedAction
         "Propose only changes needed by the user's goal. Use workflow_wait after starting a computation. On version conflict query again; do not repeat declined actions. "
         "For GUI models, use document_inputs and document_targets for bounded host reads, and native_jobs/native_job for registered solver job state. Use native_result_query for actual native catalog/channels/series/summary and quote artifact/channel/unit/source. Use workflow_native_result for workspace active/passive FE; reference playback is not native FE. Open results only with native_result_open using the registered jobId and SHA; it opens a separate result view and does not edit the source model. "
         "GUI document_propose accepts only its listed versioned Core commands with exact arguments. Core edits, analysis.run and analysis.cancel always go through host preview and apply only through the explicit task authorization or trusted user approval control. analysis.run must name the document and revision; analysis.cancel is bound by the host to the job's immutable source. Never use workflow_propose for native solver jobs. Automatic approval stays within the initially selected document UUIDs; a revision advances only after this runner's own accepted command, and selection changes never add documents. "
+        "Mesh generation, acceptance and cancellation use document_propose plus the shared Host controller; all need fresh manual GUI approval even in Auto. mesh.accept creates a new unbound document, preserves the source and never remaps old physical IDs. Use mesh_job with the exact original source UUID/revision to inspect an owned attempt. "
         "For generated extensions, inspect workflow_capabilities, schema_get and relevant knowledge first. Stage source and tests as a candidate; never claim it is active or validated until host results say so. Every extension stage, validation, activation, rollback or run requires explicit user approval, regardless of automatic task authorization. "
+        "Runtime parameter tools apply to the current native run: query its immutable identity and use workflow_capabilities plus knowledge_query for current limits and guidance, never values from a later document revision. runtime_parameters_propose saves only a preview; separate real trusted user approval in Run parameters is mandatory in every task mode. Queued is not accepted; only a matching accepted native receipt proves application. "
         "You have at most 12 model turns, 32 tool calls and 5 minutes. Finish with a short evidence-based summary. Respond in the user's language.");
     if (isReadOnly())
         systemInstructions = QStringLiteral(
@@ -1891,6 +2063,12 @@ void AgentTaskRunner::nextTool()
     }
     if (name == "native_result_open") { finishTool(hostRequest("native.result.open", arguments)); return; }
     if (name == "native_result_display") { finishTool(hostRequest("native.result.display", arguments)); return; }
+    if (name == "mesh_job")
+    {
+        finishTool(hostRequest("mesh.job.query", {{"target", QJsonObject{{"documentId", arguments.value("documentId")},
+            {"sessionEpoch", sessionEpoch}}}, {"expectedDocumentRevision", arguments.value("documentRevision")},
+            {"attemptId", arguments.value("attemptId")}})); return;
+    }
     if (name == "document_propose")
     {
         const QString command = arguments.value("command").toString();
@@ -1929,10 +2107,11 @@ void AgentTaskRunner::nextTool()
         propose("document", response.value("result").toObject(), authorizationSource);
         return;
     }
+    const bool isRuntime = name == "runtime_parameters_propose" || name == "runtime_parameters_query";
     const bool workflowTool = name.startsWith("workflow_") || name.startsWith("extension_")
-        || name == "schema_get" || name == "knowledge_query";
-    if (workflowTool && !workflow->isReady())
-    { failTool("WORKSPACE_CLOSED", tr("Open the connected workflow workspace before using workflow or extension tools.")); return; }
+        || name == "schema_get" || name == "knowledge_query" || name == "scientific_input_inspect" || isRuntime;
+    if (workflowTool && (!workflow || !workflow->isReady()))
+    { failTool("WORKSPACE_CLOSED", tr("Open the connected workflow workspace before using workflow, extension or runtime tools.")); return; }
     if (name == "workflow_telemetry") { submitWorkflow("telemetry.query", arguments); return; }
     if (name == "workflow_native_result")
     {
@@ -1945,6 +2124,8 @@ void AgentTaskRunner::nextTool()
     if (name == "workflow_capabilities") { submitWorkflow("capabilities.query"); return; }
     if (name == "task_plan_propose") { submitWorkflow("task.plan.propose", arguments); return; }
     if (name == "task_plan_query") { submitWorkflow("task.plan.query", arguments); return; }
+    if (name == "runtime_parameters_propose") { submitWorkflow("runtime.parameters.preview", arguments); return; }
+    if (name == "runtime_parameters_query") { submitWorkflow("runtime.parameters.query", arguments); return; }
     if (name == "workflow_jobs") { submitWorkflow("jobs.query"); return; }
     if (name == "workflow_recovery") { submitWorkflow("job.recovery.query", arguments); return; }
     if (name == "workflow_result") { submitWorkflow("results.query", arguments); return; }
@@ -1963,6 +2144,7 @@ void AgentTaskRunner::nextTool()
     if (name == "extension_list") { submitWorkflow("extension.list", arguments); return; }
     if (name == "extension_candidate_get") { submitWorkflow("extension.candidate.get", arguments); return; }
     if (name == "extension_version_get") { submitWorkflow("extension.version.get", arguments); return; }
+    if (name == "scientific_input_inspect") { submitWorkflow("extension.scientific.input.inspect", arguments); return; }
     if (name == "schema_get") { submitWorkflow("schema.get", arguments); return; }
     if (name == "knowledge_query") { submitWorkflow("knowledge.query", arguments); return; }
     if (name == "extension_propose")
@@ -2341,6 +2523,13 @@ void AgentTaskRunner::propose(const QString &origin, const QJsonObject &value,
         }
     }
 
+    // Rebinding introduces fresh physical analysis targets and always needs a
+    // real per-proposal user decision, including automatically authorized tasks.
+    if (origin == "document" && (value.value("command") == QJsonValue("mesh.rebind.static")
+        || value.value("command") == QJsonValue("mesh.generate")
+        || value.value("command") == QJsonValue("mesh.accept")
+        || value.value("command") == QJsonValue("mesh.cancel")))
+        inAutomaticScope = false;
     if (inAutomaticScope)
     {
         authorizePending(proposalId, true);

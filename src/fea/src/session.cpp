@@ -10,6 +10,7 @@
 #include <QThread>
 #include <QScopeGuard>
 #include <QCryptographicHash>
+#include <QDataStream>
 #include <QFile>
 #include <algorithm>
 #include <limits>
@@ -19,6 +20,7 @@
 #include <rml_file_io.h>
 #include <rproject_catalog.h>
 #include <rmodel_command_session.h>
+#include <rmodel_command_service.h>
 
 #include "session.h"
 #include "application.h"
@@ -69,6 +71,41 @@ QString publicationFileHash(const QString &path)
     if (!hash.addData(&file)) return {};
     return QString::fromLatin1(hash.result().toHex());
 }
+
+bool publicationFilesMatch(const RProjectCatalog::SourceBinding &binding)
+{
+    if (binding.sourceArtifacts.isEmpty()) return false;
+    for (const auto &artifact : binding.sourceArtifacts)
+        if (publicationFileHash(artifact.path) != artifact.sha256) return false;
+    return true;
+}
+
+}
+
+QByteArray Session::nativeResultValuesDigest(const RModel &model)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    QByteArray header;
+    QDataStream count(&header,QIODevice::WriteOnly);
+    count << quint32(model.getNVariables());
+    hash.addData(header);
+    for (uint i=0; i<model.getNVariables(); ++i)
+    {
+        const auto &variable=model.getVariable(i);
+        header.clear();
+        QDataStream metadata(&header,QIODevice::WriteOnly);
+        metadata << qint32(variable.getType()) << qint32(variable.getApplyType())
+                 << variable.getName() << variable.getUnits()
+                 << quint32(variable.getNVectors()) << quint32(variable.getNValues());
+        hash.addData(header);
+        for (uint vector=0; vector<variable.getNVectors(); ++vector)
+            for (uint value=0; value<variable.getNValues(); ++value)
+            {
+                const double scalar=variable.getValue(vector,value);
+                hash.addData(QByteArrayView(reinterpret_cast<const char *>(&scalar),sizeof(scalar)));
+            }
+    }
+    return hash.result();
 }
 
 Session::Session(QObject *parent)
@@ -2187,6 +2224,173 @@ const Model * Session::getModelPtr(uint position) const
 Model * Session::getModelPtr(uint position)
 {
     return &this->models[int(position)];
+}
+
+bool Session::isVerifiedMeshPublication(uint modelId) const
+{
+    return QThread::currentThread() == thread()
+        && verifiedMeshPublicationIdentities.contains(modelCommandStamp(modelId).first);
+}
+
+bool Session::isVerifiedArtifactPublication(uint modelId) const
+{
+    return QThread::currentThread() == thread()
+        && (isVerifiedMeshPublication(modelId)
+            || verifiedNativeResultPublicationIdentities.contains(modelCommandStamp(modelId).first));
+}
+
+bool Session::appendVerifiedNativeResult(const Model &model,
+                                         const RProjectCatalog::SourceBinding &sourceBinding,
+                                         QString *createdDocumentId, bool *documentMayExist,
+                                         QString *error)
+{
+    if (error) error->clear();
+    if (createdDocumentId) createdDocumentId->clear();
+    if (documentMayExist) *documentMayExist=false;
+    const auto reject=[error](const QString &message) { if (error) *error=message; return false; };
+    if (QThread::currentThread()!=thread() || !createdDocumentId || !documentMayExist || !commandHost)
+        return reject(tr("Verified result publication requires the GUI owner thread and output identities."));
+    if (!model.getLoadedSourceBinding() || *model.getLoadedSourceBinding()!=sourceBinding
+        || !publicationFilesMatch(sourceBinding))
+        return reject(tr("The verified native result source binding or artifact bytes changed before publication."));
+    if (!trylock()) return reject(tr("The document session is busy; verified result publication was not queued."));
+    auto unlock=qScopeGuard([this] { this->unlock(); });
+    if (ModelCommandHost::isMutationBlocked())
+        return reject(tr("Document mutation is blocked; verified result publication was not queued."));
+    const QString expectedWorkspace=projectWorkspace();
+    const QString expectedEpoch=commandHost->sessionEpoch();
+    QList<Model> next;
+    next.reserve(models.size()+1);
+    for (const auto &existing:std::as_const(models)) { next.append(existing); next.last().copyHistoryFrom(existing); }
+    next.append(model); next.last().copyHistoryFrom(model);
+    const auto &meshBefore=model.getProblemSetup().getMeshSetup();
+    next.last().initializeMeshInput();
+    const auto &meshAfter=next.last().getProblemSetup().getMeshSetup();
+    const bool normalized=meshAfter.getMinEdgeLength()!=meshBefore.getMinEdgeLength()
+                          || meshAfter.getMaxEdgeLength()!=meshBefore.getMaxEdgeLength()
+                          || model.hasNativeReadNormalization();
+    // Freeze decoded scientific content before registration or revision
+    // notifications can invoke observers. Their edits cannot become a baseline.
+    const QString expectedState=RModelCommandService::stateFingerprint(next.last());
+    const QByteArray expectedValues=nativeResultValuesDigest(next.last());
+    const QString identity=QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto initialStamp=qMakePair(identity,quint64(0));
+    const auto expectedStamp=qMakePair(identity,normalized ? quint64(1) : quint64(0));
+    {
+        QMutexLocker guard(&commandStampMutex);
+        auto stamps=commandStamps; stamps.append({identity,0});
+        models.swap(next); commandStamps.swap(stamps);
+    }
+    *createdDocumentId=identity; *documentMayExist=true;
+    this->unlock(); unlock.dismiss();
+    verifiedNativeResultPublicationIdentities.insert(identity);
+    auto clearPublication=qScopeGuard([this,identity] { verifiedNativeResultPublicationIdentities.remove(identity); });
+    const uint modelId=findModelByCommandIdentity(identity);
+    attachProjectDocument(modelId,identity,sourceBinding,QString());
+    const uint attachedId=findModelByCommandIdentity(identity);
+    if (attachedId==RConstants::eod || projectWorkspace()!=expectedWorkspace
+        || commandHost->sessionEpoch()!=expectedEpoch || modelCommandStamp(attachedId)!=initialStamp
+        || RModelCommandService::stateFingerprint(getModel(attachedId))!=expectedState
+        || nativeResultValuesDigest(getModel(attachedId))!=expectedValues
+        || !publicationFilesMatch(sourceBinding))
+        return reject(tr("RESULT_OPEN_UNKNOWN: registration callbacks changed the published result identity or scientific content."));
+    // Registration may legitimately detach a duplicate source as a copy.
+    // Freeze that source metadata before the first revision notification.
+    const auto expectedBinding=getModel(attachedId).getLoadedSourceBinding();
+    const QString expectedFileName=getModel(attachedId).getFileName();
+    if (normalized)
+    {
+        QPair<QString,quint64> changed;
+        if (!advanceModelCommandStamp(attachedId,&initialStamp,&changed) || changed!=expectedStamp)
+            return reject(tr("RESULT_OPEN_UNKNOWN: normalization could not advance the expected initial result revision."));
+        queueProjectRevisionUpdate(changed);
+    }
+    const uint registeredId=findModelByCommandIdentity(identity);
+    if (registeredId==RConstants::eod || projectWorkspace()!=expectedWorkspace
+        || commandHost->sessionEpoch()!=expectedEpoch || modelCommandStamp(registeredId)!=expectedStamp
+        || getModel(registeredId).getLoadedSourceBinding()!=expectedBinding
+        || getModel(registeredId).getFileName()!=expectedFileName
+        || RModelCommandService::stateFingerprint(getModel(registeredId))!=expectedState
+        || nativeResultValuesDigest(getModel(registeredId))!=expectedValues
+        || !publicationFilesMatch(sourceBinding))
+        return reject(tr("RESULT_OPEN_UNKNOWN: normalization callbacks changed the published result identity, source or scientific content."));
+    emit modelAdded(registeredId);
+    if (!trylock())
+        return reject(tr("RESULT_OPEN_UNKNOWN: the result was appended but callback reconciliation is busy."));
+    auto postUnlock=qScopeGuard([this] { this->unlock(); });
+    const uint resolvedId=findModelByCommandIdentity(identity);
+    if (resolvedId==RConstants::eod || resolvedId>=uint(models.size())
+        || projectWorkspace()!=expectedWorkspace || commandHost->sessionEpoch()!=expectedEpoch
+        || modelCommandStamp(resolvedId)!=expectedStamp
+        || getModel(resolvedId).getLoadedSourceBinding()!=expectedBinding
+        || getModel(resolvedId).getFileName()!=expectedFileName
+        || RModelCommandService::stateFingerprint(getModel(resolvedId))!=expectedState
+        || nativeResultValuesDigest(getModel(resolvedId))!=expectedValues
+        || !publicationFilesMatch(sourceBinding))
+        return reject(tr("RESULT_OPEN_UNKNOWN: publication callbacks changed the result identity, source, verified content or artifact bytes."));
+    return true;
+}
+
+bool Session::appendMeshCandidate(const QString &sourceDocumentId, const QString &sourceSessionEpoch,
+                                  quint64 sourceRevision, const QString &sourceStateSha256,
+                                  const RModel &candidate, uint *newModelId, QString *error,
+                                  QString *createdDocumentId, bool *documentMayExist)
+{
+    if (error) error->clear();
+    if (createdDocumentId) createdDocumentId->clear();
+    if (documentMayExist) *documentMayExist = false;
+    const auto reject = [error](const QString &message) { if (error) *error = message; return false; };
+    if (QThread::currentThread() != thread() || !newModelId)
+        return reject(tr("Mesh acceptance requires the GUI owner thread and an output identity."));
+    if (!this->commandHost || this->commandHost->sessionEpoch() != sourceSessionEpoch)
+        return reject(tr("The mesh source session changed."));
+    if (!this->trylock()) return reject(tr("The document session is busy; create a fresh acceptance preview."));
+    auto unlock = qScopeGuard([this] { this->unlock(); });
+    if (ModelCommandHost::isMutationBlocked())
+        return reject(tr("Document mutation is currently blocked; mesh acceptance was not queued."));
+    const uint sourceId = this->findModelByCommandIdentity(sourceDocumentId);
+    if (sourceId == RConstants::eod || sourceId >= uint(models.size())
+        || this->modelCommandStamp(sourceId) != qMakePair(sourceDocumentId, sourceRevision)
+        || RModelCommandService::stateFingerprint(models.at(int(sourceId))) != sourceStateSha256)
+        return reject(tr("The mesh source document no longer matches its approved version."));
+    if (candidate.getProblemTaskTree().getProblemTypeMask() != R_PROBLEM_NONE || candidate.getNVariables() != 0)
+        return reject(tr("A mesh candidate must remain unbound and contain no inherited results."));
+    Model accepted;
+    static_cast<RModel &>(accepted) = candidate;
+    accepted.setFileName(QString());
+    accepted.clearLoadedSourceBinding();
+    const QString expectedCandidateState = RModelCommandService::stateFingerprint(accepted);
+    const QString expectedWorkspace = this->projectWorkspace();
+    QList<Model> next;
+    next.reserve(models.size()+1);
+    for (const auto &existing : std::as_const(models)) { next.append(existing); next.last().copyHistoryFrom(existing); }
+    next.append(accepted);
+    const QString identity = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        QMutexLocker guard(&commandStampMutex);
+        auto stamps = commandStamps;
+        stamps.append({identity,0});
+        models.swap(next); commandStamps.swap(stamps);
+    }
+    if (createdDocumentId) *createdDocumentId = identity;
+    if (documentMayExist) *documentMayExist = true;
+    *newModelId = uint(models.size()-1);
+    this->unlock(); unlock.dismiss();
+    this->attachProjectDocument(*newModelId, identity, std::nullopt, QString());
+    verifiedMeshPublicationIdentities.insert(identity);
+    auto clearPublication = qScopeGuard([this, identity] { verifiedMeshPublicationIdentities.remove(identity); });
+    emit this->modelAdded(*newModelId);
+    if (!this->trylock()) return reject(tr("MESH_APPEND_UNKNOWN: candidate was appended but callback reconciliation is busy."));
+    auto postUnlock = qScopeGuard([this] { this->unlock(); });
+    const uint resolvedId = this->findModelByCommandIdentity(identity);
+    if (resolvedId == RConstants::eod || resolvedId >= uint(models.size())
+        || this->projectWorkspace() != expectedWorkspace
+        || this->commandHost->sessionEpoch() != sourceSessionEpoch
+        || this->modelCommandStamp(resolvedId) != qMakePair(identity, quint64(0))
+        || RModelCommandService::stateFingerprint(models.at(int(resolvedId))) != expectedCandidateState)
+        return reject(tr("MESH_APPEND_UNKNOWN: candidate publication callbacks changed its identity or verified content."));
+    *newModelId = resolvedId;
+    return true;
 }
 
 void Session::addModel(const Model &model)

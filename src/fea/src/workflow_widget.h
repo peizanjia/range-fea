@@ -22,6 +22,8 @@ class QCheckBox;
 class QTabWidget;
 class ControlMonitorWidget;
 class NativeResultsWidget;
+class GeometryCommandWidget;
+class MeshCommandWidget;
 class Session;
 
 //! A user-facing host of the actual persisted rod/beam workflow service.
@@ -49,6 +51,8 @@ signals:
     void openResultRequested(const QString &artifactPath);
 
 private:
+    GeometryCommandWidget *geometryCommands = nullptr;
+    MeshCommandWidget *meshCommands = nullptr;
     WorkflowProcess service;
     QTimer refreshTimer;
     QTabWidget *pages;
@@ -63,6 +67,8 @@ private:
     QTimer nativeJobTimer;
     QLineEdit *workspaceEdit;
     QCheckBox *trustedExtensions;
+    QCheckBox *runtimeUpdates;
+    QCheckBox *initialRuntimePause;
     QComboBox *modelChoice;
     QDoubleSpinBox *dt;
     QDoubleSpinBox *damping;

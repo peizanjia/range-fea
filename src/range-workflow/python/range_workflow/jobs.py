@@ -8,11 +8,92 @@ import math
 import os
 from pathlib import Path
 import threading
+import uuid
 
 from .service import WorkflowError, canonical, file_hash
 from .templates import TEMPLATES
 
 _NATIVE_API_VERSION = "range.workflow.native/v1"
+
+
+def _solve_with_runtime_control(service, job, directory, label, cancel, args, environment,
+                                variant_directory, context, gains, force_port):
+    """Create a trusted per-attempt channel before launching the native worker."""
+    if context is None:
+        raise WorkflowError("RUNTIME_UNSUPPORTED", "Runtime control requires bound native checkpoints")
+    task_id = str(uuid.uuid4())
+    run_id = job.get("attemptId", job["jobId"])
+    execution_path = variant_directory / "runtime-execution.json"
+    limits = [{"actuatorId": gains["actuator"]["id"], "minN": force_port["minimum"],
+               "maxN": force_port["maximum"], "rateNPerS": 0.0}]
+    session = service._runtime.register(job["jobId"], run_id, task_id, context["modelSha256"],
+                                        gains["gain"], limits, cancel)
+    try:
+        args = list(args) + ["--task-id=" + task_id, "--native-execution-state=" + str(execution_path)]
+        pause_sequence = job.get("parameters", {}).get("pauseAtAcceptedSeq")
+        if pause_sequence is not None:
+            args.append("--pause-at-accepted-seq=" + str(pause_sequence))
+        # The result journal uses an attempt ID. Runtime authority binds the
+        # logical job separately, so recovery does not overwrite journal identity.
+        environment = {**environment, **session.environment()}
+        with service._lock:
+            candidate = copy.deepcopy(service._state)
+            candidate["jobs"][job["jobId"]]["runtimeExecution"] = {
+                "runId": run_id, "taskId": task_id, "path": str(execution_path),
+                "modelSha256": context["modelSha256"], "context": copy.deepcopy(context)}
+            service._commit(candidate, "runtime.execution.bind", "bound", job_id=job["jobId"],
+                            parameters={"runId": run_id, "taskId": task_id})
+        return service.runner.run(args, directory, label, cancel, timeout=1800, env=environment)
+    finally:
+        service._runtime.unregister(job["jobId"], session)
+
+
+def _runtime_reference(service, job, source, result, linear, gains, initial_q, initial_v):
+    """Return an independent active reference with exactly accepted changes."""
+    from .runtime_reference import accepted_schedule, replay
+    with service._lock:
+        runtime = copy.deepcopy(service._state["jobs"][job["jobId"]].get("runtimeControl"))
+    if runtime is None:
+        return None
+    records = {}
+    if source and type(source.get("runtimeProposalRecords")) is dict:
+        records.update(copy.deepcopy(source["runtimeProposalRecords"]))
+    for collection in (source.get("runtimeControl") if source else None, runtime):
+        if collection:
+            for attempt in collection["attempts"].values():
+                for proposal_id, record in attempt["proposals"].items():
+                    if proposal_id in records and records[proposal_id]["parameters"] != record["parameters"]:
+                        raise WorkflowError("RUNTIME_CHANGED", "Runtime proposal history contains conflicting values")
+                    records[proposal_id] = record
+    attempt = runtime["attempts"][job.get("attemptId", job["jobId"])]
+    state = attempt["acceptedState"]
+    if state is None:
+        raise WorkflowError("RUNTIME_UNAVAILABLE", "Native runtime did not publish its accepted state")
+    from .runtime_parameters import make_parameters
+    initial_limits = attempt["limits"]
+    initial = make_parameters(state["parameters"]["fixedBaseControllerRevision"], 0, gains["gain"], initial_limits)
+    inputs, outputs = linear["inputs"], linear["outputs"]
+    force = next(item for item in inputs if item["id"] == gains["actuator"]["id"])
+    sensor = next(item for item in outputs if item["id"] == gains["sensor"]["id"])
+    # The frozen native export exposes physical generalized-force columns B
+    # and velocity sampling rows Sv (not state-space matrices).
+    import numpy as np
+    n = len(initial_q)
+    force_column = np.asarray(linear["B"], dtype=float)[:, inputs.index(force)]
+    velocity_row = np.asarray(linear["Sv"], dtype=float)[outputs.index(sensor), :]
+    try:
+        reference = replay(linear["M"], linear["C"], linear["K"], force_column, velocity_row,
+            initial_q, initial_v, dt=result["configuration"]["dt"], steps=result["totalSteps"],
+            initial_parameters=initial, schedule=accepted_schedule(state, records))
+    except (ValueError, TypeError, KeyError, np.linalg.LinAlgError):
+        raise WorkflowError("REFERENCE_MISMATCH", "Accepted runtime schedule cannot be independently verified") from None
+    result["runtimeControl"] = runtime
+    result["runtimeParameters"] = copy.deepcopy(state)
+    accepted_ids = {change["proposalId"] for change in state["history"]}
+    result["runtimeProposalRecords"] = {key: copy.deepcopy(record) for key, record in records.items()
+                                        if key in accepted_ids}
+    result["runtimeReference"] = reference
+    return reference
 
 
 def _read(path: Path) -> dict:
@@ -23,6 +104,21 @@ def _read(path: Path) -> dict:
     if not isinstance(result, dict):
         raise WorkflowError("INVALID_ARTIFACT", "Expected a JSON artifact object")
     return result
+
+
+def _controller_arguments(result):
+    from .recovery import control_arguments
+    return control_arguments(result)
+
+
+def _bind_runtime_codec(binding, source, directory):
+    if source is not None:
+        return (_verified_path(source, "runtimeParametersCodecPath")
+                if "runtimeParametersCodecPath" in source else None)
+    target = directory / "runtime_parameters.py"
+    bound = binding["runtimeParametersCodec"]
+    _copy_bound(Path(bound["path"]), target, bound["sha256"])
+    return target
 
 
 def _native(service, directory: Path, label: str, cancel, args: list[str]) -> dict:
@@ -85,9 +181,11 @@ def _publish_native_results(service, job, result, variant, native_path, accepted
     controller_id = accepted.get("controllerId")
     if not _native_controller_id(controller_id, control_enabled):
         raise WorkflowError("INVALID_NATIVE_RESPONSE", "Accepted MODEL has invalid persisted controller identity")
+    control_keys = ("controller", "controllerHost", "gains") + (
+        ("runtimeParametersCodec",) if "runtimeParametersCodecPath" in result else ())
     control_inputs = {key: {"path": result[key + "Path"],
                             "sha256": file_hash(Path(result[key + "Path"]))}
-                      for key in ("controller", "controllerHost", "gains")}
+                      for key in control_keys}
     control = {"enabled": control_enabled, "controllerId": controller_id,
                "controllerVersionSha256": hashlib.sha256(canonical(control_inputs)).hexdigest() if control_enabled else ""}
     if control_enabled:
@@ -106,7 +204,7 @@ def _publish_native_results(service, job, result, variant, native_path, accepted
     provenance_path = result_directory / "native-result.provenance.json"
     provenance_path.write_bytes(canonical(provenance))
     raw = service.runner.run([str(executable), "publish", "--result-directory", str(result_directory),
-                              "--latest", str(native_path), "--provenance-file", str(provenance_path)],
+                              "--latest", str(native_path), "--provenance-file", str(provenance_path), "--descriptor-only"],
                              directory, "publish-native-" + variant, cancel)
     try:
         responses = [json.loads(line, object_pairs_hook=_unique_object) for line in raw.splitlines()
@@ -123,7 +221,8 @@ def _publish_native_results(service, job, result, variant, native_path, accepted
             not _native_sha256(descriptor.get("manifestSha256")) or
             file_hash(manifest_path) != descriptor["manifestSha256"]):
         raise WorkflowError("INVALID_NATIVE_RESPONSE", "Native result publication did not bind its manifest")
-    manifest = _read(manifest_path)
+    from .native_manifest import load_native_manifest
+    manifest = load_native_manifest(manifest_path, descriptor["manifestSha256"])
     terminal_record = manifest.get("terminalModel", {})
     if (manifest.get("jobId") != job["jobId"] or manifest.get("artifactId") != descriptor.get("artifactId") or
             terminal_record.get("sha256") != terminal_sha or
@@ -379,7 +478,8 @@ def _seed_manifest_history(service, source, variant_directory, variant, extensio
         "catalog", {"limit": 1})
     if catalog.get("jobId") != source["jobId"] or catalog.get("artifactId") != descriptor.get("artifactId"):
         raise WorkflowError("ARTIFACT_IDENTITY_MISMATCH", "Completed source history manifest identity changed")
-    manifest = _read(manifest_path)
+    from .native_manifest import load_native_manifest
+    manifest = load_native_manifest(manifest_path, descriptor["manifestSha256"])
     frames = manifest.get("frames")
     if (not isinstance(frames, list) or not frames or not isinstance(frames[-1], dict) or
             manifest.get("jobId") != source["jobId"] or
@@ -780,6 +880,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
 
     registered, model_binding = _read_registered_source(
         service, source_id, binding, source.get("modelBinding") if (resume or recovering) else None)
+    runtime_codec_path = _bind_runtime_codec(binding, source, directory)
     descriptor = registered.get("descriptor")
     model_kind = registered.get("descriptor", {}).get("modelKind")
     if model_kind not in ("four-rod", "cantilever-beam") or configuration.get("model") != model_kind:
@@ -859,7 +960,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
         reference_path.write_bytes(canonical(reference))
         original_reference_path = reference_path
         analysis_definition = reference["analysis"]
-        service.runner.run([str(service.python), str(analysis_script), "--model", str(linear_path),
+        service.runner.run([str(service.python), "-B", str(analysis_script), "--model", str(linear_path),
                             "--output", str(analysis_path), "--modes", str(analysis_definition["modes"]),
                             "--boundary-indices-json", canonical(analysis_definition["boundaryIndices"]).decode(),
                             "--frequencies-json", "[0,5,15,30]"],
@@ -867,7 +968,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
         if _read(analysis_path).get("errors"):
             raise WorkflowError("ANALYSIS_FAILED", "Independent linear analysis reported errors")
         controller = reference["controller"]
-        service.runner.run([str(service.python), str(controller_path), "--model", str(linear_path),
+        service.runner.run([str(service.python), "-B", str(controller_path), "--model", str(linear_path),
                             "--target-damping", str(configuration["targetDamping"]),
                             "--sensor-id", controller["sensorId"], "--actuator-id", controller["actuatorId"],
                             "--output", str(gains_path)], directory, "gain-design", cancel)
@@ -879,7 +980,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
     if len(dofs) != len(initial_q) or len(dofs) != len(initial_v):
         raise WorkflowError("SOURCE_REFERENCE_FAILED", "Source initial state does not match exported coordinates")
     replay_path = directory / "reference.json"
-    replay_args = [str(service.python), str(controller_path), "--replay-model", str(linear_path),
+    replay_args = [str(service.python), "-B", str(controller_path), "--replay-model", str(linear_path),
                    "--gains", str(gains_path), "--dt", str(configuration["dt"]), "--steps", str(total),
                    "--initial-q-json", canonical(initial_q).decode(), "--output", str(replay_path)]
     replay_args += ["--initial-v-json", canonical(initial_v).decode()]
@@ -915,6 +1016,9 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
               "linearInputPath": str(linear_input_path), "linearInputSha256": file_hash(linear_input_path),
               "gainsPath": str(gains_path), "controllerPath": str(controller_path),
               "controllerHostPath": str(controller_host_path), "analysisPath": str(analysis_path)}
+    flags = source.get("controllerInterpreterFlags", []) if (resume or recovering) else ["-B"]
+    if flags:
+        result["controllerInterpreterFlags"] = copy.deepcopy(flags)
     if not resume and not recovering:
         result["sourceArtifacts"] = {name: {"path": str(path), "sha256": file_hash(path)} for name, path in
                                      (("sourceModel", source_snapshot_copy), ("sourceManifest", source_manifest_copy),
@@ -923,7 +1027,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
                                       ("linearInput", linear_input_path),
                                       ("linear", linear_path), ("gains", gains_path),
                                       ("controller", controller_path), ("controllerHost", controller_host_path),
-                                       ("analysis", analysis_path), ("sourceReference", original_reference_path))}
+                                      ("analysis", analysis_path), ("sourceReference", original_reference_path))}
     elif resume:
         result["sourceArtifacts"] = copy.deepcopy(source["sourceArtifacts"])
         for variant, artifact in prepared_inputs.items():
@@ -937,6 +1041,13 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
         result["sourceReference"] = source["sourceReference"]
         result["sourceReferencePath"] = source["sourceReferencePath"]
         result["preparedInputs"] = prepared_inputs
+
+    if runtime_codec_path is not None:
+        result["runtimeParametersCodecPath"] = str(runtime_codec_path)
+        result.setdefault("sourceArtifacts", {})["runtimeParametersCodec"] = {
+            "path": str(runtime_codec_path), "sha256": file_hash(runtime_codec_path)}
+    result["runtimeControlEnabled"] = bool(job.get("parameters", {}).get("runtimeControl") or
+        (source or {}).get("runtimeControlEnabled") or (source or {}).get("runtimeControl"))
 
     if recovering:
         result["nativeResults"] = copy.deepcopy(source.get("nativeResults", {}))
@@ -991,7 +1102,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
             from .recovery import record_progress
             record_progress(service, job["jobId"], directory, result,
                             variant=variant, phase="running", context=context)
-        args = [str(service.solver), "--file=" + str(native_path)]
+        args = [str(service.solver), "--file=" + str(native_path), "--log-quiet"]
         if resume or (recovering and recovery_selection.get("phase") == "checkpointed" and recovery_remaining > 0):
             args.append("--restart")
         if context is not None:
@@ -999,8 +1110,7 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
                      "--native-checkpoint-context-json=" + canonical(context).decode("utf-8")]
         if variant == "active":
             args += ["--control-program=" + str(service.python), "--control-timeout-ms=10000",
-                     "--control-args-json=" + canonical([str(controller_host_path), "--implementation", str(controller_path),
-                                                          "--gains", str(gains_path)]).decode()]
+                     "--control-args-json=" + canonical(_controller_arguments(result)).decode()]
         environment = os.environ.copy()
         prepared_sha = prepared_inputs[variant]["sha256"]
         input_snapshot_sha = (variant_contexts[variant]["modelSha256"]
@@ -1009,7 +1119,11 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
         if not recovering or recovery_remaining > 0:
             journal_environment, journal_path = _native_result_journal_environment(job, variant_directory)
             environment.update(journal_environment)
-            service.runner.run(args, directory, "solve-" + variant, cancel, env=environment)
+            if variant == "active" and result["runtimeControlEnabled"]:
+                _solve_with_runtime_control(service, job, directory, "solve-" + variant, cancel, args,
+                    environment, variant_directory, context, _read(gains_path), descriptor["ports"]["force"])
+            else:
+                service.runner.run(args, directory, "solve-" + variant, cancel, env=environment)
             journal_evidence = _verify_native_result_journal(
                 service, job, journal_path, variant_directory, variant, extension,
                 (recovery_selection.get("acceptedSeq", 0) + 1 if recovering and
@@ -1047,7 +1161,9 @@ def _run_imported_native_workflow(service, job: dict, directory: Path, cancel: t
         q, v = _source_dof_state(linear, accepted)
         if not np.isfinite(q).all() or not np.isfinite(v).all():
             raise WorkflowError("NONFINITE_RESULT", "Native FE result contains non-finite values")
-        predicted = replay["fullOrder" if variant == "active" else "passiveFullOrder"]
+        switched_reference = (_runtime_reference(service, job, source, result, linear, _read(gains_path),
+                              initial_q, initial_v) if variant == "active" else None)
+        predicted = switched_reference or replay["fullOrder" if variant == "active" else "passiveFullOrder"]
         q_difference = np.abs(q - np.asarray(predicted["q"], dtype=float))
         v_difference = np.abs(v - np.asarray(predicted["v"], dtype=float))
         translations = np.asarray([item["unit"] == "m" for item in dofs])
@@ -1172,13 +1288,13 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
         _copy_bound(directory / "active.ram", active_prepared_path, file_hash(directory / "active.ram"))
         service.runner.run([str(service.solver), "--file=" + str(directory / "active.ram"),
                             "--linear-model-output=" + str(linear_path)], directory, "linear-export", cancel)
-        service.runner.run([str(service.python), str(analysis_script), "--model", str(linear_path),
+        service.runner.run([str(service.python), "-B", str(analysis_script), "--model", str(linear_path),
                             "--output", str(analysis_path), "--modes", str(definition["modes"]),
                             "--boundary-indices-json", canonical([definition["boundary"]]).decode(),
                             "--frequencies-json", "[0,5,15,30]"], directory, "analysis", cancel)
         if _read(analysis_path).get("errors"):
             raise WorkflowError("ANALYSIS_FAILED", "Independent linear analysis reported errors")
-        service.runner.run([str(service.python), str(controller_path), "--model", str(linear_path),
+        service.runner.run([str(service.python), "-B", str(controller_path), "--model", str(linear_path),
                             "--target-damping", str(configuration["targetDamping"]), "--sensor-id", definition["sensor"],
                             "--actuator-id", definition["actuator"], "--output", str(gains_path)], directory, "gain-design", cancel)
         passive_prepared_path = directory / "passive-prepared.ram"
@@ -1190,6 +1306,7 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
                            "passive": {"path": str(passive_prepared_path), "sha256": file_hash(passive_prepared_path)}}
     linear = _read(linear_path)
     dofs = linear["dofs"]
+    runtime_codec_path = _bind_runtime_codec(binding, source, directory)
     model = configuration.get("model", "four-rod")
     definition = TEMPLATES[model]
     expected_dofs = definition["dofs"]
@@ -1207,7 +1324,7 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
                          if model == "four-rod" else 0.001)
             q0.append(float(d["globalDirection"][axis]) * amplitude if physical.startswith("U") else 0.0)
         reference_path = directory / "reference.json"
-        service.runner.run([str(service.python), str(controller_path), "--replay-model", str(linear_path),
+        service.runner.run([str(service.python), "-B", str(controller_path), "--replay-model", str(linear_path),
                             "--gains", str(gains_path), "--dt", str(configuration["dt"]), "--steps", str(total),
                             "--initial-q-json", canonical(q0).decode(), "--output", str(reference_path)],
                            directory, "independent-reference", cancel)
@@ -1253,6 +1370,9 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
               "gainsPath": str(gains_path), "controllerPath": str(controller_path),
               "controllerHostPath": str(controller_host_path),
               "analysisPath": str(analysis_path)}
+    flags = source.get("controllerInterpreterFlags", []) if (resume or recovering) else ["-B"]
+    if flags:
+        result["controllerInterpreterFlags"] = copy.deepcopy(flags)
     if recovering:
         result["sourceArtifacts"] = copy.deepcopy(source["sourceArtifacts"])
         result["templateSourceRef"] = source["templateSourceRef"]
@@ -1278,6 +1398,10 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
                                       ("linear", linear_path), ("gains", gains_path), ("controller", controller_path),
                                       ("controllerHost", controller_host_path), ("analysis", analysis_path),
                                       ("reference", reference_path))}
+    if runtime_codec_path is not None:
+        result["runtimeParametersCodecPath"] = str(runtime_codec_path)
+        result["sourceArtifacts"]["runtimeParametersCodec"] = {
+            "path": str(runtime_codec_path), "sha256": file_hash(runtime_codec_path)}
     mass, stiffness = np.asarray(linear["M"], dtype=float), np.asarray(linear["K"], dtype=float)
     extension = "ram"
     variant_contexts, selections = _initialize_attempt_baseline(
@@ -1319,7 +1443,7 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
         if context is not None:
             record_progress(service, job["jobId"], directory, result,
                             variant=variant, phase="running", context=context)
-        args = [str(service.solver), "--file=" + str(native_path)]
+        args = [str(service.solver), "--file=" + str(native_path), "--log-quiet"]
         restart = resume or (recovering and recovery_selection.get("phase") == "checkpointed" and recovery_remaining > 0)
         if restart:
             args.append("--restart")
@@ -1328,8 +1452,7 @@ def run_native_workflow(service, job: dict, directory: Path, cancel: threading.E
                      "--native-checkpoint-context-json=" + canonical(context).decode("utf-8")]
         if variant == "active":
             args += ["--control-program=" + str(service.python), "--control-timeout-ms=10000",
-                     "--control-args-json=" + canonical([str(controller_host_path), "--implementation", str(controller_path),
-                                                          "--gains", str(gains_path)]).decode()]
+                     "--control-args-json=" + canonical(_controller_arguments(result)).decode()]
         environment = os.environ.copy()
         input_snapshot_sha = (variant_contexts[variant]["modelSha256"]
                               if recovering and recovery_remaining == 0 else file_hash(native_path))

@@ -1067,7 +1067,10 @@ void MainWindow::onModelAdded(uint position)
     {
         this->session->setModelSelected(position,true);
     }
-    if (this->session->getModel(position).getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
+    // An approved mesh candidate is published as an intentionally unbound
+    // document. Its problem task must be chosen later, outside publication.
+    if (!this->session->isVerifiedMeshPublication(position)
+        && this->session->getModel(position).getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
     {
         ProblemTaskDialog problemTaskDialog(position,this);
         problemTaskDialog.exec();

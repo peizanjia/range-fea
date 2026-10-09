@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 
 #include <rbl_error.h>
 #include <rbl_logger.h>
@@ -25,6 +26,7 @@
 #include <rparallel_execution_context.h>
 #include <rsolver.h>
 #include <rstructural_thermal_fe_adapter.h>
+#include <rstructural_control_conditioner.h>
 #include "typed_control_task.h"
 
 #include "execution_event_journal.h"
@@ -33,6 +35,7 @@
 #include "native_result_journal.h"
 #include "native_accepted_checkpoint.h"
 #include "native_execution_gate.h"
+#include "runtime_control_bridge.h"
 #include "solver_task.h"
 
 namespace
@@ -379,6 +382,10 @@ void SolverTask::run(void)
     bool solverEntered = false;
     bool finalModelWritten = false;
     std::unique_ptr<ControlNdjsonTransport> controlTransport;
+    std::shared_ptr<RuntimeParameterGate> runtimeParameterGate;
+    std::optional<QString> frozenRuntimeProposal;
+    RuntimeParameterGate::State initialRuntimeState;
+    QJsonObject runtimeIdentity;
     const QString inputPath = QFileInfo(this->modelFileName).absoluteFilePath();
     const bool thermalMode = this->thermalMacrosteps > 0;
     const QString requestedThermalCheckpointPath = thermalMode
@@ -403,6 +410,14 @@ void SolverTask::run(void)
     };
     auto finishWithFailure = [&](const QString &message)
     {
+        if (runtimeParameterGate && frozenRuntimeProposal)
+        {
+            const auto rolledBack=runtimeParameterGate->onRollback(*frozenRuntimeProposal);
+            frozenRuntimeProposal.reset();
+            if (rolledBack.receipt && this->runtimeControlBridge)
+                this->runtimeControlBridge->publish(*rolledBack.receipt);
+        }
+        if (this->runtimeControlBridge) this->runtimeControlBridge->stop();
         reportProgressUnavailable();
         if (loggerIndented)
         {
@@ -697,6 +712,9 @@ void SolverTask::run(void)
         if (model.getProblemSetup().getStructuralThermalControlSetup().enabled)
             throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                          "Enabled thermal control setup requires --thermal-steps and --thermal-checkpoint.");
+        if (model.getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "No solver task is configured. A remeshed candidate requires explicit physics rebinding before analysis.");
         if (this->restart)
         {
             model.getProblemSetup().setRestart(true);
@@ -783,6 +801,58 @@ void SolverTask::run(void)
                     ? RStructuralInteractionSetup::getSensorUnit(sensor.quantity) : sensor.unit);
             for (const auto &actuator : interaction.getActuators())
                 config.actuatorIds.append(actuator.id);
+            if (this->runtimeControlBridge)
+            {
+                namespace Runtime=RStructuralControlRuntimeParameters;
+                if (!nativeCheckpointContext || !this->nativeExecutionGate ||
+                    interaction.getSensors().empty() || interaction.getActuators().size()!=1 ||
+                    model.getProblemSetup().getStructuralCableSetup().enabled ||
+                    model.getProblemSetup().getStructuralPiezoSetup().enabled)
+                    throw std::invalid_argument("Runtime control requires scalar linear Newmark source and checkpoint identity");
+                bool hasPhysicalVelocity = false;
+                for (const auto &sensor : interaction.getSensors())
+                    if (sensor.quantity==RStructuralSensorQuantity::Velocity &&
+                        config.sensorUnits.value(sensor.id)==QStringLiteral("m/s"))
+                        hasPhysicalVelocity = true;
+                if (!hasPhysicalVelocity)
+                    throw std::invalid_argument("Runtime control source requires a physical scalar velocity sensor in m/s");
+                std::vector<Runtime::ActuatorLimit> limits;
+                for (const auto &actuator : interaction.getActuators())
+                {
+                    if (actuator.type!=RStructuralActuatorType::NodalForce || actuator.unit!=QStringLiteral("N") ||
+                        !std::isfinite(actuator.minimum) || !std::isfinite(actuator.maximum) ||
+                        std::isnan(actuator.rateLimit) || actuator.rateLimit<=0.0)
+                        throw std::invalid_argument("Runtime control source requires NodalForce in N, finite amplitude and positive or unlimited model rate");
+                    // Positive infinity is the model's unlimited rate. The
+                    // runtime codec expresses that same policy as zero; a
+                    // model rate of zero (held force) remains unsupported.
+                    limits.push_back({actuator.id,actuator.minimum,actuator.maximum,
+                                      std::isinf(actuator.rateLimit) ? 0.0 : actuator.rateLimit});
+                }
+                initialRuntimeState=Runtime::fresh(controlRevision,this->runtimeControlBridge->bootstrapGain(),limits);
+                if (this->restart && initialRestartData.available && initialRestartData.controlAvailable)
+                {
+                    const auto envelope=RStructuralControlStateEnvelope::deserialize(initialRestartData.controlControllerState);
+                    if (!envelope.runtimeParametersState.isEmpty())
+                        initialRuntimeState=Runtime::deserialize(envelope.runtimeParametersState);
+                }
+                if (initialRuntimeState.parameters.fixedBaseControllerRevision!=controlRevision ||
+                    (!initialRuntimeState.history.empty() &&
+                     (initialRuntimeState.history.back().appliedSeq>acceptedBaselineSequence ||
+                      initialRuntimeState.history.back().acceptedTimeS>acceptedBaselineTimeS)))
+                    throw std::invalid_argument("Runtime checkpoint parameters do not match the immutable controller/accepted boundary");
+                const QString jobId=this->runtimeControlBridge->jobId();
+                const QString taskId=this->runtimeControlBridge->taskId();
+                RuntimeParameterGate::Identity identity{jobId,this->runtimeControlBridge->runId(),taskId,
+                    nativeCheckpointContext->modelSha256,controlRevision};
+                runtimeIdentity=RuntimeControlBridge::identityJson(identity);
+                config.runtimeIdentity=runtimeIdentity;
+                QString bridgeError;
+                if (!this->runtimeControlBridge->initialize(identity,initialRuntimeState,limits,&bridgeError))
+                    throw std::invalid_argument(bridgeError.toStdString());
+                runtimeParameterGate=this->runtimeControlBridge->parameterGate();
+                config.maxLineBytes=65536;
+            }
             controlTransport.reset(new ControlNdjsonTransport(std::move(config)));
             QString transportError;
             if (!controlTransport->start(&transportError))
@@ -937,6 +1007,34 @@ void SolverTask::run(void)
             solver.setStructuralControlCallback(controlSetup.controllerId,controlRevision,
                 [&](const RStructuralControlObservation &observation)
                 {
+                    QJsonObject runtimeParameters;
+                    RStructuralControlDecision decision;
+                    if (runtimeParameterGate)
+                    {
+                        namespace Runtime=RStructuralControlRuntimeParameters;
+                        if (this->nativeExecutionGate->isCancelled())
+                            throw std::invalid_argument("Runtime control run was cancelled before compute");
+                        const auto actual=observation.priorRuntimeParametersState.isEmpty()
+                            ? initialRuntimeState : Runtime::deserialize(observation.priorRuntimeParametersState);
+                        if ((observation.priorRuntimeParametersState.isEmpty() && actual.parameters.revision!=0) ||
+                            Runtime::serialize(actual)!=Runtime::serialize(runtimeParameterGate->acceptedState()))
+                            throw std::invalid_argument("Runtime observation does not match the accepted gate state");
+                        if (frozenRuntimeProposal)
+                            throw std::invalid_argument("Runtime callback replay before the prior transaction committed or rolled back");
+                        auto effective=actual.parameters;
+                        if (const auto frozen=runtimeParameterGate->freezeCandidate(actual))
+                        {
+                            frozenRuntimeProposal=frozen->proposalId;
+                            effective=frozen->parameters;
+                            decision.runtimeParameterCandidate=effective;
+                            decision.runtimeParameterProposalId=frozen->proposalId;
+                        }
+                        if (observation.priorRuntimeParametersState.isEmpty())
+                            decision.initialRuntimeParametersState=Runtime::serialize(initialRuntimeState);
+                        runtimeParameters={{QStringLiteral("schema"),QStringLiteral("range.runtime-parameters/v1")},
+                            {QStringLiteral("identity"),runtimeIdentity},
+                            {QStringLiteral("parameters"),RuntimeControlBridge::parametersJson(effective)}};
+                    }
                     QJsonObject acceptedState;
                     if (!observation.priorControllerState.isEmpty())
                     {
@@ -956,10 +1054,11 @@ void SolverTask::run(void)
                     QString error;
                     if (!controlTransport->compute(nextControlStepId,observation.acceptedTime,
                                                    observation.nextTime-observation.acceptedTime,
-                                                   values,acceptedState,reply,&error))
+                                                   values,acceptedState,reply,&error,runtimeParameters))
                         throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                                      "ControlComputeFailed: %s",qPrintable(error));
-                    RStructuralControlDecision decision;
+                    if (runtimeParameterGate && this->nativeExecutionGate->isCancelled())
+                        throw std::invalid_argument("Runtime control run was cancelled during compute");
                     QMap<QString,double> commandsById;
                     for (const auto &command : reply.commands)
                         commandsById.insert(command.actuatorId,command.force);
@@ -974,6 +1073,32 @@ void SolverTask::run(void)
             solver.setStructuralControlStepObserver(
                 [&](const RStructuralControlStepRecord &record)
                 {
+                    if (runtimeParameterGate)
+                    {
+                        namespace Runtime=RStructuralControlRuntimeParameters;
+                        // Entry into this observer proves the solver transaction
+                        // is public. Even decoding failure must not reject it as
+                        // though a trial had rolled back.
+                        const bool appliedRuntimeProposal=bool(frozenRuntimeProposal);
+                        frozenRuntimeProposal.reset();
+                        const auto committed=Runtime::deserialize(record.runtimeParametersState);
+                        if (appliedRuntimeProposal)
+                        {
+                            // This observer runs after the public step commit. Never
+                            // turn a notification failure into rollback of that step.
+                            if (committed.history.empty() || committed.history.back().appliedSeq!=record.appliedSeq ||
+                                committed.history.back().acceptedTimeS!=record.nextTime)
+                                throw std::invalid_argument("Runtime receipt does not match the actual committed record");
+                            const auto result=runtimeParameterGate->onCommitted(committed);
+                            if (result.error!=RuntimeParameterGate::Error::None || !result.receipt)
+                                throw std::invalid_argument("Runtime gate rejected the actual committed transaction state");
+                            QString publishError;
+                            if (!this->runtimeControlBridge->publish(*result.receipt,&publishError))
+                                throw std::invalid_argument(publishError.toStdString());
+                        }
+                        else if (Runtime::serialize(committed)!=Runtime::serialize(runtimeParameterGate->acceptedState()))
+                            throw std::invalid_argument("Committed runtime state changed without a frozen proposal");
+                    }
                     QJsonArray requested;
                     for (const auto &command : record.requestedCommands)
                         requested.append(QJsonObject{{QStringLiteral("actuatorId"),command.actuatorId},
@@ -1028,6 +1153,7 @@ void SolverTask::run(void)
             });
         solverEntered = true;
         solver.run();
+        if (this->runtimeControlBridge) this->runtimeControlBridge->stop();
         if (this->nativeExecutionGate)
         {
             QString completionGateError;

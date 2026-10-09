@@ -2,6 +2,13 @@ qt_add_executable(range-workflow-native native/main.cpp native/import_model.cpp 
 target_link_libraries(range-workflow-native PRIVATE range-model-lib range-solver-lib Qt6::Core)
 set_target_properties(range-workflow-native PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
 install(TARGETS range-workflow-native RUNTIME DESTINATION bin COMPONENT Application)
+if(WIN32)
+    qt_add_executable(range-workflow-isolation-launcher native/isolation_launcher.cpp native/isolation_launcher.h)
+    target_compile_definitions(range-workflow-isolation-launcher PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_libraries(range-workflow-isolation-launcher PRIVATE Qt6::Core advapi32 userenv kernel32 shell32 ole32)
+    set_target_properties(range-workflow-isolation-launcher PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
+    install(TARGETS range-workflow-isolation-launcher RUNTIME DESTINATION bin COMPONENT Application)
+endif()
 install(DIRECTORY python/ DESTINATION share/range-workflow COMPONENT Application
     FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "__pycache__" EXCLUDE)
 install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
@@ -33,6 +40,11 @@ endif()
 
 if(RANGE_BUILD_TESTS)
     find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    foreach(_read_suite native_manifest read_query_lane read_transport mesh_client scientific_runtime runtime_verification scientific_input_inspection)
+        add_test(NAME tst_workflow_${_read_suite} COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_read_suite}.py" -v)
+        set_tests_properties(tst_workflow_${_read_suite} PROPERTIES TIMEOUT 60)
+    endforeach()
     foreach(_task_suite task_plan task_scheduler knowledge)
         add_test(NAME tst_workflow_${_task_suite} COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_task_suite}.py" -v)
@@ -108,13 +120,79 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_workflow_extensions COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_extensions.py" -v)
     set_tests_properties(tst_workflow_extensions PROPERTIES TIMEOUT 120)
+    if(RANGE_PRIVATE_PYTHON_DIRECTORY)
+        add_test(NAME tst_workflow_scientific_contract COMMAND "${RANGE_PRIVATE_PYTHON_DIRECTORY}/python.exe" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scientific_contract.py" -v)
+        add_test(NAME tst_workflow_scientific_extensions COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scientific_extensions.py" -v)
+        set_tests_properties(tst_workflow_scientific_contract PROPERTIES TIMEOUT 60)
+        set_tests_properties(tst_workflow_scientific_extensions PROPERTIES TIMEOUT 180
+            ENVIRONMENT "RANGE_TEST_PRIVATE_PYTHON=${RANGE_PRIVATE_PYTHON_DIRECTORY}/python.exe")
+        add_test(NAME tst_workflow_scientific_integration COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scientific_integration.py"
+            --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+            --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+            --python "${RANGE_PRIVATE_PYTHON_DIRECTORY}/python.exe" -v)
+        set_tests_properties(tst_workflow_scientific_integration PROPERTIES TIMEOUT 600)
+        if(WIN32)
+            set_tests_properties(tst_workflow_scientific_integration PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endif()
     add_test(NAME tst_workflow_telemetry COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_telemetry.py" -v)
     set_tests_properties(tst_workflow_telemetry PROPERTIES TIMEOUT 60)
     add_test(NAME tst_workflow_series_analysis COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_analysis.py" -v)
+    add_test(NAME tst_workflow_runtime_parameters COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_parameters.py" -v)
+    add_test(NAME tst_workflow_runtime_control COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_control.py" -v)
+    add_test(NAME tst_workflow_runtime_reference COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_reference.py" -v)
+    add_test(NAME tst_workflow_runtime_manager COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_manager.py" -v)
+    add_test(NAME tst_workflow_runtime_control_integration COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_control_integration.py"
+        --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+        --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+        --python "${Python3_EXECUTABLE}" -v)
+    set_tests_properties(tst_workflow_runtime_control_integration PROPERTIES TIMEOUT 180)
+    add_test(NAME tst_workflow_runtime_interrupt COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_interrupt.py"
+        --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+        --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+        --python "${Python3_EXECUTABLE}" -v)
+    set_tests_properties(tst_workflow_runtime_interrupt PROPERTIES TIMEOUT 240)
+    foreach(runtime_story IN ITEMS failure final_receipt)
+        add_test(NAME tst_workflow_runtime_${runtime_story} COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_${runtime_story}.py"
+            --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+            --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+            --python "${Python3_EXECUTABLE}" -v)
+        set_tests_properties(tst_workflow_runtime_${runtime_story} PROPERTIES TIMEOUT 180)
+        if(WIN32)
+            set_tests_properties(tst_workflow_runtime_${runtime_story} PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
+    if(WIN32)
+        set_tests_properties(tst_workflow_runtime_control_integration tst_workflow_runtime_interrupt PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    set_tests_properties(tst_workflow_runtime_parameters tst_workflow_runtime_control PROPERTIES TIMEOUT 30)
     add_test(NAME tst_workflow_series_service COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_service.py" -v)
+    add_test(NAME tst_workflow_series_workbench COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_workbench.py" -v)
+    add_test(NAME tst_workflow_series_workbench_integration COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_workbench_integration.py"
+        --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+        --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9" --python "${Python3_EXECUTABLE}" -v)
+    set_tests_properties(tst_workflow_series_workbench_integration PROPERTIES TIMEOUT 180)
+    if(WIN32)
+        set_tests_properties(tst_workflow_series_workbench_integration PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(tst_workflow_series_analysis tst_workflow_series_service PROPERTIES TIMEOUT 60)
     add_test(NAME tst_workflow_project_catalog COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_project_catalog.py"

@@ -4,7 +4,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
+#include <QVector>
 
+#include <rgeometry_candidate_service.h>
 #include <rml_boundary_condition.h>
 #include <rml_material.h>
 #include <rml_model.h>
@@ -18,8 +20,40 @@ class RModelCommandService
 public:
     struct Delta
     {
-        enum class Kind { None, Modal, StructuralDynamics, Material, Boundary };
+        struct MeshRebind
+        {
+            struct GroupMaterial
+            {
+                uint physicalId = 0;
+                RMaterial before;
+                RMaterial after;
+            };
+            struct PointTarget
+            {
+                RPoint point;
+                uint elementPhysicalId = 0;
+                uint nodePhysicalId = 0;
+            };
+            RProblemTaskItem beforeTask;
+            RProblemTaskItem afterTask;
+            RProblemSetup beforeSetup;
+            RProblemSetup afterSetup;
+            RTimeSolver beforeTime;
+            RTimeSolver afterTime;
+            QVector<GroupMaterial> materials;
+            QVector<PointTarget> targets;
+            QString beforeGeometrySha256;
+            QString afterGeometrySha256;
+            QString beforeStateSha256;
+            QString afterStateSha256;
+            QString beforeBindingSha256;
+            QString afterBindingSha256;
+            QJsonObject report;
+        };
+        enum class Kind { None, Modal, StructuralDynamics, Material, Boundary, Geometry, MeshRebind };
         Kind kind = Kind::None;
+        MeshRebind meshRebind;
+        RGeometryCandidateService::GeometryDelta geometry;
         uint physicalId = 0;
         RBoundaryConditionType boundaryType = R_BOUNDARY_CONDITION_NONE;
         bool hadBeforeBoundary = false;
@@ -51,6 +85,10 @@ public:
         QJsonObject after;
         QJsonArray changedPaths;
         QJsonArray diagnostics;
+        QJsonObject report;
+        QJsonObject readSet;
+        QJsonObject units;
+        QJsonObject invalidation;
         QString fingerprint;
         Delta delta;
     };
@@ -67,7 +105,7 @@ public:
     static QJsonObject modalParameters(const RModalSetup &setup);
     static QJsonObject structuralDynamicsParameters(const RStructuralDynamicsSetup &setup);
     //! Hash the full supported edit surface (analysis, time grid, materials,
-    //! boundary conditions, and stable target identities) for journal binding.
+    //! boundary conditions, all native geometry, and stable target identities) for journal binding.
     static QString stateFingerprint(const RModel &model);
     static QJsonObject capabilities(const RModel &model);
     static QJsonObject context(const RModel &model, const QString &sourceId,

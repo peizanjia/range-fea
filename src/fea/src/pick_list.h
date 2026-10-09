@@ -60,6 +60,9 @@ class PickList : public QObject
         //! Remove items with given modelID from the list.
         void removeItems(uint modelID);
 
+        //! Remove picks belonging to deleted groups of the specified type.
+        void removeItems(uint modelID, REntityGroupType entityType);
+
         //! Remove items for a deleted model and reindex picks for surviving models.
         void removeModelItemsAndReindex(uint removedModelID);
 

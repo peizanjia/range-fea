@@ -3,6 +3,16 @@
 #include "application.h"
 #include "session.h"
 #include "workflow_process.h"
+#include "series_plot_widget.h"
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
+#include <QScrollArea>
+#include <QTabWidget>
 
 #include <QComboBox>
 #include <QCoreApplication>
@@ -20,11 +30,13 @@
 #include <QTreeWidgetItem>
 #include <QTreeWidgetItemIterator>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTest>
 
 #include <rml_model.h>
 
 #include <functional>
+#include <cmath>
 
 namespace
 {
@@ -39,6 +51,14 @@ bool spinUntil(const std::function<bool()> &predicate, int timeoutMs)
         QTest::qWait(10);
     }
     return predicate();
+}
+
+void clickVisible(QPushButton *button)
+{
+    for (QWidget *ancestor = button->parentWidget(); ancestor; ancestor = ancestor->parentWidget())
+        if (auto *scroll = qobject_cast<QScrollArea *>(ancestor)) scroll->ensureWidgetVisible(button);
+    QCoreApplication::processEvents();
+    QTest::mouseClick(button, Qt::LeftButton);
 }
 
 bool requestWorkflow(WorkflowProcess *workflow, const QString &operation,
@@ -268,7 +288,7 @@ bool previewAndApproveWidgetAction(ExtensionWidget *widget, const QString &butto
         return false;
     }
     result->clear();
-    action->click();
+    if (widget->isVisible()) clickVisible(action); else action->click();
     if (!spinUntil([approve] { return approve->isEnabled(); }, 30000))
     {
         if (error) *error = QStringLiteral("The GUI did not produce an approval preview for %1.").arg(expectedCommand);
@@ -282,7 +302,7 @@ bool previewAndApproveWidgetAction(ExtensionWidget *widget, const QString &butto
         if (error) *error = QStringLiteral("Expected preview for %1 but got %2.").arg(expectedCommand, previewCommand);
         return false;
     }
-    approve->click();
+    if (widget->isVisible()) clickVisible(approve); else approve->click();
     if (!spinUntil([result, &expectedResult] { return result->toPlainText().contains(expectedResult); }, 90000))
     {
         if (error) *error = QStringLiteral("The GUI job result did not contain %1. Last result: %2")
@@ -316,6 +336,508 @@ class TestExtensionWidget : public QObject
 {
     Q_OBJECT
 private slots:
+    void scientificRuntimeRequiredFailureRetiresReadyReceiptAndApproval()
+    {
+        for(const auto &code:{QString("RUNTIME_VERIFICATION_REQUIRED"),QString("RUNTIME_VERIFICATION_IN_PROGRESS")})
+        {
+            WorkflowProcess service; ExtensionWidget widget(&service);
+            widget.runtimeVerificationReady=true;
+            widget.runtimeVerificationGeneration="old-generation";
+            widget.runtimeVerificationId="old-receipt";
+            widget.runtimeVerificationRequest="old-poll";
+            widget.runtimeVerificationTimer->start();
+            widget.currentPreview={{"previewId","old-approved-candidate"}};
+            widget.commandInFlight=true;
+            ExtensionWidget::PendingRequest context{ExtensionWidget::RequestKind::CommandPreview,{}};
+            context.operation="command.preview";
+            widget.pendingRequests.insert("failed-preview",context);
+            widget.onRequestFailed("failed-preview","command.preview",code,"Private environment changed");
+            QVERIFY(!widget.runtimeVerificationReady); QVERIFY(!widget.commandInFlight);
+            QVERIFY(widget.runtimeVerificationGeneration.isEmpty()); QVERIFY(widget.runtimeVerificationId.isEmpty());
+            QVERIFY(widget.runtimeVerificationRequest.isEmpty()); QVERIFY(!widget.runtimeVerificationTimer->isActive());
+            QVERIFY(widget.currentPreview.isEmpty()); QVERIFY(!widget.approveButton->isEnabled());
+        }
+    }
+    void scientificRuntimeReceiptRejectsStaleWorkspaceAndGeneration()
+    {
+        WorkflowProcess service;
+        ExtensionWidget widget(&service);
+        widget.runtimeVerificationGeneration = "current-generation";
+        const QJsonObject receipt{{"verificationId", "receipt"}, {"state", "ready"}, {"isCurrent", true},
+            {"runtimeHash", "runtime-hash"}, {"expectedEnvironmentStamp", "stamp"}, {"profile", "packaged"},
+            {"verifiedAt", "2026-10-09T00:00:00Z"}, {"fullFileVerify", QJsonObject{{"verifiedFiles", true},
+                {"runtimeHash", "runtime-hash"}, {"environmentStamp", "stamp"}}}};
+        const auto deliver = [&widget](const QString &generation, const QString &workspace, const QJsonObject &value) {
+            ExtensionWidget::PendingRequest context{ExtensionWidget::RequestKind::RuntimeVerifyPoll, workspace};
+            context.intent = generation; context.operation = "extension.runtime.verification.query";
+            widget.pendingRequests.insert("reply", context);
+            widget.onReply("reply", context.operation, value);
+        };
+        deliver("old-generation", {}, receipt);
+        QVERIFY(!widget.runtimeVerificationReady);
+        widget.observedWorkspace = "old-workspace";
+        deliver("current-generation", "old-workspace", receipt);
+        QVERIFY(!widget.runtimeVerificationReady); // Service configuration belongs to another workspace.
+        widget.observedWorkspace.clear();
+        deliver("current-generation", {}, receipt);
+        QVERIFY(widget.runtimeVerificationReady);
+        QVERIFY(widget.runtimeVerificationMessage.contains("2026-10-09"));
+        auto changed = receipt; changed.insert("isCurrent", false); changed.insert("state", "failed");
+        changed.insert("error", QJsonObject{{"code", "RUNTIME_CHANGED"}, {"message", "stamp changed"}});
+        widget.currentPreview = {{"previewId", "stale-preview"}};
+        deliver("current-generation", {}, changed);
+        QVERIFY(!widget.runtimeVerificationReady);
+        QVERIFY(widget.currentPreview.isEmpty());
+        QVERIFY(!widget.runtimeVerificationTimer->isActive());
+    }
+
+    void actualNativeScientificPreviewPlotsAndWorkspaceSwitch()
+    {
+        if (qEnvironmentVariable("RANGE_SCIENTIFIC_GUI_ACCEPTANCE") != "1")
+            QSKIP("Explicit frozen-runtime/native GUI acceptance is enabled by RANGE_SCIENTIFIC_GUI_ACCEPTANCE=1.");
+#if defined(RANGE_SCIENTIFIC_PYTHON) && defined(RANGE_SCIENTIFIC_PACKAGE) && defined(RANGE_SCIENTIFIC_SOLVER) && defined(RANGE_SCIENTIFIC_NATIVE) && defined(RANGE_SCIENTIFIC_EXAMPLES)
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const QString evidence = qEnvironmentVariable("RANGE_SCIENTIFIC_GUI_EVIDENCE_DIRECTORY");
+        const QString reuse = qEnvironmentVariable("RANGE_SCIENTIFIC_GUI_REUSE_FIXTURE");
+        const QString fixtureRoot = reuse.isEmpty() ? fixture.path() : QFileInfo(reuse).absoluteFilePath();
+        if (reuse.isEmpty() && !evidence.isEmpty())
+        {
+            fixture.setAutoRemove(false);
+            QVERIFY(QDir().mkpath(evidence));
+            QFile location(evidence + "/scientific-fixture-location.json");
+            QVERIFY(location.open(QIODevice::WriteOnly));
+            location.write(QJsonDocument(QJsonObject{{"root", fixtureRoot}}).toJson());
+        }
+        auto config = WorkflowProcess::defaultConfiguration(fixtureRoot + "/workspace");
+        const auto configuredPath = [](const char *environmentName, const char *compiledPath) {
+            const QString overridePath = qEnvironmentVariable(environmentName);
+            return overridePath.isEmpty() ? QString::fromUtf8(compiledPath) : overridePath;
+        };
+        config.python = configuredPath("RANGE_TEST_SCIENTIFIC_PYTHON", RANGE_SCIENTIFIC_PYTHON);
+        config.packageDirectory = configuredPath("RANGE_TEST_SCIENTIFIC_PACKAGE", RANGE_SCIENTIFIC_PACKAGE);
+        config.solver = configuredPath("RANGE_TEST_SCIENTIFIC_SOLVER", RANGE_SCIENTIFIC_SOLVER);
+        config.native = configuredPath("RANGE_TEST_SCIENTIFIC_NATIVE", RANGE_SCIENTIFIC_NATIVE);
+        config.examples = configuredPath("RANGE_TEST_SCIENTIFIC_EXAMPLES", RANGE_SCIENTIFIC_EXAMPLES);
+        config.trustedExtensions = true;
+        config.requestTimeoutMs = 30000;
+        for (const auto &path : {config.python, config.solver, config.native})
+        {
+            const QFileInfo info(path);
+            QVERIFY2(info.isAbsolute() && info.isFile(), qPrintable(path));
+        }
+        for (const auto &path : {config.packageDirectory, config.examples})
+        {
+            const QFileInfo info(path);
+            QVERIFY2(info.isAbsolute() && info.isDir(), qPrintable(path));
+        }
+        QString helper = qEnvironmentVariable("RANGE_TEST_SCIENTIFIC_HELPER");
+        if (helper.isEmpty())
+            helper = QDir(QString::fromUtf8(RANGE_SCIENTIFIC_PACKAGE))
+                .absoluteFilePath("../tests/scientific_widget_bootstrap.py");
+        const QFileInfo helperInfo(helper);
+        QVERIFY2(helperInfo.isAbsolute() && helperInfo.isFile(), qPrintable(helper));
+        QProcess bootstrap;
+        // -I follows the private runtime's _pth import policy; the helper adds
+        // only the reviewed SDK/test directories, never ambient PYTHONPATH.
+        if (!QFileInfo(fixtureRoot + "/fixture.json").isFile())
+        {
+        bootstrap.start(config.python, {"-I", "-B", "-c",
+            "import runpy,sys; p=sys.argv.pop(1); runpy.run_path(p,run_name='__main__')",
+            helper, "--root", fixtureRoot, "--solver", config.solver, "--native", config.native,
+            "--examples", config.examples, "--python", config.python,
+            "--package", config.packageDirectory});
+        QVERIFY(bootstrap.waitForStarted(10000));
+        QVERIFY2(spinUntil([&bootstrap] { return bootstrap.state() == QProcess::NotRunning; }, 360000),
+                 "Real scientific bootstrap did not finish within six minutes.");
+        const auto diagnostics = bootstrap.readAllStandardError();
+        QCOMPARE(bootstrap.exitStatus(), QProcess::NormalExit);
+        QVERIFY2(bootstrap.exitCode() == 0, diagnostics.constData());
+        }
+        QFile setupFile(fixtureRoot + "/fixture.json");
+        QVERIFY(setupFile.open(QIODevice::ReadOnly));
+        const auto setup = QJsonDocument::fromJson(setupFile.readAll()).object();
+        QVERIFY(!setup.isEmpty());
+        const QString nativeJob = setup.value("sourceJob").toString();
+        const QString bundle = setup.value("first").toObject().value("bundleHash").toString();
+        const QJsonArray expectedChannels = setup.value("expected").toObject().value("channels").toArray();
+        QCOMPARE(expectedChannels.size(), 2);
+        WorkflowProcess workflow;
+        QSignalSpy serviceFailures(&workflow, &WorkflowProcess::requestFailed);
+        QSignalSpy serviceErrors(&workflow, &WorkflowProcess::serviceError);
+        QSignalSpy serviceReplies(&workflow, &WorkflowProcess::replyReceived);
+        ExtensionWidget widget(&workflow);
+        widget.resize(800, 600);
+        widget.show();
+        const auto diagnostic = [&] {
+            QJsonObject parameters; QString inputError;
+            const bool inputValid = widget.buildRunParameters(&parameters, &inputError);
+            QJsonArray failures;
+            for (const auto &failure : serviceFailures)
+                failures.append(QJsonObject{{"operation", failure.value(1).toString()},
+                    {"code", failure.value(2).toString()}, {"message", failure.value(3).toString()}});
+            QJsonArray errors;
+            for (const auto &failure : serviceErrors) errors.append(failure.value(0).toString());
+            QJsonArray replies;
+            for (const auto &reply : serviceReplies)
+                if (reply.value(1).toString() == "command.preview") replies.append(reply.value(2).toJsonObject());
+            const QJsonObject state{{"status", widget.status->text()}, {"preview", widget.currentPreview},
+                {"result", widget.resultView->toPlainText()}, {"inputValid", inputValid}, {"inputError", inputError},
+                {"draft", parameters}, {"failures", failures}, {"serviceErrors", errors}, {"previewReplies", replies},
+                {"commandInFlight", widget.commandInFlight}, {"pendingCommand", widget.pendingCommand},
+                {"pendingJobId", widget.pendingJobId}, {"selection", widget.currentSelectionKey()},
+                {"fixtureRoot", fixtureRoot}};
+            const auto bytes = QJsonDocument(state).toJson();
+            if (!evidence.isEmpty())
+            {
+                QFile output(evidence + "/scientific-gui-diagnostics.json");
+                if (output.open(QIODevice::WriteOnly)) output.write(bytes);
+                widget.grab().save(evidence + "/scientific-gui-diagnostic.png");
+            }
+            return QString::fromUtf8(bytes);
+        };
+        QCoreApplication::processEvents();
+        QVERIFY(widget.minimumSizeHint().height() <= 600);
+        workflow.start(config);
+        QVERIFY(spinUntil([&workflow] { return workflow.isReady(); }, 30000));
+        QVERIFY2(spinUntil([&widget] { return widget.runtimeVerificationReady; }, 360000), qPrintable(diagnostic()));
+        QVERIFY(spinUntil([&widget] { return versionItem(widget.extensionTree, "1.0.0", "active"); }, 30000));
+        widget.extensionTree->setCurrentItem(versionItem(widget.extensionTree, "1.0.0", "active"));
+        QVERIFY(spinUntil([&widget] { return widget.scientificFormSupported && widget.runButton->isEnabled(); }, 15000));
+        QVERIFY(widget.scientificForm->isVisible());
+        QCOMPARE(widget.selectedBundleHash, bundle);
+        QVERIFY(spinUntil([&widget, &nativeJob] { return widget.sourceJob->findData(nativeJob) >= 0; }, 15000));
+        widget.sourceMode->setCurrentIndex(widget.sourceMode->findData("native-active"));
+        widget.sourceJob->setCurrentIndex(widget.sourceJob->findData(nativeJob));
+        const auto selections = setup.value("sources").toArray();
+        for (const auto &value : selections)
+        {
+            const QString channel = value.toObject().value("channelId").toString();
+            QVERIFY(spinUntil([&widget, &channel] {
+                return widget.sourceSignal->findData(channel) >= 0 && widget.addSourceButton->isEnabled();
+            }, 30000));
+            widget.sourceSignal->setCurrentIndex(widget.sourceSignal->findData(channel));
+            clickVisible(widget.addSourceButton);
+        }
+        QCOMPARE(widget.sourcesTable->rowCount(), 2);
+        widget.windowInput->setCurrentText("hann");
+        widget.removeMeanInput->setChecked(true);
+        widget.filterInput->setCurrentText("butterworth-lowpass");
+        widget.cutoffInput->setValue(10.0);
+        clickVisible(widget.runButton);
+        QVERIFY2(spinUntil([&widget] { return widget.approveButton->isEnabled(); }, 30000), qPrintable(diagnostic()));
+        auto preview = QJsonDocument::fromJson(widget.previewView->toPlainText().toUtf8()).object();
+        QCOMPARE(preview.value("normalized").toObject().value("command").toString(), QString("extension.run"));
+        QCOMPARE(preview.value("normalized").toObject().value("parameters").toObject().value("series"), setup.value("series"));
+        QVERIFY(widget.scientificJobId.isEmpty()); // A preview is not an execution.
+        widget.cutoffInput->setValue(11.0);
+        QVERIFY(widget.currentPreview.isEmpty());
+        QVERIFY(!widget.approveButton->isEnabled());
+        widget.cutoffInput->setValue(10.0);
+        clickVisible(widget.runButton);
+        QVERIFY2(spinUntil([&widget] { return widget.approveButton->isEnabled(); }, 30000), qPrintable(diagnostic()));
+        const auto screenshot = [&widget, &evidence](const QString &name) {
+            if (evidence.isEmpty()) return true;
+            if (auto *scroll = widget.findChild<QScrollArea *>("extensionFeatureScroll"))
+            {
+                if (name == "scientific-native-preview") scroll->ensureWidgetVisible(widget.approveButton);
+                else if (name != "scientific-native-rollback" && widget.sciencePlots->count())
+                    scroll->ensureWidgetVisible(widget.sciencePlots);
+                QCoreApplication::processEvents();
+            }
+            return QDir().mkpath(evidence) && widget.grab().save(evidence + "/" + name + ".png");
+        };
+        QVERIFY(screenshot("scientific-native-preview"));
+        clickVisible(widget.approveButton);
+        QVERIFY2(spinUntil([&widget] {
+            return !widget.scientificJobId.isEmpty() && widget.sciencePlots->count() == 2;
+            }, 180000), qPrintable(diagnostic()));
+        const QString scienceJob = widget.scientificJobId;
+        const auto result = widget.displayedScientificResult;
+        QCOMPARE(result.value("bundleHash").toString(), bundle);
+        const auto artifact = result.value("scientificResult").toObject();
+        const QString relativePath = artifact.value("path").toString();
+        QCOMPARE(relativePath, "jobs/" + scienceJob + "/scientific-result.json");
+        QFile actualFile(QDir(config.workspace).absoluteFilePath(relativePath));
+        QVERIFY(actualFile.open(QIODevice::ReadOnly));
+        const auto actualBytes = actualFile.readAll();
+        QCOMPARE(QString::fromLatin1(QCryptographicHash::hash(actualBytes, QCryptographicHash::Sha256).toHex()),
+                 artifact.value("sha256").toString());
+        const auto actual = QJsonDocument::fromJson(actualBytes).object();
+        QCOMPARE(actual.value("inputHash"), result.value("seriesSha256"));
+        QCOMPARE(actual.value("times"), setup.value("series").toObject().value("times"));
+        QCOMPARE(actual.value("filter"), setup.value("options").toObject().value("filter"));
+        QCOMPARE(actual.value("sampleCount").toInt(), 20);
+        QCOMPARE(actual.value("binCount").toInt(), 11);
+        const auto profile = result.value("verificationProfile").toObject();
+        QVERIFY(!profile.value("id").toString().isEmpty());
+        QVERIFY(profile.value("absoluteTolerance").toDouble() > 0);
+        QVERIFY(profile.value("relativeTolerance").toDouble() > 0);
+        QFile provenanceFile(QDir(config.workspace).absoluteFilePath("jobs/" + scienceJob + "/input-provenance.json"));
+        QVERIFY(provenanceFile.open(QIODevice::ReadOnly));
+        const auto provenanceBytes = provenanceFile.readAll();
+        QCOMPARE(QString::fromLatin1(QCryptographicHash::hash(provenanceBytes, QCryptographicHash::Sha256).toHex()),
+                 result.value("inputProvenanceSha256").toString());
+        const auto provenance = QJsonDocument::fromJson(provenanceBytes).object();
+        for (const auto &key : {QString("seriesSha256"), QString("bundleHash"), QString("runtimeHash")})
+            QCOMPARE(provenance.value(key), result.value(key));
+        const auto origins = provenance.value("provenance").toObject().value("sources").toArray();
+        QCOMPARE(origins.size(), 2);
+        QCOMPARE(provenance.value("provenance").toObject().value("options"), setup.value("options"));
+        for (int channel = 0; channel < origins.size(); ++channel)
+        {
+            const auto origin = origins[channel].toObject();
+            const auto selector = origin.value("selector").toObject();
+            QCOMPARE(selector.value("jobId").toString(), nativeJob);
+            QCOMPARE(selector.value("mode").toString(), QString("active"));
+            QCOMPARE(selector.value("channelId"), selections[channel].toObject().value("channelId"));
+            QCOMPARE(selector.value("artifactId"), setup.value("nativeCatalog").toObject().value("artifactId"));
+            QCOMPARE(origin.value("proofScope").toString(), QString("solver-and-declared-controller-runtime/v1"));
+            QCOMPARE(origin.value("sourceKind").toString(), QString("native-active-fe"));
+            QVERIFY(!selector.value("sourceHash").toString().isEmpty());
+        }
+        const auto near = [&profile](double value, double expected) {
+            return std::isfinite(value) && std::abs(value - expected) <= profile.value("absoluteTolerance").toDouble()
+                + profile.value("relativeTolerance").toDouble() * std::abs(expected);
+        };
+        // Compare the complete output arrays against the independent small-N
+        // DFT/filter oracle built from every native raw sample, not screenshots.
+        const auto actualChannels = actual.value("channels").toArray();
+        QCOMPARE(actualChannels.size(), expectedChannels.size());
+        for (int channel = 0; channel < actualChannels.size(); ++channel)
+        {
+            const auto observed = actualChannels[channel].toObject();
+            const auto expected = expectedChannels[channel].toObject();
+            QCOMPARE(observed.value("unit"), expected.value("unit"));
+            for (const QString &key : {QString("filteredValues"), QString("amplitude"), QString("psd"), QString("fft")})
+            {
+                const auto values = observed.value(key).toArray();
+                const auto oracle = expected.value(key).toArray();
+                QCOMPARE(values.size(), oracle.size());
+                for (int i = 0; i < values.size(); ++i)
+                {
+                    if (key == "fft")
+                    {
+                        QCOMPARE(values[i].toArray().size(), 2);
+                        for (int part = 0; part < 2; ++part)
+                            QVERIFY(near(values[i].toArray()[part].toDouble(), oracle[i].toArray()[part].toDouble()));
+                    }
+                    else QVERIFY(near(values[i].toDouble(), oracle[i].toDouble()));
+                }
+            }
+        }
+        for (const QString &view : {QString("filtered-time"), QString("amplitude"), QString("psd"),
+                                   QString("real"), QString("imag"), QString("phase")})
+        {
+            widget.scienceView->setCurrentText(view);
+            QVERIFY(spinUntil([&widget, &view] {
+                auto *plot = qobject_cast<SeriesPlotWidget *>(widget.sciencePlots->widget(0));
+                return plot && plot->dataset().title == view && widget.sciencePlots->count() == 2;
+            }, 30000));
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                auto *plot = qobject_cast<SeriesPlotWidget *>(widget.sciencePlots->widget(channel));
+                QVERIFY(plot);
+                const auto &dataset = plot->dataset();
+                const auto output = actualChannels[channel].toObject();
+                const QString unit = output.value("unit").toString();
+                QCOMPARE(dataset.xUnit, view == "filtered-time" ? QString("s") : QString("Hz"));
+                QCOMPARE(dataset.yUnit, view == "phase" ? QString("rad") : view == "psd" ? unit + "^2/Hz" : unit);
+                QCOMPARE(dataset.traces.size(), 1);
+                const auto &trace = dataset.traces.first();
+                QCOMPARE(trace.sourceId, scienceJob);
+                QCOMPARE(trace.artifactSha256, artifact.value("sha256").toString());
+                QVERIFY(trace.label.contains(selections[channel].toObject().value("channelId").toString()));
+                const auto xs = actual.value(view == "filtered-time" ? "times" : "frequenciesHz").toArray();
+                QCOMPARE(trace.points.size(), xs.size());
+                QVERIFY(trace.points.size() <= 1000);
+                for (int i = 0; i < trace.points.size(); ++i)
+                {
+                    QCOMPARE(trace.originalOrdinals[i], quint64(i));
+                    QCOMPARE(trace.points[i].x(), xs[i].toDouble());
+                    double y = 0;
+                    if (view == "filtered-time") y = output.value("filteredValues").toArray()[i].toDouble();
+                    else if (view == "amplitude" || view == "psd") y = output.value(view).toArray()[i].toDouble();
+                    else
+                    {
+                        const auto pair = output.value("fft").toArray()[i].toArray();
+                        y = view == "real" ? pair[0].toDouble() : view == "imag" ? pair[1].toDouble()
+                            : std::atan2(pair[1].toDouble(), pair[0].toDouble());
+                    }
+                    QCOMPARE(trace.points[i].y(), y);
+                }
+                QCOMPARE(widget.metricsTable->item(channel, 1)->text(), unit);
+                QCOMPARE(widget.metricsTable->item(channel, 2)->text(), QString("20"));
+                QCOMPARE(widget.metricsTable->item(channel, 3)->text(), QString("11"));
+            }
+            QVERIFY(screenshot("scientific-native-" + view));
+        }
+        for (const auto &proof : {scienceJob, bundle, result.value("runtimeHash").toString(),
+                                  result.value("seriesSha256").toString(), artifact.value("sha256").toString(),
+                                  profile.value("id").toString(), QString("causal"), QString("10")})
+            QVERIFY2(widget.scienceProvenance->text().contains(proof), qPrintable(proof));
+        QVERIFY(widget.scienceProvenance->text().contains("accepted native frames"));
+        QString error;
+        QVERIFY(spinUntil([&widget] { return candidateItem(widget.extensionTree, "2.0.0", "validated"); }, 15000));
+        widget.extensionTree->setCurrentItem(candidateItem(widget.extensionTree, "2.0.0", "validated"));
+        QVERIFY2(previewAndApproveWidgetAction(&widget, "extensionActivate", "extension.activate", "active", &error), qPrintable(error));
+        QVERIFY(spinUntil([&widget] { return versionItem(widget.extensionTree, "2.0.0", "active"); }, 15000));
+        widget.extensionTree->setCurrentItem(widget.extensionTree->topLevelItem(0));
+        QVERIFY(spinUntil([&widget, &bundle] { return widget.rollbackTarget->findData(bundle) >= 0; }, 15000));
+        widget.rollbackTarget->setCurrentIndex(widget.rollbackTarget->findData(bundle));
+        QVERIFY2(previewAndApproveWidgetAction(&widget, "extensionRollback", "extension.rollback", bundle.left(12), &error), qPrintable(error));
+        QVERIFY(spinUntil([&widget] { return versionItem(widget.extensionTree, "1.0.0", "active") && versionItem(widget.extensionTree, "2.0.0", "retained"); }, 15000));
+        QJsonObject historical;
+        QVERIFY2(requestWorkflow(&workflow, "jobs.query", {{"jobId", scienceJob}}, &historical, &error), qPrintable(error));
+        QCOMPARE(historical.value("job").toObject().value("result"), QJsonValue(result));
+        actualFile.close();
+        QVERIFY(actualFile.open(QIODevice::ReadOnly));
+        QCOMPARE(actualFile.readAll(), actualBytes);
+        QVERIFY(screenshot("scientific-native-rollback"));
+        // Restore a real completed display before switching to B; merely
+        // clearing an already empty widget cannot demonstrate this regression.
+        widget.extensionTree->setCurrentItem(versionItem(widget.extensionTree, "1.0.0", "active"));
+        QVERIFY(spinUntil([&widget] { return widget.scientificFormSupported; }, 15000));
+        widget.sourceMode->setCurrentIndex(widget.sourceMode->findData("native-active"));
+        widget.sourceJob->setCurrentIndex(widget.sourceJob->findData(nativeJob));
+        for (const auto &value : selections)
+        {
+            const QString channel = value.toObject().value("channelId").toString();
+            QVERIFY(spinUntil([&widget, &channel] {
+                return widget.sourceSignal->findData(channel) >= 0 && widget.addSourceButton->isEnabled();
+            }, 30000));
+            widget.sourceSignal->setCurrentIndex(widget.sourceSignal->findData(channel));
+            clickVisible(widget.addSourceButton);
+        }
+        QCOMPARE(widget.scientificSources.size(), 2);
+        QVERIFY2(previewAndApproveWidgetAction(&widget, "extensionRun", "extension.run", "scientificResult", &error), qPrintable(error));
+        QVERIFY(spinUntil([&widget] { return widget.sciencePlots->count() == 2 && !widget.scientificJobId.isEmpty(); }, 30000));
+        workflow.stop();
+        QVERIFY(spinUntil([&workflow] { return workflow.isStopped(); }, 10000));
+        config.workspace = setup.value("secondWorkspace").toString();
+        workflow.start(config);
+        QVERIFY(spinUntil([&workflow] { return workflow.isReady(); }, 30000));
+        QVERIFY(spinUntil([&widget] { return versionItem(widget.extensionTree, "1.0.0", "active"); }, 30000));
+        widget.extensionTree->setCurrentItem(versionItem(widget.extensionTree, "1.0.0", "active"));
+        QVERIFY(spinUntil([&widget, &bundle] { return widget.scientificFormSupported && widget.selectedBundleHash == bundle; }, 15000));
+        QVERIFY(widget.scientificSources.isEmpty());
+        QVERIFY(widget.scientificJobId.isEmpty());
+        QVERIFY(widget.displayedScientificResult.isEmpty());
+        QVERIFY(widget.scientificGeneration.isEmpty());
+        QCOMPARE(widget.sourcesTable->rowCount(), 0);
+        QCOMPARE(widget.sciencePlots->count(), 0);
+        QCOMPARE(widget.pendingSciencePlots->count(), 0);
+        QCOMPARE(widget.metricsTable->rowCount(), 0);
+        QVERIFY(widget.scienceProvenance->text().isEmpty());
+        QVERIFY(screenshot("scientific-same-bundle-workspace-cleared"));
+        workflow.stop();
+        QVERIFY(spinUntil([&workflow] { return workflow.isStopped(); }, 10000));
+#else
+        QFAIL("Actual WF11 GUI acceptance requires explicit RANGE_SCIENTIFIC_* build paths.");
+#endif
+    }
+
+    void scientificFormPreservesDraftAndRejectsExpressions()
+    {
+        ExtensionWidget widget(nullptr);
+        const QJsonObject gui{{"form", QJsonArray{
+            QJsonObject{{"id", "sources"}, {"type", "channel-select"}, {"minimum", 1}, {"maximum", 4}},
+            QJsonObject{{"id", "window"}, {"type", "enum"}, {"values", QJsonArray{"rectangular", "hann"}}},
+            QJsonObject{{"id", "removeMean"}, {"type", "enum"}, {"values", QJsonArray{false, true}}},
+            QJsonObject{{"id", "filter"}, {"type", "enum"}, {"values", QJsonArray{"none", "butterworth-lowpass"}}},
+            QJsonObject{{"id", "cutoffHz"}, {"type", "number"}, {"unit", "Hz"}}}},
+            {"table", QJsonObject{{"columns", QJsonArray{"channel", "unit", "sampleCount", "binCount"}}}},
+            {"plots", QJsonArray{"filtered-time", "amplitude", "psd", "real", "imag", "phase"}}};
+        widget.scientificGui = gui; widget.selectedExtensionId = "science"; widget.selectedBundleHash = "bundle";
+        QJsonObject manifest{{"sdkVersion", "range.extension/v2"}, {"kind", "multichannel-spectral-filter"}, {"gui", gui}};
+        widget.renderFormAndMetrics(manifest); QVERIFY(widget.scientificFormSupported);
+        auto *featureScroll = widget.findChild<QScrollArea *>("extensionFeatureScroll");
+        QVERIFY(featureScroll); QVERIFY(featureScroll->widgetResizable());
+        widget.resize(800, 600); widget.show();
+        widget.scienceProvenance->setText(QString("Runtime: %1\nSource: %1\nResult: %1\n%2")
+            .arg(QString(64, 'a'), QString("Complete numerical contract and accepted frame provenance.\n").repeated(12)));
+        QCoreApplication::processEvents();
+        QVERIFY(widget.minimumSizeHint().height() <= 600);
+        featureScroll->ensureWidgetVisible(widget.approveButton);
+        QCoreApplication::processEvents();
+        QVERIFY(featureScroll->viewport()->rect().contains(widget.approveButton->mapTo(featureScroll->viewport(), widget.approveButton->rect().center())));
+        widget.windowInput->setCurrentText("hann"); widget.removeMeanInput->setChecked(true);
+        widget.currentPreview = {{"previewId", "stale"}};
+        widget.filterInput->setCurrentText("butterworth-lowpass"); QVERIFY(widget.currentPreview.isEmpty());
+        widget.sourceJob->addItem("Native", "native-job"); widget.sourceSignal->addItem("node:1", "node:1");
+        widget.nativeSourceDescriptor = {{"artifactId", "frames"}};
+        widget.addScientificSource(); widget.addScientificSource(); QCOMPARE(widget.scientificSources.size(), 1);
+        widget.renderFormAndMetrics(manifest);
+        QCOMPARE(widget.windowInput->currentText(), QString("hann")); QVERIFY(widget.removeMeanInput->isChecked());
+        QCOMPARE(widget.scientificSources.size(), 1);
+        widget.selectedVersion = {{"state", "active"}, {"bundleHash", "bundle"}, {"manifest", manifest}};
+        widget.extensionListResult = {{"extensions", QJsonArray{QJsonObject{{"extensionId", "science"}, {"activeBundleHash", "bundle"}}}}};
+        QJsonObject parameters; QString error;
+        QVERIFY2(widget.buildRunParameters(&parameters, &error), qPrintable(error));
+        QCOMPARE(parameters.value("sources").toArray().size(), 1);
+        const auto options = parameters.value("options").toObject();
+        QCOMPARE(options.value("window").toString(), QString("hann")); QVERIFY(options.value("removeMean").toBool());
+        QCOMPARE(options.value("filter").toObject().value("order").toInt(), 1);
+        QCOMPARE(options.value("filter").toObject().value("phase").toString(), QString("causal"));
+        widget.observedWorkspace = "workspace-A";
+        widget.scientificJobId = "old-job"; widget.displayedScientificResult = {{"jobId", "old-job"}};
+        widget.scienceProvenance->setText("old-source-proof");
+        widget.sciencePlots->addTab(new SeriesPlotWidget, "Old channel");
+        widget.pendingSciencePlots->addTab(new SeriesPlotWidget, "Old pending channel");
+        widget.resetScientificWorkspace(); widget.observedWorkspace = "workspace-B";
+        widget.renderFormAndMetrics(manifest); // Same immutable bundle in a different workspace.
+        QVERIFY(widget.scientificSources.isEmpty()); QVERIFY(widget.scientificJobId.isEmpty());
+        QVERIFY(widget.displayedScientificResult.isEmpty()); QVERIFY(widget.scientificGeneration.isEmpty());
+        QVERIFY(widget.scienceProvenance->text().isEmpty()); QCOMPARE(widget.sciencePlots->count(), 0);
+        QCOMPARE(widget.pendingSciencePlots->count(), 0);
+        widget.scienceProvenance->setText("previous-bundle-source-proof");
+        widget.scientificJobId = "previous-bundle-job";
+        widget.scientificPoints = QJsonArray{QJsonObject{{"x",1},{"y",2}}};
+        widget.scientificPageIdentity = {{"resultSha256","old-result"}};
+        widget.pendingScienceRows = QJsonArray{QJsonObject{{"channel","old-channel"}}};
+        widget.pendingSciencePlots->addTab(new SeriesPlotWidget, "Old pending channel");
+        widget.selectedBundleHash = "other-bundle"; widget.renderFormAndMetrics(manifest);
+        QVERIFY(widget.scienceProvenance->text().isEmpty()); QVERIFY(widget.scientificJobId.isEmpty());
+        QVERIFY(widget.scientificPoints.isEmpty()); QVERIFY(widget.scientificPageIdentity.isEmpty());
+        QVERIFY(widget.pendingScienceRows.isEmpty()); QCOMPARE(widget.pendingSciencePlots->count(),0);
+        QCOMPARE(widget.scientificSources.size(), 0); QCOMPARE(widget.windowInput->currentText(), QString("rectangular"));
+        QJsonObject maliciousGui = gui; maliciousGui.insert("expression", "execute()");
+        manifest.insert("gui", maliciousGui); widget.scientificGui = maliciousGui;
+        widget.renderFormAndMetrics(manifest); QVERIFY(!widget.featureFormSupported);
+    }
+
+    void scientificPagingPreservesExtremaAndMixedUnits()
+    {
+        ExtensionWidget widget(nullptr); widget.scientificJobId = "science-job"; widget.selectedBundleHash = "bundle";
+        widget.scienceView->setCurrentText("amplitude");
+        widget.metricsTable->setColumnCount(4);
+        auto page = [](int channel, int offset, int count, const QString &unit) {
+            QJsonArray points;
+            for (int i = offset; i < offset + count; ++i)
+                points.append(QJsonObject{{"x", double(i)}, {"y", i == 1555 ? 99999.0 : double(i % 3)}, {"rawOrdinal", i}});
+            return QJsonObject{{"jobId", "science-job"}, {"bundleHash", "bundle"}, {"view", "amplitude"},
+                {"runtimeHash", "runtime"}, {"sourceSha256", "source"}, {"resultSha256", QString(64, QChar('a'))},
+                {"channel", QJsonObject{{"id", QString("channel-%1").arg(channel)}, {"unit", unit}}},
+                {"channelCount", 2}, {"sampleCount", 3998}, {"binCount", 2000}, {"pointCount", 2000},
+                {"offset", offset}, {"nextOffset", offset + count < 2000 ? QJsonValue(offset + count) : QJsonValue(QJsonValue::Null)},
+                {"domain", "frequency"}, {"xUnit", "Hz"}, {"xLabel", "Frequency"}, {"yUnit", unit}, {"yLabel", "Amplitude"}, {"points", points}};
+        };
+        widget.consumeScientificPage(page(0, 0, 1000, "m/s")); QCOMPARE(widget.sciencePlots->count(), 0);
+        widget.consumeScientificPage(page(0, 1000, 1000, "m/s")); QCOMPARE(widget.sciencePlots->count(), 0);
+        widget.consumeScientificPage(page(1, 0, 1000, "N")); widget.consumeScientificPage(page(1, 1000, 1000, "N"));
+        auto *first = qobject_cast<SeriesPlotWidget *>(widget.sciencePlots->widget(0)); QVERIFY(first);
+        const auto &trace = first->dataset().traces.first(); QVERIFY(trace.points.size() <= 1000);
+        QVERIFY(trace.originalOrdinals.contains(1555)); QCOMPARE(first->dataset().yUnit, QString("m/s"));
+        QCOMPARE(widget.sciencePlots->count(), 2);
+        auto *second = qobject_cast<SeriesPlotWidget *>(widget.sciencePlots->widget(1)); QVERIFY(second);
+        QCOMPARE(second->dataset().yUnit, QString("N")); QCOMPARE(first->dataset().traces.size(), 1);
+        widget.scientificChannel = 0; widget.scientificPoints = {}; widget.scientificPageIdentity = {};
+        widget.consumeScientificPage(page(0, 0, 1000, "m/s"));
+        auto altered = page(0, 1000, 1000, "m/s"); altered.insert("runtimeHash", "tampered");
+        widget.consumeScientificPage(altered);
+        QCOMPARE(widget.sciencePlots->widget(0), first); QVERIFY(widget.scientificPoints.isEmpty());
+    }
+
     void numericSeriesParserRejectsInvalidAndOversizedInput()
     {
         QJsonObject series;

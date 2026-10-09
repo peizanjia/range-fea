@@ -2,6 +2,8 @@ qt_add_executable(fea-solver
     src/application.cpp
     src/command_processor.cpp
     src/control_ndjson_transport.cpp
+    src/runtime_parameter_gate.cpp
+    src/runtime_control_bridge.cpp
     src/control_typed_ndjson_transport.cpp
     src/typed_control_task.cpp
     src/execution_event_journal.cpp
@@ -18,6 +20,9 @@ qt_add_executable(fea-solver
     src/application.h
     src/command_processor.h
     src/control_ndjson_transport.h
+    src/runtime_parameter_gate.h
+    src/runtime_control_bridge.h
+    src/runtime_control_json.h
     src/control_typed_ndjson_transport.h
     src/typed_control_task.h
     src/execution_event_journal.h

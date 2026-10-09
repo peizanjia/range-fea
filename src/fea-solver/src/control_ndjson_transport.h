@@ -20,6 +20,8 @@ struct ControlTransportConfig
     QStringList actuatorIds;
     int timeoutMs = 5000;
     int maxLineBytes = 1024*1024;
+    //! Empty keeps the original v1 protocol; otherwise negotiate WF09 extension.
+    QJsonObject runtimeIdentity;
 };
 
 struct ControlObservation
@@ -54,7 +56,8 @@ public:
     bool compute(quint64 stepId, double time, double dt,
                  const QVector<ControlObservation> &observations,
                  const QJsonObject &acceptedControllerState,
-                 ControlStepReply &reply, QString *error = nullptr);
+                 ControlStepReply &reply, QString *error = nullptr,
+                 const QJsonObject &runtimeParameters = {});
     void stop();
     bool isReady() const;
     QByteArray standardErrorTail();

@@ -1,5 +1,28 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+qt_add_executable(tst_runtime_control_bridge
+    tst_runtime_control_bridge.cpp ../src/runtime_control_bridge.cpp
+    ../src/runtime_parameter_gate.cpp ../src/native_execution_gate.cpp
+    ../src/native_accepted_checkpoint.cpp)
+target_include_directories(tst_runtime_control_bridge PRIVATE ../src)
+target_link_libraries(tst_runtime_control_bridge PRIVATE range-solver-lib Qt6::Test Qt6::Network)
+add_test(NAME tst_runtime_control_bridge COMMAND tst_runtime_control_bridge)
+set_tests_properties(tst_runtime_control_bridge PROPERTIES TIMEOUT 60)
+if(WIN32)
+    set_tests_properties(tst_runtime_control_bridge PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
+qt_add_executable(tst_runtime_parameter_gate
+    tst_runtime_parameter_gate.cpp ../src/runtime_parameter_gate.cpp)
+target_include_directories(tst_runtime_parameter_gate PRIVATE ../src)
+target_link_libraries(tst_runtime_parameter_gate PRIVATE range-solver-lib Qt6::Test)
+add_test(NAME tst_runtime_parameter_gate COMMAND tst_runtime_parameter_gate)
+if(WIN32)
+    set_tests_properties(tst_runtime_parameter_gate PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 qt_add_executable(tst_native_result_journal tst_native_result_journal.cpp ../src/native_result_journal.cpp)
 target_include_directories(tst_native_result_journal PRIVATE ../src)
 target_link_libraries(tst_native_result_journal PRIVATE range-solver-lib Qt6::Test)

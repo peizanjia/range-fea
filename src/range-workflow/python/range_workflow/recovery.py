@@ -81,15 +81,23 @@ def controller_revision(program: Path, arguments: list[str]) -> str:
 
 def control_arguments(result: dict) -> list[str]:
     """Return the exact --control-args-json vector used by workflow jobs."""
-    return [str(result["controllerHostPath"]), "--implementation", str(result["controllerPath"]),
-            "--gains", str(result["gainsPath"])]
+    flags = result.get("controllerInterpreterFlags", [])
+    if flags not in ([], ["-B"]):
+        raise WorkflowError("RECOVERY_CHANGED", "Controller interpreter policy is invalid")
+    arguments = [*flags, str(result["controllerHostPath"]), "--implementation", str(result["controllerPath"]),
+                 "--gains", str(result["gainsPath"])]
+    if "runtimeParametersCodecPath" in result:
+        arguments += ["--runtime-parameters-codec", str(result["runtimeParametersCodecPath"])]
+    return arguments
 
 
 def _package_sha256(binding: dict, result: dict, source_sha: str,
                     model_sha: str, control_sha: str) -> str:
     runtime = {key: binding[key] for key in ("solver", "native", "python", "nativeResults") if key in binding}
+    control_keys = ("controller", "controllerHost", "gains") + (
+        ("runtimeParametersCodec",) if "runtimeParametersCodecPath" in result else ())
     control_inputs = {key: result.get("sourceArtifacts", {}).get(key, {}).get("sha256")
-                      for key in ("controller", "controllerHost", "gains")}
+                      for key in control_keys}
     return digest({"sourceSha256": source_sha, "modelSha256": model_sha,
                    "controlSha256": control_sha, "runtime": runtime,
                    "controlInputs": control_inputs,
@@ -756,7 +764,16 @@ def _verify_completed_variant(service, source, variant, root):
             manifest_artifact.get("sha256") != descriptor.get("manifestSha256")):
         raise WorkflowError("RECOVERY_CONFLICT", "Completed variant manifest is absent from its artifact proof")
     terminal = _regular_bound(value.get("checkpointPath", ""), root, value.get("checkpointSha256"))
-    manifest_data = _json(manifest, root, descriptor["manifestSha256"])
+    if service.native_results is None:
+        raise WorkflowError("RECOVERY_CONFLICT", "Completed variant cannot be verified without the native results broker")
+    # Native canonical/semantic validation precedes use of the storage-only
+    # Python decoder; the final check below still closes the extraction race.
+    canonical_catalog = NativeResultsClient(service.native_results, manifest, descriptor["manifestSha256"]).query(
+        "catalog", {"limit": 1})
+    if canonical_catalog.get("jobId") != source.get("jobId") or canonical_catalog.get("artifactId") != descriptor.get("artifactId"):
+        raise WorkflowError("RECOVERY_CONFLICT", "Completed variant native identity differs")
+    from .native_manifest import load_native_manifest
+    manifest_data = load_native_manifest(manifest, descriptor["manifestSha256"])
     terminal_record = manifest_data.get("terminalModel")
     if (manifest_data.get("jobId") != source.get("jobId") or
             manifest_data.get("artifactId") != descriptor.get("artifactId") or
@@ -826,6 +843,13 @@ def qualify(service, job_id):
                 not attempt_directory.resolve(strict=True).is_relative_to(root.resolve(strict=True))):
             raise WorkflowError("RECOVERY_CONFLICT", "Recovery attempt directory is outside its logical job")
         source = copy.deepcopy(attempt["partialResult"])
+        if source.get("runtimeControlEnabled") or job.get("runtimeControl"):
+            # Values saved before submission remain evidence for an accepted
+            # checkpoint digest, never authority to replay a pending proposal.
+            source["runtimeControlEnabled"] = True
+            source["runtimeControl"] = copy.deepcopy(job.get("runtimeControl", source.get("runtimeControl")))
+            if type((job.get("result") or {}).get("runtimeProposalRecords")) is dict:
+                source["runtimeProposalRecords"] = copy.deepcopy(job["result"]["runtimeProposalRecords"])
         target, dt, mode = source["totalSteps"], source["dtSeconds"], source["mode"]
         if (type(target) is not int or not 1 <= target <= 5000 or
                 not _finite_number(dt, positive=True) or mode not in ("active", "passive", "both")):

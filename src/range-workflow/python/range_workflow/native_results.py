@@ -2,10 +2,66 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
+import threading
+import time
+from contextlib import contextmanager
 
+from .process import _WindowsJob
 from .service import WorkflowError, canonical, digest, exact, file_hash, identifier
+
+_query_context = threading.local()
+
+
+@contextmanager
+def query_cancellation(event):
+    previous = getattr(_query_context, "cancel", None)
+    _query_context.cancel = event
+    try:
+        yield
+    finally:
+        _query_context.cancel = previous
+
+
+def _run_query_process(argv, output, errors, timeout):
+    """Own the reader's process tree even if the hosting service is closed."""
+    flags = {"creationflags": 0x4 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=output,
+                               stderr=errors, shell=False, **flags)
+    job = None
+    try:
+        if os.name == "nt":
+            # Assignment and resume happen in _WindowsJob, before any child
+            # code runs. Its non-inheritable handle dies with this host.
+            job = _WindowsJob(process)
+        cancel = getattr(_query_context, "cancel", None)
+        if cancel is None:
+            return subprocess.CompletedProcess(argv, process.wait(timeout=timeout))
+        deadline = time.monotonic() + timeout
+        while True:
+            if cancel.is_set():
+                raise WorkflowError("READ_CANCELLED", "Native result query was cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            try:
+                return subprocess.CompletedProcess(argv, process.wait(timeout=min(.05, remaining)))
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        if job:
+            job.close()
+        elif os.name != "nt":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            process.kill()
+        process.wait()
 
 
 class NativeResultsClient:
@@ -24,7 +80,7 @@ class NativeResultsClient:
             raise WorkflowError("ARTIFACT_PATH", "A regular absolute manifest file is required")
 
     def query(self, operation, arguments=None):
-        if operation not in ("catalog", "channels", "series", "summary"):
+        if operation not in ("catalog", "channels", "series", "summary", "snapshot"):
             raise WorkflowError("UNKNOWN_OPERATION", "Unsupported native result query")
         arguments = {} if arguments is None else arguments
         if not isinstance(arguments, dict) or len(canonical(arguments)) > 65536:
@@ -36,14 +92,14 @@ class NativeResultsClient:
             # unbounded child output in memory, then enforce the response limit.
             import tempfile
             with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-                result = subprocess.run([str(self.executable), "--manifest", str(self.manifest),
+                result = _run_query_process([str(self.executable), "--manifest", str(self.manifest),
                     "--expected-sha", self.expected_sha, "--operation", operation,
                     "--parameters", canonical(arguments).decode("utf-8")],
-                    stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
-                    timeout=self.timeout, check=False, shell=False)
+                    output, errors, self.timeout)
                 output.seek(0)
-                raw = output.read(2 * 1024 * 1024 + 1)
-            if len(raw) > 2 * 1024 * 1024:
+                response_limit = 32 * 1024 * 1024 if operation == "snapshot" else 2 * 1024 * 1024
+                raw = output.read(response_limit + 1)
+            if len(raw) > response_limit:
                 raise WorkflowError("RESULT_TOO_LARGE", "Native broker response exceeds its byte limit")
             def unique_object(pairs):
                 result = {}
@@ -75,7 +131,10 @@ class NativeResultsClient:
 
 
 def query_registered(service, operation, parameters):
-    exact(parameters, {"jobId"}, {"mode", "artifactId", "channelId", "nodePhysicalId", "offset", "limit", "cursor"})
+    optional = {"mode", "artifactId", "channelId", "nodePhysicalId", "offset", "limit", "cursor"}
+    if operation == "snapshot":
+        optional.add("channelIds")
+    exact(parameters, {"jobId"}, optional)
     job_id = identifier(parameters["jobId"], "jobId")
     mode = parameters.get("mode", "active")
     if mode not in ("active", "passive"):
@@ -100,10 +159,18 @@ def query_registered(service, operation, parameters):
         raise WorkflowError("NATIVE_RESULTS_UNAVAILABLE", "Native results executable is not configured")
     arguments = {k: v for k, v in parameters.items() if k not in {"jobId", "mode", "artifactId"}}
     client = NativeResultsClient(service.native_results, path, descriptor["manifestSha256"])
-    catalog = client.query("catalog", {"limit": 1})
+    # Snapshot already returns the hash-validated artifact/job/source identity.
+    # Reading a separate catalog repeats every MODEL hash and ancestry check.
+    # Verify that same registered identity directly on the complete snapshot.
+    if operation == "snapshot":
+        result = catalog = client.query(operation, arguments)
+    else:
+        catalog = client.query("catalog", {"limit": 1})
+        result = catalog if operation == "catalog" and arguments == {"limit": 1} else None
     if catalog.get("artifactId") != descriptor["artifactId"] or catalog.get("jobId") != job_id:
         raise WorkflowError("ARTIFACT_IDENTITY_MISMATCH", "Native catalog identity does not match the registered job")
-    result = catalog if operation == "catalog" and arguments == {"limit": 1} else client.query(operation, arguments)
+    if result is None:
+        result = client.query(operation, arguments)
     result.update(jobId=job_id, mode=mode, completed=True, manifestSha256=descriptor["manifestSha256"],
                   sourceKind=catalog.get("sourceKind"), sourceSnapshotRef=catalog.get("sourceSnapshotRef"))
     return result

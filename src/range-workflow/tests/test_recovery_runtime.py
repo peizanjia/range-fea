@@ -414,8 +414,8 @@ def _continuous_native(args, workspace, attempt, variant):
             "--native-checkpoint-dir=" + str(checkpoint_directory),
             "--native-checkpoint-context-json=" + canonical(context).decode("utf-8")]
     if variant == "active":
-        controller_arguments = [str(partial["controllerHostPath"]), "--implementation",
-                                str(partial["controllerPath"]), "--gains", str(partial["gainsPath"])]
+        from range_workflow.recovery import control_arguments
+        controller_arguments = control_arguments(partial)
         argv.extend(["--control-program=" + str(args.python), "--control-timeout-ms=10000",
                      "--control-args-json=" + canonical(controller_arguments).decode("utf-8")])
     # Production ProcessRunner copies the service child's startup environment.

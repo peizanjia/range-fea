@@ -1,5 +1,6 @@
 #include <QDir>
 #include <QCryptographicHash>
+#include <QJsonParseError>
 #include <QFile>
 #include <QFileInfo>
 #include <QDirIterator>
@@ -2618,12 +2619,22 @@ int SolverTask::perform()
                 terminal.value(QStringLiteral("sha256")).toString() != loadedSourceBinding.savedArtifactHash)
                 throw RError(RError::Type::Application, R_ERROR_REF,
                              "The native result manifest terminal MODEL does not match readback.");
+            QFile publishedFile(manifestPublication.manifestPath);
+            if (!publishedFile.open(QIODevice::ReadOnly) || publishedFile.size() > 16*1024*1024)
+                throw RError(RError::Type::Application, R_ERROR_REF, "Published manifest readback is unavailable or oversized.");
+            const QByteArray publishedBytes = publishedFile.readAll();
+            QJsonParseError manifestParseError;
+            const auto storedManifest = QJsonDocument::fromJson(publishedBytes, &manifestParseError);
+            if (publishedFile.error() != QFileDevice::NoError || !storedManifest.isObject()
+                || manifestParseError.error != QJsonParseError::NoError
+                || QString::fromLatin1(QCryptographicHash::hash(publishedBytes, QCryptographicHash::Sha256).toHex()) != manifestPublication.manifestSha256)
+                throw RError(RError::Type::Application, R_ERROR_REF, "Published manifest bytes changed before descriptor emission.");
             const QJsonObject descriptor{
                 {QStringLiteral("jobId"), this->taskID.toString()},
                 {QStringLiteral("resultArtifactId"), manifestPublication.artifactId},
                 {QStringLiteral("resultManifestRef"), QFileInfo(manifestPublication.manifestPath).absoluteFilePath()},
                 {QStringLiteral("resultManifestSha256"), manifestPublication.manifestSha256},
-                {QStringLiteral("resultManifest"), manifestPublication.manifest},
+                {QStringLiteral("resultManifest"), storedManifest.object()},
                 {QStringLiteral("resultProvenance"), this->nativeResultProvenance},
                 {QStringLiteral("provenanceFrozen"), this->nativeResultProvenanceFrozen},
                 {QStringLiteral("nativeResultCatalogAvailable"), true}};

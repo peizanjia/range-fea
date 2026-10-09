@@ -60,6 +60,8 @@ public:
     //! Commands are accepted only for the current run and current pause request.
     bool requestResume();
     bool requestPauseAt(quint64 acceptedSequence);
+    //! Choose the next boundary while holding the same mutex as acceptance.
+    bool requestPauseNext();
     bool requestCancel();
     bool markCompleted(QString *error = nullptr);
 

@@ -26,6 +26,10 @@
 #include <QTabWidget>
 #include "control_monitor_widget.h"
 #include "task_plan_widget.h"
+#include "runtime_control_widget.h"
+#include "series_workbench_widget.h"
+#include "geometry_command_widget.h"
+#include "mesh_command_widget.h"
 #include "native_results_widget.h"
 #include "solver_manager.h"
 #include <QUuid>
@@ -150,6 +154,16 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     steps = new QSpinBox;
     steps->setRange(1, 5000); steps->setValue(400); steps->setObjectName("workflowSteps");
     form->addRow(tr("Steps / additional steps"), steps);
+    runtimeUpdates = new QCheckBox(tr("Allow parameter updates during this run"));
+    runtimeUpdates->setObjectName("workflowRuntimeUpdates");
+    runtimeUpdates->setToolTip(tr("Available for an active registered native source. Each update requires its own preview and approval."));
+    form->addRow(tr("Current run"), runtimeUpdates);
+    initialRuntimePause = new QCheckBox(tr("Pause after the first accepted step"));
+    initialRuntimePause->setObjectName("workflowInitialRuntimePause");
+    initialRuntimePause->setChecked(true);
+    initialRuntimePause->setEnabled(false);
+    form->addRow(QString(), initialRuntimePause);
+    connect(runtimeUpdates, &QCheckBox::toggled, initialRuntimePause, &QWidget::setEnabled);
     damping = new QDoubleSpinBox;
     damping->setDecimals(4); damping->setRange(0.0001, 0.5); damping->setValue(0.1);
     damping->setObjectName("workflowDamping");
@@ -191,7 +205,13 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
         previewCommand("workflow.configure", parameters);
     });
     connect(runButton, &QPushButton::clicked, this, [this] {
-        previewCommand("workflow.run", {{"mode", "both"}, {"independentReference", true}});
+        QJsonObject parameters{{"mode", "both"}, {"independentReference", true}};
+        if (runtimeUpdates->isEnabled() && runtimeUpdates->isChecked())
+        {
+            parameters.insert("runtimeControl", true);
+            if (initialRuntimePause->isChecked()) parameters.insert("pauseAtAcceptedSeq", 1);
+        }
+        previewCommand("workflow.run", parameters);
     });
     connect(resumeButton, &QPushButton::clicked, this, [this] {
         if (const auto *item = jobTree->currentItem())
@@ -331,7 +351,15 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     connect(dt, &QDoubleSpinBox::valueChanged, this, invalidatePreview);
     connect(steps, &QSpinBox::valueChanged, this, invalidatePreview);
     connect(damping, &QDoubleSpinBox::valueChanged, this, invalidatePreview);
+    connect(runtimeUpdates, &QCheckBox::toggled, this, invalidatePreview);
+    connect(initialRuntimePause, &QCheckBox::toggled, this, invalidatePreview);
     pages->addTab(new TaskPlanWidget(&service), tr("Task plans"));
+    pages->addTab(new RuntimeControlWidget(&service), tr("Run parameters"));
+    pages->addTab(new SeriesWorkbenchWidget(&service), tr("Compare curves"));
+    geometryCommands = new GeometryCommandWidget;
+    pages->addTab(geometryCommands, tr("Geometry commands"));
+    meshCommands = new MeshCommandWidget;
+    pages->addTab(meshCommands, tr("Mesh candidates"));
     setActionAvailability();
 }
 
@@ -340,6 +368,9 @@ void WorkflowWidget::setSession(Session *value)
     if (session == value) return;
     if (session) disconnect(session, nullptr, this, nullptr);
     session = value;
+    geometryCommands->setSession(value);
+    meshCommands->setSession(value);
+    meshCommands->setController(value ? value->getModelCommandHost()->meshController() : nullptr);
     nativeRecoveryPreviewId.clear(); nativeRecoveryJobId.clear();
     nativeRecoveryApply->setEnabled(false);
     if (!session) return;
@@ -1114,6 +1145,8 @@ void WorkflowWidget::setActionAvailability()
         (previewSource != documentSources.cend() && sourceRuntimeIsCurrent(previewSource.value()));
     sourceButton->setEnabled(service.isReady() && session && !sourceRegistrationInFlight);
     configureButton->setEnabled(available && selectedSourceCurrent); runButton->setEnabled(available);
+    runtimeUpdates->setEnabled(available && selectedSourceCurrent && !sourceId.isEmpty());
+    initialRuntimePause->setEnabled(runtimeUpdates->isEnabled() && runtimeUpdates->isChecked());
     modelChoice->setEnabled(!commandInFlight); dt->setEnabled(!commandInFlight);
     steps->setEnabled(!commandInFlight); damping->setEnabled(!commandInFlight);
     applyButton->setEnabled(available && !preview.isEmpty() && previewRuntimeCurrent);

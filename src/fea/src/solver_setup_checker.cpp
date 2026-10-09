@@ -1,4 +1,6 @@
 #include "solver_setup_checker.h"
+#include <rmesh_rebind_service.h>
+#include <set>
 
 void SolverSetupChecker::_init(const SolverSetupChecker *pSolverSetupChecker)
 {
@@ -64,11 +66,27 @@ void SolverSetupChecker::checkMaterials(QStringList &warnings, QStringList &erro
     RProblemTypeMask problemTypeMask = this->rModel.getProblemTaskTree().getProblemTypeMask();
     QList<RMaterialProperty::Type> materialProperties = RMaterialProperty::getRequiredTypes(problemTypeMask);
 
+    // This proof is shared with the bounded native rebind geometry guard.
+    // Only empty materials on verified noncontributing static boundary roles
+    // qualify; structural surfaces, point mass, other tasks and unknown geometry
+    // retain the general material gate.
+    std::set<const RElementGroup *> materialFreeBoundaries;
+    if (RMeshRebindService::hasMaterialFreeStaticBoundaryRoles(this->rModel))
+    {
+        for (uint p=0;p<this->rModel.getNPoints();++p) materialFreeBoundaries.insert(this->rModel.getPointPtr(p));
+        for (uint s=0;s<this->rModel.getNSurfaces();++s) materialFreeBoundaries.insert(this->rModel.getSurfacePtr(s));
+    }
+    const auto materialFree=[&materialFreeBoundaries](const RElementGroup *group) {
+        return group->getMaterial().size()==0 && materialFreeBoundaries.count(group)>0;
+    };
+
     QStringList matErrors;
     // Check if entities have material group assigned.
     for (uint i=0;i<this->rModel.getNElementGroups();i++)
     {
         const RElementGroup *pElementGroup = this->rModel.getElementGroupPtr(i);
+
+        if (materialFree(pElementGroup)) continue;
 
         if (pElementGroup->getMaterial().size() == 0)
         {
@@ -98,6 +116,8 @@ void SolverSetupChecker::checkMaterials(QStringList &warnings, QStringList &erro
     for (uint i=0;i<this->rModel.getNElementGroups();i++)
     {
         const RElementGroup *pElementGroup = this->rModel.getElementGroupPtr(i);
+
+        if (materialFree(pElementGroup)) continue;
 
         if (!pElementGroup->getMaterial().hasProperties(materialProperties))
         {

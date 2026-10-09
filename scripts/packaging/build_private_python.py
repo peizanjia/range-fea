@@ -74,7 +74,7 @@ def build(lock_path, cache, output, offline):
         (stage / "python313._pth").write_text(
             "python313.zip\n.\nLib/site-packages\n../../share/range-workflow\n", encoding="utf-8")
         (stage / "runtime-lock.json").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
-        verification = subprocess.run([str(stage / "python.exe"), "-I", "-c",
+        verification = subprocess.run([str(stage / "python.exe"), "-I", "-B", "-c",
             "import sys,numpy,scipy; import scipy.linalg; "
             "assert sys.flags.isolated and sys.flags.no_user_site; "
             "assert abs(float(scipy.linalg.det(numpy.array([[2.,0.],[0.,3.]])))-6.)<1e-12; "

@@ -7,17 +7,23 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QVector>
+#include <QTemporaryDir>
+#include <QFile>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 
 #include <rbl_utils.h>
 #include <rbl_error.h>
 #include <rml_condition_component.h>
 #include <rml_structural_control_setup.h>
 #include <rml_variable.h>
+#include <rml_file_io.h>
+#include <rmesh_rebind_service.h>
 
 namespace
 {
@@ -263,6 +269,20 @@ QString resultFingerprint(const RModel &model, const RModel &candidate,
                              {QStringLiteral("postStateFingerprint"), RModelCommandService::stateFingerprint(candidate)}};
     return QString::fromLatin1(QCryptographicHash::hash(
         QJsonDocument(record).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+}
+
+QJsonObject geometryState(const RGeometryCandidateService::GeometryDelta &delta, bool after)
+{
+    QJsonArray nodes;
+    for (const auto &node : delta.nodes)
+    {
+        const auto &xyz = after ? node.afterXYZ : node.beforeXYZ;
+        nodes.append(QJsonObject{{QStringLiteral("physicalNodeId"), double(node.physicalNodeId)},
+            {QStringLiteral("coordinates"), QJsonArray{xyz[0], xyz[1], xyz[2]}}});
+    }
+    return {{QStringLiteral("geometrySha256"), after ? delta.postGeometrySha256 : delta.preGeometrySha256},
+            {QStringLiteral("affectedPhysicalNodeIds"), delta.affectedPhysicalNodeIds},
+            {QStringLiteral("nodes"), nodes}};
 }
 
 bool parseTargetId(const QJsonValue &value, uint &physicalId)
@@ -675,6 +695,90 @@ void appendSamples(RConditionComponent &component, double timeS, double value)
     component.add(timeS, value);
 }
 
+// Rebinding replaces the complete reset analysis setup. Its history guard is
+// deliberately separate from the existing journal hash scope (v3).
+QString rebindBindingFingerprint(const RModel &model)
+{
+    const auto &restart = model.getProblemSetup().getStructuralDynamicsRestartData();
+    const auto fields = [](const RStructuralDynamicsRestartData &s) {
+        return std::tie(s.available,s.completedSteps,s.time,s.fixedTimeStep,s.meshNodeCount,s.meshElementCount,
+            s.physicalDofCount,s.meshFingerprint,s.dofFingerprint,s.systemFingerprint,s.q,s.v,s.a,s.externalForce,
+            s.cumulativeExternalWork,s.cumulativeDampingDissipation,s.initialMechanicalEnergy,s.supportResponseAvailable,
+            s.supportFingerprint,s.supportReactions,s.supportPowers,s.cumulativeSupportWork,s.controlAvailable,
+            s.controlProtocolVersion,s.controlFingerprint,s.controlChannelIds,s.controlLastCommands,s.controlPowers,
+            s.cumulativeControlWork,s.controlControllerState,s.controlDeterministicSeed);
+    };
+    const RStructuralDynamicsRestartData defaults;
+    const auto &setup = model.getProblemSetup();
+    const auto &interactions = setup.getStructuralInteractionSetup();
+    if (fields(restart) != fields(defaults) || model.getNVariables()
+        || !model.getMonitoringPointManager().empty() || model.getNVectorFields()
+        || model.getNScalarFields() || model.getNStreamLines() || model.getNCuts() || model.getNIsos()
+        || !interactions.getLinearConstraints().empty() || !interactions.getCouplings().empty()
+        || !interactions.getSensors().empty() || !interactions.getActuators().empty() || !interactions.getPrescribedMotions().empty()
+        || !setup.getStructuralControlSetup().controllerId.isEmpty() || !setup.getStructuralControlSetup().channelConditioning.empty()
+        || !setup.getStructuralCableSetup().meshFingerprint.isEmpty() || !setup.getStructuralCableSetup().members.empty()
+        || !setup.getStructuralPiezoSetup().meshFingerprint.isEmpty() || !setup.getStructuralPiezoSetup().ports.empty()
+        || !setup.getStructuralPiezoSetup().nodalBoundaryConditions.empty()
+        || !setup.getRadiationSetup().getViewFactorMatrixFile().isEmpty()
+        || !setup.getStructuralThermalControlSetup().channels.empty() || !setup.getStructuralThermalControlSetup().sparseObservationNodeIds.empty()
+        || !setup.getStructuralDynamicsSetup().getModalDampingRatios().empty() || !setup.getMeshSetup().getVariables().empty()) return {};
+    QVector<QPair<uint, QJsonObject>> orderedGroups;
+    for (uint g = 0; g < model.getNElementGroups(); ++g)
+    {
+        const auto *group = model.getElementGroupPtr(g);
+        if (group->getNInitialConditions() || group->getNEnvironmentConditions()
+            || !group->getData().getVariableData().empty()) return {};
+        QJsonArray members;
+        QList<uint> physicalIds;
+        for (uint e = 0; e < group->size(); ++e)
+        {
+            if (group->get(e) >= model.getNElements()) return {};
+            physicalIds.append(model.getElementPhysicalId(group->get(e)));
+        }
+        std::sort(physicalIds.begin(), physicalIds.end());
+        for (uint id : physicalIds) members.append(double(id));
+        QJsonObject entry{{"physicalId", double(group->getPhysicalId())}, {"members", members}};
+        if (model.getEntityGroupType(g, true) == R_ENTITY_GROUP_POINT)
+            entry.insert("volume", model.getPoint(model.getEntityGroupPosition(g, true)).getVolume());
+        orderedGroups.append({group->getPhysicalId(), entry});
+    }
+    std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    QJsonArray groups;
+    for (const auto &entry : orderedGroups) groups.append(entry.second);
+    QTemporaryDir directory;
+    if (!directory.isValid()) throw std::runtime_error("Cannot stage rebinding history verification.");
+    const QString path = directory.filePath(QStringLiteral("binding.bin"));
+    RSaveFile output(path, RSaveFile::BINARY);
+    output.setVersion(RModel::version);
+    if (!output.open(QIODevice::WriteOnly)) throw std::runtime_error("Cannot write rebinding history verification.");
+    RFileIO::writeBinary(output, model.getProblemTaskTree());
+    RFileIO::writeBinary(output, model.getProblemSetup());
+    RFileIO::writeBinary(output, model.getTimeSolver());
+    if (!output.commit()) throw std::runtime_error("Cannot commit rebinding history verification.");
+    QFile input(path);
+    if (!input.open(QIODevice::ReadOnly)) throw std::runtime_error("Cannot read rebinding history verification.");
+    QByteArray bytes = input.readAll();
+    if (input.error() != QFile::NoError) throw std::runtime_error("Cannot finish rebinding history verification.");
+    bytes.append(QJsonDocument(QJsonObject{{"groups", groups}}).toJson(QJsonDocument::Compact));
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+
+void rebindMetadata(RModelCommandService::PreviewResult &result, bool forward)
+{
+    const auto &binding = result.delta.meshRebind;
+    result.report = binding.report;
+    result.report.insert("physicsState", forward ? "BOUND_STATIC" : "UNBOUND");
+    result.report.insert("requiresRebinding", !forward);
+    result.readSet = {{"geometrySha256", forward ? binding.beforeGeometrySha256 : binding.afterGeometrySha256},
+                     {"supportedStateSha256", forward ? binding.beforeStateSha256 : binding.afterStateSha256},
+                     {"bindingSha256", forward ? binding.beforeBindingSha256 : binding.afterBindingSha256}};
+    result.units = {{"coordinates", "m"}, {"displacement", "m"}, {"force", "N"},
+                    {"youngModulus", "Pa"}, {"density", "kg/m^3"}, {"poissonRatio", "1"}};
+    result.invalidation = {{"results", true}, {"restart", true}, {"rom", true},
+                           {"control", true}, {"derivedMappings", true}};
+}
+
 } // namespace
 
 QJsonObject RModelCommandService::modalParameters(const RModalSetup &setup)
@@ -741,7 +845,8 @@ QString RModelCommandService::stateFingerprint(const RModel &model)
                             {QStringLiteral("structuralDynamics"), structuralDynamicsParameters(
                                  model.getProblemSetup().getStructuralDynamicsSetup())},
                             {QStringLiteral("timeSolver"), timeSolverParameters(model.getTimeSolver())},
-                            {QStringLiteral("groups"), groups}};
+                            {QStringLiteral("groups"), groups},
+                            {QStringLiteral("geometrySha256"), RGeometryCandidateService::geometryFingerprint(model)}};
     return QString::fromLatin1(QCryptographicHash::hash(
         QJsonDocument(state).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
 }
@@ -752,7 +857,7 @@ QJsonObject RModelCommandService::capabilities(const RModel &model)
     const bool modal = taskMask & R_PROBLEM_STRESS_MODAL;
     const bool stressOnly = taskMask == R_PROBLEM_STRESS;
     const bool structural = stressOnly || taskMask == R_PROBLEM_STRESS_MODAL;
-    const QJsonArray commands{
+    QJsonArray commands{
         QJsonObject{{QStringLiteral("id"), QStringLiteral("analysis.modal.configure")},
                     {QStringLiteral("version"), 1}, {QStringLiteral("supported"), modal},
                     {QStringLiteral("units"), QJsonObject{{QStringLiteral("tolerance"), QStringLiteral("1")}}},
@@ -823,10 +928,36 @@ QJsonObject RModelCommandService::capabilities(const RModel &model)
                     {QStringLiteral("constraints"), QJsonArray{QStringLiteral("force requires a Stress-only model and a single-node Point group"),
                         QStringLiteral("displacement requires Stress or Stress Modal and a Point, Line, Surface, or Volume group")}}}
     };
+    const QJsonObject geometryCapabilities = RGeometryCandidateService::capabilities();
+    const auto identity = RGeometryCandidateService::preview(model, QStringLiteral("geometry.rigid_transform"),
+        {{"unit", "m"}, {"angleUnit", "deg"}, {"directionPolicy", "preserve_global"},
+         {"center", QJsonArray{0.0, 0.0, 0.0}}, {"axis", QJsonArray{0.0, 0.0, 1.0}},
+         {"angle", 0.0}, {"translation", QJsonArray{0.0, 0.0, 0.0}}});
+    for (const auto &command : geometryCapabilities.value(QStringLiteral("commands")).toArray())
+    {
+        QJsonObject capability = geometryCapabilities;
+        capability.remove(QStringLiteral("commands"));
+        capability.insert(QStringLiteral("id"), command);
+        capability.insert(QStringLiteral("version"), 1);
+        capability.insert(QStringLiteral("supported"), identity.valid);
+        commands.append(capability);
+    }
+    QJsonObject rebindCapability = RMeshRebindService::capabilities();
+    rebindCapability.remove(QStringLiteral("commandId"));
+    rebindCapability.insert(QStringLiteral("id"), QStringLiteral("mesh.rebind.static"));
+    // Empty constraints reach argument validation only after the pure service
+    // has accepted the complete unbound source mesh and reset setup.
+    const auto rebindProbe = RMeshRebindService::preview(model,
+        {{"unitSI", true}, {"staticStress", true},
+         {"material", QJsonObject{{"youngModulusPa", 1000.0}, {"poissonRatio", 0.25}, {"densityKgM3", 1.0}}},
+         {"constraints", QJsonArray{}}, {"loads", QJsonArray{}}});
+    rebindCapability.insert(QStringLiteral("supported"), rebindProbe.code == QStringLiteral("invalid_constraints"));
+    rebindCapability.insert(QStringLiteral("required"), QJsonArray{"unitSI", "staticStress", "material", "constraints", "loads"});
+    commands.append(rebindCapability);
     return {{QStringLiteral("apiVersion"), apiVersion},
             {QStringLiteral("taskMask"), taskMask},
             {QStringLiteral("sourceIdentityBinding"), QStringLiteral("Target pages and cursors bind the wrapper sourceId and current revision; command previews bind their supplied sourceId and revision.")},
-            {QStringLiteral("fingerprintScope"), QStringLiteral("Accepted analysis and time-grid settings, stable element-group IDs/types/labels, complete material and boundary state, and Point-group member identity/geometry. Selection and visibility state are excluded; wrappers must enforce their accepted source revision for other model changes.")},
+            {QStringLiteral("fingerprintScope"), QStringLiteral("Accepted analysis and time-grid settings, stable element-group IDs/types/labels, complete material and boundary state, and complete native node coordinates, element types/connectivity and physical identities. Selection and visibility state are excluded; wrappers must enforce their accepted source revision for other model changes.")},
             {QStringLiteral("targetPagination"), QJsonObject{{QStringLiteral("minimumLimit"), 1},
                 {QStringLiteral("maximumLimit"), MaximumPageSize}, {QStringLiteral("defaultLimit"), DefaultPageSize},
                 {QStringLiteral("cursorBoundBy"), QJsonArray{QStringLiteral("sourceId"), QStringLiteral("revision"),
@@ -933,7 +1064,81 @@ RModelCommandService::PreviewResult RModelCommandService::preview(
 
     try
     {
-        if (commandId == QStringLiteral("analysis.modal.configure"))
+        if (commandId == QStringLiteral("mesh.rebind.static"))
+        {
+            const auto rebound = RMeshRebindService::preview(model, arguments);
+            if (!rebound.valid) return reject(rebound.code, rebound.message);
+            result.candidate = rebound.candidate;
+            result.delta.kind = Delta::Kind::MeshRebind;
+            auto &binding = result.delta.meshRebind;
+            binding.beforeTask = model.getProblemTaskTree();
+            binding.afterTask = result.candidate.getProblemTaskTree();
+            binding.beforeSetup = model.getProblemSetup();
+            binding.afterSetup = result.candidate.getProblemSetup();
+            binding.beforeTime = model.getTimeSolver();
+            binding.afterTime = result.candidate.getTimeSolver();
+            binding.beforeGeometrySha256 = rebound.sourceGeometrySha256;
+            binding.afterGeometrySha256 = rebound.postGeometrySha256;
+            binding.beforeStateSha256 = rebound.sourceStateSha256;
+            binding.afterStateSha256 = rebound.postStateSha256;
+            binding.beforeBindingSha256 = rebindBindingFingerprint(model);
+            binding.afterBindingSha256 = rebindBindingFingerprint(result.candidate);
+            if (binding.beforeBindingSha256.isEmpty() || binding.afterBindingSha256.isEmpty())
+                return reject(QStringLiteral("invalid_candidate"), QStringLiteral("Rebinding setup cannot be safely captured for history."));
+            binding.report = rebound.report;
+            for (uint g = 0; g < model.getNElementGroups(); ++g)
+            {
+                const auto *sourceGroup = model.getElementGroupPtr(g);
+                const auto *candidateGroup = findGroup(result.candidate, sourceGroup->getPhysicalId(), nullptr, nullptr);
+                if (!candidateGroup) return reject(QStringLiteral("invalid_candidate"), QStringLiteral("Rebinding lost a source group identity."));
+                binding.materials.append({sourceGroup->getPhysicalId(), sourceGroup->getMaterial(), candidateGroup->getMaterial()});
+                result.delta.changedPaths.append(QStringLiteral("/entities/g:%1/material").arg(sourceGroup->getPhysicalId()));
+            }
+            for (uint p = 0; p < result.candidate.getNPoints(); ++p)
+            {
+                const auto &point = result.candidate.getPoint(p);
+                const uint element = point.get(0);
+                binding.targets.append({point, result.candidate.getElementPhysicalId(element),
+                    result.candidate.getNodePhysicalId(result.candidate.getElement(element).getNodeId(0))});
+            }
+            result.delta.changedPaths.append(QStringLiteral("/geometry/elements"));
+            result.delta.changedPaths.append(QStringLiteral("/entities/points"));
+            result.delta.changedPaths.append(QStringLiteral("/analysis/taskTree"));
+            result.delta.changedPaths.append(QStringLiteral("/analysis/problemSetup"));
+            result.delta.changedPaths.append(QStringLiteral("/analysis/timeSolver"));
+            result.delta.changedPath = result.delta.changedPaths.first().toString();
+            result.normalizedArguments = rebound.normalizedArguments;
+            result.delta.normalizedArguments = result.normalizedArguments;
+            result.before = {{"physicsState", "UNBOUND"}, {"requiresRebinding", true},
+                {"geometrySha256", binding.beforeGeometrySha256}, {"supportedStateSha256", binding.beforeStateSha256},
+                {"bindingSha256", binding.beforeBindingSha256}};
+            result.after = {{"physicsState", "BOUND_STATIC"}, {"requiresRebinding", false},
+                {"geometrySha256", binding.afterGeometrySha256}, {"supportedStateSha256", binding.afterStateSha256},
+                {"bindingSha256", binding.afterBindingSha256}};
+            result.delta.beforeState = result.before;
+            result.delta.afterState = result.after;
+            rebindMetadata(result, true);
+        }
+        else if (commandId == QStringLiteral("geometry.node_coordinates.set")
+            || commandId == QStringLiteral("geometry.rigid_transform"))
+        {
+            const auto geometry = RGeometryCandidateService::preview(model, commandId, arguments);
+            if (!geometry.valid) return reject(geometry.code, geometry.message);
+            result.delta.geometry = geometry.delta;
+            result.delta.kind = geometry.delta.noOp ? Delta::Kind::None : Delta::Kind::Geometry;
+            result.before = geometryState(geometry.delta, false);
+            result.after = geometryState(geometry.delta, true);
+            result.normalizedArguments = geometry.normalizedArguments;
+            result.delta.normalizedArguments = result.normalizedArguments;
+            result.delta.beforeState = result.before;
+            result.delta.afterState = result.after;
+            for (const auto &node : geometry.delta.nodes)
+                result.delta.changedPaths.append(QStringLiteral("/geometry/nodes/n:%1/coordinates").arg(node.physicalNodeId));
+            result.delta.changedPath = result.delta.changedPaths.isEmpty() ? QString()
+                : result.delta.changedPaths.first().toString();
+            result.candidate = geometry.candidate;
+        }
+        else if (commandId == QStringLiteral("analysis.modal.configure"))
         {
             static const QSet<QString> expected{QStringLiteral("method"), QStringLiteral("iterations"),
                 QStringLiteral("modes"), QStringLiteral("tolerance"), QStringLiteral("unit")};
@@ -1186,7 +1391,9 @@ RModelCommandService::PreviewResult RModelCommandService::preview(
         result.delta.changedPaths = result.changedPaths;
         result.delta.changedPath = result.changedPaths.isEmpty() ? QString() : result.delta.changedPath;
 
-        result.candidate = model;
+        if (commandId != QStringLiteral("geometry.node_coordinates.set")
+            && commandId != QStringLiteral("geometry.rigid_transform")
+            && commandId != QStringLiteral("mesh.rebind.static")) result.candidate = model;
         if (commandId == QStringLiteral("analysis.modal.configure"))
             result.candidate.getProblemSetup().setModalSetup(result.delta.afterModal);
         else if (commandId == QStringLiteral("analysis.structural_dynamics.configure"))
@@ -1239,6 +1446,138 @@ RModelCommandService::PreviewResult RModelCommandService::applyDelta(
         return reject(QStringLiteral("empty_history"), QStringLiteral("No supported model change is stored in this history entry."));
     try
     {
+        if (delta.kind == Delta::Kind::MeshRebind)
+        {
+            const auto &binding = delta.meshRebind;
+            const QString expectedGeometry = forward ? binding.beforeGeometrySha256 : binding.afterGeometrySha256;
+            const QString expectedState = forward ? binding.beforeStateSha256 : binding.afterStateSha256;
+            const QString expectedBinding = forward ? binding.beforeBindingSha256 : binding.afterBindingSha256;
+            if (binding.targets.isEmpty() || binding.materials.isEmpty()
+                || expectedGeometry.isEmpty() || expectedState.isEmpty() || expectedBinding.isEmpty()
+                || RGeometryCandidateService::geometryFingerprint(model) != expectedGeometry
+                || stateFingerprint(model) != expectedState || rebindBindingFingerprint(model) != expectedBinding)
+                return reject(QStringLiteral("stale_history"), QStringLiteral("Geometry or complete static binding state no longer matches the stored edit."));
+            result.candidate = model;
+            QSet<uint> targetGroupIds, targetElementIds;
+            QVector<uint> pointPositions, elementPositions;
+            for (const auto &target : binding.targets)
+            {
+                const uint groupId = target.point.getPhysicalId();
+                REntityGroupType type = R_ENTITY_GROUP_NONE;
+                uint position = RConstants::eod;
+                const auto *group = findGroup(model, groupId, &type, &position);
+                const uint element = model.findElementPositionByPhysicalId(target.elementPhysicalId);
+                const uint node = model.findNodePositionByPhysicalId(target.nodePhysicalId);
+                if (!groupId || !target.elementPhysicalId || targetGroupIds.contains(groupId)
+                    || targetElementIds.contains(target.elementPhysicalId) || node >= model.getNNodes()
+                    || target.point.size() != 1)
+                    return reject(QStringLiteral("stale_history"), QStringLiteral("Stored point target identities are invalid."));
+                targetGroupIds.insert(groupId);
+                targetElementIds.insert(target.elementPhysicalId);
+                if (forward)
+                {
+                    if (group || element != RConstants::eod)
+                        return reject(QStringLiteral("stale_history"), QStringLiteral("A captured point identity is already in use."));
+                    const uint point = result.candidate.getNPoints();
+                    // Native add methods advance the allocators. Assign the
+                    // captured group identity only after uniqueness checks;
+                    // allocator high-water marks are never restored backwards.
+                    result.candidate.addPoint(target.point);
+                    result.candidate.getPoint(point) = target.point;
+                    result.candidate.getPoint(point).resize(0);
+                    RElement next(R_ELEMENT_POINT);
+                    next.setNodeId(0, node);
+                    result.candidate.addElement(next, true, point);
+                    result.candidate.setElementPhysicalId(result.candidate.getNElements() - 1, target.elementPhysicalId);
+                }
+                else
+                {
+                    if (!group || type != R_ENTITY_GROUP_POINT || group->size() != 1
+                        || element >= model.getNElements() || group->get(0) != element
+                        || model.getElement(element).getType() != R_ELEMENT_POINT
+                        || model.getElement(element).size() != 1 || model.getElement(element).getNodeId(0) != node)
+                        return reject(QStringLiteral("stale_history"), QStringLiteral("A captured point target no longer matches its node and element."));
+                    pointPositions.append(position);
+                    elementPositions.append(element);
+                }
+            }
+            if (!forward)
+            {
+                std::sort(pointPositions.begin(), pointPositions.end(), std::greater<uint>());
+                for (uint p : pointPositions) result.candidate.removePoint(p);
+                std::sort(elementPositions.begin(), elementPositions.end(), std::greater<uint>());
+                // Each source node remains used by a validated volume element.
+                // removeGroups=true also repairs native element-index shifts.
+                for (uint e : elementPositions) result.candidate.removeElement(e, true);
+            }
+            QSet<uint> materialIds;
+            for (const auto &material : binding.materials)
+            {
+                auto *group = findGroup(result.candidate, material.physicalId, nullptr, nullptr);
+                if (!group || materialIds.contains(material.physicalId) || targetGroupIds.contains(material.physicalId))
+                    return reject(QStringLiteral("stale_history"), QStringLiteral("Stored source material target is invalid."));
+                materialIds.insert(material.physicalId);
+                group->setMaterial(forward ? material.after : material.before);
+            }
+            result.candidate.setProblemTaskTree(forward ? binding.afterTask : binding.beforeTask);
+            result.candidate.setProblemSetup(forward ? binding.afterSetup : binding.beforeSetup);
+            result.candidate.setTimeSolver(forward ? binding.afterTime : binding.beforeTime);
+            const QString nextGeometry = forward ? binding.afterGeometrySha256 : binding.beforeGeometrySha256;
+            const QString nextState = forward ? binding.afterStateSha256 : binding.beforeStateSha256;
+            const QString nextBinding = forward ? binding.afterBindingSha256 : binding.beforeBindingSha256;
+            if (nextGeometry.isEmpty() || nextState.isEmpty() || nextBinding.isEmpty()
+                || RGeometryCandidateService::geometryFingerprint(result.candidate) != nextGeometry
+                || stateFingerprint(result.candidate) != nextState || rebindBindingFingerprint(result.candidate) != nextBinding)
+                return reject(QStringLiteral("stale_history"), QStringLiteral("Stored static binding result does not match the captured state."));
+            result.before = forward ? delta.beforeState : delta.afterState;
+            result.after = forward ? delta.afterState : delta.beforeState;
+            result.normalizedArguments = delta.normalizedArguments;
+            result.changedPaths = delta.changedPaths;
+            result.delta = delta;
+            rebindMetadata(result, forward);
+            result.valid = true;
+            result.fingerprint = resultFingerprint(model, result.candidate, QString(), QString(),
+                forward ? QStringLiteral("model.redo") : QStringLiteral("model.undo"),
+                result.normalizedArguments, result.before, result.after);
+            return result;
+        }
+        if (delta.kind == Delta::Kind::Geometry)
+        {
+            const auto &geometry = delta.geometry;
+            const QString expectedHash = forward ? geometry.preGeometrySha256 : geometry.postGeometrySha256;
+            const QString nextHash = forward ? geometry.postGeometrySha256 : geometry.preGeometrySha256;
+            if (geometry.nodes.empty() || expectedHash.isEmpty() || nextHash.isEmpty()
+                || RGeometryCandidateService::geometryFingerprint(model) != expectedHash)
+                return reject(QStringLiteral("stale_history"), QStringLiteral("Geometry no longer matches the stored edit."));
+            result.candidate = model;
+            QSet<uint> ids;
+            for (const auto &node : geometry.nodes)
+            {
+                const uint position = model.findNodePositionByPhysicalId(node.physicalNodeId);
+                if (position >= model.getNNodes() || ids.contains(node.physicalNodeId))
+                    return reject(QStringLiteral("stale_history"), QStringLiteral("Stored geometry node identity is invalid."));
+                ids.insert(node.physicalNodeId);
+                const auto &expected = forward ? node.beforeXYZ : node.afterXYZ;
+                const auto &next = forward ? node.afterXYZ : node.beforeXYZ;
+                const RNode &current = model.getNode(position);
+                const std::array<double,3> xyz{current.getX(), current.getY(), current.getZ()};
+                if (std::memcmp(xyz.data(), expected.data(), sizeof(double) * 3) != 0)
+                    return reject(QStringLiteral("stale_history"), QStringLiteral("Stored geometry coordinates no longer match."));
+                result.candidate.getNode(position).set(next[0], next[1], next[2]);
+            }
+            if (RGeometryCandidateService::geometryFingerprint(result.candidate) != nextHash)
+                return reject(QStringLiteral("stale_history"), QStringLiteral("Stored geometry result hash does not match."));
+            result.before = geometryState(geometry, !forward);
+            result.after = geometryState(geometry, forward);
+            result.normalizedArguments = delta.normalizedArguments;
+            result.changedPaths = delta.changedPaths;
+            result.delta = delta;
+            result.valid = true;
+            result.fingerprint = resultFingerprint(model, result.candidate, QString(), QString(),
+                forward ? QStringLiteral("model.redo") : QStringLiteral("model.undo"),
+                result.normalizedArguments, result.before, result.after);
+            return result;
+        }
         const QJsonObject expected = forward ? delta.beforeState : delta.afterState;
         const QJsonObject next = forward ? delta.afterState : delta.beforeState;
         result.before = currentResourceState(model, delta.kind, delta.physicalId, delta.boundaryType);

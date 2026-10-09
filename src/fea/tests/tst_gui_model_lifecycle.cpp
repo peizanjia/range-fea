@@ -49,6 +49,10 @@ public:
         cloudSessionManager = new RCloudSessionManager(this);
         cloudConnectionHandler = new RCloudConnectionHandler(cloudSessionManager, applicationSettings, this);
         aiAgentSettingsManager = new RAgentSettingsManager(this);
+        // QSettings isolation does not isolate QStandardPaths-based native jobs.
+        // Ordinary invocations must not scan previous test runs' durable ledgers.
+        QCoreApplication::setApplicationName(QStringLiteral("RangeFEA-Integration-")
+            + QUuid::createUuid().toString(QUuid::WithoutBraces));
         const QStringList testArguments = QCoreApplication::arguments();
         if (testArguments.contains(QStringLiteral("--recovery-interaction"))
             || testArguments.contains(QStringLiteral("--model-commit-recovery")))
@@ -824,6 +828,12 @@ int runAgentReadOnlyRunnerTests(int argc, char **argv);
 int runAgentConversationHistoryWidgetTests(int argc, char **argv);
 int runAgentObservationBoundaryTests(int argc, char **argv);
 int runTaskPlanWidgetTests(int argc, char **argv);
+int runRuntimeControlWidgetTests(int argc, char **argv);
+int runSeriesWorkbenchWidgetTests(int argc, char **argv);
+int runGeometryCommandWidgetTests(int argc, char **argv);
+int runMeshJobControllerTests(int argc, char **argv);
+int runMeshBindingWidgetTests(int argc, char **argv);
+int runScientificProviderTests(int argc, char **argv);
 int runSolverSnapshotTests(int argc, char **argv);
 int runExtensionWidgetTests(int argc, char **argv);
 int runAgentEventViewTests(int argc, char **argv);
@@ -850,6 +860,8 @@ int main(int argc, char **argv)
         settings.setValue("cloud/softwareCheckUpdates", false);
         settings.setValue("cloud/softwareSendUsageInfo", false);
         settings.setValue("cloud/syncDataDirectory", false);
+        // Bound native child parallelism in this isolated test settings directory.
+        settings.setValue("application/nThreads", 4);
         settings.sync();
     }
     WindowApplication application(argc, argv);
@@ -861,6 +873,12 @@ int main(int argc, char **argv)
     const bool agentHistory = argc > 1 && QByteArray(argv[1]) == "--agent-conversation-history";
     const bool observationBoundaries = argc > 1 && QByteArray(argv[1]) == "--agent-observation-boundaries";
     const bool taskPlans = argc > 1 && QByteArray(argv[1]) == "--task-plans-widget";
+    const bool runtimeControl = argc > 1 && QByteArray(argv[1]) == "--runtime-control-widget";
+    const bool seriesWorkbench = argc > 1 && QByteArray(argv[1]) == "--series-workbench-widget";
+    const bool geometryCommands = argc > 1 && QByteArray(argv[1]) == "--geometry-command-widget";
+    const bool meshJobs = argc > 1 && QByteArray(argv[1]) == "--mesh-job-controller";
+    const bool meshBinding = argc > 1 && QByteArray(argv[1]) == "--mesh-binding-widget";
+    const bool scientificProvider = argc > 1 && QByteArray(argv[1]) == "--scientific-provider";
     const bool solverSnapshot = argc > 1 && QByteArray(argv[1]) == "--solver-snapshot";
     const bool extensionWidget = argc > 1 && QByteArray(argv[1]) == "--extension-widget";
     const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
@@ -872,7 +890,7 @@ int main(int argc, char **argv)
     const bool currentModelWorkflow = argc > 1 && QByteArray(argv[1]) == "--current-model-workflow";
     const bool recoveryInteraction = argc > 1 && QByteArray(argv[1]) == "--recovery-interaction";
     const bool modelCommitRecovery = argc > 1 && QByteArray(argv[1]) == "--model-commit-recovery";
-    if (hostContext || agentRunner || agentReadOnly || agentHistory || observationBoundaries || taskPlans || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
+    if (hostContext || agentRunner || agentReadOnly || agentHistory || observationBoundaries || taskPlans || runtimeControl || seriesWorkbench || geometryCommands || meshJobs || meshBinding || scientificProvider || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
@@ -883,6 +901,12 @@ int main(int argc, char **argv)
         : agentHistory ? runAgentConversationHistoryWidgetTests(argc, argv)
         : observationBoundaries ? runAgentObservationBoundaryTests(argc, argv)
         : taskPlans ? runTaskPlanWidgetTests(argc, argv)
+        : runtimeControl ? runRuntimeControlWidgetTests(argc, argv)
+        : seriesWorkbench ? runSeriesWorkbenchWidgetTests(argc, argv)
+        : geometryCommands ? runGeometryCommandWidgetTests(argc, argv)
+        : meshJobs ? runMeshJobControllerTests(argc, argv)
+        : meshBinding ? runMeshBindingWidgetTests(argc, argv)
+        : scientificProvider ? runScientificProviderTests(argc, argv)
         : solverSnapshot ? runSolverSnapshotTests(argc, argv)
         : extensionWidget ? runExtensionWidgetTests(argc, argv)
         : agentEventView ? runAgentEventViewTests(argc, argv)

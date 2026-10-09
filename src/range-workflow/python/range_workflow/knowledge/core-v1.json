@@ -9,6 +9,16 @@
     "protocolVersions": ["range.workflow/v1"]
   },
   "groups": {
+    "runtime": {
+      "title": "Control the accepted native runtime with separate host approval",
+      "steps": [
+        "Query the live job and attempt identity, current accepted parameter revision, physical units, and immutable actuator envelope.",
+        "Preview the exact finite scalar velocity gain and narrowed force limits; submit only after separate host approval of that source and parameter binding.",
+        "Read the solver's actual accepted receipt and history. Queued or frozen proposals are pending, and display Hold does not pause the solver."
+      ],
+      "success": "Only an authoritative accepted receipt identifies actual appliedSeq, acceptedTimeS, parameter hash, and runtime controller revision.",
+      "recovery": "Query the original proposal when delivery is unknown. Reopen discards approval and never resends pending proposals; restored checkpoint history remains distinct from this attempt."
+    },
     "workflow": {
       "title": "Follow the workflow from preview through verified result",
       "steps": [
@@ -54,7 +64,9 @@
       "steps": [
         "Read the native operation descriptor and its current source, revision, and unit context.",
         "Preview edits before applying them, and keep the native document identity separate from imported or caller-supplied references.",
-        "After execution, inspect the published native artifact and verify the requested engineering outcome independently."
+        "After execution, inspect the published native artifact and verify the requested engineering outcome independently.",
+        "GUI mesh generation and acceptance use the live native host catalog, exact source document revision and a separate manual approval for each action, including Auto tasks. Acceptance creates a new unbound document with fresh physical IDs; old loads, controls and ROM targets are not mapped.",
+        "Before static analysis on an accepted tetrahedral mesh, explicitly preview and approve mesh.rebind.static with SI material values, new physical node IDs, global displacement constraints and forces. A NONE task is not solvable."
       ],
       "success": "The operation returns an artifact bound to the intended native document and its accepted revision.",
       "recovery": "On a revision conflict or stale source, refresh the document and create a new preview only after reconciling the changed state."
@@ -64,7 +76,9 @@
       "steps": [
         "Check the live extension runtime flags; the normal mode keeps trusted extension execution disabled.",
         "Use trusted developer mode only when the host explicitly enables it, and review bundle validation and declared inputs before activation.",
-        "Treat the extension runtime as trusted code execution; the runtime flags do not claim an operating-system sandbox."
+        "Treat the extension runtime as trusted code execution; the runtime flags do not claim an operating-system sandbox.",
+        "Before a v2 scientific preview, request extension.runtime.verify and poll extension.runtime.verification.query until the current full-file receipt is ready. Each request keeps its normal timeout; verification runs in the background.",
+        "The v2 private runtime accepts only its frozen file manifest and rejects disk bytecode caches. An environment-stamp currentity receipt does not continuously verify DLL bytes; execution performs complete byte verification. After a required or failed verification, create a fresh verification association before retrying."
       ],
       "success": "An extension result is accepted only when the host reports its validated version, runtime binding, and result checks.",
       "recovery": "If trust mode is disabled, validation fails, or an extension outcome is uncertain, stop and preserve the candidate and validation record."

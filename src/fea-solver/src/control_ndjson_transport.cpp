@@ -6,6 +6,8 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QUuid>
+#include <QProcessEnvironment>
+#include "runtime_control_json.h"
 
 #include <cmath>
 #include <utility>
@@ -112,12 +114,16 @@ bool ControlNdjsonTransport::start(QString *error)
     this->stderrTail.clear();
     this->process.setProgram(this->config.program);
     this->process.setArguments(this->config.arguments);
+    QProcessEnvironment childEnvironment=QProcessEnvironment::systemEnvironment();
+    for (const QString &name : childEnvironment.keys())
+        if (name.startsWith(QStringLiteral("RANGE_RUNTIME_CONTROL_"))) childEnvironment.remove(name);
+    this->process.setProcessEnvironment(childEnvironment);
     this->process.start(QIODevice::ReadWrite);
     if (!this->process.waitForStarted(this->config.timeoutMs))
         return this->failRemote(QStringLiteral("Controller process failed to start"),error);
 
     const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    const QJsonObject request{{QStringLiteral("protocolVersion"),protocolVersion},
+    QJsonObject request{{QStringLiteral("protocolVersion"),protocolVersion},
                               {QStringLiteral("requestId"),requestId},
                               {QStringLiteral("op"),QStringLiteral("handshake")},
                               {QStringLiteral("controllerId"),this->config.controllerId},
@@ -130,6 +136,13 @@ bool ControlNdjsonTransport::start(QString *error)
                                   {QStringLiteral("controlMode"),QStringLiteral("scalar-nodal-force")},
                                   {QStringLiteral("sensors"),sensors},
                                   {QStringLiteral("actuatorIds"),actuators}}}};
+    if (!this->config.runtimeIdentity.isEmpty())
+    {
+        auto capabilities=request.value(QStringLiteral("capabilities")).toObject();
+        capabilities.insert(QStringLiteral("runtimeParameters"),QStringLiteral("range.runtime-parameters/v1"));
+        request.insert(QStringLiteral("capabilities"),capabilities);
+        request.insert(QStringLiteral("runtimeIdentity"),this->config.runtimeIdentity);
+    }
     QJsonObject response;
     if (!this->exchange(request,response,error)) return false;
     const QJsonValue capabilitiesValue = response.value(QStringLiteral("capabilities"));
@@ -142,6 +155,20 @@ bool ControlNdjsonTransport::start(QString *error)
             QString::number(this->config.deterministicSeed))
         return this->failRemote(QStringLiteral("Invalid controller handshake"),error);
     const QJsonObject capabilities = capabilitiesValue.toObject();
+    if (!this->config.runtimeIdentity.isEmpty() &&
+        (capabilities.value(QStringLiteral("runtimeParameters")) != QStringLiteral("range.runtime-parameters/v1") ||
+         response.value(QStringLiteral("runtimeIdentity")) != this->config.runtimeIdentity))
+        return this->failRemote(QStringLiteral("Controller does not support the bound runtime parameter extension"),error);
+    if (!this->config.runtimeIdentity.isEmpty())
+    {
+        auto keys=response.keys();keys.sort();
+        QStringList expected{"protocolVersion","requestId","op","ok","controllerId","controllerRevision",
+                             "modelSnapshotSha256","deterministicSeed","capabilities","runtimeIdentity"};expected.sort();
+        auto capabilityKeys=capabilities.keys();capabilityKeys.sort();
+        QStringList expectedCapabilities{"pureStep","controlMode","actuatorIds","runtimeParameters"};expectedCapabilities.sort();
+        if (keys!=expected || capabilityKeys!=expectedCapabilities)
+            return this->failRemote(QStringLiteral("Unknown runtime handshake fields"),error);
+    }
     if (capabilities.value(QStringLiteral("pureStep")) != true ||
         capabilities.value(QStringLiteral("controlMode")) != QStringLiteral("scalar-nodal-force") ||
         !capabilities.value(QStringLiteral("actuatorIds")).isArray())
@@ -163,9 +190,16 @@ bool ControlNdjsonTransport::start(QString *error)
 bool ControlNdjsonTransport::compute(quint64 stepId, double time, double dt,
                                      const QVector<ControlObservation> &observations,
                                      const QJsonObject &acceptedControllerState,
-                                     ControlStepReply &reply, QString *error)
+                                     ControlStepReply &reply, QString *error,
+                                     const QJsonObject &runtimeParameters)
 {
     if (!this->ready) return failLocal(QStringLiteral("Control transport is not ready"),error);
+    if (this->config.runtimeIdentity.isEmpty() != runtimeParameters.isEmpty() ||
+        (!runtimeParameters.isEmpty() &&
+         (runtimeParameters.value(QStringLiteral("schema")) != QStringLiteral("range.runtime-parameters/v1") ||
+          runtimeParameters.value(QStringLiteral("identity")) != this->config.runtimeIdentity ||
+          !runtimeParameters.value(QStringLiteral("parameters")).isObject() || !finiteJson(runtimeParameters))))
+        return failLocal(QStringLiteral("Invalid runtime parameter compute extension"),error);
     if (!std::isfinite(time) || !std::isfinite(dt) || dt <= 0.0 ||
         !finiteJson(acceptedControllerState))
         return failLocal(QStringLiteral("Invalid control step time, dt or controller state"),error);
@@ -200,8 +234,21 @@ bool ControlNdjsonTransport::compute(quint64 stepId, double time, double dt,
                         {QStringLiteral("dt"),dt},
                         {QStringLiteral("observations"),values},
                         {QStringLiteral("acceptedControllerState"),acceptedControllerState}};
+    if (!runtimeParameters.isEmpty()) request.insert(QStringLiteral("runtimeParameters"),runtimeParameters);
     QJsonObject response;
     if (!this->exchange(request,response,error)) return false;
+    if (!runtimeParameters.isEmpty())
+    {
+        auto keys=response.keys();keys.sort();
+        QStringList expectedKeys{"protocolVersion","requestId","op","stepId","controllerId","controllerRevision",
+            "modelSnapshotSha256","deterministicSeed","commands","nextControllerState","runtimeParameters"};expectedKeys.sort();
+        if (keys!=expectedKeys || response.value(QStringLiteral("runtimeParameters"))!=runtimeParameters ||
+            response.value(QStringLiteral("controllerId"))!=this->config.controllerId ||
+            response.value(QStringLiteral("controllerRevision"))!=this->config.controllerRevision ||
+            response.value(QStringLiteral("modelSnapshotSha256"))!=this->config.modelSnapshotSha256 ||
+            response.value(QStringLiteral("deterministicSeed"))!=QString::number(this->config.deterministicSeed))
+            return this->failRemote(QStringLiteral("Controller runtime parameter echo mismatch"),error);
+    }
     if (response.value(QStringLiteral("op")) != QStringLiteral("compute") ||
         response.value(QStringLiteral("stepId")) != step ||
         !response.value(QStringLiteral("commands")).isArray() ||
@@ -216,6 +263,12 @@ bool ControlNdjsonTransport::compute(quint64 stepId, double time, double dt,
     {
         if (!item.isObject()) return this->failRemote(QStringLiteral("Invalid control command"),error);
         const QJsonObject command = item.toObject();
+        if (!runtimeParameters.isEmpty())
+        {
+            auto keys=command.keys();keys.sort();
+            if (keys!=QStringList{"actuatorId","force","unit"})
+                return this->failRemote(QStringLiteral("Unknown runtime force command fields"),error);
+        }
         const QString id = command.value(QStringLiteral("actuatorId")).toString();
         const QJsonValue force = command.value(QStringLiteral("force"));
         if (!this->config.actuatorIds.contains(id) || commanded.contains(id) ||
@@ -259,13 +312,23 @@ bool ControlNdjsonTransport::exchange(const QJsonObject &request, QJsonObject &r
             QByteArray line = this->stdoutBuffer.left(newline);
             this->stdoutBuffer.remove(0,newline+1);
             if (line.endsWith('\r')) line.chop(1);
-            QJsonParseError parseError;
-            const QJsonDocument document = QJsonDocument::fromJson(line,&parseError);
-            if (parseError.error != QJsonParseError::NoError || !document.isObject())
-                return this->failRemote(QStringLiteral("Controller reply is not a JSON object"),error);
-            response = document.object();
+            if (!this->config.runtimeIdentity.isEmpty())
+            {
+                if (!RuntimeControlJson::parse(line,response))
+                    return this->failRemote(QStringLiteral("Controller runtime reply is not strict bounded JSON"),error);
+            }
+            else
+            {
+                QJsonParseError parseError;
+                const QJsonDocument document = QJsonDocument::fromJson(line,&parseError);
+                if (parseError.error != QJsonParseError::NoError || !document.isObject())
+                    return this->failRemote(QStringLiteral("Controller reply is not a JSON object"),error);
+                response = document.object();
+            }
             if (!response.value(QStringLiteral("protocolVersion")).isDouble() ||
                 response.value(QStringLiteral("protocolVersion")).toInt() != protocolVersion ||
+                (!this->config.runtimeIdentity.isEmpty() &&
+                 response.value(QStringLiteral("protocolVersion")) != QJsonValue(protocolVersion)) ||
                 !response.value(QStringLiteral("requestId")).isString() ||
                 response.value(QStringLiteral("requestId")).toString() != request.value(QStringLiteral("requestId")).toString())
                 return this->failRemote(QStringLiteral("Controller protocol version or request ID mismatch"),error);

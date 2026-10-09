@@ -1976,7 +1976,8 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
     const bool streamEnabled = requestStreamingSnapshot && providerSupportsStreaming(settings.getType());
     const bool thinkingDisabled = deepSeek && requestEffortSnapshot == QStringLiteral("off");
     const QString deepSeekEffort = deepSeek && !thinkingDisabled ? requestEffortSnapshot : QString();
-    const int maxTokens = deepSeek && !thinkingDisabled ? 8192 : 2048;
+    const int maxTokens = deepSeek && !thinkingDisabled
+        ? qMax(8192, settings.getMaxTokens()) : settings.getMaxTokens();
     QByteArray body; QString error;
     if (!RAgent::buildToolRequest(settings.getModel().trimmed(), maxTokens, 1.0, messages, tools,
                                  thinkingDisabled, &body, &error, deepSeekEffort, streamEnabled))

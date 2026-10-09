@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QTemporaryDir>
 
 #include <limits>
 #include <utility>
@@ -23,6 +24,44 @@ RModel stressLineModel()
     truss.setNodeId(1, 1);
     model.addElement(truss, true, 0);
     return model;
+}
+
+RModel unboundTetraModel()
+{
+    RModel model;
+    model.setNNodes(4); model.setNSurfaces(1); model.setNVolumes(1);
+    const double xyz[4][3] = {{0,0,0}, {1,0,0}, {0,1,0}, {0,0,1}};
+    for (uint n = 0; n < 4; ++n)
+    {
+        model.getNode(n).set(xyz[n][0], xyz[n][1], xyz[n][2]);
+        model.setNodePhysicalId(n, 101 + 10 * n);
+    }
+    const uint faces[4][3] = {{0,2,1}, {0,1,3}, {0,3,2}, {1,2,3}};
+    for (const auto &face : faces)
+    {
+        RElement element(R_ELEMENT_TRI1);
+        for (uint n = 0; n < 3; ++n) element.setNodeId(n, face[n]);
+        model.addElement(element, true, 0);
+    }
+    RElement volume(R_ELEMENT_TETRA1);
+    for (uint n = 0; n < 4; ++n) volume.setNodeId(n, n);
+    model.addElement(volume, true, 0);
+    model.setProblemTaskTree(RProblemTaskItem()); model.setProblemSetup(RProblemSetup()); model.setTimeSolver(RTimeSolver());
+    for (uint g = 0; g < model.getNElementGroups(); ++g)
+        while (model.getElementGroupPtr(g)->getNEnvironmentConditions()) model.getElementGroupPtr(g)->removeEnvironmentCondition(0u);
+    return model;
+}
+
+QJsonObject staticRebindArguments()
+{
+    const QJsonValue none(QJsonValue::Null);
+    return {{"unitSI", true}, {"staticStress", true},
+        {"material", QJsonObject{{"youngModulusPa", 1000}, {"poissonRatio", 0.25}, {"densityKgM3", 1}}},
+        {"constraints", QJsonArray{
+            QJsonObject{{"nodePhysicalId", 101}, {"values", QJsonArray{0,0,0}}},
+            QJsonObject{{"nodePhysicalId", 111}, {"values", QJsonArray{none,0,0}}},
+            QJsonObject{{"nodePhysicalId", 121}, {"values", QJsonArray{none,none,0}}}}},
+        {"loads", QJsonArray{QJsonObject{{"nodePhysicalId", 131}, {"forceN", QJsonArray{0,0,-1}}}}}};
 }
 
 RModel stressPointModel()
@@ -108,6 +147,11 @@ class TestModelCommandService : public QObject
 {
     Q_OBJECT
 private slots:
+    void staticRebindPreviewExactHistoryAndFreshAllocators();
+    void staticRebindRejectsDirtyHistoryAndArguments();
+    void geometryPreviewAndExactHistory();
+    void geometryFingerprintsBindOtherCommands();
+    void geometrySessionMixedHistoryAndNativeFormats();
     void modalPreviewKeepsLegacyShape();
     void structuralDynamicsUsesSecondOrderSetupAndSyncsTimeGrid();
     void materialSetPreservesOtherPropertiesAndUsesPhysicalId();
@@ -119,6 +163,113 @@ private slots:
     void duplicatePhysicalIdsRejectTargetQueries();
     void sessionAcceptUndoRedoAndIdempotencyUseSharedService();
 };
+
+void TestModelCommandService::staticRebindPreviewExactHistoryAndFreshAllocators()
+{
+    RModel source = unboundTetraModel();
+    RMaterial old(RMaterial::Solid); old.setName("old source metadata");
+    source.getSurface(0).setMaterial(old); source.getVolume(0).setMaterial(old);
+    const QString pre = RModelCommandService::stateFingerprint(source);
+    const auto rebound = RModelCommandService::preview(source, "mesh.rebind.static", staticRebindArguments(), "source", "revision");
+    QVERIFY2(rebound.valid, qPrintable(rebound.message));
+    QCOMPARE(rebound.delta.kind, RModelCommandService::Delta::Kind::MeshRebind);
+    QCOMPARE(RModelCommandService::stateFingerprint(source), pre);
+    QCOMPARE(rebound.candidate.getProblemTaskTree().getProblemTypeMask(), R_PROBLEM_STRESS);
+    QCOMPARE(rebound.candidate.getNPoints(), 4u); QCOMPARE(rebound.candidate.getNElements(), 9u);
+    QCOMPARE(rebound.report["physicsState"].toString(), QString("BOUND_STATIC"));
+    QCOMPARE(rebound.readSet["supportedStateSha256"].toString(), pre);
+    QCOMPARE(rebound.units["force"].toString(), QString("N"));
+    QVERIFY(rebound.invalidation["restart"].toBool());
+    QCOMPARE(rebound.candidate.getSurface(0).getMaterial().size(), 0u);
+    QCOMPARE(rebound.candidate.getVolume(0).getMaterial().get(
+        rebound.candidate.getVolume(0).getMaterial().findPosition(RMaterialProperty::ModulusOfElasiticity)).get(293.15), 1000.0);
+    QVector<uint> capturedElements, capturedGroups;
+    for (const auto &target : rebound.delta.meshRebind.targets)
+    {
+        capturedElements.append(target.elementPhysicalId); capturedGroups.append(target.point.getPhysicalId());
+        QVERIFY(source.findElementPositionByPhysicalId(target.elementPhysicalId) == RConstants::eod);
+        REntityGroupType type; uint index;
+        QVERIFY(!source.findElementGroupByPhysicalId(target.point.getPhysicalId(), &type, &index));
+    }
+    const auto &force = rebound.candidate.getPoint(3).getBoundaryCondition(R_BOUNDARY_CONDITION_FORCE);
+    QCOMPARE(force.getComponent(force.findComponentPosition(R_VARIABLE_FORCE_Z)).getValue(0), -1.0);
+    auto undo = RModelCommandService::applyDelta(rebound.candidate, rebound.delta, false);
+    QVERIFY2(undo.valid, qPrintable(undo.message));
+    QCOMPARE(undo.candidate.getNPoints(), 0u); QCOMPARE(undo.candidate.getNElements(), 5u);
+    QCOMPARE(undo.candidate.getProblemTaskTree().getProblemTypeMask(), R_PROBLEM_NONE);
+    QCOMPARE(RModelCommandService::stateFingerprint(undo.candidate), pre);
+    QCOMPARE(undo.candidate.getSurface(0).getMaterial().toJson(), old.toJson());
+    QCOMPARE(undo.candidate.getVolume(0).getMaterial().toJson(), old.toJson());
+    for (uint g = 0; g < undo.candidate.getNElementGroups(); ++g)
+        QCOMPARE(undo.candidate.getElementGroupPtr(g)->getNEnvironmentConditions(), 0u);
+    auto redo = RModelCommandService::applyDelta(undo.candidate, rebound.delta, true);
+    QVERIFY2(redo.valid, qPrintable(redo.message));
+    QCOMPARE(RModelCommandService::stateFingerprint(redo.candidate), RModelCommandService::stateFingerprint(rebound.candidate));
+    for (uint p = 0; p < redo.candidate.getNPoints(); ++p)
+    {
+        QCOMPARE(redo.candidate.getPoint(p).getPhysicalId(), capturedGroups[int(p)]);
+        QCOMPARE(redo.candidate.getElementPhysicalId(redo.candidate.getPoint(p).get(0)), capturedElements[int(p)]);
+    }
+    undo = RModelCommandService::applyDelta(redo.candidate, rebound.delta, false);
+    QVERIFY2(undo.valid, qPrintable(undo.message));
+    // A different accepted branch must allocate after every prior binding,
+    // including temporary IDs consumed by redo, rather than reuse old IDs.
+    const auto branch = RModelCommandService::preview(undo.candidate, "mesh.rebind.static", staticRebindArguments());
+    QVERIFY2(branch.valid, qPrintable(branch.message));
+    for (const auto &target : branch.delta.meshRebind.targets)
+    {
+        QVERIFY(target.elementPhysicalId > capturedElements.last());
+        QVERIFY(target.point.getPhysicalId() > capturedGroups.last());
+    }
+    bool supported = false;
+    for (const auto &command : RModelCommandService::capabilities(source)["commands"].toArray())
+        if (command.toObject()["id"] == "mesh.rebind.static") supported = command.toObject()["supported"].toBool();
+    QVERIFY(supported);
+    supported = true;
+    for (const auto &command : RModelCommandService::capabilities(rebound.candidate)["commands"].toArray())
+        if (command.toObject()["id"] == "mesh.rebind.static") supported = command.toObject()["supported"].toBool();
+    QVERIFY(!supported);
+    QVERIFY(!RModelCommandService::preview(rebound.candidate, "mesh.rebind.static", staticRebindArguments()).valid);
+}
+
+void TestModelCommandService::staticRebindRejectsDirtyHistoryAndArguments()
+{
+    const RModel source = unboundTetraModel();
+    const auto rebound = RModelCommandService::preview(source, "mesh.rebind.static", staticRebindArguments());
+    QVERIFY2(rebound.valid, qPrintable(rebound.message));
+    const QString post = RModelCommandService::stateFingerprint(rebound.candidate);
+    auto stale = rebound.candidate; stale.getNode(0).set(0.01, 0, 0);
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getProblemSetup().getStructuralControlSetup().controllerId = "unexpected";
+    QCOMPARE(RModelCommandService::stateFingerprint(stale), post); // Private reset guard closes the v3 gap.
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getProblemSetup().getStructuralDynamicsRestartData().q = {1};
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getPoint(0).addBoundaryCondition(RBoundaryCondition(R_BOUNDARY_CONDITION_DISPLACEMENT_NORMAL));
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getPoint(0).addBoundaryCondition(RBoundaryCondition(R_BOUNDARY_CONDITION_CUSTOM));
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getPoint(0).addInitialCondition(RInitialCondition(R_INITIAL_CONDITION_TEMPERATURE));
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getPoint(0).getData().getVariableData()[R_VARIABLE_DISPLACEMENT_X] = 0;
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getSurface(0).set(0, stale.getSurface(0).get(1));
+    QCOMPARE(RModelCommandService::stateFingerprint(stale), post);
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    stale = rebound.candidate; stale.getPoint(0).setVolume(2.0);
+    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    auto arguments = staticRebindArguments(); arguments.insert("nearestNode", true);
+    QVERIFY(!RModelCommandService::preview(source, "mesh.rebind.static", arguments).valid);
+    arguments = staticRebindArguments(); arguments.insert("loads", QJsonArray{QJsonObject{{"nodePhysicalId", 999}, {"forceN", QJsonArray{0,0,-1}}}});
+    QVERIFY(!RModelCommandService::preview(source, "mesh.rebind.static", arguments).valid);
+    arguments = staticRebindArguments(); arguments.insert("loads", QJsonArray{QJsonObject{{"nodePhysicalId", 131}, {"forceN", QJsonArray{0,0,0}}}});
+    QVERIFY(!RModelCommandService::preview(source, "mesh.rebind.static", arguments).valid);
+    auto undo = RModelCommandService::applyDelta(rebound.candidate, rebound.delta, false);
+    QVERIFY(undo.valid);
+    undo.candidate.getSurface(0).removeAllEnvironmentConditions();
+    QCOMPARE(RModelCommandService::applyDelta(undo.candidate, rebound.delta, true).code, QString("stale_history"));
+    QCOMPARE(RModelCommandService::stateFingerprint(rebound.candidate), post);
+}
 
 void TestModelCommandService::modalPreviewKeepsLegacyShape()
 {
@@ -556,6 +707,130 @@ void TestModelCommandService::sessionAcceptUndoRedoAndIdempotencyUseSharedServic
     QCOMPARE(session.execute(commandRequest(session, QStringLiteral("model.redo"), {}))
                  .value(QStringLiteral("status")).toString(), QStringLiteral("accepted"));
     QVERIFY(session.model().getLine(0).hasBoundaryCondition(R_BOUNDARY_CONDITION_DISPLACEMENT));
+}
+
+
+void TestModelCommandService::geometryPreviewAndExactHistory()
+{
+    RModel model = stressLineModel();
+    model.setNodePhysicalId(0, 41);
+    model.setNodePhysicalId(1, 73);
+    const QString initialHash = RModelCommandService::stateFingerprint(model);
+    const QJsonObject arguments{{"unit", "m"}, {"directionPolicy", "preserve_global"},
+        {"nodes", QJsonArray{QJsonObject{{"physicalNodeId", 73},
+            {"coordinates", QJsonArray{2.0, 0.5, 0.0}}}}}};
+    const auto preview = RModelCommandService::preview(model, "geometry.node_coordinates.set", arguments, "source", "r1");
+    QVERIFY2(preview.valid, qPrintable(preview.message));
+    QCOMPARE(preview.delta.kind, RModelCommandService::Delta::Kind::Geometry);
+    QCOMPARE(preview.before["affectedPhysicalNodeIds"].toArray(), QJsonArray{73});
+    QCOMPARE(preview.before["nodes"].toArray().first().toObject()["coordinates"].toArray(), (QJsonArray{1.0, 0.0, 0.0}));
+    QCOMPARE(preview.changedPaths, QJsonArray{QStringLiteral("/geometry/nodes/n:73/coordinates")});
+    QCOMPARE(model.getNode(1).getX(), 1.0);
+    QCOMPARE(preview.candidate.getNode(1).getX(), 2.0);
+    QVERIFY(initialHash != RModelCommandService::stateFingerprint(preview.candidate));
+    const auto undo = RModelCommandService::applyDelta(preview.candidate, preview.delta, false);
+    QVERIFY2(undo.valid, qPrintable(undo.message));
+    QCOMPARE(RModelCommandService::stateFingerprint(undo.candidate), initialHash);
+    const auto redo = RModelCommandService::applyDelta(undo.candidate, preview.delta, true);
+    QVERIFY(redo.valid);
+    QCOMPARE(RModelCommandService::stateFingerprint(redo.candidate), RModelCommandService::stateFingerprint(preview.candidate));
+    RModel stale = preview.candidate;
+    stale.getNode(0).set(0.0, 0.25, 0.0); // unedited node still participates in CAS
+    QCOMPARE(RModelCommandService::applyDelta(stale, preview.delta, false).code, QStringLiteral("stale_history"));
+    auto corrupt = preview.delta;
+    corrupt.geometry.nodes[0].beforeXYZ[0] = 4.0;
+    QCOMPARE(RModelCommandService::applyDelta(preview.candidate, corrupt, false).code, QStringLiteral("stale_history"));
+    const auto noOp = RModelCommandService::preview(preview.candidate, "geometry.node_coordinates.set", arguments);
+    QVERIFY(noOp.valid);
+    QCOMPARE(noOp.delta.kind, RModelCommandService::Delta::Kind::None);
+    QVERIFY(noOp.changedPaths.isEmpty());
+    QCOMPARE(noOp.before, noOp.after);
+    auto invalid = arguments;
+    invalid["nodes"] = QJsonArray{QJsonObject{{"physicalNodeId", 73}, {"coordinates", QJsonArray{0.0, 0.0, 0.0}}}};
+    const auto rejected = RModelCommandService::preview(model, "geometry.node_coordinates.set", invalid);
+    QVERIFY(!rejected.valid); // zero-length truss
+    QCOMPARE(RModelCommandService::stateFingerprint(model), initialHash);
+}
+
+void TestModelCommandService::geometryFingerprintsBindOtherCommands()
+{
+    RModel model = stressLineModel();
+    RModel changed = model;
+    changed.getNode(1).set(2.0, 0.0, 0.0);
+    const uint group = model.getLine(0).getPhysicalId();
+    for (const auto &command : {QStringLiteral("entity.material.set"), QStringLiteral("entity.boundary.set"),
+                               QStringLiteral("analysis.structural_dynamics.configure")})
+    {
+        const QJsonObject arguments = command == "entity.material.set" ? materialArguments(group)
+            : command == "entity.boundary.set" ? boundaryArguments(group) : dynamicsArguments();
+        const auto before = RModelCommandService::preview(model, command, arguments, "same", "same");
+        const auto after = RModelCommandService::preview(changed, command, arguments, "same", "same");
+        QVERIFY(before.valid);
+        QVERIFY(after.valid);
+        QVERIFY(before.fingerprint != after.fingerprint);
+    }
+    model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS_MODAL));
+    changed = model;
+    changed.getNode(1).set(2.0, 0.0, 0.0);
+    const auto args = RModelCommandService::modalParameters(model.getProblemSetup().getModalSetup());
+    QVERIFY(RModelCommandService::preview(model, "analysis.modal.configure", args).fingerprint
+        != RModelCommandService::preview(changed, "analysis.modal.configure", args).fingerprint);
+    const QString original = RModelCommandService::stateFingerprint(model);
+    changed = model;
+    changed.getElement(0).setNodeId(0, 1);
+    changed.getElement(0).setNodeId(1, 0);
+    QVERIFY(original != RModelCommandService::stateFingerprint(changed));
+    changed = model;
+    changed.setNodePhysicalId(1, 500);
+    QVERIFY(original != RModelCommandService::stateFingerprint(changed));
+    changed = model;
+    changed.setElementPhysicalId(0, 600);
+    QVERIFY(original != RModelCommandService::stateFingerprint(changed));
+}
+
+void TestModelCommandService::geometrySessionMixedHistoryAndNativeFormats()
+{
+    RModel model = stressLineModel();
+    RModelCommandSession session(model);
+    const uint group = model.getLine(0).getPhysicalId();
+    const QJsonObject transform{{"unit", "m"}, {"angleUnit", "deg"}, {"directionPolicy", "preserve_global"},
+        {"center", QJsonArray{0.0, 0.0, 0.0}}, {"axis", QJsonArray{0.0, 0.0, 2.0}},
+        {"angle", 90.0}, {"translation", QJsonArray{1.0, 2.0, 0.0}}};
+    auto command = commandRequest(session, "geometry.rigid_transform", transform, true);
+    const auto original = session.query();
+    const auto preview = session.execute(command);
+    QCOMPARE(preview["status"].toString(), QStringLiteral("preview"));
+    QCOMPARE(preview["normalizedParameters"].toObject()["axis"].toArray(), (QJsonArray{0.0, 0.0, 2.0}));
+    QCOMPARE(session.query(), original);
+    command["dryRun"] = false;
+    QCOMPARE(session.execute(command)["status"].toString(), QStringLiteral("accepted"));
+    const QString geometryHash = RGeometryCandidateService::geometryFingerprint(session.model());
+    QCOMPARE(session.execute(commandRequest(session, "entity.material.set", materialArguments(group)))["status"].toString(), QStringLiteral("accepted"));
+    QCOMPARE(session.execute(commandRequest(session, "entity.boundary.set", boundaryArguments(group)))["status"].toString(), QStringLiteral("accepted"));
+    for (int i = 0; i < 3; ++i)
+        QCOMPARE(session.execute(commandRequest(session, "model.undo", {}))["status"].toString(), QStringLiteral("accepted"));
+    QCOMPARE(RModelCommandService::stateFingerprint(session.model()), RModelCommandService::stateFingerprint(model));
+    for (int i = 0; i < 3; ++i)
+        QCOMPARE(session.execute(commandRequest(session, "model.redo", {}))["status"].toString(), QStringLiteral("accepted"));
+    QCOMPARE(RGeometryCandidateService::geometryFingerprint(session.model()), geometryHash);
+    QVERIFY(session.model().getLine(0).hasBoundaryCondition(R_BOUNDARY_CONDITION_DISPLACEMENT));
+    QCOMPARE(session.model().getLine(0).getMaterial().getName(), QStringLiteral("Steel"));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    for (const QString &extension : {RModel::getDefaultFileExtension(false), RModel::getDefaultFileExtension(true)})
+    {
+        const QString path = session.model().write(directory.filePath("geometry." + extension), false);
+        RModel loaded;
+        loaded.read(path);
+        QCOMPARE(RGeometryCandidateService::geometryFingerprint(loaded), geometryHash);
+        const auto candidate = RModelCommandService::preview(loaded, "geometry.rigid_transform", transform);
+        QVERIFY2(candidate.valid, qPrintable(candidate.message));
+    }
+    const auto oldCommand = commandRequest(session, "entity.material.set", materialArguments(group));
+    RModel changed = session.model();
+    changed.getNode(0).set(3.0, 2.0, 0.0);
+    QVERIFY(session.recordExternalChange("external_edit", changed));
+    QCOMPARE(session.execute(oldCommand)["code"].toString(), QStringLiteral("session_closed"));
 }
 
 QTEST_GUILESS_MAIN(TestModelCommandService)

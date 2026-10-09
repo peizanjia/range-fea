@@ -1,4 +1,5 @@
 #include "model_command_host.h"
+#include "mesh_job_controller.h"
 
 #include "application.h"
 #include "model_io.h"
@@ -21,6 +22,7 @@
 #include <QMutexLocker>
 #include <QRegularExpression>
 #include <QSet>
+#include <QScopeGuard>
 #include <QStringList>
 #include <QThread>
 #include <QUuid>
@@ -30,6 +32,25 @@
 
 namespace
 {
+// The controller retains file paths and worker requests as trusted host data.
+// Model-facing previews expose the same scientific receipt without transport paths.
+QJsonObject meshReceipt(QJsonObject receipt)
+{
+    receipt.remove("request"); receipt.remove("frozenRequest");
+    const auto capture = receipt.take("capture").toObject();
+    if (!capture.isEmpty())
+        for (const QString &field : {QStringLiteral("sourceRuntimeStamp"), QStringLiteral("sourceModelSha256"),
+                                    QStringLiteral("supportedSourceStateSha256"), QStringLiteral("physicalIds")})
+            receipt.insert(field, capture.value(field));
+    auto descriptor = receipt.value("descriptor").toObject();
+    descriptor.remove("frozenRequest");
+    for (auto it = descriptor.begin(); it != descriptor.end();)
+        if (it.key().endsWith("Path") || it.key().endsWith("Directory")) it = descriptor.erase(it);
+        else ++it;
+    if (receipt.contains("descriptor")) receipt.insert("descriptor", descriptor);
+    return receipt;
+}
+
 QString durableOperationPhase(RProjectCatalog::OperationPhase phase)
 {
     switch (phase)
@@ -130,7 +151,10 @@ bool isCoreEditCommand(const QString &command)
     return command == QStringLiteral("analysis.modal.configure")
         || command == QStringLiteral("analysis.structural_dynamics.configure")
         || command == QStringLiteral("entity.material.set")
-        || command == QStringLiteral("entity.boundary.set");
+        || command == QStringLiteral("entity.boundary.set")
+        || command == QStringLiteral("geometry.node_coordinates.set")
+        || command == QStringLiteral("geometry.rigid_transform")
+        || command == QStringLiteral("mesh.rebind.static");
 }
 
 RElementGroup *mutableElementGroup(RModel &model, uint physicalId)
@@ -169,6 +193,21 @@ bool commitSupportedCandidate(RModel &liveModel, const RModel &candidate,
 {
     switch (delta.kind)
     {
+        case RModelCommandService::Delta::Kind::MeshRebind:
+        {
+            const QString acceptedHash = delta.meshRebind.afterStateSha256;
+            if (acceptedHash.isEmpty()
+                || RModelCommandService::stateFingerprint(liveModel) != delta.meshRebind.beforeStateSha256
+                || RModelCommandService::stateFingerprint(candidate) != acceptedHash)
+            {
+                if (error) *error = QObject::tr("Static binding publication no longer matches the approved source and candidate.");
+                return false;
+            }
+            return liveModel.applyStaticMeshBindingCandidate(candidate,
+                [&](const RModel &prepared) {
+                    return RModelCommandService::stateFingerprint(prepared) == acceptedHash;
+                }, error);
+        }
         case RModelCommandService::Delta::Kind::Modal:
             liveModel.getProblemSetup().setModalSetup(
                 candidate.getProblemSetup().getModalSetup());
@@ -198,6 +237,28 @@ bool commitSupportedCandidate(RModel &liveModel, const RModel &candidate,
                 liveGroup->addBoundaryCondition(candidateGroup->getBoundaryCondition(delta.boundaryType));
             else if (liveGroup->hasBoundaryCondition(delta.boundaryType))
                 liveGroup->removeBoundaryCondition(delta.boundaryType);
+            return true;
+        }
+        case RModelCommandService::Delta::Kind::Geometry:
+        {
+            // Resolve all stable IDs before publishing; preserve the GUI Model subclass.
+            QList<QPair<uint, uint>> positions;
+            for (const auto &node : delta.geometry.nodes)
+            {
+                const uint live = liveModel.findNodePositionByPhysicalId(node.physicalNodeId);
+                const uint proposed = candidate.findNodePositionByPhysicalId(node.physicalNodeId);
+                if (live >= liveModel.getNNodes() || proposed >= candidate.getNNodes())
+                {
+                    if (error) *error = QObject::tr("The approved physical node no longer exists.");
+                    return false;
+                }
+                positions.append(qMakePair(live, proposed));
+            }
+            for (const auto &position : positions)
+            {
+                const auto &node = candidate.getNode(position.second);
+                liveModel.getNode(position.first).set(node.getX(), node.getY(), node.getZ());
+            }
             return true;
         }
         case RModelCommandService::Delta::Kind::None:
@@ -241,6 +302,19 @@ QJsonObject nativeSourceBindingJson(const RProjectCatalog::SourceBinding &bindin
             {QStringLiteral("sourceArtifacts"), artifacts}};
 }
 
+bool nativeSourceFilesMatch(const RProjectCatalog::SourceBinding &binding)
+{
+    if (binding.sourceArtifacts.isEmpty()) return false;
+    for (const auto &artifact : binding.sourceArtifacts)
+    {
+        QFile file(artifact.path);
+        if (!file.open(QIODevice::ReadOnly)) return false;
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        if (!hash.addData(&file) || QString::fromLatin1(hash.result().toHex())!=artifact.sha256) return false;
+    }
+    return true;
+}
+
 QJsonObject hostResponse(const QJsonValue &requestId, const QString &status, const QString &code,
                          const QJsonObject &result = {})
 {
@@ -276,6 +350,7 @@ private:
 
 struct ModelCommandHost::State
 {
+    MeshJobController *meshController = nullptr;
     struct Preview
     {
         QString id;
@@ -290,6 +365,8 @@ struct ModelCommandHost::State
         QJsonArray readSet;
         RModelCommandService::Delta delta;
         bool hasSupportedDelta = false;
+        QString staticBindingHistoryId;
+        QString staticBindingHistoryHash;
         QString inputFingerprint;
         QString readSetHash;
         QString jobId;
@@ -298,6 +375,7 @@ struct ModelCommandHost::State
         QJsonObject projectSnapshotRef;
         QJsonObject validation;
         QJsonObject recoveryQualification;
+        QString meshPreviewId;
         bool approved = false;
         bool consumed = false;
     };
@@ -339,6 +417,8 @@ struct ModelCommandHost::State
     std::map<QString, IdempotentResult> idempotency;
     std::map<QString, JobSource> jobSources;
     std::map<QString, ResultDocument> resultDocuments;
+    QMap<QString,QJsonObject> resultPublicationUnknown;
+    QSet<QString> resultPublicationsInFlight;
     std::map<QString, QJsonObject> resultDescriptors;
     QList<QString> previewOrder;
     QList<QString> operationOrder;
@@ -425,6 +505,12 @@ struct ModelCommandHost::State
 
 ModelCommandHost::ModelCommandHost(Session *session) : QObject(session), state(std::make_unique<State>()), session(session)
 {
+    state->meshController = new MeshJobController(session, this);
+    connect(state->meshController, &MeshJobController::previewsInvalidated, this, [this] {
+        for (auto &entry : state->previews)
+            if (entry.second.command == "mesh.generate" || entry.second.command == "mesh.accept")
+                entry.second.consumed = true;
+    });
     const QDir directory(QDir(Application::instance()->getApplicationSettings()->getSessionDir()).filePath("command-audit"));
     QDir().mkpath(directory.absolutePath());
     state->journal = directory.filePath(QUuid::createUuid().toString(QUuid::WithoutBraces) + ".json");
@@ -643,6 +729,8 @@ QString ModelCommandHost::projectWorkspace() const
     return QThread::currentThread() == thread() && session ? session->projectWorkspace() : QString();
 }
 
+MeshJobController *ModelCommandHost::meshController() const { return state->meshController; }
+
 QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const QJsonArray &pinnedDocuments)
 {
     const auto requestId = request.value(QStringLiteral("requestId"));
@@ -658,7 +746,7 @@ QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const Q
         QStringLiteral("native.job.query"), QStringLiteral("native.job.recovery.query"),
         QStringLiteral("native.result.catalog.query"), QStringLiteral("native.result.channels.query"),
         QStringLiteral("native.result.series.query"), QStringLiteral("native.result.summary.query"),
-        QStringLiteral("operation.query"), QStringLiteral("operations.query")};
+        QStringLiteral("operation.query"), QStringLiteral("operations.query"), QStringLiteral("mesh.job.query")};
     const QString operation = request.value(QStringLiteral("operation")).toString();
     if (!reads.contains(operation))
         return denied(QStringLiteral("READ_ONLY_DENIED"), tr("This question cannot prepare, approve or execute an action."));
@@ -778,6 +866,36 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         *sessionEpoch = target.value(QStringLiteral("sessionEpoch")).toString();
         return true;
     };
+    auto ownedMeshAttempt = [&](const QString &attemptId, const QString &documentId,
+                                const QString &epoch, quint64 revision) {
+        if (epoch != state->sessionEpoch) return QJsonObject{};
+        for (const auto &value : state->meshController->jobs())
+        {
+            const auto job = value.toObject();
+            if (job.value("attemptId") != QJsonValue(attemptId)) continue;
+            const auto source = job.value("sourceRuntimeStamp").toObject();
+            if (source.value("documentId") == QJsonValue(documentId)
+                && source.value("sessionEpoch") == QJsonValue(epoch)
+                && source.value("documentRevision") == QJsonValue(double(revision))) return job;
+        }
+        return QJsonObject{};
+    };
+    if (operation == "mesh.job.query")
+    {
+        QString documentId, epoch; quint64 revision = 0;
+        if (!exactKeys(parameters, {"target", "expectedDocumentRevision", "attemptId"})
+            || !targetFieldsValid(&documentId, &epoch)
+            || !unsignedInteger(parameters.value("expectedDocumentRevision"), &revision)
+            || !validToken(parameters.value("attemptId")))
+            return invalid("INVALID_PARAMETERS", tr("Mesh query requires its exact source target, revision and attemptId."));
+        const QString attempt = parameters.value("attemptId").toString();
+        if (ownedMeshAttempt(attempt, documentId, epoch, revision).isEmpty())
+            return invalid("MESH_SOURCE_MISMATCH", tr("No owned mesh attempt matches this immutable source identity."));
+        const auto queried = state->meshController->query(attempt);
+        if (!queried.value("valid").toBool())
+            return invalid(queried.value("code").toString(), queried.value("message").toString());
+        return ok(meshReceipt(queried.value("result").toObject()));
+    }
     auto describeResultView = [&](const QString &documentId, const QPair<QString, quint64> &stamp) {
         const auto found = state->resultDescriptors.find(documentId);
         if (found == state->resultDescriptors.end()) return QJsonObject{};
@@ -948,6 +1066,17 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
     };
 
     const QJsonArray hostCommands{
+        QJsonObject{{"id", "mesh.generate"}, {"version", 1}, {"requiresPreview", true},
+            {"requiresHostApproval", true}, {"requiresManualApproval", true}, {"history", "none"},
+            {"arguments", QJsonObject{{"unit", "m"}, {"volumeUnit", "m^3"}, {"maxVolume", "number [1e-15,1e18]"},
+                {"radiusEdgeRatio", "number [1.2,2.0]"}}}},
+        QJsonObject{{"id", "mesh.accept"}, {"version", 1}, {"requiresPreview", true},
+            {"requiresHostApproval", true}, {"requiresManualApproval", true}, {"history", "none"},
+            {"arguments", QJsonObject{{"attemptId", "owned mesh attempt bound to exact source target/revision"}}},
+            {"acceptanceMode", "new_document_from_current_source"}, {"requiresRebinding", true}},
+        QJsonObject{{"id", "mesh.cancel"}, {"version", 1}, {"requiresPreview", true},
+            {"requiresHostApproval", true}, {"requiresManualApproval", true}, {"history", "none"},
+            {"arguments", QJsonObject{{"attemptId", "owned queued/running mesh attempt bound to exact original source"}}}},
         QJsonObject{{QStringLiteral("id"), QStringLiteral("analysis.run")},
             {QStringLiteral("version"), 1}, {QStringLiteral("requiresPreview"), true},
             {QStringLiteral("requiresHostApproval"), true},
@@ -1299,9 +1428,34 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         const QJsonObject registeredBinding = job.value(QStringLiteral("resultSourceBinding")).toObject();
         if (!beforeBinding || beforeBinding->sourceArtifacts.isEmpty()
             || beforeBinding->sourceArtifacts.first().sha256 != expectedSha
-            || nativeSourceBindingJson(*beforeBinding) != registeredBinding)
+            || nativeSourceBindingJson(*beforeBinding) != registeredBinding
+            || !nativeSourceFilesMatch(*beforeBinding))
             return invalid(QStringLiteral("ARTIFACT_CHANGED"), sourceError.isEmpty()
                 ? tr("The native result source chain no longer matches its immutable registered identity.") : sourceError);
+
+        const QString publicationKey=beforeBinding->logicalSourcePath+QLatin1Char('\n')+expectedSha;
+        const auto unknownPublication=[&](const QString &documentId,const QString &message) {
+            const QJsonObject uncertainty{{QStringLiteral("documentId"),documentId},
+                {QStringLiteral("documentMayExist"),true},{QStringLiteral("artifactRef"),registeredPath},
+                {QStringLiteral("artifactSHA256"),expectedSha},{QStringLiteral("message"),message}};
+            state->resultPublicationUnknown.insert(publicationKey,uncertainty);
+            // A failed final callback check must also retire any optimistic
+            // descriptor prepared before emitting the publication event.
+            state->resultDescriptors.erase(documentId);
+            for (auto it=state->resultDocuments.begin(); it!=state->resultDocuments.end();)
+                if (it->second.documentId==documentId) it=state->resultDocuments.erase(it);
+                else ++it;
+            return hostResponse(requestId,QStringLiteral("unknown"),QStringLiteral("RESULT_OPEN_UNKNOWN"),uncertainty);
+        };
+        if (state->resultPublicationUnknown.contains(publicationKey))
+            return hostResponse(requestId,QStringLiteral("unknown"),QStringLiteral("RESULT_OPEN_UNKNOWN"),
+                                state->resultPublicationUnknown.value(publicationKey));
+        if (state->resultPublicationsInFlight.contains(publicationKey))
+            return invalid(QStringLiteral("RESULT_OPEN_IN_PROGRESS"),tr("This verified result is already being published."));
+        // Keep the lease through reuse, every publication event, and final
+        // reconciliation; a callback cannot open the same artifact mid-check.
+        state->resultPublicationsInFlight.insert(publicationKey);
+        auto clearInFlight=qScopeGuard([this,publicationKey] { state->resultPublicationsInFlight.remove(publicationKey); });
 
         QString resultDocumentId;
         bool reused = false;
@@ -1313,12 +1467,6 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         {
             session->unlock();
             return invalid(QStringLiteral("MODEL_BUSY"), tr("A live model task is using Session storage; wait before opening a result document."));
-        }
-        QSet<QString> knownOpenDocuments;
-        for (uint i = 0; i < session->getNModels(); ++i)
-        {
-            const auto stamp = session->modelCommandStamp(i);
-            if (!stamp.first.isEmpty()) knownOpenDocuments.insert(stamp.first);
         }
         // Reuse only a result document whose current Session revision still
         // equals the revision captured when this host opened it.
@@ -1360,7 +1508,6 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 }
             }
         }
-        const uint appendModelIndex = session->getNModels();
         session->unlock();
 
         if (resultDocumentId.isEmpty())
@@ -1379,7 +1526,8 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QString afterError;
             const auto afterBinding = RProjectCatalog::resolveSourceBinding(registeredPath, &afterError);
             if (!afterBinding || *afterBinding != *beforeBinding || loadedBinding != *beforeBinding
-                || nativeSourceBindingJson(*afterBinding) != registeredBinding)
+                || nativeSourceBindingJson(*afterBinding) != registeredBinding
+                || !nativeSourceFilesMatch(*afterBinding))
                 return invalid(QStringLiteral("ARTIFACT_CHANGED"), afterError.isEmpty()
                     ? tr("The terminal native artifact changed while the result was being loaded.") : afterError);
 
@@ -1390,35 +1538,14 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             if (attachBlocked)
                 return invalid(QStringLiteral("MODEL_BUSY"), tr("A live model task started before the result document could be attached."));
 
-            // addModel is synchronous on the GUI thread. Capture the runtime
-            // identity for the slot appended by this call. Project catalog
-            // registration can detach a duplicate source as an independent
-            // copy and clear its loaded-source binding, so binding equality
-            // is not a reliable way to discover the document that was just
-            // created.
-            auto onModelAdded = connect(session, &Session::modelAdded, this, [&](uint modelID) {
-                if (modelID != appendModelIndex) return;
-                const auto stamp = session->modelCommandStamp(modelID);
-                if (stamp.first.isEmpty()) return;
-                if (!knownOpenDocuments.contains(stamp.first))
-                    resultDocumentId = stamp.first;
-            });
-            session->addModel(model, loadedBinding);
-            disconnect(onModelAdded);
-            if (resultDocumentId.isEmpty())
+            bool documentMayExist=false;
+            QString publicationError;
+            if (!session->appendVerifiedNativeResult(model,loadedBinding,&resultDocumentId,&documentMayExist,&publicationError))
             {
-                if (!session->trylock(0))
-                    return invalid(QStringLiteral("RESULT_OPEN_PENDING"), tr("The result was queued for session opening but its runtime document identity is not available yet."));
-                if (session->getNModels() > appendModelIndex)
-                {
-                    const auto stamp = session->modelCommandStamp(appendModelIndex);
-                    if (!stamp.first.isEmpty() && !knownOpenDocuments.contains(stamp.first))
-                        resultDocumentId = stamp.first;
-                }
-                session->unlock();
+                if (!documentMayExist)
+                    return invalid(QStringLiteral("RESULT_OPEN_FAILED"),publicationError);
+                return unknownPublication(resultDocumentId,publicationError);
             }
-            if (resultDocumentId.isEmpty())
-                return invalid(QStringLiteral("RESULT_OPEN_FAILED"), tr("The result artifact was loaded but no independent GUI document was created."));
         }
 
         const uint resultModelID = session->findModelByCommandIdentity(resultDocumentId);
@@ -1432,6 +1559,12 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             openedAtRevision = resultStamp.second;
             normalizedAtOpen = normalizedAtOpen || openedAtRevision != 0;
         }
+        const QString publicationWorkspace=session->projectWorkspace();
+        const QString publicationEpoch=state->sessionEpoch;
+        const QString publicationFileName=session->getModel(resultModelID).getFileName();
+        const auto publicationBinding=session->getModel(resultModelID).getLoadedSourceBinding();
+        const QString publicationState=RModelCommandService::stateFingerprint(session->getModel(resultModelID));
+        const QByteArray publicationValues=Session::nativeResultValuesDigest(session->getModel(resultModelID));
         const QJsonObject displayDescriptor{{QStringLiteral("kind"), QStringLiteral("native_solver_result")},
             {QStringLiteral("displayLabel"), tr("Solver result %1").arg(jobId.left(8))},
             {QStringLiteral("sourceJobId"), jobId},
@@ -1496,6 +1629,18 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                  {QStringLiteral("sessionEpoch"), state->sessionEpoch}});
             emit eventPublished(event);
         }
+        if (!session->trylock(0))
+            return unknownPublication(resultDocumentId,tr("The result was published but final callback reconciliation is busy."));
+        auto publicationUnlock=qScopeGuard([this] { session->unlock(); });
+        const uint publishedId=session->findModelByCommandIdentity(resultDocumentId);
+        if (publishedId==RConstants::eod || session->projectWorkspace()!=publicationWorkspace
+            || state->sessionEpoch!=publicationEpoch || session->modelCommandStamp(publishedId)!=resultStamp
+            || session->getModel(publishedId).getFileName()!=publicationFileName
+            || session->getModel(publishedId).getLoadedSourceBinding()!=publicationBinding
+            || RModelCommandService::stateFingerprint(session->getModel(publishedId))!=publicationState
+            || Session::nativeResultValuesDigest(session->getModel(publishedId))!=publicationValues
+            || !nativeSourceFilesMatch(*beforeBinding))
+            return unknownPublication(resultDocumentId,tr("Final result publication callbacks changed the document or verified artifact bytes."));
         return ok(result, QStringLiteral("accepted"));
     }
 
@@ -1534,6 +1679,8 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.inputs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.jobs.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.job.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
+            QJsonObject{{"id", "mesh.job.query"}, {"version", 1}, {"readOnly", true},
+                {"identity", "owned-attempt-and-exact-source-target-revision"}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.job.recovery.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.source.validate")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("native.result.open")}, {QStringLiteral("version"), 1},
@@ -1759,6 +1906,66 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QStringLiteral("command"), QStringLiteral("commandVersion"), QStringLiteral("arguments")};
         const QSet<QString> detachedCancelKeys{QStringLiteral("command"), QStringLiteral("commandVersion"),
             QStringLiteral("arguments")};
+        if (command == "mesh.generate" || command == "mesh.accept" || command == "mesh.cancel")
+        {
+            QString documentId, epoch; quint64 revision = 0;
+            if (!exactKeys(parameters, standardKeys) || !targetFieldsValid(&documentId, &epoch)
+                || !unsignedInteger(parameters.value("expectedDocumentRevision"), &revision))
+                return invalid("INVALID_PARAMETERS", tr("Mesh commands require an exact source target and revision."));
+            if (epoch != state->sessionEpoch) return invalid("STALE_SESSION", tr("The mesh source belongs to another session."));
+            if (activeModalInteraction() || isMutationBlocked())
+                return invalid("INTERACTION_BLOCKED", tr("Finish the current document interaction before mesh actions."));
+            QJsonObject native;
+            if (command == "mesh.generate")
+            {
+                const double volume = arguments.value("maxVolume").toDouble(-1);
+                const double ratio = arguments.value("radiusEdgeRatio").toDouble(-1);
+                if (!exactKeys(arguments, {"unit", "volumeUnit", "maxVolume", "radiusEdgeRatio"})
+                    || arguments.value("unit") != QJsonValue("m") || arguments.value("volumeUnit") != QJsonValue("m^3")
+                    || !arguments.value("maxVolume").isDouble() || !std::isfinite(volume) || volume < 1e-15 || volume > 1e18
+                    || !arguments.value("radiusEdgeRatio").isDouble() || !std::isfinite(ratio) || ratio < 1.2 || ratio > 2.0)
+                    return invalid("INVALID_PARAMETERS", tr("Require exact mesh SI units and bounded volume/quality options."));
+                const uint id = session->findModelByCommandIdentity(documentId);
+                if (id >= session->getNModels() || session->modelCommandStamp(id).second != revision)
+                    return invalid("STALE_REVISION", tr("The mesh source document changed; preview its current revision."));
+                native = state->meshController->previewGenerate(id, arguments);
+            }
+            else
+            {
+                if (!exactKeys(arguments, {"attemptId"}) || !validToken(arguments.value("attemptId")))
+                    return invalid("INVALID_PARAMETERS", tr("Mesh acceptance and cancellation require only an owned attemptId."));
+                const auto job = ownedMeshAttempt(arguments.value("attemptId").toString(), documentId, epoch, revision);
+                if (job.isEmpty()) return invalid("MESH_SOURCE_MISMATCH", tr("No owned mesh attempt matches this immutable source identity."));
+                if (command == "mesh.accept") native = state->meshController->previewAccept(arguments.value("attemptId").toString());
+                else
+                {
+                    if (job.value("status") != QJsonValue("queued") && job.value("status") != QJsonValue("running"))
+                        return invalid("MESH_ATTEMPT_TERMINAL", tr("Only an owned queued or running mesh attempt can be cancelled."));
+                    native = QJsonObject{{"valid", true}, {"result", job}};
+                }
+            }
+            if (!native.value("valid").toBool())
+                return invalid(native.value("code").toString(), native.value("message").toString());
+            State::Preview preview;
+            preview.id = uuid(); preview.documentId = documentId; preview.sessionEpoch = epoch;
+            preview.stampGeneration = revision; preview.command = command; preview.arguments = arguments;
+            preview.nativePreview = native.value("result").toObject();
+            preview.meshPreviewId = preview.nativePreview.value("previewId").toString();
+            preview.jobId = preview.nativePreview.value("attemptId").toString();
+            preview.digest = QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(QJsonObject{
+                {"command", command}, {"arguments", arguments}, {"target", parameters.value("target")},
+                {"revision", double(revision)}, {"meshPreview", preview.nativePreview}})
+                .toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+            QJsonObject result{{"command", command}, {"commandVersion", 1}, {"arguments", arguments},
+                {"target", parameters.value("target")}, {"expectedDocumentRevision", double(revision)},
+                {"previewId", preview.id}, {"digest", preview.digest}, {"requiresHostApproval", true},
+                {"requiresManualApproval", true}, {"history", "none"}, {"meshPreview", meshReceipt(preview.nativePreview)},
+                {"after", QJsonObject{{"sourceDocumentModified", false}, {"requiresRebinding", true},
+                    {"createsNewDocument", command == "mesh.accept"}, {"remapsOldPhysicalIds", false}}}};
+            if (state->previewOrder.size() >= 128) state->previews.erase(state->previewOrder.takeFirst());
+            state->previewOrder.append(preview.id); state->previews.emplace(preview.id, preview);
+            return ok(result, "preview");
+        }
         if (command == "analysis.recover")
         {
             const int remaining = arguments.value("remainingSteps").toInt(-1);
@@ -2015,7 +2222,8 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 after = core.after;
                 changedPaths = command == QStringLiteral("analysis.modal.configure")
                     ? QJsonArray{QStringLiteral("analysis.modal")}
-                    : (core.changedPaths.isEmpty() ? QJsonArray{core.delta.changedPath} : core.changedPaths);
+                    : (core.delta.geometry.noOp ? QJsonArray{}
+                        : (core.changedPaths.isEmpty() ? QJsonArray{core.delta.changedPath} : core.changedPaths));
                 candidateFingerprint = core.fingerprint;
                 readSet.append(QStringLiteral("/analysis/taskTree"));
                 readSet.append(QStringLiteral("/problemSetup"));
@@ -2028,6 +2236,18 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                     {QStringLiteral("changedPaths"), changedPaths},
                     {QStringLiteral("candidateFingerprint"), core.fingerprint},
                     {QStringLiteral("diagnostics"), core.diagnostics}};
+                if (core.delta.kind == RModelCommandService::Delta::Kind::MeshRebind)
+                {
+                    nativePreview.insert("report", core.report);
+                    nativePreview.insert("bindingReadSet", core.readSet);
+                    nativePreview.insert("units", core.units);
+                    nativePreview.insert("invalidation", core.invalidation);
+                    readSet.append(QStringLiteral("/geometry"));
+                    readSet.append(QStringLiteral("/entityGroups"));
+                    readSet.append(QStringLiteral("/timeSolver"));
+                    readSet.append(QStringLiteral("/results"));
+                    readSet.append(QStringLiteral("/derivedMappings"));
+                }
             }
             else if (runCommand)
             {
@@ -2060,6 +2280,20 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 after = {{QStringLiteral("historyState"), QStringLiteral("computed_on_commit")}};
                 changedPaths = QJsonArray{QStringLiteral("document.history")};
                 readSet.append(QStringLiteral("/document/history"));
+                if (model.hasStaticMeshBindingHistory(undo))
+                {
+                    QString historyError;
+                    if (!model.previewStaticMeshBindingHistory(undo, &preview.staticBindingHistoryHash, &historyError))
+                        return invalid(QStringLiteral("UNSUPPORTED_HISTORY"), historyError);
+                    preview.staticBindingHistoryId = model.staticMeshBindingHistoryIdentity(undo);
+                    candidateFingerprint = preview.staticBindingHistoryHash;
+                    nativePreview.insert(QStringLiteral("historyItemId"), preview.staticBindingHistoryId);
+                    before.insert(QStringLiteral("historyItemId"), preview.staticBindingHistoryId);
+                    after = {{QStringLiteral("supportedStateFingerprint"), candidateFingerprint}};
+                    readSet.append(QStringLiteral("/geometry"));
+                    readSet.append(QStringLiteral("/entityGroups"));
+                    readSet.append(QStringLiteral("/results"));
+                }
             }
             preview.id = uuid();
             preview.documentId = documentId;
@@ -2091,6 +2325,9 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             {QStringLiteral("inputStateFingerprint"), inputFingerprint},
             {QStringLiteral("readSetHash"), preview.readSetHash},
             {QStringLiteral("nativeRevision"), nativeRevision}};
+        for (const QString &field : {QStringLiteral("report"), QStringLiteral("bindingReadSet"),
+                                    QStringLiteral("units"), QStringLiteral("invalidation")})
+            if (nativePreview.contains(field)) digestInput.insert(field, nativePreview.value(field));
         preview.digest = QString::fromLatin1(QCryptographicHash::hash(
             QJsonDocument(digestInput).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
         QJsonObject result{{QStringLiteral("target"), QJsonObject{{QStringLiteral("documentId"), documentId},
@@ -2108,6 +2345,9 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             {QStringLiteral("invalidatedResultsAvailability"), QStringLiteral("unknown_not_exposed")},
             {QStringLiteral("previewId"), preview.id}, {QStringLiteral("digest"), preview.digest},
             {QStringLiteral("nativeModalSessionRevision"), preview.nativeRevision}};
+        for (const QString &field : {QStringLiteral("report"), QStringLiteral("bindingReadSet"),
+                                    QStringLiteral("units"), QStringLiteral("invalidation")})
+            if (nativePreview.contains(field)) result.insert(field, nativePreview.value(field));
         if (runCommand)
         {
             result.insert(QStringLiteral("validation"), preview.validation);
@@ -2262,7 +2502,8 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             RProjectCatalog::OperationAssociation association = initialAssociation;
             const uint currentModel = session->findModelByCommandIdentity(preview.documentId);
             QString snapshotError;
-            if (status == "accepted" && observedResult.contains("afterRevision") && currentModel != RConstants::eod)
+            if (status == "accepted" && !observedResult.value("noOp").toBool()
+                && observedResult.contains("afterRevision") && currentModel != RConstants::eod)
             {
                 const auto snapshot = session->createDocumentSnapshot(currentModel, &snapshotError);
                 if (!snapshot.isEmpty())
@@ -2317,6 +2558,35 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             return finishCompleted(operationResult, QStringLiteral("error"),
                                    QStringLiteral("OBSERVED_MODIFIED_UNLOGGED"), message);
         };
+
+        if (preview.command == "mesh.generate" || preview.command == "mesh.accept" || preview.command == "mesh.cancel")
+        {
+            if (activeModalInteraction() || isMutationBlocked())
+                return invalid("INTERACTION_BLOCKED", tr("Finish the current document interaction before mesh execution."));
+            if (preview.command != "mesh.generate"
+                && ownedMeshAttempt(preview.jobId, preview.documentId, preview.sessionEpoch, preview.stampGeneration).isEmpty())
+                return invalid("MESH_SOURCE_MISMATCH", tr("The owned mesh attempt no longer matches its approved source."));
+            const QString meshCommand = preview.command;
+            const QString controllerPreview = preview.meshPreviewId;
+            const QString attempt = preview.jobId;
+            const QString executionWorkspace = session->projectWorkspace();
+            preview.consumed = true; // Controller approval is one-shot, including uncertain publication outcomes.
+            durableSideEffect = true;
+            const auto executed = meshCommand == "mesh.generate" ? state->meshController->approveGenerate(controllerPreview)
+                : meshCommand == "mesh.accept" ? state->meshController->approveAccept(controllerPreview)
+                                               : state->meshController->cancel(attempt);
+            if (session->projectWorkspace() != executionWorkspace || session->getProjectCatalog() != catalog)
+                return invalid("MESH_EXECUTION_UNKNOWN", tr("Mesh callbacks changed the project workspace; reconcile the original attempt before any retry."));
+            QJsonObject result = meshReceipt(executed.value("result").toObject());
+            result.insert("command", meshCommand); result.insert("operationId", operationId);
+            result.insert("sourceDocumentModified", false); result.insert("history", "none");
+            if (!executed.value("valid").toBool())
+            {
+                // The controller owns durable stop/publication uncertainty. Never turn it into a retryable approval.
+                return invalid(executed.value("code").toString(), executed.value("message").toString());
+            }
+            return finishAccepted(result);
+        }
 
         if (preview.command == "analysis.recover")
         {
@@ -2538,6 +2808,18 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                     || RModelCommandService::stateFingerprint(entry->second.editing->model()) != currentFingerprint)
                     return invalid(QStringLiteral("STALE_REVISION"), tr("The accepted command session no longer matches the approved live model."));
 
+                if (preview.delta.geometry.noOp)
+                {
+                    guard.unlock();
+                    return finishAccepted({{"operationId", operationId}, {"documentId", preview.documentId},
+                        {"sessionEpoch", state->sessionEpoch}, {"command", preview.command},
+                        {"beforeRevision", double(stamp.second)}, {"afterRevision", double(stamp.second)},
+                        {"changedPaths", QJsonArray{}}, {"noOp", true}, {"history", "none"},
+                        {"fileSaveRequired", false}, {"coreJournalRecorded", false},
+                        {"preStateHash", currentFingerprint}, {"postStateHash", currentFingerprint},
+                        {"outcome", "no_op"}});
+                }
+
                 coreJournalRequestId = uuid();
                 coreJournalIdempotencyKey = uuid();
                 QJsonObject nativeRequest{{QStringLiteral("apiVersion"), QStringLiteral("range.application/v1")},
@@ -2579,12 +2861,19 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 if (preview.command == QStringLiteral("analysis.modal.configure")) undoMessage = tr("Configure modal analysis");
                 else if (preview.command == QStringLiteral("analysis.structural_dynamics.configure")) undoMessage = tr("Configure structural dynamics");
                 else if (preview.command == QStringLiteral("entity.material.set")) undoMessage = tr("Set material properties");
+                else if (preview.delta.kind == RModelCommandService::Delta::Kind::Geometry) undoMessage = tr("Edit node geometry");
+                else if (preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind) undoMessage = tr("Bind static mesh analysis");
                 else undoMessage = tr("Set boundary condition");
                 if (preview.delta.physicalId
                     && !model.findElementGroupByPhysicalId(preview.delta.physicalId, &changedGroupType, &changedGroupIndex))
                     return invalid(QStringLiteral("STALE_TARGET"), tr("The physical target no longer exists."));
-                session->storeCurentModelVersion(modelID, undoMessage);
-                if (!commitSupportedDelta(model, preview.delta, &applyError))
+                const bool meshBinding = preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind;
+                if (!meshBinding) session->storeCurentModelVersion(modelID, undoMessage);
+                const bool applied = meshBinding
+                    ? model.commitStaticMeshBindingWithHistory(currentCandidate.candidate, preview.delta,
+                        Application::instance()->getApplicationSettings()->getNHistoryRecords(), undoMessage, &applyError)
+                    : commitSupportedDelta(model, preview.delta, &applyError);
+                if (!applied)
                 {
                     QString reconcileError;
                     const bool reconciled = entry->second.editing->recordExternalChange(
@@ -2612,8 +2901,24 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 historyAction = undo ? model.getUndoActionMessage() : model.getRedoActionMessage();
                 if (depth == 0 || historyAction != preview.nativePreview.value(QStringLiteral("historyAction")).toString())
                     return invalid(QStringLiteral("STALE_PREVIEW"), tr("The selected GUI history item is no longer current."));
-                session->getPickList().removeItems(modelID);
-                if (undo) model.undo(0); else model.redo(0);
+                if (!preview.staticBindingHistoryId.isEmpty())
+                {
+                    if (preStateHash != preview.inputFingerprint
+                        || model.staticMeshBindingHistoryIdentity(undo) != preview.staticBindingHistoryId)
+                        return invalid(QStringLiteral("STALE_PREVIEW"), tr("The approved static binding history source or item changed."));
+                    QString historyError;
+                    if (!model.applyStaticMeshBindingHistory(undo, preview.staticBindingHistoryId,
+                                                            preview.staticBindingHistoryHash, &historyError))
+                        return invalid(QStringLiteral("UNSUPPORTED_HISTORY"), historyError);
+                    if (undo) session->getPickList().removeItems(modelID, R_ENTITY_GROUP_POINT);
+                }
+                else
+                {
+                    if (model.hasStaticMeshBindingHistory(undo))
+                        return invalid(QStringLiteral("STALE_PREVIEW"), tr("The selected GUI history item changed."));
+                    session->getPickList().removeItems(modelID);
+                    if (undo) model.undo(0); else model.redo(0);
+                }
                 durableSideEffect = true;
                 postStateHash = RModelCommandService::stateFingerprint(model);
             }
@@ -2628,6 +2933,11 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 session->setMaterialChanged(modelID, changedGroupType, changedGroupIndex);
             else
                 session->setBoundaryConditionChanged(modelID, changedGroupType, changedGroupIndex);
+        }
+        else if (coreEdit && (preview.delta.kind == RModelCommandService::Delta::Kind::Geometry
+                             || preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind))
+        {
+            session->setModelChanged(modelID);
         }
         else if (coreEdit)
         {
@@ -2717,6 +3027,33 @@ bool ModelCommandHost::approvePreview(const QString &previewId)
     auto found = state->previews.find(previewId);
     if (found == state->previews.end() || found->second.approved || found->second.consumed
         || found->second.sessionEpoch != state->sessionEpoch) return false;
+    if (found->second.command == "mesh.generate" || found->second.command == "mesh.accept" || found->second.command == "mesh.cancel")
+    {
+        if (isMutationBlocked()) return false;
+        const auto &preview = found->second;
+        if (preview.command != "mesh.cancel")
+        {
+            const uint id = session->findModelByCommandIdentity(preview.documentId);
+            if (id >= session->getNModels() || session->modelCommandStamp(id).second != preview.stampGeneration) return false;
+        }
+        if (preview.command != "mesh.generate")
+        {
+            bool owned = false;
+            for (const auto &value : state->meshController->jobs())
+            {
+                const auto job = value.toObject();
+                const auto source = job.value("sourceRuntimeStamp").toObject();
+                if (job.value("attemptId") == QJsonValue(preview.jobId)
+                    && source == QJsonObject{{"documentId", preview.documentId}, {"sessionEpoch", preview.sessionEpoch},
+                                             {"documentRevision", double(preview.stampGeneration)}})
+                    owned = preview.command != "mesh.cancel" || job.value("status") == QJsonValue("queued")
+                        || job.value("status") == QJsonValue("running");
+            }
+            if (!owned) return false;
+        }
+        found->second.approved = true;
+        return true;
+    }
     if (found->second.command == "analysis.recover")
     {
         if (isMutationBlocked() || SolverManager::getInstance().nativeJobRecoveryQuery(found->second.jobId)

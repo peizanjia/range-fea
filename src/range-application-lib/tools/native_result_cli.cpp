@@ -30,7 +30,7 @@ int main(int argc, char *argv[])
     const QCommandLineOption shaOption(QStringList{QStringLiteral("expected-sha")},
         QStringLiteral("Expected lowercase manifest SHA-256."), QStringLiteral("sha256"));
     const QCommandLineOption operationOption(QStringList{QStringLiteral("operation")},
-        QStringLiteral("Read-only operation: catalog, channels, series, or summary."), QStringLiteral("name"));
+        QStringLiteral("Read-only operation: catalog, channels, series, summary, or snapshot."), QStringLiteral("name"));
     const QCommandLineOption parametersOption(QStringList{QStringLiteral("parameters")},
         QStringLiteral("Optional inline JSON object of bounded query arguments."), QStringLiteral("json"));
     parser.addOption(manifestOption);
@@ -43,9 +43,12 @@ int main(int argc, char *argv[])
         QStringLiteral("Logical latest native artifact to publish."), QStringLiteral("path"));
     const QCommandLineOption provenanceOption(QStringList{QStringLiteral("provenance-file")},
         QStringLiteral("Bounded provenance JSON file owned by the caller."), QStringLiteral("path"));
+    const QCommandLineOption descriptorOnlyOption(QStringList{QStringLiteral("descriptor-only")},
+        QStringLiteral("Publish the complete manifest to disk and return only its hash-bound descriptor."));
     parser.addOption(resultDirectoryOption);
     parser.addOption(latestOption);
     parser.addOption(provenanceOption);
+    parser.addOption(descriptorOnlyOption);
     parser.addPositionalArgument(QStringLiteral("command"), QStringLiteral("Optional publish command."));
     parser.process(application);
 
@@ -103,13 +106,14 @@ int main(int argc, char *argv[])
             result.insert(QStringLiteral("manifestPath"), published.manifestPath);
             result.insert(QStringLiteral("manifestSha256"), published.manifestSha256);
             result.insert(QStringLiteral("artifactId"), published.artifactId);
-            result.insert(QStringLiteral("manifest"), published.manifest);
+            if (!parser.isSet(descriptorOnlyOption))
+                result.insert(QStringLiteral("manifest"), published.manifest);
         }
         print(result);
         return published.valid ? 0 : 3;
     }
     if (!parser.positionalArguments().isEmpty() || parser.isSet(resultDirectoryOption) ||
-        parser.isSet(latestOption) || parser.isSet(provenanceOption))
+        parser.isSet(latestOption) || parser.isSet(provenanceOption) || parser.isSet(descriptorOnlyOption))
         return printError(QStringLiteral("USAGE_ERROR"), QStringLiteral("Only publish accepts publication arguments."), 2);
     if (!parser.isSet(manifestOption) || !parser.isSet(shaOption) || !parser.isSet(operationOption))
         return printError(QStringLiteral("USAGE_ERROR"),

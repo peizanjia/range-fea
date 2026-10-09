@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QCryptographicHash>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -25,6 +26,7 @@
 #include <QTextBrowser>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QUuid>
 
 #include <rbl_error.h>
 #include <rml_material_property.h>
@@ -33,7 +35,9 @@
 #include "main_window.h"
 #include "model_io.h"
 #include "model_tree.h"
+#include "model_command_host.h"
 #include "native_results_widget.h"
+#include "runtime_control_widget.h"
 #include "session.h"
 #include "workflow_process.h"
 #include "workflow_widget.h"
@@ -148,6 +152,270 @@ private slots:
         Application::instance()->getSession()->clear();
     }
 
+    void pausedNativeRunKeepsSnapshotWhileGuiDocumentAdvances()
+    {
+        auto *session = Application::instance()->getSession(); session->clear();
+        QTemporaryDir project(QDir(evidenceDirectory).filePath("live-document-project-XXXXXX"));
+        QTemporaryDir workspace(QDir(evidenceDirectory).filePath("live-document-workflow-XXXXXX"));
+        QVERIFY(project.isValid()); QVERIFY(workspace.isValid());
+        project.setAutoRemove(false); workspace.setAutoRemove(false);
+        QString error; QVERIFY2(session->openProject(project.path(), &error), qPrintable(error));
+#ifdef RANGE_CURRENT_MODEL_TEST_FIXTURE
+        const QString generator = QStringLiteral(RANGE_CURRENT_MODEL_TEST_FIXTURE);
+#else
+        const QString generator = QDir(QCoreApplication::applicationDirPath()).filePath("range-workflow-native-import-fixture.exe");
+#endif
+        const QString input = project.filePath("live-beam.ram");
+        QProcess fixture; fixture.start(generator, {"beam", input});
+        QVERIFY(fixture.waitForFinished(30000)); QCOMPARE(fixture.exitCode(), 0);
+        Model model;
+        try { ModelIO::open(model, input); }
+        catch (const RError &exception) { QFAIL(qPrintable(exception.getMessage())); }
+        session->addModel(model); const uint modelId = session->getNModels() - 1;
+        session->setModelSelected(modelId, true);
+        const auto stampA = session->modelCommandStamp(modelId);
+        const uint undoBefore = session->getModel(modelId).getUndoStackSize();
+        const uint redoBefore = session->getModel(modelId).getRedoStackSize();
+        const QString fileName = session->getModel(modelId).getFileName();
+        const uint variableCount = session->getModel(modelId).getNVariables();
+        const auto resultValues = [&] {
+            QJsonArray variables;
+            for (uint index = 0; index < session->getModel(modelId).getNVariables(); ++index)
+            {
+                const auto &variable = session->getModel(modelId).getVariable(index);
+                QJsonArray vectors;
+                for (uint vector = 0; vector < variable.getNVectors(); ++vector)
+                {
+                    QJsonArray values;
+                    for (uint value = 0; value < variable.getNValues(); ++value)
+                        values.append(variable.getValue(vector, value));
+                    vectors.append(values);
+                }
+                variables.append(vectors);
+            }
+            return variables;
+        };
+        const auto originalResults = resultValues();
+        const auto youngPosition = session->getModel(modelId).getLine(0).getMaterial()
+            .findPosition(RMaterialProperty::ModulusOfElasiticity);
+        const double youngA = session->getModel(modelId).getLine(0).getMaterial().get(youngPosition).getValue(0);
+        auto *window = Application::instance()->getMainWindow();
+        auto *dock = window->findChild<QDockWidget *>("controlDock"); QVERIFY(dock); dock->show(); dock->raise();
+        auto *pages = workflow->findChild<QTabWidget *>("workflowPages"); QVERIFY(clickTab(pages, 1));
+        auto *workspaceEdit = workflow->findChild<QLineEdit *>("workflowWorkspace"); QVERIFY(workspaceEdit);
+        workspaceEdit->setText(workspace.path());
+        QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowOpen")));
+        QTRY_VERIFY_WITH_TIMEOUT(workflow->transport()->isReady(), 30000);
+        QSignalSpy replies(workflow->transport(), &WorkflowProcess::replyReceived);
+        QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowUseDocumentSnapshot")));
+        QTRY_VERIFY_WITH_TIMEOUT(!lastResponse(replies, "model.source.register").isEmpty(), 30000);
+        const auto sourceA = lastResponse(replies, "model.source.register");
+        const QString sourceId = sourceA.value("sourceId").toString(); QVERIFY(!sourceId.isEmpty());
+        const auto rpc = [&](const QString &operation, const QJsonObject &arguments) {
+            return readService(workflow->transport(), operation, arguments);
+        };
+        // Trusted test RPC selects seq 2 exactly; source registration above is
+        // still the actual GUI capture, with its real catalog and instance stamp.
+        const auto execute = [&](const QString &command, const QJsonObject &parameters) {
+            const auto current = rpc("project.query", {});
+            const auto preview = rpc("command.preview", {{"command", command}, {"parameters", parameters},
+                {"expectedRevision", current.value("revision")}});
+            const auto approval = rpc("host.approve", {{"previewId", preview.value("previewId")},
+                {"previewHash", preview.value("previewHash")}});
+            return rpc("command.execute", {{"previewId", preview.value("previewId")},
+                {"approvalToken", approval.value("approvalToken")}});
+        };
+        const auto configured = execute("workflow.configure", {{"sourceId", sourceId}, {"dt", .001},
+            {"steps", 20}, {"targetDamping", .05}});
+        const QString configureJob = configured.value("jobId").toString(); QVERIFY(!configureJob.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(rpc("jobs.query", {{"jobId", configureJob}}).value("job").toObject()
+            .value("state").toString(), QString("succeeded"), 60000);
+        const auto launched = execute("workflow.run", {{"mode", "active"}, {"independentReference", true},
+            {"runtimeControl", true}, {"pauseAtAcceptedSeq", 2}});
+        const QString job = launched.value("jobId").toString(); QVERIFY(!job.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(rpc("runtime.parameters.query", {{"jobId", job}}).value("execution").toObject()
+            .value("acceptedSeq").toInt(), 2, 90000);
+        const auto paused = rpc("runtime.parameters.query", {{"jobId", job}});
+        const auto attempts = paused.value("runtimeControl").toObject().value("attempts").toObject();
+        QCOMPARE(attempts.size(), 1);
+        const auto attemptA = attempts.begin().value().toObject();
+        const auto identityA = attemptA.value("identity").toObject();
+        const auto parametersA = attemptA.value("acceptedState").toObject().value("parameters").toObject();
+        const auto pausedJob = rpc("jobs.query", {{"jobId", job}}).value("job").toObject();
+        const auto configurationA = pausedJob.value("configuration").toObject();
+        QCOMPARE(configurationA.value("sourceId").toString(), sourceId);
+        const auto hashFile = [](const QString &path) {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) return QString();
+            return QString::fromLatin1(QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256).toHex());
+        };
+        const QString registeredPath = workspace.filePath("model-sources/" + sourceId + "/model.rbm");
+        const QString jobSourcePath = workspace.filePath("jobs/" + job + "/source.rbm");
+        const QString preparedPath = workspace.filePath("jobs/" + job + "/active-prepared.rbm");
+        const QString preparedSha = hashFile(preparedPath); QCOMPARE(preparedSha.size(), 64);
+        QCOMPARE(hashFile(registeredPath), sourceA.value("registeredModelSha256").toString());
+        QCOMPARE(hashFile(jobSourcePath), sourceA.value("registeredModelSha256").toString());
+        QCOMPARE(identityA.value("modelSha256").toString().size(), 64);
+        QCOMPARE(identityA.value("baseControllerRevision").toString().size(), 64);
+        QVERIFY(attemptA.value("acceptedState").toObject().value("history").toArray().isEmpty());
+
+        auto *host = session->getModelCommandHost();
+        const auto hostRpc = [&](const QString &operation, const QJsonObject &parameters) {
+            return host->handle({{"apiVersion", "range.host/v1"}, {"requestId", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                {"operation", operation}, {"parameters", parameters}});
+        };
+        const auto materialPreview = hostRpc("command.preview", {
+            {"target", QJsonObject{{"documentId", stampA.first}, {"sessionEpoch", host->sessionEpoch()}}},
+            {"expectedDocumentRevision", double(stampA.second)}, {"command", "entity.material.set"},
+            {"commandVersion", 1}, {"arguments", QJsonObject{
+                {"targetId", QString("g:%1").arg(session->getModel(modelId).getLine(0).getPhysicalId())},
+                {"name", "WF09 next beam material"}, {"youngModulusPa", youngA * 1.01},
+                {"densityKgM3", 3210.0}, {"poissonRatio", .23}, {"thermalExpansionPerK", 0.0}}}});
+        QVERIFY2(materialPreview.value("status").toString() == QString("preview"),
+            QJsonDocument(materialPreview).toJson(QJsonDocument::Compact).constData());
+        const QString materialId = materialPreview.value("result").toObject().value("previewId").toString();
+        QVERIFY(!materialId.isEmpty());
+        QCOMPARE(session->modelCommandStamp(modelId), stampA);
+        QVERIFY(host->approvePreview(materialId)); // Trusted GUI manual approval boundary.
+        const auto documentEdit = hostRpc("command.execute", {{"previewId", materialId},
+            {"idempotencyKey", QUuid::createUuid().toString(QUuid::WithoutBraces)}});
+        QVERIFY2(documentEdit.value("status").toString() == QString("accepted"),
+            QJsonDocument(documentEdit).toJson(QJsonDocument::Compact).constData());
+        QVERIFY(documentEdit.value("result").toObject().value("coreJournalRecorded").toBool());
+        const auto stampB = session->modelCommandStamp(modelId);
+        QCOMPARE(stampB.first, stampA.first); QVERIFY(stampB.second > stampA.second);
+        QCOMPARE(session->getModel(modelId).getLine(0).getMaterial().get(youngPosition).getValue(0), youngA * 1.01);
+        QCOMPARE(session->getModel(modelId).getFileName(), fileName);
+        QCOMPARE(session->getModel(modelId).getNVariables(), variableCount);
+        QCOMPARE(resultValues(), originalResults);
+        QCOMPARE(session->getModel(modelId).getUndoStackSize(), undoBefore + 1);
+        QCOMPARE(session->getModel(modelId).getRedoStackSize(), redoBefore);
+        QCOMPARE(rpc("model.source.query", {{"sourceId", sourceId}}), sourceA);
+        const auto afterEdit = rpc("runtime.parameters.query", {{"jobId", job}});
+        QCOMPARE(afterEdit.value("runtimeControl"), paused.value("runtimeControl"));
+        QCOMPARE(afterEdit.value("execution").toObject().value("acceptedSeq").toInt(), 2);
+        QCOMPARE(hashFile(registeredPath), sourceA.value("registeredModelSha256").toString());
+        QCOMPARE(hashFile(jobSourcePath), sourceA.value("registeredModelSha256").toString());
+        QCOMPARE(hashFile(preparedPath), preparedSha);
+        QCOMPARE(rpc("jobs.query", {{"jobId", job}}).value("job").toObject().value("configuration"), configurationA);
+
+        // Publishing an accepted document snapshot is a trusted Session route;
+        // it does not register a workflow source or alter the busy run lane.
+        const auto nextDocumentSnapshot = session->createDocumentSnapshot(modelId, &error);
+        QVERIFY2(!nextDocumentSnapshot.isEmpty(), qPrintable(error));
+        QVERIFY(nextDocumentSnapshot.value("modelSha256") != sourceA.value("registeredModelSha256"));
+        QCOMPARE(nextDocumentSnapshot.value("instanceRef").toObject()
+            .value("documentRevision").toDouble(), double(stampB.second));
+        QCOMPARE(session->modelCommandStamp(modelId), stampB);
+
+        RuntimeControlWidget runtime(workflow->transport()); runtime.resize(700, 1000); runtime.show();
+        const auto proposal = rpc("runtime.parameters.preview", {{"jobId", job},
+            {"velocityGainNsm", parametersA.value("velocityGainNsm").toDouble() * 1.2},
+            {"actuatorLimits", parametersA.value("actuatorLimits")}});
+        const QString proposalId = proposal.value("proposalId").toString(); QVERIFY(!proposalId.isEmpty());
+        runtime.refresh();
+        auto *saved = runtime.findChild<QComboBox *>("runtimeProposalChoice"); QVERIFY(saved);
+        QTRY_VERIFY_WITH_TIMEOUT(saved->findData(proposalId) >= 0, 15000);
+        saved->setCurrentIndex(saved->findData(proposalId));
+        auto *approve = runtime.findChild<QPushButton *>("runtimeApproveSubmit"); QVERIFY(approve);
+        QTRY_VERIFY(approve->isEnabled()); QVERIFY(clickControl(approve));
+        QTRY_VERIFY_WITH_TIMEOUT(runtime.findChild<QLabel *>("runtimeStatus")->text().contains("queued"), 15000);
+        QVERIFY(clickControl(runtime.findChild<QPushButton *>("runtimeResume")));
+        QTRY_COMPARE_WITH_TIMEOUT(rpc("jobs.query", {{"jobId", job}}).value("job").toObject()
+            .value("state").toString(), QString("succeeded"), 90000);
+        const auto completed = rpc("jobs.query", {{"jobId", job}}).value("job").toObject();
+        const auto result = completed.value("result").toObject();
+        QCOMPARE(result.value("totalSteps").toInt(), 20);
+        QCOMPARE(result.value("configuration").toObject(), configurationA);
+        QCOMPARE(result.value("modelBinding").toObject().value("sourceId").toString(), sourceId);
+        QCOMPARE(result.value("modelBinding").toObject().value("registeredModelSha256"), sourceA.value("registeredModelSha256"));
+        QCOMPARE(result.value("modelBinding").toObject().value("originRef"), sourceA.value("originRef"));
+        const auto active = result.value("active").toObject();
+        QVERIFY(active.contains("maxDisplacementErrorM")); QVERIFY(active.contains("maxVelocityErrorMPerSecond"));
+        QVERIFY(active.value("maxDisplacementErrorM").toDouble() <= 1e-8);
+        QVERIFY(active.value("maxVelocityErrorMPerSecond").toDouble() <= 1e-7);
+        const auto accepted = rpc("runtime.parameters.query", {{"jobId", job}, {"proposalId", proposalId}});
+        QCOMPARE(accepted.value("status").toString(), QString("accepted"));
+        QCOMPARE(accepted.value("receipt").toObject().value("appliedSeq").toString(), QString("3"));
+        const auto finalRuntime = rpc("runtime.parameters.query", {{"jobId", job}});
+        const auto finalAttempts = finalRuntime.value("runtimeControl").toObject().value("attempts").toObject();
+        const auto finalAttempt = finalAttempts.begin().value().toObject();
+        QCOMPARE(finalAttempt.value("identity").toObject(), identityA);
+        QCOMPARE(finalAttempt.value("acceptedState").toObject().value("history").toArray().size(), 1);
+        QCOMPARE(session->modelCommandStamp(modelId), stampB);
+        QCOMPARE(session->getModel(modelId).getLine(0).getMaterial().get(youngPosition).getValue(0), youngA * 1.01);
+        QCOMPARE(session->getModel(modelId).getUndoStackSize(), undoBefore + 1);
+        QCOMPARE(session->getModel(modelId).getRedoStackSize(), redoBefore);
+        QCOMPARE(session->getModel(modelId).getNVariables(), variableCount);
+        QCOMPARE(resultValues(), originalResults);
+        QCOMPARE(session->getModel(modelId).getFileName(), fileName);
+        QCOMPARE(hashFile(registeredPath), sourceA.value("registeredModelSha256").toString());
+        QCOMPARE(hashFile(jobSourcePath), sourceA.value("registeredModelSha256").toString());
+        QCOMPARE(hashFile(preparedPath), preparedSha);
+        QCOMPARE(rpc("model.source.query", {{"sourceId", sourceId}}), sourceA);
+
+        // Only after this run finishes may the real GUI register and configure
+        // the next source. The live gain receipt remains owned by run A.
+        runtime.hide(); window->raise(); window->activateWindow(); dock->raise();
+        QVERIFY(clickTab(pages, 1));
+        const int registrations = replies.size();
+        QSignalSpy registrationFailures(workflow->transport(), &WorkflowProcess::requestFailed);
+        QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowUseDocumentSnapshot")));
+        QElapsedTimer registrationWait; registrationWait.start();
+        QJsonObject registrationFailure;
+        while (registrationWait.elapsed() < 30000)
+        {
+            if (replies.size() > registrations &&
+                lastResponse(replies, "model.source.register").value("sourceId").toString() != sourceId) break;
+            for (const auto &failure : registrationFailures)
+                if (failure[1].toString() == "model.source.register")
+                    registrationFailure = {{"requestId", failure[0].toString()}, {"operation", failure[1].toString()},
+                        {"code", failure[2].toString()}, {"message", failure[3].toString()}};
+            if (!registrationFailure.isEmpty()) break;
+            QTest::qWait(10);
+        }
+        registrationFailure.insert("workflowStatus", workflow->findChild<QLabel *>("workflowStatus")->text());
+        QVERIFY2(replies.size() > registrations &&
+            lastResponse(replies, "model.source.register").value("sourceId").toString() != sourceId,
+            QJsonDocument(registrationFailure).toJson(QJsonDocument::Compact).constData());
+        const auto sourceB = lastResponse(replies, "model.source.register");
+        QVERIFY(sourceB.value("registeredModelSha256") != sourceA.value("registeredModelSha256"));
+        QCOMPARE(sourceB.value("registeredModelSha256"), nextDocumentSnapshot.value("modelSha256"));
+        QCOMPARE(sourceB.value("originRef").toObject().value("instanceRef").toObject()
+            .value("documentRevision").toDouble(), double(stampB.second));
+        auto *nextDt = workflow->findChild<QDoubleSpinBox *>("workflowTimeStep");
+        auto *nextSteps = workflow->findChild<QSpinBox *>("workflowSteps"); QVERIFY(nextDt); QVERIFY(nextSteps);
+        enterNumber(nextDt, "0.001"); enterNumber(nextSteps, "20");
+        QSignalSpy nextAccepted(workflow, &WorkflowWidget::jobAccepted);
+        QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowConfigure")));
+        auto *nextApply = workflow->findChild<QPushButton *>("workflowApply"); QVERIFY(nextApply);
+        QTRY_VERIFY_WITH_TIMEOUT(nextApply->isEnabled(), 30000);
+        const auto nextPreview = workflow->currentPreview();
+        QCOMPARE(nextPreview.value("normalized").toObject().value("command").toString(), QString("workflow.configure"));
+        QCOMPARE(nextPreview.value("normalized").toObject().value("parameters").toObject()
+            .value("sourceId"), sourceB.value("sourceId"));
+        QVERIFY(clickControl(nextApply)); QTRY_COMPARE_WITH_TIMEOUT(nextAccepted.size(), 1, 30000);
+        const QString nextConfigJob = nextAccepted.first()[0].toString(); QVERIFY(!nextConfigJob.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(rpc("jobs.query", {{"jobId", nextConfigJob}}).value("job").toObject()
+            .value("state").toString(), QString("succeeded"), 60000);
+        const auto nextConfigured = rpc("jobs.query", {{"jobId", nextConfigJob}}).value("job").toObject();
+        const auto nextProject = rpc("project.query", {});
+        QCOMPARE(nextProject.value("configuration").toObject().value("sourceId"), sourceB.value("sourceId"));
+        QCOMPARE(rpc("jobs.query", {{"jobId", job}}).value("job").toObject().value("configuration"), configurationA);
+        QCOMPARE(rpc("runtime.parameters.query", {{"jobId", job}}).value("runtimeControl"), finalRuntime.value("runtimeControl"));
+        QCOMPARE(session->modelCommandStamp(modelId), stampB);
+        QCOMPARE(resultValues(), originalResults);
+        QCOMPARE(rpc("model.source.query", {{"sourceId", sourceB.value("sourceId")}}), sourceB);
+        QFile report(QDir(evidenceDirectory).filePath("live-document-next-revision.json"));
+        QVERIFY(report.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const auto bytes = QJsonDocument(QJsonObject{{"sourceA", sourceA}, {"sourceB", sourceB},
+            {"nextDocumentSnapshot", nextDocumentSnapshot}, {"nextConfigurationPreview", nextPreview},
+            {"nextConfigurationJob", nextConfigured}, {"nextProject", nextProject},
+            {"documentEdit", documentEdit}, {"pausedRuntime", paused}, {"runtimeProposal", proposal},
+            {"runtimeReceipt", accepted}, {"finalRuntime", finalRuntime}, {"completedJob", completed}}).toJson();
+        QCOMPARE(report.write(bytes), qint64(bytes.size()));
+    }
+
     void nondefaultBeamSnapshotToNativeFeTableAndFrozenCsv()
     {
         auto *session = Application::instance()->getSession(); session->clear();
@@ -241,6 +509,23 @@ private slots:
         while (configureWait.elapsed() < 30000);
         QCOMPARE(configured.value("state").toString(), QString("succeeded"));
         QVERIFY(clickTab(pages, 1));
+        auto *runtimeUpdates = workflow->findChild<QCheckBox *>("workflowRuntimeUpdates");
+        auto *runtimePause = workflow->findChild<QCheckBox *>("workflowInitialRuntimePause");
+        QVERIFY(runtimeUpdates && runtimePause);
+        QVERIFY(runtimeUpdates->isEnabled());
+        runtimeUpdates->setChecked(true);
+        QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowRun")));
+        QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 30000);
+        const auto pausedRun = workflow->currentPreview().value("normalized").toObject().value("parameters").toObject();
+        QCOMPARE(pausedRun.value("runtimeControl"), QJsonValue(true));
+        QCOMPARE(pausedRun.value("pauseAtAcceptedSeq").toInt(), 1);
+        runtimePause->setChecked(false);
+        QVERIFY(workflow->currentPreview().isEmpty()); QVERIFY(!apply->isEnabled());
+        QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowRun")));
+        QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 30000);
+        QVERIFY(!workflow->currentPreview().value("normalized").toObject().value("parameters").toObject().contains("pauseAtAcceptedSeq"));
+        runtimeUpdates->setChecked(false);
+        QVERIFY(workflow->currentPreview().isEmpty()); QVERIFY(!apply->isEnabled());
         QVERIFY(clickControl(workflow->findChild<QPushButton *>("workflowRun")));
         QTRY_VERIFY_WITH_TIMEOUT(apply->isEnabled(), 30000);
         QCOMPARE(workflow->currentPreview().value("normalized").toObject().value("command").toString(), QString("workflow.run"));

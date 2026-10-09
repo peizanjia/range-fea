@@ -169,6 +169,9 @@ bool readJournal(const QString &path, JournalData &data, QString *error)
         }
         recordIds.insert(record.recordId);
         previousId = record.recordId;
+        // Historical scope-v1 modal and scope-v2 supported-state hashes are
+        // audit evidence. Preserve their original hash values and scope metadata;
+        // only newly constructed records use the current scope version.
         parsed.append(std::move(record));
     }
 
@@ -305,10 +308,49 @@ bool buildJournalRecord(const RModelCommandSession::JournalOptions &options,
             record.selectionSnapshot.insert(QStringLiteral("parametersEncoding"), QStringLiteral("json-text/v1"));
         }
     }
+    else if (commandId == QStringLiteral("mesh.rebind.static"))
+    {
+        // Rebind constraints use nullable XYZ axes. Encode the canonical
+        // request without loosening InteractionRecord v1's null/string limits.
+        const QByteArray encoded = QJsonDocument(parameters).toJson(QJsonDocument::Compact);
+        if (encoded.size() > 65536)
+        {
+            if (error) *error = QStringLiteral("Static binding parameters exceed the 64 KiB lossless audit encoding limit.");
+            return false;
+        }
+        const QString json = QString::fromUtf8(encoded);
+        QJsonArray chunks;
+        int begin = 0;
+        while (begin < json.size())
+        {
+            int end = begin;
+            int bytes = 0;
+            while (end < json.size())
+            {
+                const int width = json.at(end).isHighSurrogate() && end + 1 < json.size()
+                    && json.at(end + 1).isLowSurrogate() ? 2 : 1;
+                const int nextBytes = json.mid(end, width).toUtf8().size();
+                if (end - begin + width > 4096 || bytes + nextBytes > 4096) break;
+                end += width;
+                bytes += nextBytes;
+            }
+            if (end == begin || chunks.size() >= 32)
+            {
+                if (error) *error = QStringLiteral("Static binding parameters exceed the bounded audit chunk limit.");
+                return false;
+            }
+            chunks.append(json.mid(begin, end - begin));
+            begin = end;
+        }
+        record.parameters = {{QStringLiteral("encoding"), QStringLiteral("json-text-chunks/v1")},
+                             {QStringLiteral("chunks"), chunks}};
+        record.selectionSnapshot.insert(QStringLiteral("parametersEncoding"), QStringLiteral("json-text-chunks/v1"));
+    }
     record.selectionSnapshot.insert(QStringLiteral("preRevision"), preRevision);
     record.selectionSnapshot.insert(QStringLiteral("postRevision"), modelRevision);
     record.selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("supported_model_state"));
-    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 2);
+    // Scope 3 extends scope 2 with all native node/element geometry.
+    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 3);
     if (!options.sourcePath.isEmpty())
         record.selectionSnapshot.insert(QStringLiteral("sourcePath"), options.sourcePath);
     if (!options.sourceSha256.isEmpty())
@@ -1254,6 +1296,13 @@ QJsonObject RModelCommandSession::execute(const QJsonObject &request)
         response.insert(QStringLiteral("changedPaths"), operation.changedPaths);
         response.insert(QStringLiteral("fingerprint"), operation.fingerprint);
         response.insert(QStringLiteral("diagnostics"), operation.diagnostics);
+        if (operation.delta.kind == RModelCommandService::Delta::Kind::MeshRebind)
+        {
+            response.insert(QStringLiteral("report"), operation.report);
+            response.insert(QStringLiteral("readSet"), operation.readSet);
+            response.insert(QStringLiteral("units"), operation.units);
+            response.insert(QStringLiteral("invalidation"), operation.invalidation);
+        }
     }
     if (dryRun)
     {
@@ -1286,8 +1335,10 @@ QJsonObject RModelCommandSession::execute(const QJsonObject &request)
     else
     {
         if (operation.delta.kind != RModelCommandService::Delta::Kind::None)
+        {
             candidate->undo.append(operation.delta);
-        candidate->redo.clear();
+            candidate->redo.clear();
+        }
     }
     candidate->model = operation.candidate;
     ++candidate->generation;

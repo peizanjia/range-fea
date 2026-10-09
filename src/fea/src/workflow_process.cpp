@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonParseError>
 #include <QProcessEnvironment>
 #include <QSet>
@@ -13,6 +14,46 @@
 namespace
 {
 constexpr qsizetype maxResponse = 16 * 1024 * 1024;
+constexpr qsizetype maxPending = 16;
+constexpr qsizetype maxRetired = 128;
+bool isIsolatedRead(const QString &operation)
+{
+    static const QSet<QString> operations{"result.plot.sources.query", "result.plot.query", "result.raw.query",
+        "result.raw.export", "result.raw.export.chunk", "extension.result.query"};
+    return operations.contains(operation);
+}
+bool hasDuplicateJsonKeys(const QByteArray &json)
+{
+    // QJsonDocument otherwise silently keeps the last duplicate member. The
+    // document parser validates syntax; this scanner checks decoded member names.
+    struct Frame { bool object, key; QSet<QString> names; };
+    QList<Frame> stack;
+    for (qsizetype index = 0; index < json.size(); ++index)
+    {
+        const char token = json[index];
+        if (token == '{') stack.append(Frame{true, true, {}});
+        else if (token == '[') stack.append(Frame{false, false, {}});
+        else if (token == '}' || token == ']') { if (!stack.isEmpty()) stack.removeLast(); }
+        else if (token == ',' && !stack.isEmpty() && stack.last().object) stack.last().key = true;
+        else if (token == '"')
+        {
+            const qsizetype begin = index;
+            for (++index; index < json.size(); ++index)
+            {
+                if (json[index] == '\\') { ++index; continue; }
+                if (json[index] == '"') break;
+            }
+            if (!stack.isEmpty() && stack.last().object && stack.last().key)
+            {
+                const auto key = QJsonDocument::fromJson("[" + json.mid(begin, index - begin + 1) + "]")
+                    .array().first().toString();
+                if (stack.last().names.contains(key)) return true;
+                stack.last().names.insert(key); stack.last().key = false;
+            }
+        }
+    }
+    return false;
+}
 QString firstFile(const QStringList &candidates)
 {
     for (const auto &path : candidates)
@@ -53,12 +94,38 @@ WorkflowProcess::WorkflowProcess(QObject *parent) : QObject(parent)
     });
     deadlineTimer.setInterval(100);
     connect(&deadlineTimer, &QTimer::timeout, this, [this] {
-        for (const auto &item : std::as_const(pending))
-            if (clock.elapsed() >= item.deadline)
+        QStringList expiredReads, expiredCancellations;
+        for (auto it = pending.cbegin(); it != pending.cend(); ++it)
+            if (clock.elapsed() >= it->deadline)
             {
+                if (!it->cancelTarget.isEmpty()) { expiredCancellations.append(it.key()); continue; }
+                if (isIsolatedRead(it->operation)) { expiredReads.append(it.key()); continue; }
                 failTransport("REQUEST_TIMEOUT", tr("The workflow request timed out. Reopen its workspace to reconcile unfinished work before retrying."));
                 return;
             }
+        for (const auto &id : expiredCancellations)
+        {
+            if (!pending.contains(id)) continue;
+            const auto item = pending.take(id);
+            retiredReads.insert(id, item);
+            retiredOrder.append(id);
+            while (retiredOrder.size() > maxRetired) retiredReads.remove(retiredOrder.takeFirst());
+            emit requestFailed(id, item.operation, "REQUEST_TIMEOUT",
+                tr("Workflow read cancellation is unconfirmed: its receipt timed out."));
+            if (stopping) return;
+        }
+        for (const auto &id : expiredReads)
+        {
+            if (!pending.contains(id)) continue;
+            const auto item = pending.take(id);
+            retiredReads.insert(id, item);
+            retiredOrder.append(id);
+            while (retiredOrder.size() > maxRetired) retiredReads.remove(retiredOrder.takeFirst());
+            cancelRead(id);
+            emit requestFailed(id, item.operation, "REQUEST_TIMEOUT",
+                tr("The workflow read timed out; cancellation was requested. Check its state before retrying."));
+            if (stopping) return;
+        }
     });
 }
 
@@ -125,6 +192,7 @@ void WorkflowProcess::start(const Configuration &configuration)
     ++generation;
     stopping = false;
     output.clear(); diagnostics.clear(); pending.clear(); handshakeId.clear();
+    retiredReads.clear(); retiredOrder.clear();
     setReady(false);
     QProcessEnvironment environment;
     const auto inherited = QProcessEnvironment::systemEnvironment();
@@ -134,6 +202,7 @@ void WorkflowProcess::start(const Configuration &configuration)
             environment.insert(QString::fromLatin1(name), inherited.value(QString::fromLatin1(name)));
     environment.insert("PYTHONPATH", config.packageDirectory);
     environment.insert("PYTHONNOUSERSITE", "1");
+    environment.insert("PYTHONDONTWRITEBYTECODE", "1");
     environment.insert("PYTHONUNBUFFERED", "1");
     process.setProcessEnvironment(environment);
     process.setWorkingDirectory(config.packageDirectory);
@@ -143,6 +212,11 @@ void WorkflowProcess::start(const Configuration &configuration)
                           "--examples", config.examples, "--python", config.python};
     if (config.trustedExtensions) arguments.append("--trusted-extensions");
     if (!config.nativeResults.isEmpty()) arguments.append({"--native-results", config.nativeResults});
+    if (QFileInfo(QFileInfo(config.python).dir().filePath("python313._pth")).isFile())
+    {
+        const QString bootstrap = "import sys,runpy; sys.path.insert(0,sys.argv.pop(1)); runpy.run_module('range_workflow',run_name='__main__')";
+        arguments = QStringList{"-I", "-B", "-c", bootstrap, config.packageDirectory} + arguments.mid(2);
+    }
     process.setArguments(arguments);
     process.start();
     deadlineTimer.start();
@@ -162,14 +236,14 @@ QString WorkflowProcess::request(const QString &operation, const QJsonObject &pa
     const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     const auto bytes = QJsonDocument(QJsonObject{{"apiVersion", "range.workflow/v1"},
         {"requestId", id}, {"operation", operation}, {"parameters", parameters}}).toJson(QJsonDocument::Compact) + '\n';
-    if (stopping || process.state() != QProcess::Running || pending.size() >= 32 || bytes.size() > 256 * 1024)
+    if (stopping || process.state() != QProcess::Running || pending.size() >= maxPending || bytes.size() > 256 * 1024)
     {
         QTimer::singleShot(0, this, [this, id, operation] {
             emit requestFailed(id, operation, "SERVICE_UNAVAILABLE", tr("Workflow service is unavailable or its request limit was reached."));
         });
         return id;
     }
-    pending.insert(id, {operation, clock.elapsed() + config.requestTimeoutMs});
+    pending.insert(id, {operation, clock.elapsed() + config.requestTimeoutMs, {}});
     const auto requestGeneration = generation;
     if (process.write(bytes) != bytes.size())
         QTimer::singleShot(0, this, [this, id, requestGeneration] {
@@ -179,15 +253,17 @@ QString WorkflowProcess::request(const QString &operation, const QJsonObject &pa
     return id;
 }
 
+void WorkflowProcess::cancelRead(const QString &requestId)
+{
+    const auto id = request("host.read.cancel", {{"requestId", requestId}});
+    if (pending.contains(id)) pending[id].cancelTarget = requestId;
+    else failTransport("WRITE_FAILED", tr("The workflow read cancellation could not be submitted."));
+}
+
 void WorkflowProcess::consumeOutput()
 {
     if (stopping) { process.readAllStandardOutput(); return; }
     output.append(process.readAllStandardOutput());
-    if (output.size() > maxResponse)
-    {
-        failTransport("INVALID_RESPONSE", tr("Workflow output exceeded its size limit."));
-        return;
-    }
     while (output.contains('\n'))
     {
         const qsizetype end = output.indexOf('\n');
@@ -198,16 +274,43 @@ void WorkflowProcess::consumeOutput()
         const auto response = document.object();
         const QString id = response.value("requestId").toString();
         const QString status = response.value("status").toString();
-        if (error.error != QJsonParseError::NoError || !document.isObject()
+        if (line.size() + 1 > maxResponse || error.error != QJsonParseError::NoError || !document.isObject()
+            || hasDuplicateJsonKeys(line)
             || response.size() != 5 || response.value("apiVersion") != "range.workflow/v1"
-            || !response.value("code").isString() || !response.value("result").isObject()
-            || (status != "ok" && status != "error") || !pending.contains(id))
+            || !response.value("requestId").isString() || QUuid(id).isNull()
+            || QUuid(id).toString(QUuid::WithoutBraces) != id
+            || !response.value("code").isString() || response.value("code").toString().isEmpty()
+            || !response.value("result").isObject() || (status != "ok" && status != "error")
+            || (status == "ok" && response.value("code") != "OK")
+            || (status == "error" && response.value("code") == "OK")
+            || (status == "error" && (response.value("result").toObject().size() != 1
+                || !response.value("result").toObject().value("message").isString()))
+            || (!pending.contains(id) && (!retiredReads.contains(id)
+                || (!isIsolatedRead(retiredReads.value(id).operation) && retiredReads.value(id).cancelTarget.isEmpty()))))
         {
             failTransport("INVALID_RESPONSE", tr("Workflow service returned an invalid or uncorrelated response."));
             return;
         }
-        const auto item = pending.take(id);
+        const bool late = retiredReads.contains(id);
+        const auto item = late ? retiredReads.value(id) : pending.value(id);
         const auto result = response.value("result").toObject();
+        if (!item.cancelTarget.isEmpty())
+        {
+            if (status == "ok" && (result.size() != 2 || result.value("requestId") != item.cancelTarget
+                || !result.value("readCancelled").isBool()))
+            {
+                failTransport("INVALID_RESPONSE", tr("Workflow service returned an invalid read cancellation receipt."));
+                return;
+            }
+            if (late) { retiredReads.remove(id); retiredOrder.removeOne(id); continue; }
+            pending.remove(id);
+            if (status == "error")
+                emit requestFailed(id, item.operation, response.value("code").toString(),
+                    tr("Workflow read cancellation was not confirmed: %1").arg(result.value("message").toString()));
+            continue;
+        }
+        if (late) { retiredReads.remove(id); retiredOrder.removeOne(id); continue; }
+        pending.remove(id);
         if (status == "error")
         {
             emit requestFailed(id, item.operation, response.value("code").toString(), result.value("message").toString());
@@ -225,6 +328,8 @@ void WorkflowProcess::consumeOutput()
         }
         emit replyReceived(id, item.operation, result);
     }
+    if (output.size() > maxResponse)
+        failTransport("INVALID_RESPONSE", tr("Workflow output exceeded its size limit."));
 }
 
 void WorkflowProcess::failTransport(const QString &code, const QString &message)
