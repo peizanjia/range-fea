@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
@@ -96,6 +97,21 @@ private slots:
         widget.approveAndApply();
         QCOMPARE(session->getModel(0).getNode(1).getX(), 1.0);
         widget.preview(); QVERIFY(apply->isEnabled());
+        session->getModel(0).setDescription("Accepted external edit");
+        session->setModelChanged(0);
+        // Approval must retire synchronously, before the queued context read.
+        QVERIFY(!apply->isEnabled());
+        widget.approveAndApply();
+        QCOMPARE(session->getModel(0).getNode(1).getX(), 1.0);
+        // The real MainWindow rebuilds its model tree on modelChanged and
+        // reconciles selection. Select the intended source for a new preview.
+        session->setModelSelected(0, true);
+        session->setModelSelected(1, false);
+        QCOMPARE(session->getSelectedModelIDs(), QList<uint>{0});
+        widget.preview();
+        QVERIFY2(apply->isEnabled(), qPrintable(widget.findChild<QLabel *>("geometryStatus")->text()));
+        QCoreApplication::processEvents();
+        QVERIFY2(apply->isEnabled(), qPrintable(widget.findChild<QLabel *>("geometryStatus")->text()));
         session->setModelSelected(0, false);
         session->setModelSelected(1, true);
         QVERIFY(!apply->isEnabled());

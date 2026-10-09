@@ -44,6 +44,9 @@ private:
     QPlainTextEdit *details = nullptr;
     MeshBindingWidget *binding = nullptr;
     QJsonObject generationPreview, acceptancePreview;
+    bool contextRefreshPending = false;
+    quint64 contextRefreshGeneration = 0;
+    void queueContextRefresh();
     QString selectedAttempt() const;
     void clearApprovals();
     void showResponse(const QJsonObject &response);

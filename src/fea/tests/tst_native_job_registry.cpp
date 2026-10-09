@@ -23,6 +23,7 @@
 #include <cmath>
 
 #include <rml_time_solver.h>
+#include <rnative_result_broker.h>
 
 #include <rbl_job.h>
 
@@ -457,6 +458,111 @@ class TestNativeJobRegistry : public QObject
     Q_OBJECT
 
 private slots:
+    void restartCapturePreservesCompactOriginsAcrossCatalogPages()
+    {
+        // Metadata/capture fixture only: these persisted MODELs exercise the
+        // broker and staging boundary, without claiming a numerical FE solve.
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        QVERIFY(waitForManagerIdle(SolverManager::getInstance()));
+        SessionModelGuard models(session);
+        Model model;
+        QString logicalPath;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("paged-restart-origin"), model, &logicalPath));
+        constexpr uint frameCount = 201;
+        configureSingleOutputDynamics(model, frameCount, 1);
+        RVariable displacement(R_VARIABLE_DISPLACEMENT, R_VARIABLE_APPLY_NODE);
+        displacement.resize(3, model.getNNodes());
+        model.addVariable(displacement);
+        RStructuralDynamicsRestartData checkpoint;
+        checkpoint.available = true;
+        checkpoint.fixedTimeStep = 0.001;
+        checkpoint.meshNodeCount = model.getNNodes();
+        checkpoint.meshElementCount = model.getNElements();
+        checkpoint.physicalDofCount = model.getNNodes();
+        checkpoint.meshFingerprint = RStructuralDynamicsRestartData::computeMeshFingerprint(model);
+        checkpoint.dofFingerprint = QString(64, QLatin1Char('a'));
+        checkpoint.systemFingerprint = QString(64, QLatin1Char('b'));
+        checkpoint.q.assign(model.getNNodes(), 0.0);
+        checkpoint.v.assign(model.getNNodes(), 0.0);
+        checkpoint.a.assign(model.getNNodes(), 0.0);
+        checkpoint.externalForce.assign(model.getNNodes(), 0.0);
+        for (uint record = 1; record <= frameCount; ++record)
+        {
+            model.getTimeSolver().setCurrentTimeStep(record - 1);
+            checkpoint.completedSteps = record;
+            checkpoint.time = model.getTimeSolver().getCurrentTime();
+            model.getProblemSetup().setStructuralDynamicsRestartData(checkpoint);
+            model.write(logicalPath, true);
+        }
+        const QString fixtureHash = fileSha256(logicalPath);
+        const QJsonObject declared{
+            {QStringLiteral("jobId"), QStringLiteral("metadata-fixture-paged-restart")},
+            {QStringLiteral("proofScope"), QStringLiteral("solver-and-declared-controller-runtime/v1")},
+            {QStringLiteral("sourceRuntimeStamp"), QJsonObject{
+                {QStringLiteral("documentId"), QStringLiteral("metadata-fixture")},
+                {QStringLiteral("revision"), QStringLiteral("1")}}},
+            {QStringLiteral("sourceSnapshotRef"), QJsonObject{
+                {QStringLiteral("projectId"), QStringLiteral("metadata-fixture")},
+                {QStringLiteral("sourceRevision"), QStringLiteral("1")}}},
+            {QStringLiteral("inputSnapshotSha256"), fixtureHash},
+            {QStringLiteral("inputPackageSha256"), fixtureHash},
+            {QStringLiteral("runtime"), QJsonObject{
+                {QStringLiteral("fingerprintSha256"), fixtureHash},
+                {QStringLiteral("scope"), QStringLiteral("metadata-fixture/v1")}}},
+            {QStringLiteral("control"), QJsonObject{
+                {QStringLiteral("enabled"), false},
+                {QStringLiteral("controllerId"), QString()},
+                {QStringLiteral("controllerVersionSha256"), QString()}}}};
+        const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, declared);
+        QVERIFY2(published.valid, qPrintable(published.message));
+        const QJsonObject firstPage = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+            QStringLiteral("catalog"), {{QStringLiteral("limit"), 200}});
+        QVERIFY(firstPage.value(QStringLiteral("valid")).toBool());
+        QCOMPARE(firstPage.value(QStringLiteral("frames")).toArray().size(), 200);
+        QVERIFY(!firstPage.value(QStringLiteral("nextCursor")).toString().isEmpty());
+        QFile manifest(published.manifestPath);
+        QVERIFY(manifest.open(QIODevice::ReadOnly));
+        const QJsonObject compact = QJsonDocument::fromJson(manifest.readAll()).object();
+        QVERIFY(compact.value(QStringLiteral("originTable")).isObject());
+        manifest.close();
+
+        Model restart;
+        ModelIO::open(restart, logicalPath);
+        restart.getProblemSetup().setRestart(true);
+        const uint modelID = models.add(restart);
+        SolverTask capture(Application::instance()->getApplicationSettings(), modelID);
+        QVERIFY(capture.captureInputSnapshot(restart, session->modelCommandStamp(modelID), modelID));
+        QFile index(QDir(QFileInfo(capture.getInputSnapshotFileName()).absolutePath())
+                    .filePath(QStringLiteral("history/origin-index.json")));
+        QVERIFY(index.open(QIODevice::ReadOnly));
+        const QJsonArray captured = QJsonDocument::fromJson(index.readAll()).array();
+        const QJsonArray originals = published.manifest.value(QStringLiteral("frames")).toArray();
+        QCOMPARE(captured.size(), int(frameCount));
+        QCOMPARE(originals.size(), int(frameCount));
+        for (int offset = 0; offset < captured.size(); ++offset)
+        {
+            const QJsonObject entry = captured.at(offset).toObject();
+            const QJsonObject original = originals.at(offset).toObject();
+            QCOMPARE(entry.value(QStringLiteral("recordNo")).toInt(), offset + 1);
+            QCOMPARE(entry.value(QStringLiteral("originalFrameSha256")), original.value(QStringLiteral("sha256")));
+            QCOMPARE(entry.value(QStringLiteral("origin")), original.value(QStringLiteral("origin")));
+            QCOMPARE(entry.value(QStringLiteral("originManifestSha256")).toString(), published.manifestSha256);
+            QCOMPARE(entry.value(QStringLiteral("originManifestPath")).toString(), QFileInfo(published.manifestPath).canonicalFilePath());
+        }
+
+        // The last frame lies on page two; a changed source must be rejected
+        // even when all first-page frame bytes remain intact.
+        const QJsonObject lastOriginal = originals.last().toObject();
+        QFile changed(directory.filePath(lastOriginal.value(QStringLiteral("relativePath")).toString()));
+        QVERIFY(changed.open(QIODevice::WriteOnly | QIODevice::Append));
+        QCOMPARE(changed.write("\n"), qint64(1));
+        changed.close();
+        SolverTask rejected(Application::instance()->getApplicationSettings(), modelID);
+        QVERIFY(!rejected.captureInputSnapshot(restart, session->modelCommandStamp(modelID), modelID));
+    }
+
     void managedRestartHistoryKeepsOriginalJobAndRejectsChangedAncestorManifest()
     {
         QTemporaryDir directory;
@@ -475,6 +581,15 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(originalJob).value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"), 120000);
         QVERIFY(waitForManagerIdle(manager));
         const QJsonObject original = manager.jobQuery(originalJob);
+        QFile originalManifest(original.value(QStringLiteral("resultManifestRef")).toString());
+        QVERIFY(originalManifest.open(QIODevice::ReadOnly));
+        const QJsonObject rawOriginalManifest = QJsonDocument::fromJson(originalManifest.readAll()).object();
+        originalManifest.close();
+        QVERIFY(rawOriginalManifest.value(QStringLiteral("originTable")).isObject());
+        const QJsonArray originalFrames = rawOriginalManifest.value(QStringLiteral("frames")).toArray();
+        QVERIFY(!originalFrames.isEmpty());
+        QVERIFY(originalFrames.first().toObject().contains(QStringLiteral("originRef")));
+        QVERIFY(!originalFrames.first().toObject().contains(QStringLiteral("origin")));
         Model restart;
         ModelIO::open(restart, original.value(QStringLiteral("resultArtifactRef")).toString());
         restart.getProblemSetup().setRestart(true);
@@ -494,6 +609,21 @@ private slots:
         QVERIFY2(catalog.value(QStringLiteral("valid")).toBool(), qPrintable(catalog.value(QStringLiteral("message")).toString()));
         const QJsonArray frames = catalog.value(QStringLiteral("frames")).toArray();
         const QJsonObject restarted = manager.jobQuery(restartedJob);
+        QFile originIndex(QDir(restarted.value(QStringLiteral("inputPackageRef")).toString())
+                          .filePath(QStringLiteral("history/origin-index.json")));
+        QVERIFY(originIndex.open(QIODevice::ReadOnly));
+        const QJsonArray capturedOrigins = QJsonDocument::fromJson(originIndex.readAll()).array();
+        QCOMPARE(capturedOrigins.size(), originalFrames.size());
+        for (int index = 0; index < capturedOrigins.size(); ++index)
+        {
+            const QJsonObject captured = capturedOrigins.at(index).toObject();
+            const QJsonObject originalFrame = originalFrames.at(index).toObject();
+            QCOMPARE(captured.value(QStringLiteral("recordNo")), originalFrame.value(QStringLiteral("recordNo")));
+            QCOMPARE(captured.value(QStringLiteral("originalFrameSha256")), originalFrame.value(QStringLiteral("sha256")));
+            QCOMPARE(captured.value(QStringLiteral("origin")).toObject(),
+                     original.value(QStringLiteral("nativeResultProvenance")).toObject());
+            QCOMPARE(captured.value(QStringLiteral("originManifestSha256")), original.value(QStringLiteral("resultManifestSha256")));
+        }
         QCOMPARE(frames.size(), 4);
         for (int index = 0; index < frames.size(); ++index)
         {
@@ -1563,9 +1693,15 @@ private slots:
         QVERIFY(std::abs(continuousState.cumulativeDampingDissipation - resumedState.cumulativeDampingDissipation) < 1.0e-11);
         QVERIFY(std::abs(continuousState.initialMechanicalEnergy - resumedState.initialMechanicalEnergy) < 1.0e-11);
 
-        QFile manifestFile(resumedJob.value(QStringLiteral("resultManifestRef")).toString());
-        QVERIFY(manifestFile.open(QIODevice::ReadOnly));
-        const QJsonObject manifest = QJsonDocument::fromJson(manifestFile.readAll()).object();
+        // Query the verified public catalog so compact originRef entries are
+        // expanded before checking the inherited explicit null origins.
+        const QJsonObject manifest = recoveredAgain.nativeResultQuery(completedRecoveryJobId,
+            QStringLiteral("catalog"), {{QStringLiteral("limit"), 200}});
+        QVERIFY2(manifest.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(manifest.value(QStringLiteral("message")).toString()));
+        QCOMPARE(manifest.value(QStringLiteral("jobId")).toString(), completedRecoveryJobId);
+        QCOMPARE(manifest.value(QStringLiteral("frameCount")).toInt(), int(targetSteps));
+        QVERIFY(!manifest.contains(QStringLiteral("nextCursor")));
         const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
         QSet<uint> recordNumbers;
         for (const QJsonValue &frameValue : frames)

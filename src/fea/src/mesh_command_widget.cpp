@@ -93,15 +93,17 @@ void MeshCommandWidget::setSession(Session *value)
 {
     if (session == value) return;
     if (session) disconnect(session,nullptr,this,nullptr);
+    ++contextRefreshGeneration;
+    contextRefreshPending = false;
     session = value; clearApprovals();
     binding->setSession(value);
     if (session)
     {
-        const auto changed = [this] { clearApprovals(); refreshContext(); };
+        const auto changed = [this] { clearApprovals(); queueContextRefresh(); };
         connect(session,&Session::modelSelectionChanged,this,changed);
         connect(session,&Session::documentRevisionChanged,this,changed);
         connect(session,&Session::runtimeDocumentRemoved,this,changed);
-        connect(session,&Session::modelAdded,this,[this] { refreshContext(); });
+        connect(session,&Session::modelAdded,this,changed);
         connect(session,&QObject::destroyed,this,changed);
     }
     refreshContext();
@@ -111,19 +113,35 @@ void MeshCommandWidget::setController(MeshJobController *value)
 {
     if (jobController == value) return;
     if (jobController) disconnect(jobController,nullptr,this,nullptr);
+    ++contextRefreshGeneration;
+    contextRefreshPending = false;
     jobController = value; clearApprovals();
     if (jobController)
     {
-        connect(jobController,&MeshJobController::jobsChanged,this,&MeshCommandWidget::refreshContext);
+        connect(jobController,&MeshJobController::jobsChanged,this,&MeshCommandWidget::queueContextRefresh);
         connect(jobController,&MeshJobController::previewsInvalidated,this,[this] {
             generationPreview = {}; acceptancePreview = {};
             generateApprove->setEnabled(false); acceptApprove->setEnabled(false);
         });
-        connect(jobController,&QObject::destroyed,this,[this] { clearApprovals(); refreshContext(); });
+        connect(jobController,&QObject::destroyed,this,[this] { clearApprovals(); queueContextRefresh(); });
     }
     refreshContext();
 }
 MeshJobController *MeshCommandWidget::controller() const { return jobController; }
+
+void MeshCommandWidget::queueContextRefresh()
+{
+    if (contextRefreshPending) return;
+    contextRefreshPending = true;
+    const auto generation = contextRefreshGeneration;
+    // jobs() may query a different, still-current source and flush pending
+    // project changes, so revision and job notifications share this queue.
+    QTimer::singleShot(0, this, [this, generation] {
+        if (generation != contextRefreshGeneration) return;
+        contextRefreshPending = false;
+        refreshContext();
+    });
+}
 
 void MeshCommandWidget::clearApprovals()
 {

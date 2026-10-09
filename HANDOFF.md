@@ -1,5 +1,13 @@
 # 续作交接
 
+## 2026-10-10 冻结后完整回归修复（验收未结束）
+
+- 54d82ff完整179实际运行1647.25s，176PASS、3失败：project_session两个sourceRevision多+1，native_job_registry重启来源INVALID_HISTORY_PROVENANCE后300.04s超时，workflow_runtime旧测试访问已取消内嵌manifest导致KeyError。XML/log均在WF11/frozen-54d82ff-full-179.*，不可用后续局部通过覆盖该轮。
+- sourceRevision真正生产回归为Geometry/Mesh/Workflow同步只读观察者在一次accepted修改两通知之间flush全局目录。修为同步退役批准/cheap stamp动作禁用，队列合并完整上下文读取并以generation防旧Session/controller。原版本/哈希/CAS规则不变。独立终审无确定P1/P2。项目目标已PASS13.24s，新增真实Workflow选B/实际Undo A反例保留r1→r2一次且B不变。
+- GUI重启捕获先broker校验却随后读取raw compact originRef，origin-index遗漏完整origin。改从同manifest SHA的broker完整分页catalog获取；offset/游标/顺序/job/artifact/count/source MODEL SHA/捕获后manifest校验保留。真实registered重启及新201 MODEL metadata分页捕获+末页篡改拒绝已通过，后续恢复用例raw存储访问改verifiedcatalog保持null-prefix/数值断言。201fixture不是201步真实FE。
+- 修复六目标批次SDK beam配置both/resume已PASS136.28s，current_model GUI35s、meshcontroller12.29s、project13.24s通过；geometry原新测试缺修改后ModelTree重选，已恢复实际单来源；native恢复旧测试字段已修。最后geometry/native两目标重跑87493正在，geometryPASS1.33s，native待退出。
+- 此后还需新代码冻结/全量build/完整179实际回归/私有安装故事/正式AID与记录提交。WF10/WF11provider/WF12三硬项仍未通过；monitor48342目前98%/1卡，终止任务时stop。
+
 ## 2026-10-10 最终整合检查点（仍待冻结与完整验收）
 
 - Root仍在进行最终整合，不把局部通过或179项inventory冒称交付。WF09联合Windows故事已通过运行A冻结/接受步3调参/真实文档编辑检查；首次最终重跑111.810s在下一来源登记失败，实际审计为NATIVE_PREFLIGHT_REJECTED，因为测试材料加入非零热膨胀。测试现在保留原生beam密度/泊松比/零热膨胀，只使E增加1%；正重新构建与真实窗口验证。

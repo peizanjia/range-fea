@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QCoreApplication>
+#include <QComboBox>
 #include <QDialog>
 #include <QDir>
 #include <QElapsedTimer>
@@ -9,6 +10,7 @@
 #include <QJsonDocument>
 #include <QMetaObject>
 #include <QLockFile>
+#include <QLineEdit>
 #include <QSignalSpy>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -32,6 +34,7 @@
 #include "bc_manager_tree.h"
 #include "ec_manager_tree.h"
 #include "ec_tree.h"
+#include "geometry_command_widget.h"
 #include "ic_manager_tree.h"
 #include "model_action.h"
 #include "model_action_input.h"
@@ -41,6 +44,7 @@
 #include "problem_tree.h"
 #include "session.h"
 #include "value_line_edit.h"
+#include "workflow_widget.h"
 
 namespace
 {
@@ -1576,6 +1580,115 @@ private slots:
         ModelIO::open(snapshotModel, QDir(session->projectWorkspace()).filePath(
                                       allowedSnapshot.value(QStringLiteral("relativePath")).toString()));
         QCOMPARE(snapshotModel.getProblemSetup().getModalSetup().getConvergenceValue(), acceptedTolerance);
+    }
+
+    void unchangedWorkflowSourceDoesNotSplitAnotherDocumentsUndoRevision()
+    {
+        QTemporaryDir project, sources, workflowWorkspace;
+        QVERIFY(project.isValid() && sources.isValid() && workflowWorkspace.isValid());
+        auto *session = Application::instance()->getSession();
+        QVERIFY(openProject(session, project.path()));
+        const QString sourceAPath = nativeModelPath(sources.path(), QStringLiteral("cross-document-A"));
+        QVERIFY(createSourceModel(sourceAPath));
+        Model sourceA;
+        ModelIO::open(sourceA, sourceAPath);
+        session->addModel(sourceA);
+
+        // Use the same bounded beam fixture as the current-document workflow
+        // tests, rather than manufacturing a workflow source registration.
+#ifdef Q_OS_WIN
+        const QString executableSuffix = QStringLiteral(".exe");
+#else
+        const QString executableSuffix;
+#endif
+        const QString generator = QFileInfo(QStringLiteral(RANGE_PROJECT_TEST_NATIVE)).dir()
+            .filePath(QStringLiteral("range-workflow-native-import-fixture") + executableSuffix);
+        QVERIFY2(QFileInfo(generator).isFile(), qPrintable(generator));
+        const QString sourceBPath = nativeModelPath(sources.path(), QStringLiteral("cross-document-B"));
+        QProcess fixture;
+        fixture.start(generator, {QStringLiteral("beam"), sourceBPath});
+        QVERIFY(fixture.waitForFinished(30000));
+        QCOMPARE(fixture.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(fixture.exitCode(), 0);
+        Model sourceB;
+        ModelIO::open(sourceB, sourceBPath);
+        session->addModel(sourceB);
+        session->setModelSelected(0, false);
+        session->setModelSelected(1, true);
+
+        WorkflowWidget workflow;
+        workflow.setSession(session);
+        auto configuration = WorkflowProcess::defaultConfiguration(workflowWorkspace.path());
+        configuration.solver = QStringLiteral(RANGE_PROJECT_TEST_SOLVER);
+        configuration.native = QStringLiteral(RANGE_PROJECT_TEST_NATIVE);
+        workflow.openWorkspace(configuration);
+        QTRY_VERIFY_WITH_TIMEOUT(workflow.transport()->isReady(), 30000);
+        QSignalSpy replies(workflow.transport(), &WorkflowProcess::replyReceived);
+        auto *capture = workflow.findChild<QPushButton *>(QStringLiteral("workflowUseDocumentSnapshot"));
+        QVERIFY(capture && capture->isEnabled());
+        capture->click();
+        const auto registeredSource = [&replies] {
+            for (const auto &reply : replies)
+                if (reply[1].toString() == QStringLiteral("model.source.register"))
+                    return reply[2].toJsonObject();
+            return QJsonObject{};
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(!registeredSource().isEmpty(), 30000);
+        const QString sourceId = registeredSource().value(QStringLiteral("sourceId")).toString();
+        QVERIFY(!sourceId.isEmpty());
+        auto *choice = workflow.findChild<QComboBox *>(QStringLiteral("workflowModel"));
+        QVERIFY(choice);
+        QCOMPARE(choice->currentData(Qt::UserRole + 1).toString(), sourceId);
+        auto *configure = workflow.findChild<QPushButton *>(QStringLiteral("workflowConfigure"));
+        auto *workflowApply = workflow.findChild<QPushButton *>(QStringLiteral("workflowApply"));
+        QVERIFY(configure && configure->isEnabled() && workflowApply);
+        configure->click();
+        QTRY_VERIFY_WITH_TIMEOUT(workflowApply->isEnabled(), 30000);
+        const auto workflowPreview = workflow.currentPreview();
+        const auto bStamp = session->modelCommandStamp(1);
+        const auto bContext = session->documentProjectContext(1);
+
+        session->setModelSelected(1, false);
+        session->setModelSelected(0, true);
+        auto modal = session->getModel(0).getProblemSetup().getModalSetup();
+        modal.setNIterations(24);
+        QString error;
+        QVERIFY2(session->getModelCommandHost()->configureModal({0}, modal, &error), qPrintable(error));
+        QCOMPARE(session->documentProjectContext(0).value(QStringLiteral("sourceRevision")).toString(),
+                 QStringLiteral("r1"));
+
+        GeometryCommandWidget geometry;
+        geometry.setSession(session);
+        geometry.findChild<QLineEdit *>(QStringLiteral("geometryNodeId"))->setText(
+            QString::number(session->getModel(0).getNodePhysicalId(1)));
+        geometry.findChild<QLineEdit *>(QStringLiteral("geometryCoordinates0"))->setText(QStringLiteral("2"));
+        geometry.preview();
+        auto *geometryApply = geometry.findChild<QPushButton *>(QStringLiteral("geometryApproveApply"));
+        QVERIFY(geometryApply && geometryApply->isEnabled());
+        const auto aStamp = session->modelCommandStamp(0);
+        auto *actions = Application::instance()->getActionList();
+        actions->processAvailability();
+        auto *undo = actions->getAction(Action::ACTION_GEOMETRY_UNDO);
+        QVERIFY(undo->isEnabled());
+        undo->trigger();
+
+        // Undo emits recordExternalChange followed by setModelChanged. A
+        // synchronous check of unchanged source B used to flush A between them.
+        QVERIFY(!geometryApply->isEnabled());
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getNIterations(), 12u);
+        QCOMPARE(session->modelCommandStamp(0).second, aStamp.second + 2);
+        QCOMPARE(session->documentProjectContext(0).value(QStringLiteral("sourceRevision")).toString(),
+                 QStringLiteral("r2"));
+        QCOMPARE(session->modelCommandStamp(1), bStamp);
+        const auto afterB = session->documentProjectContext(1);
+        for (const auto &field : {QStringLiteral("persistentDocumentId"), QStringLiteral("sourceRevision"),
+                                  QStringLiteral("modelSha256"), QStringLiteral("unsaved")})
+            QCOMPARE(afterB.value(field), bContext.value(field));
+        QCOMPARE(choice->currentData(Qt::UserRole + 1).toString(), sourceId);
+        QCOMPARE(workflow.currentPreview(), workflowPreview);
+        QCoreApplication::processEvents();
+        QVERIFY(workflowApply->isEnabled());
+        QVERIFY(!geometryApply->isEnabled());
     }
 
     void acceptedModalUndoRedoBackgroundSaveAndDuplicateNameReorderKeepIdentity()

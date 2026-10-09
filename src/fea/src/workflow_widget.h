@@ -108,6 +108,10 @@ private:
     QString recoveryRequest;
     bool commandInFlight = false;
     bool sourceRegistrationInFlight = false;
+    bool sourceContextRefreshPending = false;
+    quint64 sourceContextRefreshGeneration = 0;
+    void invalidateStaleSourceActions();
+    void queueSourceContextRefresh();
     void useCurrentDocumentSnapshot();
     QString selectedSourceId() const;
     bool sourceRuntimeStampMatches(const DocumentSourceChoice &source, QString *reason = nullptr) const;

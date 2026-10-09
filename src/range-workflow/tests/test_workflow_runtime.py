@@ -290,7 +290,9 @@ class NativeIntegration(unittest.TestCase):
                 self.assertEqual(len(result["active"]["q"]), 2)
                 self.assertEqual(len(result["passive"]["q"]), 2)
                 self.assertLess(result["controlledToPassiveEnergyRatio"], 1.0)
-                self.assertEqual(result["nativeResults"]["active"]["manifest"]["control"]["controllerId"],
+                catalog = sdk.native_result(original["jobId"], "catalog", mode="active")
+                self.assertTrue(catalog["valid"])
+                self.assertEqual(catalog["control"]["controllerId"],
                                  "stage10-beam-velocity-feedback")
                 original_id = original["jobId"]
                 original_hashes = {item["path"]: item["sha256"] for item in original["artifacts"]}

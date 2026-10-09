@@ -367,13 +367,20 @@ void WorkflowWidget::setSession(Session *value)
 {
     if (session == value) return;
     if (session) disconnect(session, nullptr, this, nullptr);
+    ++sourceContextRefreshGeneration;
+    sourceContextRefreshPending = false;
     session = value;
     geometryCommands->setSession(value);
     meshCommands->setSession(value);
     meshCommands->setController(value ? value->getModelCommandHost()->meshController() : nullptr);
     nativeRecoveryPreviewId.clear(); nativeRecoveryJobId.clear();
     nativeRecoveryApply->setEnabled(false);
-    if (!session) return;
+    if (!session)
+    {
+        invalidateStaleSourceActions();
+        queueSourceContextRefresh();
+        return;
+    }
     documentNativeResults->setQueryHandler([this](const QString &operation, const QJsonObject &parameters) {
         if (!session) return QJsonObject{{"valid", false}, {"message", tr("Document session is unavailable.")}};
         const auto response = session->getModelCommandHost()->handle(QJsonObject{{"apiVersion", "range.host/v1"},
@@ -388,37 +395,56 @@ void WorkflowWidget::setSession(Session *value)
             {"message", response.value("message")}};
     });
 
-    connect(session, &Session::documentRevisionChanged, this,
-            [this](const QString &documentId, quint64 revision) {
-        for (auto it = documentSources.cbegin(); it != documentSources.cend(); ++it)
-        {
-            if (it.value().runtimeDocumentId == documentId && it.value().runtimeRevision != revision)
-            {
-                updateSourceChoiceLabel(it.key());
-                if (selectedSourceId() == it.key())
-                {
-                    QString reason;
-                    sourceRuntimeIsCurrent(it.value(), &reason);
-                    status->setText(tr("The captured document source is stale: %1").arg(reason));
-                }
-            }
-        }
-        setActionAvailability();
-    });
-    connect(session, &Session::runtimeDocumentRemoved, this,
-            [this](const QString &documentId) {
-        for (auto it = documentSources.cbegin(); it != documentSources.cend(); ++it)
-        {
-            if (it.value().runtimeDocumentId == documentId)
-            {
-                updateSourceChoiceLabel(it.key());
-                if (selectedSourceId() == it.key())
-                    status->setText(tr("The captured document source is stale because its document was closed."));
-            }
-        }
-        setActionAvailability();
+    const auto changed = [this] {
+        invalidateStaleSourceActions();
+        queueSourceContextRefresh();
+    };
+    connect(session, &Session::documentRevisionChanged, this, changed);
+    connect(session, &Session::runtimeDocumentRemoved, this, changed);
+    connect(session, &QObject::destroyed, this, [this] {
+        session = nullptr;
+        ++sourceContextRefreshGeneration;
+        sourceContextRefreshPending = false;
+        invalidateStaleSourceActions();
+        queueSourceContextRefresh();
     });
     setActionAvailability();
+}
+
+void WorkflowWidget::invalidateStaleSourceActions()
+{
+    const QString sourceId = selectedSourceId();
+    const auto source = documentSources.constFind(sourceId);
+    QString reason;
+    if (!sourceId.isEmpty() &&
+        (source == documentSources.cend() || !sourceRuntimeStampMatches(source.value(), &reason)))
+    {
+        configureButton->setEnabled(false);
+        runtimeUpdates->setEnabled(false);
+        initialRuntimePause->setEnabled(false);
+        status->setText(tr("The captured document source is stale: %1").arg(reason));
+    }
+    const QString previewSourceIdentity = previewSourceId();
+    const auto previewSource = documentSources.constFind(previewSourceIdentity);
+    if (!previewSourceIdentity.isEmpty() &&
+        (previewSource == documentSources.cend() || !sourceRuntimeStampMatches(previewSource.value())))
+        applyButton->setEnabled(false);
+}
+
+void WorkflowWidget::queueSourceContextRefresh()
+{
+    if (sourceContextRefreshPending) return;
+    sourceContextRefreshPending = true;
+    const auto generation = sourceContextRefreshGeneration;
+    // Full source validation reads project context and can flush changes to
+    // other documents. Observe it only after the legacy mutation has finished.
+    QTimer::singleShot(0, this, [this, generation] {
+        if (generation != sourceContextRefreshGeneration) return;
+        sourceContextRefreshPending = false;
+        for (auto it = documentSources.cbegin(); it != documentSources.cend(); ++it)
+            updateSourceChoiceLabel(it.key());
+        setActionAvailability();
+    });
 }
 
 QString WorkflowWidget::selectedSourceId() const

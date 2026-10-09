@@ -137,11 +137,16 @@ void GeometryCommandWidget::setSession(Session *value)
 {
     if (session == value) return;
     if (session) disconnect(session, nullptr, this, nullptr);
+    ++contextRefreshGeneration;
+    contextRefreshPending = false;
     session = value;
     invalidatePreview(tr("Select one native document, enter geometry, and preview."));
     if (session)
     {
-        const auto changed = [this] { refreshContext(); };
+        const auto changed = [this] {
+            invalidatePreview(tr("Document or selection changed. Preview again."));
+            queueContextRefresh();
+        };
         connect(session, &Session::modelSelectionChanged, this, changed);
         connect(session, &Session::modelAdded, this, changed);
         connect(session, &Session::modelRemoved, this, changed);
@@ -150,6 +155,20 @@ void GeometryCommandWidget::setSession(Session *value)
         connect(session, &QObject::destroyed, this, changed);
     }
     refreshContext();
+}
+
+void GeometryCommandWidget::queueContextRefresh()
+{
+    if (contextRefreshPending) return;
+    contextRefreshPending = true;
+    const auto generation = contextRefreshGeneration;
+    // A read-only context query can flush pending project changes. Let the
+    // complete legacy mutation finish before observing its committed context.
+    QTimer::singleShot(0, this, [this, generation] {
+        if (generation != contextRefreshGeneration) return;
+        contextRefreshPending = false;
+        refreshContext();
+    });
 }
 
 QJsonObject GeometryCommandWidget::currentDocument() const

@@ -271,6 +271,12 @@ private slots:
         widget.findChild<QLineEdit *>("meshRadiusEdgeRatio")->setText("1.7");
         QVERIFY(!approve->isEnabled());
         widget.approveGeneration(); QCOMPARE(controller.jobs().size(),0);
+        widget.previewGeneration(); QVERIFY(approve->isEnabled());
+        session->getModel(0).setDescription("Accepted external edit");
+        session->setModelChanged(0);
+        // Both widget approval and controller preview invalidation stay direct.
+        QVERIFY(!approve->isEnabled());
+        widget.approveGeneration(); QCOMPARE(controller.jobs().size(),0);
         const auto preview = controller.previewGenerate(0,options()).value("result").toObject();
         QVERIFY(!preview.isEmpty());
         // No revision notification: only the full native-byte comparison can

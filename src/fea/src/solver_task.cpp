@@ -486,18 +486,88 @@ bool stageRestartHistory(const Model &model,
         if (error) *error = QStringLiteral("The registered restart manifest is missing or its path changed.");
         return false;
     }
-    QJsonObject ancestor;
+    QMap<uint, QJsonObject> ancestorFrames;
+    QMap<uint, QString> originalHashes;
     if (!sourceRecords.isEmpty() && hasManifest)
     {
-        const QJsonObject catalog = RNativeResultBroker::query(manifestPath, manifestHash, QStringLiteral("catalog"), {});
-        QFile manifestFile(manifestPath);
-        if (!catalog.value(QStringLiteral("valid")).toBool() || !manifestFile.open(QIODevice::ReadOnly) ||
-            manifestFile.size() > 16 * 1024 * 1024)
+        // Catalog frames carry the broker's hash-validated, expanded origin.
+        // Raw compact manifests only carry originRef and cannot supply it.
+        QString artifactId;
+        QString jobId;
+        QString cursor;
+        QSet<QString> cursors;
+        int frameCount = -1;
+        int offset = 0;
+        uint previousRecord = 0;
+        double previousTime = -std::numeric_limits<double>::infinity();
+        do
         {
-            if (error) *error = QStringLiteral("Restart history manifest could not be verified.");
-            return false;
+            QJsonObject arguments{{QStringLiteral("limit"), 200}};
+            if (!cursor.isEmpty()) arguments.insert(QStringLiteral("cursor"), cursor);
+            const QJsonObject catalog = RNativeResultBroker::query(manifestPath, manifestHash, QStringLiteral("catalog"), arguments);
+            const int count = catalog.value(QStringLiteral("frameCount")).toInt(-1);
+            const QJsonArray page = catalog.value(QStringLiteral("frames")).toArray();
+            if (!catalog.value(QStringLiteral("valid")).toBool() || count < 0 ||
+                catalog.value(QStringLiteral("offset")).toInt(-1) != offset ||
+                !catalog.value(QStringLiteral("frames")).isArray() ||
+                page.isEmpty() || page.size() > 200 || page.size() > count - offset ||
+                catalog.value(QStringLiteral("artifactId")).toString().isEmpty() ||
+                catalog.value(QStringLiteral("jobId")).toString().isEmpty() ||
+                (registeredManifestValid && catalog.value(QStringLiteral("jobId")) != registeredManifest.value(QStringLiteral("jobId"))) ||
+                (offset > 0 && (count != frameCount ||
+                    catalog.value(QStringLiteral("artifactId")).toString() != artifactId ||
+                    catalog.value(QStringLiteral("jobId")).toString() != jobId)))
+            {
+                if (error) *error = QStringLiteral("Restart history manifest catalog could not be completely verified.");
+                return false;
+            }
+            frameCount = count;
+            artifactId = catalog.value(QStringLiteral("artifactId")).toString();
+            jobId = catalog.value(QStringLiteral("jobId")).toString();
+            for (const QJsonValue &value : page)
+            {
+                const QJsonObject frame = value.toObject();
+                const double recordNo = frame.value(QStringLiteral("recordNo")).toDouble(-1.0);
+                const double time = frame.value(QStringLiteral("timeS")).toDouble(std::numeric_limits<double>::quiet_NaN());
+                const QJsonValue origin = frame.value(QStringLiteral("origin"));
+                if (!value.isObject() || !std::isfinite(recordNo) || std::floor(recordNo) != recordNo ||
+                    recordNo <= double(previousRecord) || recordNo > 1000000.0 ||
+                    !std::isfinite(time) || time <= previousTime ||
+                    !(origin.isObject() || (origin.isNull() &&
+                        frame.value(QStringLiteral("originKind")).toString() == QLatin1String("legacy-history-unattributed"))))
+                {
+                    if (error) *error = QStringLiteral("Restart history catalog contains an invalid or duplicate frame.");
+                    return false;
+                }
+                previousRecord = uint(recordNo);
+                previousTime = time;
+                ancestorFrames.insert(previousRecord, frame);
+            }
+            offset += page.size();
+            cursor = catalog.value(QStringLiteral("nextCursor")).toString();
+            if ((offset < frameCount) != !cursor.isEmpty() ||
+                (!cursor.isEmpty() && cursors.contains(cursor)))
+            {
+                if (error) *error = QStringLiteral("Restart history catalog pagination is incomplete or repeated.");
+                return false;
+            }
+            if (!cursor.isEmpty()) cursors.insert(cursor);
         }
-        ancestor = QJsonDocument::fromJson(manifestFile.readAll()).object();
+        while (!cursor.isEmpty());
+        // Match every required source before staging any record, including
+        // records beyond the first bounded catalog page.
+        for (auto it = sourceRecords.cbegin(); it != sourceRecords.cend(); ++it)
+        {
+            const QString originalHash = QString::fromLatin1(sha256File(it.value()).toHex());
+            const QJsonObject frame = ancestorFrames.value(it.key());
+            if (frame.isEmpty() || frame.value(QStringLiteral("sha256")).toString() != originalHash ||
+                frame.value(QStringLiteral("relativePath")).toString() != QFileInfo(it.value()).fileName())
+            {
+                if (error) *error = QStringLiteral("Restart frame does not match its original result manifest.");
+                return false;
+            }
+            originalHashes.insert(it.key(), originalHash);
+        }
     }
     const QString restartHash = QString::fromLatin1(sha256File(sourceModelFileName).toHex());
 
@@ -505,22 +575,13 @@ bool stageRestartHistory(const Model &model,
     {
         for (auto it = sourceRecords.cbegin(); it != sourceRecords.cend(); ++it)
         {
-            const QString originalHash = QString::fromLatin1(sha256File(it.value()).toHex());
+            const QString originalHash = hasManifest ? originalHashes.value(it.key())
+                    : QString::fromLatin1(sha256File(it.value()).toHex());
             QJsonObject history{{QStringLiteral("recordNo"), double(it.key())},
                                 {QStringLiteral("originalFrameSha256"), originalHash}};
             if (hasManifest)
             {
-                QJsonObject originalFrame;
-                for (const QJsonValue &frame : ancestor.value(QStringLiteral("frames")).toArray())
-                    if (frame.toObject().value(QStringLiteral("recordNo")).toDouble() == double(it.key()) &&
-                        frame.toObject().value(QStringLiteral("sha256")).toString() == originalHash &&
-                        frame.toObject().value(QStringLiteral("relativePath")).toString() == QFileInfo(it.value()).fileName())
-                        originalFrame = frame.toObject();
-                if (originalFrame.isEmpty())
-                {
-                    if (error) *error = QStringLiteral("Restart frame does not match its original result manifest.");
-                    return false;
-                }
+                const QJsonObject originalFrame = ancestorFrames.value(it.key());
                 history.insert(QStringLiteral("originKind"), QStringLiteral("reused-history"));
                 history.insert(QStringLiteral("origin"), originalFrame.value(QStringLiteral("origin")));
                 history.insert(QStringLiteral("originManifestPath"), QFileInfo(manifestPath).canonicalFilePath());

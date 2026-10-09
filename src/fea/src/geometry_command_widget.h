@@ -41,6 +41,9 @@ private:
     QJsonObject approvedPreview;
     QJsonObject previewDocument;
     QString previewWorkspace;
+    bool contextRefreshPending = false;
+    quint64 contextRefreshGeneration = 0;
+    void queueContextRefresh();
     QJsonObject currentDocument() const;
     QJsonObject arguments(QString *error) const;
     bool previewIsCurrent() const;
