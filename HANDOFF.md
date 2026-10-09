@@ -1,5 +1,23 @@
 # 续作交接
 
+## 2026-10-09 WF07已验收：转顺序3连续实施
+
+- WF07源码冻结 6294aee42448133f72ea8f713f21340c5da95e40，Root完整CTest61831已结束exit0，136/136零失败1578.11s，frozen-full-ctest.log；没有共享runtime活动。八条证据/status done已更新，WF01–07 done，WF08/09/10 in_progress，剩余4planned。用户配置/凭据/记忆不改，不push；下方旧正在运行记录已失效。
+- WF09纯codec worker完成，Root补dt>0、seq>0、nonempty actuator与64KiB组合容量强保证；3新solver-lib文件未编译/注册/提交，Root所有权。设计docs/agent_playbooks/wf09_design_checkpoint.md。
+- WF10plot worker完成3新文件，Root接管并补duplicate trace ID/同source换channel重置zoom/无样本禁导出；独立prep reviewer确认codec无materialfinding，plot仍P2：逐坐标clamp扭曲线段斜率，需归一化空间线裁剪+反例。3文件均未编译/注册，不称WF10通过。
+- Root下一步先接受本地commit（仅docs/status/handoff，保留userfiles及未完成backendfiles）；安排有界plot裁剪修复、WF08纯DAG/knowledge实施，RootCMake注册codec/plot串行build/targettests；随后Root服务/GUI/RCCE/solver/桥接整合。必须独立审查/数值/安装/真实故事再各自freeze/full验收，然后WF14与WF11→12持续推进。
+
+
+## 2026-10-09 当前运行：WF07冻结6294aee完整136回归；WF09独立codec准备
+
+- WF07实现冻结 `6294aee42448133f72ea8f713f21340c5da95e40`，当前Root串行CTest exec session61831，`build/audit-20261009/WF-07/frozen-full-ctest.log`；已通过106，正在107真实conversation history（含native pause），完整结论未出。先核对61831结束再build/test/install。用户配置/凭据/记忆未改，不push；Root源码其余实现没有在本轮测试中改动。
+- WF07安装、真实DeepSeek、Windows导出修复、byte-limit和独立终审已完成，详见下面入口和 docs/acceptance/WF-07.md；所有WF07workers停止。验收status仍in_progress，不把commit或106绿色称完整通过。当前只新的WF08设计doc和计划WF09状态为Root未提交修改。
+- 依赖03/05已done，WF09现in_progress。Sol high只读transaction设计完成：保留base controllerRevision/modelcontrolSHA；独立候选runtimeparams在现有solver step snapshot/store/commit/rollback事务；旧空组件保留RCCEv1同字节，新增可选第三参数组件输出RCCEv2；live增益必须由当次pure compute+参数hash/revision回显，而不是修改controller.gain全局。直接GUI native受控作业仍不支持pinned executable/argv，首批Stage9热参数走工作区registered-source服务；现有GUI pause只queued/uncontrolled不能当live能力。
+- 新worker wf09_runtime_parameter_codec (Luna max)仅新solver-lib/include+src/rstructural_control_runtime_parameters.{h,cpp}及新tests/tst_structural_control_runtime_parameters.cpp，不改existing/CMake，不build/test。Root禁止改被测现有source直到61831结束；未注册新文件不进入当前frozenbinary。API pure namespace ActuatorLimit/Parameters/Change/State, fresh/candidate/serialize/deserialize/validateCandidateAgainstBase/acceptedChange；64KiBcanonicalJSON、<=256actuator、128acceptedhistory、SHA和nextrevision，limits withinimmutable envelope且rate间隔有交集。Root之后接RCCE/stress/CLI/Python桥/GUI，不把codec称WF09交付。
+- WF08设计落在 docs/agent_playbooks/wf08_design_checkpoint.md（未安装开发doc），还未实施/inprogress，等07done；DAG/reducer+单workflow_state v3、逐节点批准、2点native扫描、预算及版本knowledge已Root冻结设计。WF10纯数学/adapter仍inprogress；图形新worker请求因threadlimit未创建，不能冒称已开始；slot后可创建，Root保留service/GUI集成。
+- 下一步61831 full136结果→若通过更新WF07八条证据/接受commit及状态，thenWF08两个独立纯模块和WF10plot新文件；WF09codec先审查/编译target+数值事务集成；WF14后续几何/网格按依赖推进，再WF11→12，不提前退出。
+
+
 ## 2026-10-09 WF07源码冻结前：实测及终审闭合
 
 - 持续目标active到顺序4，根待冻结WF07实现；WF07尚非done。Root配置/凭据/记忆未改，不push。所有WF07worker与终审已完成停止，无实施代理写入。

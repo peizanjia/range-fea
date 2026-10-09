@@ -554,8 +554,8 @@
     {
       "id": "WF-07",
       "title": "Persistent conversations and parallel read-only questions",
-      "status": "in_progress",
-      "statusReason": "WF05/06已验收，按顺序启动：可见消息/宿主事实独立持久存储，旁路只读权限围栏和独立控件路由，分支不复制批准或执行权；尚未交付。",
+      "status": "done",
+      "statusReason": "八项验收完成：冻结6294aee完整136/136、持久历史/分支/只读及观察容量反例、Windows真实native并行故事、实际DeepSeek只读/安装私有SDK和独立终审通过；完整产品发布仍按WF13。",
       "priority": "P1",
       "effort": "L",
       "dependsOn": [
@@ -582,13 +582,84 @@
         "src/range-ai-lib/tests/tst_agent_tool_turn.cpp",
         "src/range-workflow/python/range_workflow/service.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "acceptanceId": "WF-07-A05",
+          "outcome": "fail",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "首轮boundary4/5，fixture误以为工具失败自动终结对话；保留observation-boundaries-first.txt，修为核对STALE_PREVIEW后明确final回答。"
+        },
+        {
+          "acceptanceId": "WF-07-A08",
+          "outcome": "fail",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "Windows第一轮6/7、零skip274.162s，仅OS保存对话框自动化失败；日志保留，scopeQt对话框修复3/3通过。"
+        },
+        {
+          "acceptanceId": "WF-07-A01",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A02",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A03",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A04",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A05",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A06",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A07",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A08",
+          "outcome": "pass",
+          "artifactPath": "docs/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        }
+      ]
     },
     {
       "id": "WF-08",
       "title": "Durable recipes and knowledge",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "WF07已验收；按已冻结设计启动service外纯DAG/reducer与版本knowledge registry，逐节点批准与真实native扫描；实现/GUI/SDK/安装验收尚未完成。",
       "priority": "P1",
       "effort": "L",
       "dependsOn": [
@@ -621,8 +692,8 @@
     {
       "id": "WF-09",
       "title": "Accepted-step live tuning and pause",
-      "status": "planned",
-      "statusReason": "",
+      "status": "in_progress",
+      "statusReason": "依赖WF03/WF05已完成；接受步热参数事务设计已核对，先实现独立runtime parameter纯状态/codec，保持静态控制指纹和旧RCCE兼容；solver/bridge/GUI整合及验收尚未交付。",
       "priority": "P1",
       "effort": "XL",
       "dependsOn": [

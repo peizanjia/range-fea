@@ -1,6 +1,6 @@
 # 会话、分支与旁路只读问答
 
-本文对应当前 WF-07 实现，验收状态以 workflow_delivery_plan.json 为准；当前仍在整体验证，不声明完整产品或外部干净 Windows 已交付。
+本文对应当前 WF-07 实现，验收状态以 workflow_delivery_plan.json 为准；WF07已完成当前支持范围验收，不声明完整产品或外部干净 Windows 已交付。
 
 ## 选择正在进行的工作
 

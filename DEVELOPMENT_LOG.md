@@ -343,3 +343,10 @@
 实现冻结ae2cd80；完成当前源控制/原生broker/live/SDK/Agent/逐幀CSV/场定位，原九项与后续独立审查全部修复。最终125/125、655.46s及安装私有SDK/Windows3/3通过；详见WF03/WF04验收文档。保留失败历史：ASCII舍入、beam恢复模量、模板控制器ID硬编码、测试自注入、setElement默认入群组、restart追加语义、PickList压缩索引越界；不放宽任何数值门槛。
 
 用户授权延长至顺序4；新skill执行Luna max优先，Sol只解决具体未决推理。WF05/WF06启动，依赖门槛与WF13外部终验独立保留。Root配置/用户文件/凭据不变，不push。
+
+
+## 2026-10-09 WF05–WF07验收与顺序3持续实施
+
+WF05/06冻结ed57d60，完整132/132及真实Windows/私有SDK/DeepSeek通过；记录分别见acceptance/WF05/WF06。WF07冻结6294aee，完整136/136、零失败1578.11s；历史/分支/只读多层权限、原task持久核对引用、64未观察容量及20MiB收据预留实现，独立终审三P2闭合。首次边界终态fixture与Windows原生保存对话框自动化失败保留，后续修复具实际回归。真实native并行使用fixture供应商，实际DeepSeek旁路在主编辑后执行，分开记录；不冒称实际供应商全过程求解并行或外部干净机器。
+
+WF08依赖已满足，纯DAG/单state提交/版本knowledge设计冻结后启动；WF09独立接受参数codec及WF10绘图新控件准备不改变已测接口，尚未交付。当前skill允许需要方法/诊断直接Sol medium、紧耦合问题Sol high；明确执行Luna max，reviewer根继承。用户配置、凭据、记忆保持原样，不push。
