@@ -823,6 +823,7 @@ int runAgentTaskRunnerTests(int argc, char **argv);
 int runAgentReadOnlyRunnerTests(int argc, char **argv);
 int runAgentConversationHistoryWidgetTests(int argc, char **argv);
 int runAgentObservationBoundaryTests(int argc, char **argv);
+int runTaskPlanWidgetTests(int argc, char **argv);
 int runSolverSnapshotTests(int argc, char **argv);
 int runExtensionWidgetTests(int argc, char **argv);
 int runAgentEventViewTests(int argc, char **argv);
@@ -859,6 +860,7 @@ int main(int argc, char **argv)
     const bool agentReadOnly = argc > 1 && QByteArray(argv[1]) == "--agent-readonly-runner";
     const bool agentHistory = argc > 1 && QByteArray(argv[1]) == "--agent-conversation-history";
     const bool observationBoundaries = argc > 1 && QByteArray(argv[1]) == "--agent-observation-boundaries";
+    const bool taskPlans = argc > 1 && QByteArray(argv[1]) == "--task-plans-widget";
     const bool solverSnapshot = argc > 1 && QByteArray(argv[1]) == "--solver-snapshot";
     const bool extensionWidget = argc > 1 && QByteArray(argv[1]) == "--extension-widget";
     const bool agentEventView = argc > 1 && QByteArray(argv[1]) == "--agent-event-view";
@@ -870,7 +872,7 @@ int main(int argc, char **argv)
     const bool currentModelWorkflow = argc > 1 && QByteArray(argv[1]) == "--current-model-workflow";
     const bool recoveryInteraction = argc > 1 && QByteArray(argv[1]) == "--recovery-interaction";
     const bool modelCommitRecovery = argc > 1 && QByteArray(argv[1]) == "--model-commit-recovery";
-    if (hostContext || agentRunner || agentReadOnly || agentHistory || observationBoundaries || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
+    if (hostContext || agentRunner || agentReadOnly || agentHistory || observationBoundaries || taskPlans || solverSnapshot || extensionWidget || agentEventView || agentConversation || projectSession || nativeJobs || modelOperations || nativeResults || currentModelWorkflow || recoveryInteraction || modelCommitRecovery)
     {
         for (int i = 1; i < argc - 1; ++i) argv[i] = argv[i + 1];
         --argc; argv[argc] = nullptr;
@@ -880,6 +882,7 @@ int main(int argc, char **argv)
         : agentReadOnly ? runAgentReadOnlyRunnerTests(argc, argv)
         : agentHistory ? runAgentConversationHistoryWidgetTests(argc, argv)
         : observationBoundaries ? runAgentObservationBoundaryTests(argc, argv)
+        : taskPlans ? runTaskPlanWidgetTests(argc, argv)
         : solverSnapshot ? runSolverSnapshotTests(argc, argv)
         : extensionWidget ? runExtensionWidgetTests(argc, argv)
         : agentEventView ? runAgentEventViewTests(argc, argv)

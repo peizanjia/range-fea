@@ -1,5 +1,44 @@
 # 续作交接
 
+## 2026-10-09 WF08实现冻结前：安装/窗口/终审已闭合
+
+- Root HEAD224ce85，持续active至顺序4。全Release、latest GUI/main构建通过；最新Windows任务树5/5零skip32.861s（windows-task-tree-label-fixed.txt），含active/passive单modepreview、四真实逐节点批准、nativeJob独立、重开/切workspace；截图实际查看。前轮因可读标签替换旧assert造成3/5失败106.159s，已修对显示文字，未改业务/数值门槛。
+- final-install.log通过；仅installedbin+Windows PATH/privatePython与安装SDK/parameter_scan/nativeTools导入/路径断言真实两点sourceFE扫描1/1PASS19.214s，installed-private-task-scan.log；源package扫描19.185s互补。知识纯11、kernel/host腐败/expiry/budget/cancel/source反例已更新，host29/scheduler14；newROplanpropose/query拒绝3/3零skip17.679s。版本化知识旧doc路径断言失败已更新到真实pack/id/version/schemaHash，窄1/1pass。
+- 独立最终review无remainingmaterial：已补严格mutableState/关联/形状、inputRefs所有kind、previewmode、globalExpiry清node intentid；expiredFutureClock fixture首次reopenCORRUPT由testtime回退，改fakeclock推进后host29/29通过（expiry-association-fixed-regression.log），原fail保留。不要把未知/错误事件称成功。
+- Solver子模块本地prep提交5986cb91a7ecda5ebc870c7c0b7112f6176621ca（12files1845lines，runtimeState+RCCEv2+atomicStress+21FE），根指针待freeze；这不是WF09产品交付，liveCLI/provider/service/GUI仍待接。WF10typedplot/clip10/10及puremath/adapter仅准备，无最终产品界面/性能。
+- 当前无sharedruntime/worker活动。Root下一条把授权08实现+09/10prep源冻结提交（排除user.agents/.codex/AGENTS、build、凭据），然后OMP4完整145ctest日志frozen-full-ctest.log；先取得真实exit，再更新08八证据/status与接受commit。之后09/10/14及11→12连续推进，不提前退出，不push；配置/skill/凭据/记忆保持用户改动。
+
+
+## 2026-10-09 WF08最终形状/权限收尾（覆盖上一入口）
+
+- Root全Release74948结束PASS；Windows61074结束4/4零skip30.912s截图已查看，实际两点SDK19.185s同前。145/145注册/9组与CI14通过；WF08还未freeze/full/install/done。
+- 终审新增3P2已修并pure反例：kernel mutable JSON shape/state/counts/node/outbox/completed consistency；command acceptedjobPlanRef/project/node/command/succeeded关联；configuration严格字段；inputRefs所有kind必须dict；GUIpreview按实际active/passive/both。新增纯suite50tests49pass+real1skip，final-review-regressions-pure.log；Qt新single-modepreview-onlyslot尚未跑。Oldextensionknowledge路径断言docMD不再适用，改versionedpack/id/schemaHash验证后1/1pass；首次10suite9/10失败保留versioned-knowledge-extension-regression.log。
+- 当前Root串行构建exec（最新tool返回session，日志final-window-app-build.log），目标tst_gui_model_lifecycle+fea，包含最新状态标签/previewmode/actorPlanTools；续作先核对结束，不并行runtime。Independentreviewer wf08_final_review followup只读最终3P2闭合，等待final；其余writers均已停止，Root拥有全部08/09/10WIP文件。
+- 下一具体：build结束→Windows任务树完整新5业务？实际Qtcase3+init/cleanup=5，若pass截图检查；安装privatePython仅installedshare导入+真实SDKscan+packcoverage；scopeActorpropose/query/ROdeny targeted；submodulecoreprep本地提交+root08sourcefreeze(09/10prepared不是done)，完整145零fail然后08验收statuscommit，持续09/10/14与11→12。不push/userconfig/credential/memory不改。尽量tool行动/短analysis，等待sleep≤20s，避免推测或无意义词串。
+
+
+## 2026-10-09 WF08收尾当前断点：真实Windows4/4与SDK扫描通过
+
+- 持续goal active至顺序4。HEAD224ce85，WF01–07done，WF08/09/10in_progress，WF14eligible，11/12待依赖，用户配置/凭据/记忆不改，不push。所有先前sharedruntime结束，目前Root全Release构建exec74948，日志WF-08/final-all-build.log；先核对结束再test/install。RootCL/MP4、parallel2。
+- WF08Windows TaskPlanWidget新故事61074结束exit0：windows-task-tree-first.txt4/4零skip30.912s，四按钮逐节点批准、实际两个active/passive native作业、独立误差、reopen旧批准拒绝、pause/cancel后已接受job仍独立成功、workspaceswitch+旧reply不串，真实截图Root已查看。第一actorSDK real-task-scan-first.log1/1PASS19.185s，两个targetDamping.05/.10各nativeboth+参考+条件；pure合同不是FE证据。
+- Root新增TaskManager与service storagev3、TaskPlanWidget、SDKwrapper、Actor tooltask_plan_propose/query（不能start/approve；ROwhitelist不扩）、schema_get range.task-plan/v1+hosttoolcatalog、封闭versionedknowledgeregistry替换旧MD搜索；操作手册TASK_PLANS.md已在installlist。RootSourceModel/manifest/env/schema/knowledge SHA都绑定，same-bytessource alias拒绝，acceptednode+job同commit，未知不重试，状态变化等待0模型calls。
+- 独立review4P2已修：普通nodeerror respectingcontinue-independent，sourceid/model/manifestbinding，siblingconditionstop保持failed，latecompletion不能绕nodebudget；新增反例runtime24/24+scheduler12/12。追加staleoutbox P2（兄弟node超预算移除intent后旧forlist仍dispatch），Rootreloadliveintent fix已静态闭合；worker wf08_stale_outbox_regression只写test_task_runtime.py跑独立pure验证，等待final（不可sharedbuild/native）。初轮approve被skip、预算状态只看intents未保存两个实际fail日志保留。
+- RootUI小修刚加用户可读action/status（内部rawstate保存在QtUserRole，测试getter已改）、clear旧workspace previewDetails、actualbefore/effective/source展示；这两处最后源码Root74948正在构建，须重新窄Windows截图/故事最终验收，不借用旧照片称最新UI。
+- 当前mandatory145/145、9组inventory通过；CI工具14/14+plan结构通过。WF08未最终源码freeze、未安装privateSDK/窗口已安装入口、新工具权限回归、最后全145、最终review，不能标done。待74948结束→终审/Windows/Actor/frozenfull+install+acceptcommit，再09/10/14、11→12持续推进。
+- WF09核心State/codec/RCCEv2+Stress transaction及21/21实际FE/回滚/冻结积分方法已实现但未submodulecommit；所有corefiles Rootowns。ProductCLI/Stage9 transport/livebridge/service/GUI未接；WF10plot10/10以及puremath/adapter准备无RPC/reference/多任务GUI/实际性能，未交付。新widgets/py modules/测试未提交；Root后续需先submodule本地提交再rootfreeze，排除.agents/.codex/AGENTS与build/凭据。
+
+
+## 2026-10-09 当前：WF08真实两点扫描已通过，GUI/终审进行中
+
+- Root HEAD224ce85，WF01–07done；WF08/09/10in_progress，4planned。WF07实现6294aee冻结full136/136零失败1578.11s、安装/Windows/DeepSeek/终审已验收，不再等待61831。user.agents/.codex/AGENTS/凭据/记忆未改，不push。持续目标active至顺序4。
+- WF08 Root新增task_runtime.py并接service storageVersion3（v1/v2迁移），plans/kernel+acceptedjob taskPlanRef在同commit；逐节点host.task.node.approve，旧批准reopen失效，unknown不自动重试，driver由job状态变化等待且0LLMcalls。Task_plan/task_scheduler纯18测试、knowledge.py/core-v1.json纯11、host合同21pure+1real skip、旧合同9均通过。首轮审批后被skip、budget状态只看intents未持久两bug已修日志保留。
+- Root真实测试34341已结束exit0：real-task-scan-first.log，实际registered native2点targetDamping.05/.10、每点bothFE+独立参考+条件，1/1PASS19.185s；mode分别native-active-fe/native-passive-fe，不将fakecontract当FE。service/client/extension知识接线及SDKwrapper已加；新TaskPlanWidget真实来源/参数前后预览+trusted审批已接WorkflowWidget末尾tab（保留旧indices）。
+- 当前Root串行GUI构建exec session以新tool返回为准（task-gui-final-build.log）；源码/接口还未冻结08。独立reviewer wf08_service_review只读这些实现与GUI，等待finding；未跑真正新任务树Windows故事/安装/全文回归。先核对build结束再runtime，勿并行共享任务。
+- WF09 worker/coreRoot改已完成：runtime_parametercodec12/12、RCCE v1/v2 9/9、实际FE switch/handNewmark/restart/compute/真实linear nonfinite solve/latefilewrite/invalid updates/legacy21/21零skip102ms（runtime-fe-freeze-fixed.txt）。Root按checkpoint内缩放qva×findNodeScale、externalwork×scale²修fixture单位，控制功物理单位；独立review发现Alpha→Newmark回调变配置越权，新增freeze全部DynamicsSetup+反例已pass。CLI/controller/livebridge/service/GUI调参尚未接线，不称WF09done；所有core文件Rootowns，新库未提交。
+- WF10新SeriesPlotWidget .h/.cpp+test/main registered，Root修重复id/同源换通道reset/no样本export与单位bin标签，独立review修LiangBarsky避免clamp端点产生假曲线；10/10零skip22ms通过。Puremath+series_service预备已在07full通过，仍未有服务RPC/独立referenceadapter/多任务GUI/长曲线实际性能。所有rendererfilesRootowns，未提交。
+- 后续第一步GUI构建→review修复+真实任务树/SDK安装/Sourcefreeze/full验收08；09核心接live协议/事件/恢复/UI、10实际数据/图区、14几何重网格，再11→12。三个新增开发设计docs已在224ce85，范围准确；不要把局部source/test归为产品交付。
+
+
 ## 2026-10-09 WF07已验收：转顺序3连续实施
 
 - WF07源码冻结 6294aee42448133f72ea8f713f21340c5da95e40，Root完整CTest61831已结束exit0，136/136零失败1578.11s，frozen-full-ctest.log；没有共享runtime活动。八条证据/status done已更新，WF01–07 done，WF08/09/10 in_progress，剩余4planned。用户配置/凭据/记忆不改，不push；下方旧正在运行记录已失效。

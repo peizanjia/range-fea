@@ -13,6 +13,7 @@ install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
     ${CMAKE_SOURCE_DIR}/../docs/RECOVERY_OPERATIONS.md
       ${CMAKE_SOURCE_DIR}/../docs/RECOVERY_CONTRACT.md
       ${CMAKE_SOURCE_DIR}/../docs/CONVERSATIONS.md
+      ${CMAKE_SOURCE_DIR}/../docs/TASK_PLANS.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_INTERACTION_DESIGN.md
     ${CMAKE_SOURCE_DIR}/../docs/GUI_UX_ACCEPTANCE.md
     ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
@@ -32,6 +33,24 @@ endif()
 
 if(RANGE_BUILD_TESTS)
     find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    foreach(_task_suite task_plan task_scheduler knowledge)
+        add_test(NAME tst_workflow_${_task_suite} COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_task_suite}.py" -v)
+        set_tests_properties(tst_workflow_${_task_suite} PROPERTIES TIMEOUT 60)
+    endforeach()
+    add_test(NAME tst_workflow_task_runtime COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_task_runtime.py" -v)
+    set_tests_properties(tst_workflow_task_runtime PROPERTIES TIMEOUT 60)
+    add_test(NAME tst_workflow_task_scan_runtime COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_task_runtime.py"
+        --solver "$<TARGET_FILE:fea-solver>" --native "$<TARGET_FILE:range-workflow-native>"
+        --examples "${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9"
+        --python "${Python3_EXECUTABLE}" -v RealTaskScanAcceptance)
+    set_tests_properties(tst_workflow_task_scan_runtime PROPERTIES TIMEOUT 300)
+    if(WIN32)
+        set_tests_properties(tst_workflow_task_scan_runtime PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_executable(range-workflow-fixture EXCLUDE_FROM_ALL tests/generate_beam.cpp)
     target_include_directories(range-workflow-fixture PRIVATE "${CMAKE_SOURCE_DIR}/range-solver-lib/tests")
     target_link_libraries(range-workflow-fixture PRIVATE range-model-lib Qt6::Core)

@@ -137,10 +137,14 @@ class ExtensionTest(unittest.TestCase):
         self.assertIn("extension.stage", [item["id"] for item in catalog["commands"]])
         self.assertEqual(request(self.service, "schema.get", {"schemaId": "range.extension/v1/numeric-series"})["schema"]["properties"]["times"]["maxItems"], 100000)
         self.assertEqual(request(self.service, "schema.get", {"schemaId": "range.extension/v1/numeric-series"})["schema"]["x-hostMaxJsonBytes"], 96 * 1024)
-        knowledge = request(self.service, "knowledge.query", {"query": "DeepSeek credentials"})
-        self.assertTrue(any(item["sourcePath"] == "doc/AGENT_OPERATIONS.md" for item in knowledge["items"]))
+        knowledge = request(self.service, "knowledge.query", {"query": "command.preview"})
+        self.assertTrue(any(item["id"] == "command.preview" for item in knowledge["items"]))
+        for item in knowledge["items"]:
+            self.assertTrue(item["sourcePath"].startswith("package:range_workflow/knowledge/core-v1.json#"))
+            self.assertEqual(item["version"], "1.0.0")
+            self.assertEqual(len(item["schemaHash"]), 64)
         extension_knowledge = request(self.service, "knowledge.query", {"query": "numeric-series RMS extension"})
-        self.assertTrue(any(item["sourcePath"] == "doc/EXTENSION_SDK.md" for item in extension_knowledge["items"]))
+        self.assertTrue(any(item["id"].startswith("extension.") for item in extension_knowledge["items"]))
 
     def test_stage_validate_activate_run_query_and_rollback(self):
         with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "must-not-enter-child"}):

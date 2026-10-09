@@ -1,0 +1,192 @@
+{
+  "schema": "range.operation-knowledge/v1",
+  "packId": "range.workflow.core",
+  "version": "1.0.0",
+  "date": "2026-10-09",
+  "status": "supported",
+  "protocolVersion": "range.workflow/v1",
+  "compatibility": {
+    "protocolVersions": ["range.workflow/v1"]
+  },
+  "groups": {
+    "workflow": {
+      "title": "Follow the workflow from preview through verified result",
+      "steps": [
+        "Check the live service state and command catalog before proposing a state change.",
+        "Request a preview, present its revision and source binding, and wait for separate trusted host approval before execution.",
+        "Observe the returned job and verify its published native artifact, units, independent reference, and requested business outcome."
+      ],
+      "success": "Report completion only after host job evidence and native artifact checks support the requested outcome.",
+      "recovery": "For an unknown submission outcome, query the original execution identity and do not retry automatically. Stop when the source binding or artifact evidence changes."
+    },
+    "project": {
+      "title": "Inspect linked project and document state",
+      "steps": [
+        "Use the host project catalog to identify linked documents, accepted revisions, and available snapshots.",
+        "Keep FE source identity, independent reference data, and caller-provided data as separate claims; retain their hashes and revisions.",
+        "Treat a project snapshot as available only when the host reports its binding and verification state."
+      ],
+      "success": "The selected document and revision are identified by host-owned project metadata.",
+      "recovery": "If a document is missing, dirty, stale, or ambiguous, refresh the catalog and ask the caller to resolve the source before proceeding."
+    },
+    "model.source": {
+      "title": "Register or inspect a trusted model source",
+      "steps": [
+        "Use the live operation schema and source catalog to select an explicit source binding.",
+        "Register sources only through the trusted owner path and preserve the returned source identity and content hash.",
+        "Before a solve, confirm the selected source still matches the accepted project revision."
+      ],
+      "success": "The host reports a stable source identity tied to the inspected bytes and current project state.",
+      "recovery": "If the source changes or its owner binding cannot be verified, stop and re-register through the trusted owner workflow."
+    },
+    "result": {
+      "title": "Inspect a published result artifact",
+      "steps": [
+        "Select a result from the actual job and artifact catalog, then keep that identity fixed while reading pages or channels.",
+        "Check reported units, time coverage, node or channel identity, and source-job binding before interpreting values.",
+        "Compare FE results with an independent reference and assess the caller's business criteria separately."
+      ],
+      "success": "Every reported value is tied to the selected published artifact and retains its declared units and scope.",
+      "recovery": "If pagination, artifact identity, units, or source binding changes, discard the partial comparison and query the catalog again."
+    },
+    "native": {
+      "title": "Use native document operations with explicit bindings",
+      "steps": [
+        "Read the native operation descriptor and its current source, revision, and unit context.",
+        "Preview edits before applying them, and keep the native document identity separate from imported or caller-supplied references.",
+        "After execution, inspect the published native artifact and verify the requested engineering outcome independently."
+      ],
+      "success": "The operation returns an artifact bound to the intended native document and its accepted revision.",
+      "recovery": "On a revision conflict or stale source, refresh the document and create a new preview only after reconciling the changed state."
+    },
+    "extension": {
+      "title": "Use extensions only in the host's declared trust mode",
+      "steps": [
+        "Check the live extension runtime flags; the normal mode keeps trusted extension execution disabled.",
+        "Use trusted developer mode only when the host explicitly enables it, and review bundle validation and declared inputs before activation.",
+        "Treat the extension runtime as trusted code execution; the runtime flags do not claim an operating-system sandbox."
+      ],
+      "success": "An extension result is accepted only when the host reports its validated version, runtime binding, and result checks.",
+      "recovery": "If trust mode is disabled, validation fails, or an extension outcome is uncertain, stop and preserve the candidate and validation record."
+    },
+    "task.plan": {
+      "title": "Build a bounded plan from the live tool catalog",
+      "steps": [
+        "Use only operations and commands present in the current host catalog, with each node's live schema and declared dependencies.",
+        "Request previews for state-changing nodes and obtain separate trusted approval for each required node before submission.",
+        "Bound model calls, tool calls, active time, and deadlines; verify each job, native artifact, units, and business criterion from host evidence."
+      ],
+      "success": "Plan progress follows host-observed node results, and completion requires verified evidence for every required node.",
+      "recovery": "Pause on unknown submissions, missing evidence, or exhausted budgets. Reconcile the original job identity; never invent a successful exit result or resubmit blindly."
+    },
+    "task.node": {
+      "title": "Advance a task node from trusted evidence",
+      "steps": [
+        "Keep the node's plan, attempt, source, and capability bindings unchanged while work is in flight.",
+        "Use host-observed query results for read-only nodes and a fresh preview plus separate approval for each command node.",
+        "Accept completion only from the host's verified job, native artifact, unit, and business checks."
+      ],
+      "success": "The node reaches a terminal success state only after its declared predicate is satisfied by trusted host evidence.",
+      "recovery": "On a lost response or binding conflict, pause and reconcile the same attempt. Do not convert missing output or a process exit code into a fabricated success."
+    },
+    "schema": {
+      "title": "Use the runtime schema as the operation contract",
+      "steps": [
+        "Read the exact schema and precondition from the live operation or command descriptor.",
+        "Use this guidance only for human workflow steps; do not copy parameter rules from prose or add fields absent from the runtime schema.",
+        "Bind the guidance to the returned schema hash and catalog hash before presenting it."
+      ],
+      "success": "The operation is interpreted using its current runtime signature, units, and preconditions.",
+      "recovery": "If a descriptor or schema hash changes, discard the old interpretation and query capabilities again."
+    },
+    "knowledge": {
+      "title": "Treat knowledge as guidance, not a capability source",
+      "steps": [
+        "Search only guidance attached to operations and commands present in the current runtime catalog.",
+        "Use the item hashes and source path to identify the packaged guidance version.",
+        "Keep approval and execution decisions in the separate trusted host workflow."
+      ],
+      "success": "A knowledge result explains a catalogued capability without adding permissions or changing its schema.",
+      "recovery": "If a capability has no matching rule, stop and report the coverage gap; do not infer an operation or retry an unknown identifier."
+    },
+    "telemetry": {
+      "title": "Read telemetry as bounded observation",
+      "steps": [
+        "Read only the channels and time window reported for the selected job.",
+        "Preserve sequence, timestamps, and declared units when comparing samples or exporting data.",
+        "Use telemetry as evidence about an observed run, not as a command or substitute for artifact verification."
+      ],
+      "success": "Samples remain tied to the job, channel, and time range that the host returned.",
+      "recovery": "If sequence or job identity changes, resume from a fresh host query and keep incomplete observations marked as partial."
+    },
+    "audit": {
+      "title": "Inspect audit history as diagnostic evidence",
+      "steps": [
+        "Read audit entries in revision order and retain the operation and job identities they reference.",
+        "Use audit records to explain state transitions while checking result artifacts through their dedicated interfaces.",
+        "Do not treat an audit entry by itself as proof that an engineering goal was met."
+      ],
+      "success": "The reported history matches host revisions and does not expose approval tokens or other credentials.",
+      "recovery": "If revisions are missing or inconsistent, query from the last confirmed revision and report the gap."
+    },
+    "jobs": {
+      "title": "Observe the original job through its terminal state",
+      "steps": [
+        "Poll the same host-issued job identity and distinguish queued, active, and terminal states.",
+        "After completion, inspect the associated native artifact and its unit-aware result evidence.",
+        "Use explicit cancellation or recovery operations only when their live preconditions are met."
+      ],
+      "success": "A job is reported complete only when the host marks it terminal and the required result checks pass.",
+      "recovery": "For an interrupted or uncertain job, reconcile its original attempt and preserve its history; do not create a duplicate job automatically."
+    },
+    "execution": {
+      "title": "Reconcile an uncertain execution without retrying",
+      "steps": [
+        "Query execution using the identity from the original preview or submission.",
+        "Treat a missing receipt as unknown until the host confirms the outcome.",
+        "Continue only after reconciling the same request, job, and source bindings."
+      ],
+      "success": "The original request resolves to its host receipt and job identity, or remains explicitly unaccepted.",
+      "recovery": "Never retry an unknown execution automatically. Preserve the original request identity and ask the trusted host to reconcile it."
+    }
+  },
+  "rules": [
+    {
+      "kind": "operation",
+      "id": "capabilities.query",
+      "title": "Inspect the live workflow capabilities",
+      "steps": [
+        "Read the current operation and command catalog before choosing a call.",
+        "Use each entry's runtime schema and precondition as the operation contract.",
+        "Bind selected guidance to the live catalog hash and exact schema hash."
+      ],
+      "success": "The selected ID is present in the current catalog and its exact descriptor is available.",
+      "recovery": "If an ID or schema is absent, refresh capabilities and stop; do not invent an operation or command."
+    },
+    {
+      "kind": "operation",
+      "id": "command.preview",
+      "title": "Preview a proposed state change",
+      "steps": [
+        "Request a preview against the current project revision and explicit source binding.",
+        "Review the normalized effects and preview hash with the caller.",
+        "Keep preview separate from execution and wait for the trusted host's approval step."
+      ],
+      "success": "The host returns a preview bound to the reviewed request; a preview does not execute it.",
+      "recovery": "On a stale revision or source conflict, refresh the project state and reconcile before requesting a new preview."
+    },
+    {
+      "kind": "operation",
+      "id": "command.execute",
+      "title": "Submit only a separately approved preview",
+      "steps": [
+        "Execute only the exact preview after separate trusted host approval for that preview hash.",
+        "Treat the accepted response as job submission and observe the host-issued job identity.",
+        "Verify the native artifact, declared units, independent reference, and caller's business goal before reporting completion."
+      ],
+      "success": "The host accepts the approved preview and provides an execution receipt or job identity for verification.",
+      "recovery": "If the response is lost or uncertain, query execution by the original preview hash; never submit a second execution blindly.",
+      "requiresApproval": true
+    }
+  ]
+}

@@ -25,6 +25,7 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include "control_monitor_widget.h"
+#include "task_plan_widget.h"
 #include "native_results_widget.h"
 #include "solver_manager.h"
 #include <QUuid>
@@ -330,6 +331,7 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     connect(dt, &QDoubleSpinBox::valueChanged, this, invalidatePreview);
     connect(steps, &QSpinBox::valueChanged, this, invalidatePreview);
     connect(damping, &QDoubleSpinBox::valueChanged, this, invalidatePreview);
+    pages->addTab(new TaskPlanWidget(&service), tr("Task plans"));
     setActionAvailability();
 }
 

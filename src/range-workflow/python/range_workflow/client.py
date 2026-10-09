@@ -115,6 +115,29 @@ class WorkflowClient:
         """Host API: call only after the user authorizes the displayed fixed preview."""
         return self.request("host.approve", {"previewId": preview["previewId"], "previewHash": preview["previewHash"]})
 
+    def propose_plan(self, plan):
+        """Validate and retain a native-source plan without starting any node."""
+        return self.request("task.plan.propose", {"plan": plan})
+
+    def plans(self, plan_id=None):
+        return self.request("task.plan.query", {} if plan_id is None else {"planId": plan_id})
+
+    def control_plan(self, plan, action):
+        """Pause/cancel/take over scheduling; submitted jobs stay independent."""
+        if action not in {"start", "pause", "resume", "cancel", "supersede"}:
+            raise WorkflowError("INVALID_PARAMETERS", "Unknown plan control action")
+        return self.request("task.plan." + action,
+            {"planId": plan["planId"], "expectedPlanSha256": plan["planSha256"]})
+
+    def approve_plan_node(self, plan, node):
+        """Trusted host API, only after the user reviews this exact node preview."""
+        return self.request("host.task.node.approve", {"planId": plan["planId"],
+            "expectedPlanSha256": plan["planSha256"], "nodeId": node["id"], "previewHash": node["previewHash"]})
+
+    def answer_plan(self, plan, node_id, answer):
+        return self.request("task.plan.clarify", {"planId": plan["planId"],
+            "expectedPlanSha256": plan["planSha256"], "nodeId": node_id, "answer": answer})
+
     def execute(self, preview, approval):
         return self.request("command.execute", {"previewId": preview["previewId"], "approvalToken": approval["approvalToken"]})
 

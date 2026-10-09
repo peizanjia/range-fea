@@ -497,6 +497,11 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
     }
     if (name == "workflow_result" || name == "workflow_wait")
         return exactKeys(arguments, {"jobId"}) && validIdentifier(arguments.value("jobId"));
+    if (name == "task_plan_propose")
+        return exactKeys(arguments, {"plan"}) && arguments.value("plan").isObject()
+            && QJsonDocument(arguments.value("plan").toObject()).toJson(QJsonDocument::Compact).size() <= 65536;
+    if (name == "task_plan_query")
+        return arguments.isEmpty() || (exactKeys(arguments, {"planId"}) && validIdentifier(arguments.value("planId")));
     if (name == "workflow_propose")
     {
         return exactKeys(arguments, {"command", "arguments"}) && arguments.value("command").isString()
@@ -522,7 +527,8 @@ bool validToolArguments(const QString &name, const QJsonObject &arguments)
         return exactKeys(arguments, {"schemaId"})
             && (arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/manifest"))
                 || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/numeric-series"))
-                || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/statistics")));
+                || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.extension/v1/statistics"))
+                || arguments.value("schemaId") == QJsonValue(QStringLiteral("range.task-plan/v1")));
     if (name == "knowledge_query")
         return (exactKeys(arguments, {"query"}) || exactKeys(arguments, {"query", "extensionId"}))
             && boundedString(arguments.value("query"), 1024) && arguments.value("query").toString().size() <= 256
@@ -553,6 +559,7 @@ bool knownToolName(const QString &name)
         QStringLiteral("ask_user"),
         QStringLiteral("workflow_result"), QStringLiteral("workflow_wait"),
         QStringLiteral("workflow_propose"), QStringLiteral("extension_candidate_get"),
+        QStringLiteral("task_plan_propose"), QStringLiteral("task_plan_query"),
         QStringLiteral("extension_list"), QStringLiteral("extension_version_get"),
         QStringLiteral("schema_get"), QStringLiteral("knowledge_query"),
         QStringLiteral("extension_propose")};
@@ -777,7 +784,7 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         {"cursor", cursorSchema}, {"labelQuery", labelQuerySchema}}, {});
     const QJsonObject schemaId{{"type", "string"},
         {"enum", QJsonArray{"range.extension/v1/manifest", "range.extension/v1/numeric-series",
-                            "range.extension/v1/statistics"}}};
+                            "range.extension/v1/statistics", "range.task-plan/v1"}}};
     const QJsonObject extensionCommand{{"type", "string"},
         {"enum", QJsonArray{"extension.stage", "extension.validate", "extension.activate",
                             "extension.rollback", "extension.run"}}};
@@ -836,6 +843,10 @@ QJsonArray AgentTaskRunner::toolDefinitions(AccessPolicy policy)
         tool("workflow_status", "Read the independent rod/beam workspace configuration and revision. Its reference model is distinct from the GUI's open document.", schema({}, {})),
         tool("workflow_capabilities", "Read the connected workflow runtime's supported read operations, command parameter schemas, trusted-runtime requirements and limits.", schema({}, {})),
         tool("workflow_jobs", "Read the states of workflow jobs. Only succeeded jobs have accepted results.", schema({}, {})),
+        tool("task_plan_propose", "Validate and retain a bounded persistent DAG for the configured registered native source. It does not start nodes or approve writes. Read runtime capabilities and versioned knowledge first; each write node needs separate trusted user approval in Task plans. Never include code, credentials or approval tokens.",
+             schema({{"plan", object}}, {"plan"})),
+        tool("task_plan_query", "Read host-owned plan/node state, source identity, budgets and job references. Historical completion text is not current authority. Do not poll this tool with repeated model calls while a solver is running.",
+             schema({{"planId", string}}, {})),
         tool("workflow_telemetry", "Read bounded live accepted-step telemetry for a submitted workflow job. This is read-only and does not change or resume the calculation.",
              schema(telemetryParameters, {"jobId"})),
         tool("workflow_propose", "Propose workflow.configure, workflow.run, workflow.resume or workflow.recover. The host supplies current revision and handles fresh authorization. Configuration uses model=four-rod|cantilever-beam, dt(seconds),steps,targetDamping. Run uses mode=active|passive|both,independentReference=true. Resume uses jobId,additionalSteps. Recover uses jobId and fresh qualificationSha256 from workflow_recovery; old approval cannot be reused.",
@@ -1932,6 +1943,8 @@ void AgentTaskRunner::nextTool()
     if (name == "workflow_sources") { submitWorkflow("model.sources.query"); return; }
     if (name == "workflow_status") { submitWorkflow("project.query"); return; }
     if (name == "workflow_capabilities") { submitWorkflow("capabilities.query"); return; }
+    if (name == "task_plan_propose") { submitWorkflow("task.plan.propose", arguments); return; }
+    if (name == "task_plan_query") { submitWorkflow("task.plan.query", arguments); return; }
     if (name == "workflow_jobs") { submitWorkflow("jobs.query"); return; }
     if (name == "workflow_recovery") { submitWorkflow("job.recovery.query", arguments); return; }
     if (name == "workflow_result") { submitWorkflow("results.query", arguments); return; }

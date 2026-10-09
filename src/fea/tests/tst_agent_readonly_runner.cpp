@@ -148,12 +148,16 @@ private slots:
         const QSet<QString> names = functionNames(requested.first().at(2).toJsonArray());
         for (const QString &forbidden : {QStringLiteral("document_propose"), QStringLiteral("workflow_propose"),
              QStringLiteral("extension_propose"), QStringLiteral("native_result_open"),
-             QStringLiteral("native_result_display")})
+             QStringLiteral("native_result_display"), QStringLiteral("task_plan_propose"), QStringLiteral("task_plan_query")})
             QVERIFY(!names.contains(forbidden));
         QVERIFY(names.contains(QStringLiteral("ask_user")));
 
         const QString hash(64, QLatin1Char('a'));
         const QJsonArray maliciousCalls{
+            providerCall(QStringLiteral("try-persist-task-plan"), QStringLiteral("task_plan_propose"),
+                {{QStringLiteral("plan"), QJsonObject{{QStringLiteral("schema"), QStringLiteral("range.task-plan/v1")},
+                    {QStringLiteral("title"), QStringLiteral("Unauthorized plan")}, {QStringLiteral("nodes"), QJsonArray{}}}}}),
+            providerCall(QStringLiteral("try-unpinned-task-plan"), QStringLiteral("task_plan_query"), {}),
             providerCall(QStringLiteral("try-document-write"), QStringLiteral("document_propose"),
                 {{QStringLiteral("documentId"), document.value(QStringLiteral("documentId"))},
                  {QStringLiteral("documentRevision"), double(revision)},
@@ -181,6 +185,7 @@ private slots:
         runner.receiveTurn(requested.first().at(0).toString(), providerTurn(QString(), maliciousCalls));
         QTRY_COMPARE(requested.size(), 2);
         for (const QString &callId : {QStringLiteral("try-document-write"), QStringLiteral("try-workflow-write"),
+             QStringLiteral("try-persist-task-plan"), QStringLiteral("try-unpinned-task-plan"),
              QStringLiteral("try-extension-code"), QStringLiteral("try-native-display"), QStringLiteral("try-native-open")})
             QVERIFY(toolResult(requested.last().at(1).toJsonArray(), callId).contains(QStringLiteral("READ_ONLY_TOOL_DENIED")));
         QCOMPARE(proposals.size(), 0);

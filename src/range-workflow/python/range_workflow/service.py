@@ -172,6 +172,8 @@ class WorkflowService:
         self._telemetry = TelemetryReader(self.workspace)
         self._closed = False
         self._fault = False
+        from .task_runtime import TaskManager
+        self._plans = TaskManager(self)
         try:
             self._state = self._load()
             from .extensions import install as install_extensions
@@ -183,7 +185,9 @@ class WorkflowService:
                 if job["state"] not in TERMINAL_STATES:
                     job.update(state="interrupted", completedAt=utc(),
                                error={"code": "INTERRUPTED", "message": "Service closed before job completion"})
+            self._plans.restore(candidate)
             self._commit(candidate, "session.open", "opened")
+            self._plans.start()
         except BaseException:
             self._os_lock.close()
             raise
@@ -192,17 +196,23 @@ class WorkflowService:
         from .project_catalog import load_project_catalog
         catalog = load_project_catalog(self.workspace)
         if not self._state_path.exists():
-            return {"storageVersion": 2, "projectId": catalog["projectId"] if catalog else str(uuid.uuid4()), "modelId": str(uuid.uuid4()),
+            return {"storageVersion": 3, "projectId": catalog["projectId"] if catalog else str(uuid.uuid4()), "modelId": str(uuid.uuid4()),
                     "sessionId": str(uuid.uuid4()), "revision": 0, "auditRevision": 0,
                     "configuration": {"dt": 0.005, "steps": 400, "targetDamping": 0.1, "model": "four-rod"},
-                    "jobs": {}, "previews": {}, "audit": [], "extensions": {}}
+                    "jobs": {}, "previews": {}, "audit": [], "extensions": {}, "plans": {}}
         try:
             if self._state_path.stat().st_size > MAX_STATE_BYTES:
                 raise ValueError("state too large")
             value = json.loads(self._state_path.read_bytes())
+            if type(value.get("storageVersion")) is not int:
+                raise ValueError("invalid storage version type")
+            if value.get("storageVersion") in (1, 2):
+                if "plans" in value:
+                    raise ValueError("unexpected plans in legacy state")
+                value["plans"] = {}
             exact(value, {"storageVersion", "projectId", "modelId", "sessionId", "revision",
-                          "auditRevision", "configuration", "jobs", "previews", "audit", "extensions"})
-            if value["storageVersion"] not in (1, 2):
+                          "auditRevision", "configuration", "jobs", "previews", "audit", "extensions", "plans"})
+            if value["storageVersion"] not in (1, 2, 3):
                 raise ValueError("unsupported storage version")
             for key in ("projectId", "modelId", "sessionId"):
                 if uuid.UUID(value[key]).int == 0:
@@ -210,7 +220,7 @@ class WorkflowService:
             integer(value["revision"], "revision", 0, 2**53 - 1)
             integer(value["auditRevision"], "auditRevision", 0, 2**53 - 1)
             self._normalize_builtin("workflow.configure", value["configuration"], state=value)
-            if not all(isinstance(value[k], dict) for k in ("jobs", "previews", "extensions")):
+            if not all(isinstance(value[k], dict) for k in ("jobs", "previews", "extensions", "plans")) or len(value["plans"]) > 16:
                 raise ValueError("invalid state collections")
             from .extensions import validate_registry_state
             validate_registry_state(value["extensions"])
@@ -227,7 +237,7 @@ class WorkflowService:
                 if not isinstance(preview, dict):
                     raise ValueError("invalid preview")
                 preview.pop("approvalToken", None)
-            value["storageVersion"] = 2
+            value["storageVersion"] = 3
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
             raise WorkflowError("CORRUPT_STATE", "Workspace state is invalid; it was preserved") from error
         if catalog is not None and catalog["projectId"] != value["projectId"]:
@@ -508,6 +518,12 @@ class WorkflowService:
                 raise
 
     def _dispatch(self, operation: str, p: dict) -> dict:
+        if operation.startswith("task.plan.") or operation == "host.task.node.approve":
+            from .task_plan import PlanError
+            try:
+                return self._plans.dispatch(operation, p)
+            except PlanError:
+                raise WorkflowError("INVALID_PLAN", "The plan violates its closed schema, dependency, capability or budget rules") from None
         if operation == "capabilities.query":
             exact(p, set())
             return self.capabilities()
@@ -751,6 +767,7 @@ class WorkflowService:
                     "state": recovering_job["state"], "error": recovering_job.get("error"),
                     "attemptId": recovering_job.get("attemptId", jid)}]
             candidate["jobs"][jid] = job
+            self._plans.associate_accepted_job(candidate, job)
             self._compact_stale_extension_previews(candidate["previews"], candidate["revision"],
                                                    candidate["sessionId"])
             self._commit(candidate, "command.execute", "accepted", job_id=jid, approval="approved",
@@ -761,6 +778,7 @@ class WorkflowService:
             if registry_write and extension_id:
                 self._extension_writers[extension_id] = jid
             worker.start()
+            self._plans.wake.set()
             return {"jobId": jid, "state": "queued", "revision": self._state["revision"]}
         if operation == "job.cancel":
             exact(p, {"jobId"})
@@ -945,9 +963,17 @@ class WorkflowService:
             "extension.candidate.get": schema({"candidateId": id_schema}),
             "extension.version.get": schema({"extensionId": id_schema, "bundleHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}),
             "schema.get": schema({"schemaId": {"type": "string", "enum": [
-                "range.extension/v1/manifest", "range.extension/v1/numeric-series", "range.extension/v1/statistics"]}}),
+                "range.extension/v1/manifest", "range.extension/v1/numeric-series", "range.extension/v1/statistics", "range.task-plan/v1"]}}),
             "knowledge.query": schema({"query": {"type": "string", "maxLength": 256},
-                                        "extensionId": id_schema}, ["query"])}
+                                          "extensionId": id_schema}, ["query"])}
+        operation_parameters["task.plan.propose"] = schema({"plan": {"type": "object"}})
+        operation_parameters["task.plan.query"] = schema({"planId": id_schema}, [])
+        plan_control_schema = schema({"planId": id_schema,
+            "expectedPlanSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}})
+        for action in ("start", "pause", "resume", "cancel", "supersede"):
+            operation_parameters["task.plan." + action] = plan_control_schema
+        operation_parameters["task.plan.clarify"] = schema({**plan_control_schema["properties"],
+            "nodeId": id_schema, "answer": {"type": "string", "minLength": 1, "maxLength": 4096}})
         operation_parameters["model.source.register"] = schema({"catalogRoot": {"type": "string"},
                                                                "snapshotRef": {"type": "object"}})
         operation_parameters["model.sources.query"] = schema({"offset": {"type": "integer", "minimum": 0},
@@ -962,7 +988,8 @@ class WorkflowService:
                 "cursor": {"type": "string", "maxLength": 16384}}, ["jobId"])
         read_operations = {"capabilities.query", "project.query", "project.catalog.query", "project.snapshot.query", "jobs.query", "results.query", "telemetry.query", "audit.query",
                            "model.sources.query", "model.source.query", "job.recovery.query",
-                           "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query"}
+                           "extension.list", "extension.candidate.get", "extension.version.get", "schema.get", "knowledge.query",
+                           "task.plan.query"}
         operations = [{"id": name, "readOnly": name in read_operations, "parameters": parameters}
                       for name, parameters in operation_parameters.items()]
         for item in operations:
@@ -989,6 +1016,11 @@ class WorkflowService:
                          "qualificationSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}})}]
         commands += [{"id": name, **entry["descriptor"]} for name, entry in self._commands.items()]
         return {"apiVersion": API_VERSION, "operations": operations, "commands": commands,
+                "taskPlans": {"schemaVersion": "range.task-plan/v1", "storageVersion": 3,
+                    "supportedSource": "registered-native-source", "nodeApproval": "separate-trusted-host-per-node",
+                    "ordinaryCodeExecution": False, "runtimeAvailable": not self._plans.stop.is_set(),
+                    "maxNodes": 64, "maxScanPoints": 4, "maxRetainedPlans": 16,
+                    "maxModelCalls": 24, "maxToolCalls": 128, "maxReadOnlyParallel": 2},
                 "capabilityRevision": self._capability_revision(),
                 "extensionRuntime": {"trustedExtensions": self.trusted_extensions,
                     "trustMode": "trusted-developer" if self.trusted_extensions else "disabled",
@@ -1013,6 +1045,7 @@ class WorkflowService:
                 cancel.set()
         for worker, _ in workers:
             worker.join(15)
+        self._plans.close()
         self._os_lock.close()
 
     def __enter__(self):

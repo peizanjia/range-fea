@@ -171,10 +171,12 @@ class ContractTest(unittest.TestCase):
         self.service.close()
         legacy = json.loads(state_path.read_bytes())
         legacy["storageVersion"] = 1
+        legacy.pop("plans")
         legacy["previews"][action["previewId"]]["approvalToken"] = action["approvalToken"]
         state_path.write_text(json.dumps(legacy), encoding="utf-8")
         self.service = self.open()
-        self.assertEqual(json.loads(state_path.read_bytes())["storageVersion"], 2)
+        self.assertEqual(json.loads(state_path.read_bytes())["storageVersion"], 3)
+        self.assertEqual(json.loads(state_path.read_bytes())["plans"], {})
         self.assertNotIn(action["approvalToken"].encode(), state_path.read_bytes())
         self.assertCode("STALE_REVISION", request, self.service, "command.execute", action)
         self.assertCode("STALE_REVISION", request, self.service, "host.approve",

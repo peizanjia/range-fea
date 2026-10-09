@@ -361,6 +361,7 @@ add_dependencies(fea range-base-lib range-model-lib range-solver-lib range-cloud
 target_sources(fea PRIVATE src/model_command_host.cpp src/model_command_host.h)
 target_sources(fea PRIVATE src/workflow_process.cpp src/workflow_process.h
                            src/workflow_widget.cpp src/workflow_widget.h
+                           src/task_plan_widget.cpp src/task_plan_widget.h
                            src/control_monitor_widget.cpp src/control_monitor_widget.h)
 target_sources(fea PRIVATE src/native_results_widget.cpp src/native_results_widget.h)
 target_sources(fea PRIVATE src/agent_task_runner.cpp src/agent_task_runner.h
@@ -656,6 +657,17 @@ qt_add_translations(fea
 )
 
 if(RANGE_BUILD_TESTS)
+    qt_add_executable(tst_series_plot_widget tests/tst_series_plot_main.cpp
+        tests/tst_series_plot_widget.cpp src/series_plot_widget.cpp src/series_plot_widget.h)
+    target_include_directories(tst_series_plot_widget PRIVATE src)
+    target_link_libraries(tst_series_plot_widget PRIVATE Qt6::Widgets Qt6::Test)
+    add_test(NAME tst_series_plot_widget COMMAND tst_series_plot_widget -o -,txt)
+    set_tests_properties(tst_series_plot_widget PROPERTIES TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_series_plot_widget PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     # Exercise the actual Application/MainWindow/Session instead of substituting
     # a lightweight widget fixture for the complete document lifecycle.
     get_target_property(_fea_lifecycle_sources fea SOURCES)
@@ -667,6 +679,7 @@ if(RANGE_BUILD_TESTS)
         tests/tst_agent_event_view.cpp tests/tst_agent_conversation_widget.cpp tests/tst_project_session.cpp
         tests/tst_agent_conversation_history_widget.cpp
         tests/tst_agent_observation_boundaries.cpp
+        tests/tst_task_plan_widget.cpp
         tests/tst_native_job_registry.cpp tests/tst_gui_model_operations.cpp tests/tst_native_results_widget.cpp
         tests/tst_current_model_workflow.cpp tests/tst_recovery_interaction.cpp
         tests/tst_model_commit_recovery.cpp ${_fea_lifecycle_sources})
@@ -674,6 +687,8 @@ if(RANGE_BUILD_TESTS)
         "RANGE_RECOVERY_INTERACTION_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
     set_source_files_properties(tests/tst_agent_conversation_history_widget.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_WORKFLOW_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\";RANGE_WF07_SOLVER=\"$<TARGET_FILE:fea-solver>\"")
+    set_source_files_properties(tests/tst_task_plan_widget.cpp PROPERTIES COMPILE_DEFINITIONS
+        "RANGE_TASK_WIDGET_SOLVER=\"$<TARGET_FILE:fea-solver>\";RANGE_TASK_WIDGET_NATIVE=\"$<TARGET_FILE:range-workflow-native>\";RANGE_TASK_WIDGET_PYTHON=\"${Python3_EXECUTABLE}\";RANGE_TASK_WIDGET_PACKAGE=\"${CMAKE_SOURCE_DIR}/range-workflow/python\";RANGE_TASK_WIDGET_EXAMPLES=\"${CMAKE_SOURCE_DIR}/fea-solver/examples/stage9\"")
     set_source_files_properties(tests/tst_current_model_workflow.cpp PROPERTIES COMPILE_DEFINITIONS
         "RANGE_CURRENT_MODEL_TEST_FIXTURE=\"$<TARGET_FILE:range-workflow-native-import-fixture>\"")
     target_include_directories(tst_gui_model_lifecycle PRIVATE src)
@@ -695,6 +710,13 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_agent_readonly_runner COMMAND tst_gui_model_lifecycle --agent-readonly-runner -o -,txt)
     add_test(NAME tst_agent_conversation_history_widget COMMAND tst_gui_model_lifecycle --agent-conversation-history -o -,txt)
     add_test(NAME tst_agent_observation_boundaries COMMAND tst_gui_model_lifecycle --agent-observation-boundaries -o -,txt)
+    add_test(NAME tst_task_plan_widget COMMAND tst_gui_model_lifecycle --task-plans-widget -o -,txt)
+    set_tests_properties(tst_task_plan_widget PROPERTIES TIMEOUT 240
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
+    if(WIN32)
+        set_tests_properties(tst_task_plan_widget PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(tst_agent_observation_boundaries PROPERTIES TIMEOUT 180
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1")
     if(WIN32)

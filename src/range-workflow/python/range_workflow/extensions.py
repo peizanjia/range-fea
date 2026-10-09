@@ -1288,6 +1288,10 @@ def read_operation(service, operation: str, parameters: dict) -> dict | None:
         schemas = {MANIFEST_SCHEMA: _manifest_schema(), SERIES_SCHEMA: _series_schema(),
                    STATISTICS_SCHEMA: _statistics_schema()}
         schema_id = parameters["schemaId"]
+        if schema_id == "range.task-plan/v1":
+            from .task_plan import plan_schema
+            return {"schemaId": schema_id, "apiVersion": "range.workflow/v1", "schema": plan_schema(),
+                    "toolCatalog": service._plans.catalog()}
         if schema_id not in schemas:
             _fail("SCHEMA_NOT_FOUND", "Unknown versioned extension schema")
         return {"schemaId": schema_id, "apiVersion": PROTOCOL_VERSION, "schema": schemas[schema_id]}
@@ -1304,41 +1308,11 @@ def read_operation(service, operation: str, parameters: dict) -> dict | None:
 
 
 def _knowledge(query: str, extension_id: str | None, service) -> dict:
-    terms = [x.casefold() for x in re.findall(r"[A-Za-z0-9._/-]+|[^\s]+", query) if len(x) > 1]
-    documents = []
-    package_path = Path(__file__).resolve()
-    roots = (package_path.parents[3] / "doc", package_path.parents[4] / "docs")
-    for filename in ("AGENT_OPERATIONS.md", "WORKFLOW_CONTRACT.md", "EXTENSION_SDK.md",
-                     "NATIVE_MODEL_OPERATIONS.md", "NATIVE_DOCUMENT_SDK.md", "NATIVE_RESULTS.md", "PROJECT_CATALOG.md"):
-        found = next((root / filename for root in roots if (root / filename).is_file() and not (root / filename).is_symlink()), None)
-        if found is None or found.stat().st_size > 256 * 1024:
-            continue
-        try:
-            raw = found.read_bytes()
-            text = raw.decode("utf-8", "strict")
-        except (OSError, UnicodeError):
-            continue
-        sections = []
-        current_title = filename
-        current = []
-        for line in text.splitlines():
-            if line.startswith("#"):
-                if current:
-                    sections.append((current_title, "\n".join(current).strip()))
-                current_title, current = line.lstrip("# ").strip(), [line]
-            else:
-                current.append(line)
-        if current:
-            sections.append((current_title, "\n".join(current).strip()))
-        for title, section in sections:
-            haystack = (title + "\n" + section).casefold()
-            score = sum(1 for term in terms if term in haystack) if terms else 1
-            if score:
-                documents.append((score, len(terms), filename, title, section, hashlib.sha256(raw).hexdigest()))
-    documents.sort(key=lambda row: (-row[0], row[2], row[3]))
-    results = [{"title": title, "sourcePath": "doc/" + filename,
-                "protocolVersion": "range.workflow/v1", "text": section[:4000], "sha256": sha}
-               for _, _, filename, title, section, sha in documents[:5]]
+    from .knowledge import KnowledgeError, query_knowledge
+    try:
+        results = query_knowledge(service.capabilities(), query)["items"]
+    except KnowledgeError as error:
+        raise WorkflowError(error.code, error.message) from None
     if extension_id is not None:
         entry = _registry_entry(service, extension_id)
         active_hash = entry.get("activeBundleHash")
