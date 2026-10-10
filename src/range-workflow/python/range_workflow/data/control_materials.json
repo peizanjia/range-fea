@@ -1,0 +1,365 @@
+{
+  "schema": "range.control-catalog/v1",
+  "version": "1.0.0",
+  "metadata": {
+    "purpose": "Example material and device templates for future GUI and SDK binding.",
+    "assumptions": "SI only; material frame tensors; rods, ideal bonded patches and fixed mass equivalent cables. Geometry, electrode polarity, anchors and sensor locations require later explicit binding.",
+    "qualification": "Synthetic examples; no hardware calibration, native solver qualification, DOF binding or electrical availability is asserted."
+  },
+  "materials": [
+    {
+      "schema": "range.control-material/v1",
+      "id": "example-elastic",
+      "name": "Synthetic elastic solid",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "isotropic-elastic",
+      "properties": {
+        "E_Pa": 70000000000,
+        "nu": 0.3,
+        "rho_kg_m3": 2700
+      }
+    },
+    {
+      "schema": "range.control-material/v1",
+      "id": "example-piezo",
+      "name": "Synthetic coupled solid",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "piezoelectric",
+      "tensorConvention": {
+        "voigtOrder": [
+          "xx",
+          "yy",
+          "zz",
+          "yz",
+          "xz",
+          "xy"
+        ],
+        "shear": "engineering",
+        "frame": "material"
+      },
+      "properties": {
+        "formulation": "stress-charge",
+        "rho_kg_m3": 7500,
+        "cE_Pa": [
+          [
+            100000000000,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            100000000000,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            100000000000,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            100000000000,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            100000000000,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            100000000000
+          ]
+        ],
+        "e_C_m2": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            -2,
+            -2,
+            5,
+            0,
+            0,
+            0
+          ]
+        ],
+        "epsilonS_F_m": [
+          [
+            1e-08,
+            0,
+            0
+          ],
+          [
+            0,
+            1e-08,
+            0
+          ],
+          [
+            0,
+            0,
+            1e-08
+          ]
+        ]
+      }
+    }
+  ],
+  "devices": [
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-rod",
+      "name": "Synthetic active rod",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "piezo-rod",
+      "state": "ready-for-binding",
+      "parameters": {
+        "mode": "material-based",
+        "length_m": 0.1,
+        "area_m2": 0.0001,
+        "electrodeSeparation_m": 0.1,
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "electricFieldDirection": [
+          0,
+          0,
+          1
+        ]
+      },
+      "materialId": "example-piezo"
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-patch",
+      "name": "Synthetic ideal bonded patch",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "piezo-patch",
+      "state": "ready-for-binding",
+      "parameters": {
+        "length_m": 0.05,
+        "width_m": 0.02,
+        "thickness_m": 0.0005,
+        "side": "positive",
+        "polingDirection": [
+          0,
+          0,
+          1
+        ],
+        "bond": "ideal"
+      },
+      "materialId": "example-piezo"
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-cable",
+      "name": "Synthetic fixed mass length actuator",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "cable-length-actuator",
+      "state": "ready-for-binding",
+      "parameters": {
+        "massModel": "fixed-mass-equivalent",
+        "fixedMass_kg": 0.2,
+        "referenceLength_m": 1,
+        "minLength_m": 0.8,
+        "maxLength_m": 1.2
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-displacement",
+      "name": "Virtual displacement",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "displacement",
+        "unit": "m",
+        "location": "bind-later"
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-velocity",
+      "name": "Virtual velocity",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "velocity",
+        "unit": "m/s",
+        "location": "bind-later"
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-acceleration",
+      "name": "Virtual acceleration",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "acceleration",
+        "unit": "m/s^2",
+        "location": "bind-later"
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-strain",
+      "name": "Virtual strain",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "strain",
+        "unit": "1",
+        "location": "bind-later"
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-tension",
+      "name": "Virtual tension",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "tension",
+        "unit": "N",
+        "location": "bind-later"
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-charge",
+      "name": "Virtual charge",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "charge",
+        "unit": "C",
+        "location": "bind-later"
+      }
+    },
+    {
+      "schema": "range.control-device/v1",
+      "id": "example-sensor-voltage",
+      "name": "Virtual voltage",
+      "version": "1.0.0",
+      "units": "SI",
+      "provenance": {
+        "kind": "example",
+        "source": "Range independent synthetic demonstration",
+        "note": "Synthetic values only; no manufacturer identity or hardware calibration."
+      },
+      "type": "virtual-sensor",
+      "state": "ready-for-binding",
+      "parameters": {
+        "quantity": "voltage",
+        "unit": "V",
+        "location": "bind-later"
+      }
+    }
+  ]
+}
