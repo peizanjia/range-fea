@@ -150,7 +150,7 @@
     {
       "id": "CW-02",
       "title": "三维主动/被动压电杆原生模型基础",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "CW-01"
       ],
@@ -162,20 +162,47 @@
         {
           "id": "CW-02-A01",
           "description": "显式active/passive分类持久化且旧格式兼容",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-02.md",
+              "sha256": "efe8a2bb09e839e82a8ffd1c38ece415a70305ddc4b8b5dfe698b254a335f2cb"
+            },
+            {
+              "path": "docs/acceptance/CW-foundation-20261011.json",
+              "sha256": "a89e6079818d1c6c9a4264c73f89f3c3ccd6bf0d6092fab1aeeabf40f07368c6"
+            }
+          ]
         },
         {
           "id": "CW-02-A02",
           "description": "斜杆/异材料串联/非共线闭合桁架独立参考",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-02.md",
+              "sha256": "efe8a2bb09e839e82a8ffd1c38ece415a70305ddc4b8b5dfe698b254a335f2cb"
+            },
+            {
+              "path": "docs/acceptance/CW-foundation-20261011.json",
+              "sha256": "a89e6079818d1c6c9a4264c73f89f3c3ccd6bf0d6092fab1aeeabf40f07368c6"
+            }
+          ]
         },
         {
           "id": "CW-02-A03",
           "description": "无假电学端口/分支，结果可用性及错误发布校验",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-02.md",
+              "sha256": "efe8a2bb09e839e82a8ffd1c38ece415a70305ddc4b8b5dfe698b254a335f2cb"
+            },
+            {
+              "path": "docs/acceptance/CW-foundation-20261011.json",
+              "sha256": "a89e6079818d1c6c9a4264c73f89f3c3ccd6bf0d6092fab1aeeabf40f07368c6"
+            }
+          ]
         }
       ]
     },
@@ -216,7 +243,7 @@
     {
       "id": "CW-04",
       "title": "材料、器件和标准传感目录",
-      "status": "planned",
+      "status": "in_progress",
       "dependsOn": [
         "CW-01"
       ],
@@ -291,8 +318,17 @@
         {
           "id": "CW-06-A01",
           "description": "nearest-node Tie完整唯一覆盖，未知/歧义/非有限容差拒绝",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-06-A01.md",
+              "sha256": "cbb03d747543852581c885f1737ce34ff5bace0011ee0d2493d070768f72800b"
+            },
+            {
+              "path": "docs/acceptance/CW-foundation-20261011.json",
+              "sha256": "a89e6079818d1c6c9a4264c73f89f3c3ccd6bf0d6092fab1aeeabf40f07368c6"
+            }
+          ]
         },
         {
           "id": "CW-06-A02",
@@ -311,7 +347,7 @@
     {
       "id": "CW-07",
       "title": "收放索长和移动锚点动态作动",
-      "status": "planned",
+      "status": "in_progress",
       "dependsOn": [
         "CW-01"
       ],
@@ -642,4 +678,3 @@
     }
   ]
 }
-

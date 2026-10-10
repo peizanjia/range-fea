@@ -141,6 +141,9 @@ if(RANGE_BUILD_TESTS)
     add_test(NAME tst_workflow_telemetry COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_telemetry.py" -v)
     set_tests_properties(tst_workflow_telemetry PROPERTIES TIMEOUT 60)
+    add_test(NAME tst_control_profiles COMMAND "${Python3_EXECUTABLE}" -B
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_control_profiles.py" -v)
+    set_tests_properties(tst_control_profiles PROPERTIES TIMEOUT 30)
     add_test(NAME tst_workflow_series_analysis COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_series_analysis.py" -v)
     add_test(NAME tst_workflow_runtime_parameters COMMAND "${Python3_EXECUTABLE}"

@@ -360,3 +360,12 @@ WF08依赖已满足，纯DAG/单state提交/版本knowledge设计冻结后启动
 逐条审查发现缺少WF14联合故事/几何修改后真实控制以及WF10键盘/主题/DPI证据。补充测试冻结664ea7b43dcebad5f423e85a877f0e12211267e2，只有测试和测试源编译定义变化，产品实现不变；三个受影响完整目标3/3通过104.59s。实际Windows图表16/16（native深浅主题、窄宽、Fit文字、键盘、不同单位分图）2.084s，键盘及双实际原生工作台4/4为23.190s；实际DPR>1被断言。几何联合3/3为23.958s：同GUI会话内梁端117 X3.3→3.333、人工预览应用/真实快照→主被动20接受步，再独立TRI壳网格/显式静态重绑/原生位移视口。两个支持领域使用两份文档，不能冒称同文档CAD几何→网格。主/被动终态q/v误差约1e-15/1e-12，完整20点独立对照限active Y速度；其余时程做完整性/有限值/时网和终态校核。
 
 WF08/WF09/WF14按首批支持范围接受。WF10 A08保留20k首次绘图5秒失败和完整导出/峰值未验；WF11 A02保留真实DeepSeek高effort生成失败及stage/approval=0，受信手写候选不代替模型生成；WF12 A01保留LPAC class46 Win32 87，worker未恢复运行，A02-A09未验证、ordinary OFF。按用户授权记录后跳过，未降低原验收门槛。WF13发布汇合仍planned。工件SHA、版本、安装二进制一致性见docs/acceptance/integrated-20261010.json，原失败保留在build。只做本地提交，不push，用户配置/skill/凭据/记忆不改。
+
+## 2026-10-11 控制工作台 CW-02 原生静力基础验收
+
+- 用户主场景确定为主动压电杆替换桁架杆/其中一段，贴片另作为梁/平板范式。完整14需求/16任务/48验收不缩减，首要目标少操作。
+- Model 4ae7188：主动/被动分类、1.3.19兼容持久化与nearest-node Tie完整覆盖；solver ebb196f：三维混合静力装配、无普通杆假电端口、精确输入与结果一致性、独立斜杆/异材料串联/闭合三角参考及RAM/RBM实际CLI。
+- 全目标Release构建exit0，完整required CTest180/180、0fail、1499.60s；最后受影响9/9及实际CLI目标通过。独立源码/验收审查无新confirmed material问题。raw JUnit被CTest相对test-dir写到build/vs2026/build/...，原样归档并验证SHA，不重跑或伪造XML。
+- Catalog bce470e独立24/24，合成2材料/10器件、严格SI/本构转换。私有安装Python3.13.5目录/solver SHA一致，缩减PATH help通过。真实native目录绑定、校准数据、干净机器/新GUI仍未验证。
+- CW-02 done；CW-06仅A01 pass，面投影/插值/功/收敛保持pending；CW-04 in_progress，productComplete=false。报告docs/acceptance/CW-foundation-20261011.json与CW-02.md/CW-06-A01.md。
+- 下一CW03/CW07共同动力设计冻结并独立审查，明确端口功与内部能、有效索长固定质量、解析anchor运动、左右加速度及precommit checkpoint。旧postcommit observer不满足新存储失败回滚保证。pure mixed assembly首批writer仅新增三个文件，root统一接线和验收，不把kernel当成完整动力产品。

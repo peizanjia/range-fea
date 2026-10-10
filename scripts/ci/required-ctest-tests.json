@@ -159,6 +159,7 @@
       "tst_workflow_recovery",
       "tst_workflow_recovery_runtime",
       "tst_workflow_telemetry",
+      "tst_control_profiles",
       "tst_workflow_series_analysis",
       "tst_workflow_runtime_parameters",
       "tst_workflow_runtime_control",

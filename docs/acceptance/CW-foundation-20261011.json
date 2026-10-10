@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-11",
+  "status": "pass",
+  "scope": "CW02-static-native-foundation-and-CW06-A01-only; CW04-catalog-partial",
+  "baselineRootCommit": "46324e8",
+  "sourceRootHeadAtFullRun": "bce470e86aa4a045b7ff20d7e5181b866d296732",
+  "sourceByteFreeze": {
+    "submodules": {
+      "src/range-model-lib": {
+        "baselineCommit": "3f7da639895d3abd4fd060e720c93b04bca5dcaa",
+        "sourceFiles": [
+          {
+            "path": "src/range-model-lib/CMakeLists.txt",
+            "sha256": "1ed0a8046de6ec2e3a7006cf6f91cd05ae1b9a520493969ee04fba7f7e096852",
+            "bytes": 8361
+          },
+          {
+            "path": "src/range-model-lib/include/rml_structural_piezo_setup.h",
+            "sha256": "0cb18ae4d530f54686b99f09cc4f99eb59db05a2f7f1889f531a7b278d039049",
+            "bytes": 2715
+          },
+          {
+            "path": "src/range-model-lib/src/rml_file_io.cpp",
+            "sha256": "03e5b141b28fe0752f252e9db673292a7e295dd293bb62687ee663ce262762be",
+            "bytes": 251043
+          },
+          {
+            "path": "src/range-model-lib/src/rml_model.cpp",
+            "sha256": "a7ff8b8e300e3e29e2c1e3fb68f75b6bff0199df231b3e59c15b6859c783c778",
+            "bytes": 303363
+          },
+          {
+            "path": "src/range-model-lib/src/rml_structural_interaction.cpp",
+            "sha256": "dc4847fd4c3ca78c40a03f87c145802d1b56a5b4e005df43c649b47c5a9ee26d",
+            "bytes": 31034
+          },
+          {
+            "path": "src/range-model-lib/src/rml_structural_piezo_setup.cpp",
+            "sha256": "51c305515d5e282f9420b3e9893a17ef0d1c8dbc735c0678837a5a228fba4a5c",
+            "bytes": 18101
+          },
+          {
+            "path": "src/range-model-lib/tests/tst_model_physical_ids.cpp",
+            "sha256": "663af997bd75dddcbf31f89ab415e5e6c9ea13659efafd847c0f28396d5421a3",
+            "bytes": 30428
+          },
+          {
+            "path": "src/range-model-lib/tests/tst_problem_setup.cpp",
+            "sha256": "cb503a08bed891f75d34f2a7c6994279bb126c7b634da06e1c69dce4c4e5fb64",
+            "bytes": 70632
+          },
+          {
+            "path": "src/range-model-lib/tests/tst_structural_cable_setup.cpp",
+            "sha256": "94c13c7656cc127b1fefe31853de05ebe6bbf3d33a5634717811e5c83722a99b",
+            "bytes": 11456
+          },
+          {
+            "path": "src/range-model-lib/tests/tst_structural_piezo_setup.cpp",
+            "sha256": "6808bcd1345ecf4fd056eba2c904ca7d79fe4186c81b4e68a49b4d39e7b5e848",
+            "bytes": 35063
+          }
+        ]
+      },
+      "src/range-solver-lib": {
+        "baselineCommit": "03c2a4365e9730435cde0c9f4006350b9f66415b",
+        "sourceFiles": [
+          {
+            "path": "src/range-solver-lib/include/rstructural_piezo_model_adapter.h",
+            "sha256": "eb479bfccc551847b95f027a7ff92da3e99034d8846c86d50366019429f330a0",
+            "bytes": 4103
+          },
+          {
+            "path": "src/range-solver-lib/src/rstructural_piezo_model_adapter.cpp",
+            "sha256": "5881a75482f887c726202a6631423e08f3cbc726d963ca8146a19ed3b06679c2",
+            "bytes": 46903
+          },
+          {
+            "path": "src/range-solver-lib/tests/CMakeLists.txt",
+            "sha256": "b2f24a4276e013351f6ec26894e83a80e521bd22fb22967d4d48f3e61a3ed5c4",
+            "bytes": 3064
+          },
+          {
+            "path": "src/range-solver-lib/tests/tst_structural_piezo_fe.cpp",
+            "sha256": "c23f0731e4b820f2fbe9cee8969edc9064897941dc67b7417f08bab2b0a4a8e3",
+            "bytes": 43750
+          }
+        ]
+      }
+    },
+    "rootFiles": [
+      {
+        "path": "src/range-application-lib/tests/tst_model_command_cli.cpp",
+        "sha256": "69ffa9ead4884050de8b4b59d15d09150341239ab9164b83ad1c8730c3ba1b4c",
+        "bytes": 47576
+      },
+      {
+        "path": "src/range-workflow/tests/test_native_document_client.py",
+        "sha256": "f1a5bd82ff0ff186913f0cc2f602734747b9e0646c6cfa90f54de9deb92139bf",
+        "bytes": 14653
+      },
+      {
+        "path": "src/range-workflow/CMakeLists.txt",
+        "sha256": "55bfedec9c6497a03553a3c304b70bde565d89e16527c8ba4b1c4dd293187c5f",
+        "bytes": 15310
+      },
+      {
+        "path": "scripts/ci/required-ctest-tests.json",
+        "sha256": "35159925d7aa9b0189c5b737a3f033005d905499df60ef8dd04854865adcc846",
+        "bytes": 6776
+      },
+      {
+        "path": "src/range-workflow/python/range_workflow/control_profiles.py",
+        "sha256": "5cbd6827da27aac8c583c1f642d2167f32758c7de19c63a4c36437cde06d3f2b",
+        "bytes": 13480
+      },
+      {
+        "path": "src/range-workflow/python/range_workflow/data/control_materials.json",
+        "sha256": "3f02a5b08e88cceda71c1614c0a3f7513270d7b4b22c3fb307b4e14a2dafaa85",
+        "bytes": 9812
+      },
+      {
+        "path": "src/range-workflow/tests/test_control_profiles.py",
+        "sha256": "e1fd45b155d31b6484a2bb00c1d9dc963b1b1435454ef3a7b07c0e016ac47a9c",
+        "bytes": 16585
+      }
+    ]
+  },
+  "fullCtest": {
+    "command": "ctest --test-dir build/vs2026 -C Release --output-on-failure --output-junit build/audit-20261011/control-workbench/full-180.xml --output-log build/audit-20261011/control-workbench/full-180.log",
+    "junitOriginal": {
+      "path": "build/vs2026/build/audit-20261011/control-workbench/full-180.xml",
+      "sha256": "6164313746237ed063fb4d2d7311373216a2c1bd53fe656a81f04fc1769a1be2",
+      "bytes": 148687
+    },
+    "junitArchivedCopyMatches": true,
+    "toolExitCode": 0,
+    "tests": 180,
+    "failures": [],
+    "ctestSkippedTests": [],
+    "requiredTests": 180,
+    "requiredGroups": 9,
+    "wallSeconds": 1499.6,
+    "qtInternalSkipReports": []
+  },
+  "targetedVerification": {
+    "modelAndProfiles": "9/9 PASS, 11.84 seconds",
+    "piezoNativeCliTarget": "PASS, including actual RAM/RBM solver subprocesses",
+    "invalidCliModelBoundary": "Missing classification is rejected by writer preflight before subprocess launch in the current negative fixture; no success result."
+  },
+  "independentReviews": [
+    {
+      "task": "/root/cw_foundation_review",
+      "scope": "actual model/solver diff, result provenance, tie, native CLI and CMake registration",
+      "finalOutcome": "No new confirmed material issue; prior confirmed findings fixed and retested."
+    },
+    {
+      "task": "/root/cw04_catalog_review",
+      "scope": "catalog conversion, UTF-8, SI units, tests and docs",
+      "finalOutcome": "Two confirmed P2 issues closed; independent 24/24 and boundary probes passed; no new material issue."
+    }
+  ],
+  "localInstalledRuntime": {
+    "schemaVersion": 1,
+    "date": "2026-10-11",
+    "status": "pass",
+    "scope": "local-installed-catalog-and-native-runtime-help",
+    "notVerified": [
+      "clean-machine-install",
+      "new-gui-binding",
+      "mixed-dynamics",
+      "hardware-control"
+    ],
+    "pythonVersion": "3.13.5",
+    "pythonExecutable": "D:\\YOGA\\Documents\\Projects\\range-fea\\build\\cw-foundation-install-20261011\\runtime\\python\\python.exe",
+    "modulePath": "D:\\YOGA\\Documents\\Projects\\range-fea\\build\\cw-foundation-install-20261011\\share\\range-workflow\\range_workflow\\control_profiles.py",
+    "materials": 2,
+    "devices": 10,
+    "catalogDigest": "d83731de34a3e98fa6f52ac612cc273b041b06671cbccec21eac49cd729fc0da",
+    "fileChecks": {
+      "range_workflow/control_profiles.py": {
+        "sourceSha256": "5cbd6827da27aac8c583c1f642d2167f32758c7de19c63a4c36437cde06d3f2b",
+        "installedSha256": "5cbd6827da27aac8c583c1f642d2167f32758c7de19c63a4c36437cde06d3f2b"
+      },
+      "range_workflow/data/control_materials.json": {
+        "sourceSha256": "3f02a5b08e88cceda71c1614c0a3f7513270d7b4b22c3fb307b4e14a2dafaa85",
+        "installedSha256": "3f02a5b08e88cceda71c1614c0a3f7513270d7b4b22c3fb307b4e14a2dafaa85"
+      }
+    },
+    "solverSha256": "cdee261e70dcc68cedc350caaeb03162a8bd74e88e0c16650ae855ca3485624e",
+    "restrictedPathHelpExitCode": 0
+  },
+  "acceptance": {
+    "CW-02-A01": "pass",
+    "CW-02-A02": "pass",
+    "CW-02-A03": "pass",
+    "CW-06-A01": "pass"
+  },
+  "notVerified": [
+    "CW03-mixed-piezo-passive-cable-dynamics",
+    "ring-antenna-modal-transient-closed-loop",
+    "CW05-beam-flat-plate-patches",
+    "CW06-A02/A03-nonmatching-face-interfaces",
+    "CW04-native-material-device-sensor-binding-and-real-calibration",
+    "CW07-time-varying-length-and-analytic-moving-anchor",
+    "v3-SDK-multirate-checkpoint-atomicity",
+    "new-few-operation-GUI",
+    "clean-machine-human-install",
+    "physical-hardware"
+  ],
+  "rawArtifacts": [
+    {
+      "path": "build/audit-20261011/control-workbench/full-180.xml",
+      "sha256": "6164313746237ed063fb4d2d7311373216a2c1bd53fe656a81f04fc1769a1be2",
+      "bytes": 148687
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/full-180.log",
+      "sha256": "274fb2b065d1f0aa9b8872c556e65a18de241e8fe4d78d3c026e4b7c70c12784",
+      "bytes": 24993
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/foundation-full-build.log",
+      "sha256": "6aaaf821d4aa3160fb2ec70f0b4bab3f8c141cd39043c6f8a2df1c4e6f62678f",
+      "bytes": 38833
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/model-and-profile-final.log",
+      "sha256": "20f5aece8433eec1eba15c10decf4cdfdf3737eed0956511e6008417fa515fe5",
+      "bytes": 1173
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/piezo-native-cli-final.log",
+      "sha256": "64cbd818506b28b0dc7eb353901fa2656f1b70965721b4b312fc60aec22f3b18",
+      "bytes": 259
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/piezo-native-cli-final.xml",
+      "sha256": "e5173d8ae3d669ddee67296c7743ad18940c37fe660744e1e08c3b99a2bb207e",
+      "bytes": 1514
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/required-ctest-inventory-180.json",
+      "sha256": "61ea53fcf2fa44e1707be896eccfcd377a58ae7872ef5fa1338324421d457cc8",
+      "bytes": 159906
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/installed-profile-verification.json",
+      "sha256": "64d07401ecd9ad11f2371fe1be40e751dddaa3ccf48e6a598a83876c03263cd4",
+      "bytes": 1343
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/foundation-install.log",
+      "sha256": "46a17a1bba643e6de65ed4c1251d37fc74d065c6511da0a44ba640a37be05623",
+      "bytes": 503916
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/first-foundation-tests.log",
+      "sha256": "f8f1736fe8e6d2b7cbd2a2b4071b23dd60553ac7d86a6102befbfc523db3c142",
+      "bytes": 3930
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/model-compatibility-final.log",
+      "sha256": "76751e1df6301371352ec5fbd61933e4fbf01ffd679879005b00ace63b2db773",
+      "bytes": 5549
+    },
+    {
+      "path": "build/audit-20261011/control-workbench/problem-setup-first.xml",
+      "sha256": "a46d976fa0b910cc332461bc644a297092025d07636bf63a3b62230bc34eaffc",
+      "bytes": 12902
+    }
+  ],
+  "metadataGuardBoundary": "Tracking/evidence hashes cannot prove scientific or GUI correctness; productComplete remains false."
+}

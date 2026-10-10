@@ -1,6 +1,19 @@
 # 续作交接
 
-## 2026-10-11 结构控制工作台：首批源冻结，完整构建仍在运行
+## 2026-10-11 CW-02 静力基础已验收，推进共同杆索动力核心
+
+用户目标仍 active：分阶段开发并验收功能完善、操作简单的控制工作台。主要范式是主动压电杆替换桁架杆件/嵌段，贴片为另一条梁/平板路线。不要将静力基础或新的 pure kernel 当成全部产品完成。
+
+- 全目标 Release build 已 exit 0；唯一完整 CTest 句柄 20144 已实际终态 exit 0：180/180、0 fail、1499.60s，包含新增 control_profiles 必跑项。没有 live native build/test；不要恢复已经关闭的旧句柄。JUnit 原始位置由 CTest test-dir 解析为 build/vs2026/build/audit-20261011/control-workbench/full-180.xml，已按原字节复制到审计目录并核对 SHA。完整报告 docs/acceptance/CW-foundation-20261011.json。
+- Model `4ae7188`、solver `ebb196f` 已分别提交：格式1.3.19显式主动/被动分类，混合静力没有假普通杆电端口，输入/result seal，三维斜杆/异材料串联/闭合三角独立参考，RAM/RBM实际 native CLI读回。负例缺分类由writer preflight拒绝，不能说其子进程实际跑过。CW-02三项 pass/任务 done。
+- Tie最近节点必须完整唯一覆盖、合法容差，损坏命名集合typed诊断，保留多对象错误与rigid/distributed兼容。CW-06仅A01 pass；面投影/插值/功/收敛A02/A03仍pending，全CW-06 in_progress。第一次测试fixture组索引错误的失败日志原样保留。
+- Catalog已提交 `bce470e`，独立24/24+边界检查；2 synthetic materials/10 devices，严格SI与stress-charge/d转换。私有Python3.13.5安装加载同SHA目录、solver缩减PATH help exit0均验证，但本地安装不等于干净机器/新GUI。CW-04保持in_progress，native器件/传感/真实校准未验收。
+- 14需求/16任务/48验收完整保留。CW-01/CW-02 done，其余未完成；productComplete=false，plan guard有效。旧WF10/11/12硬项仍未闭合，不改阈值、不重复无新证据盲试。
+- 新设计 docs/NATIVE_TRUSS_DYNAMICS_DESIGN.md 经独立只读物理/API核对，无新的已确认实质问题。共同mixed残差、fixed mass等效L0、解析C2 anchor u/v/a、signed bar+piezo+tension-only cable、GMRES新鲜残差、U/H和VdQ/参数/支座功、左右a、precommit checkpoint为后续路线。旧generic accepted observer在commit后，不能伪装存储失败可回滚；必须新提交前接口。设计不等于实作。
+- 下一有界writer cw07_truss_law_core 仅owns三个NEW文件：rstructural_truss_assembly.h/.cpp、tst_structural_truss_assembly.cpp，生产CMake/required manifest/root文档由root owns；worker禁止build/run/git commit。先pure共同装配，再dynamic driver/native adapter/时序checkpoint/环形天线/GUI逐项验收。root续作须重新查agent/真实句柄，不由文字推断存活。
+- 用户未跟踪.agents/.codex/AGENTS.md不混入提交；不push、不更新记忆。原始build/audit失败/成功日志保留，提交子模块后提交根指针；后续新源代码不属于本180回归的验证范围。
+
+## 2026-10-11 首批源冻结历史记录（以下进程及待验收状态已由上节替代）
 
 用户目标持续 active：按已确认讨论分阶段开发并验收功能完善、操作简单的工作台。首要卖点少操作，主要场景为环形桁架主动压电杆（普通杆替换/嵌段）、梁/平板理想粘结贴片、收放索长/移动锚点；不得将静力基础缩成整个目标。
 
