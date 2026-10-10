@@ -1,0 +1,540 @@
+{
+  "title": "Control workbench plan guard verification",
+  "date": "2026-10-11",
+  "verificationMethod": "Python standard library import/inspect calls and CLI subprocesses",
+  "verificationBoundary": "Checks plan inventory, frozen scope, status/dependency rules, evidence path and bytes, and CLI goal threshold only. It does not validate physical correctness, GUI behavior, solver behavior, installation, or release acceptance.",
+  "trackedFilesModifiedByVerifier": [],
+  "buildCmakeCTestStarted": false,
+  "releaseAcceptanceWritten": false,
+  "sourceFiles": {
+    "scripts/ci/verify_control_workbench_plan.py": {
+      "sha256": "07be3908ce2e5537510207d7703b5458893c41dd8e93e2d7538af35029442767",
+      "bytes": 9434
+    },
+    "docs/control_workbench_plan.json": {
+      "sha256": "f9d6dcfd50d3fabdd51f51b1c88b5800071caccdeb046a8941dd18b54eae17ef",
+      "bytes": 17394
+    }
+  },
+  "caseCount": 19,
+  "passedCount": 19,
+  "failedCount": 0,
+  "results": [
+    {
+      "name": "normal_structure_tracking_passes",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [],
+      "detail": {
+        "unfinishedTaskCount": 16,
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ]
+      }
+    },
+    {
+      "name": "cli_normal_tracking_pass",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [],
+      "detail": {
+        "returnCode": 0,
+        "verificationScope": "tracking-and-evidence-bytes"
+      }
+    },
+    {
+      "name": "full_goal_gate_fails_for_incomplete_plan",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The full goal is not complete"
+      ],
+      "detail": {
+        "returnCode": 1,
+        "verificationScope": "tracking-and-evidence-bytes"
+      }
+    },
+    {
+      "name": "reject_deleted_requirement",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The complete agreed requirement inventory must be preserved",
+        "The frozen requirements, descriptions, mappings, or dependencies changed"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": false
+      }
+    },
+    {
+      "name": "reject_deleted_task",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The complete staged task inventory must be preserved",
+        "The complete agreed acceptance inventory must be preserved",
+        "The frozen requirements, descriptions, mappings, or dependencies changed"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15"
+        ],
+        "scopeSignatureUnchanged": false
+      }
+    },
+    {
+      "name": "reject_deleted_acceptance_criterion",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The complete agreed acceptance inventory must be preserved",
+        "The frozen requirements, descriptions, mappings, or dependencies changed"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": false
+      }
+    },
+    {
+      "name": "reject_shortened_description",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The frozen requirements, descriptions, mappings, or dependencies changed"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": false
+      }
+    },
+    {
+      "name": "reject_changed_requirement_mapping",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The frozen requirements, descriptions, mappings, or dependencies changed"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": false
+      }
+    },
+    {
+      "name": "reject_changed_dependency_graph",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "The frozen requirements, descriptions, mappings, or dependencies changed"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": false
+      }
+    },
+    {
+      "name": "reject_fake_productComplete_with_unfinished_tasks",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "productComplete cannot be true while required tasks remain"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_done_with_pending_acceptance",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-01: done requires every acceptance to pass",
+        "CW-01: done requires every acceptance to pass",
+        "CW-01: done requires every acceptance to pass"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_pass_without_evidence",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-01-A01: passed acceptance needs inspectable evidence"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_missing_evidence_file",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-01-A01: evidence is missing: build/audit-20261011/control-workbench/missing-evidence.bin"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_tampered_evidence_hash",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-01-A01: evidence changed: build/audit-20261011/control-workbench/evidence-tampered.bin"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_relative_path_escape",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-01-A01: evidence escapes project root"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_absolute_evidence_path",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-01-A01: evidence escapes project root"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "allow_reasonable_status_and_evidence_update",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-02",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "reject_done_when_dependency_not_done",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [
+        "CW-02: dependency not done"
+      ],
+      "detail": {
+        "unfinishedTasks": [
+          "CW-01",
+          "CW-03",
+          "CW-04",
+          "CW-05",
+          "CW-06",
+          "CW-07",
+          "CW-08",
+          "CW-09",
+          "CW-10",
+          "CW-11",
+          "CW-12",
+          "CW-13",
+          "CW-14",
+          "CW-15",
+          "CW-16"
+        ],
+        "scopeSignatureUnchanged": true
+      }
+    },
+    {
+      "name": "scope_probe_synthetic_all_done_placeholder_evidence",
+      "expected": true,
+      "actual": true,
+      "passed": true,
+      "errors": [],
+      "detail": {
+        "returnCode": 0,
+        "unfinishedTaskCount": 0,
+        "verificationScope": "tracking-and-evidence-bytes",
+        "evidenceContentIsSyntheticPlaceholder": true
+      }
+    }
+  ]
+}

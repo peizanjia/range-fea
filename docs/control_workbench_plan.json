@@ -1,0 +1,645 @@
+{
+  "schemaVersion": 1,
+  "project": "range-fea",
+  "objective": "根据已确认讨论分阶段开发并验收功能完善、操作简单的结构动力学控制工作台",
+  "createdAt": "2026-10-11",
+  "baselineRootCommit": "46324e8",
+  "productComplete": false,
+  "requirements": [
+    {
+      "id": "CW-R01",
+      "title": "操作简化",
+      "description": "模型、端口、器件、控制器、运行、图表和诊断在同一软件配置；保存的实验运行只需运行及一次整体确认。"
+    },
+    {
+      "id": "CW-R02",
+      "title": "主动作动杆",
+      "description": "三维主动压电杆与普通杆混用，独立电极端口，轴向刚度/质量/机电耦合，静力/模态/动态及环形桁架控制。"
+    },
+    {
+      "id": "CW-R03",
+      "title": "梁板贴片",
+      "description": "梁与平板的理想完全粘结压电贴片；自动层合/偏心/附加质量/刚度、电极和动态控制；不得冒充任意曲壳或脱粘。"
+    },
+    {
+      "id": "CW-R04",
+      "title": "收放索与锚点",
+      "description": "以有效参考长度或规定锚点运动作动，张力由动力学求得；不能把预张力参数当成固定外力。"
+    },
+    {
+      "id": "CW-R05",
+      "title": "混合结构",
+      "description": "普通杆、主动杆和拉索共同装配及动态求解；环形桁架天线端到端验收。"
+    },
+    {
+      "id": "CW-R06",
+      "title": "材料与器件",
+      "description": "版本化机械/介电/压电材料和器件预设，d/e与介电条件/单位/极化一致，来源及示例/标定类别可见。"
+    },
+    {
+      "id": "CW-R07",
+      "title": "标准传感",
+      "description": "虚拟运动学、应变、力/张力及压电电学测量；可选校准/带宽/噪声，设备质量影响与虚拟测量分开。"
+    },
+    {
+      "id": "CW-R08",
+      "title": "网格连接",
+      "description": "完全覆盖的节点Tie、共用宿主贴片；独立非匹配面投影/插值与覆盖诊断，不用全局合并或增大容差伪装修复。"
+    },
+    {
+      "id": "CW-R09",
+      "title": "控制协议与SDK",
+      "description": "v3量值端口、Python step(frame,state)和C++常驻程序、可选TCP；v1/v2保持语义和兼容，完整依赖身份。"
+    },
+    {
+      "id": "CW-R10",
+      "title": "多速率与接受态",
+      "description": "Ts=N*dtFE，独立FE/控制计数、候选事务、保持/调理/限幅、左右加速度、逐相位checkpoint续算。"
+    },
+    {
+      "id": "CW-R11",
+      "title": "内置控制与ROM",
+      "description": "速度反馈、PID和离散状态空间；同载荷回放与各自闭环比较分开，ROM支持矩阵和误差证据诚实。"
+    },
+    {
+      "id": "CW-R12",
+      "title": "本地诊断与Agent",
+      "description": "无LLM确定性检查、证据与修复预览；GUI/SDK/Agent同源，Agent不能批准，代码生成隔离门槛不绕过。"
+    },
+    {
+      "id": "CW-R13",
+      "title": "验收与发布",
+      "description": "独立物理参考、真实窗口、安装私有运行时、兼容及故障恢复，保留20k首图5s/完整导出30s门槛，第三方许可材料核查。"
+    },
+    {
+      "id": "CW-R14",
+      "title": "后续功能完整性",
+      "description": "应力/区域传感、分布作动/基座运动、曲壳、胶层柔度、热耦合扩展分别交付；硬实时/实物作动不属于已授权首批范围。"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "CW-01",
+      "title": "冻结完整工作台契约与验收追踪",
+      "status": "done",
+      "dependsOn": [],
+      "requirementIds": [
+        "CW-R01",
+        "CW-R02",
+        "CW-R03",
+        "CW-R04",
+        "CW-R05",
+        "CW-R06",
+        "CW-R07",
+        "CW-R08",
+        "CW-R09",
+        "CW-R10",
+        "CW-R11",
+        "CW-R12",
+        "CW-R13",
+        "CW-R14"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-01-A01",
+          "description": "需求映射覆盖用户确认的全部范围",
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/CONTROL_WORKBENCH_DELIVERY.md",
+              "sha256": "759423c8f58d497a691aafb9dd760b5fa4a1a963be56b11fc32599a11feb017e"
+            },
+            {
+              "path": "docs/acceptance/CW-01-tracking-report.json",
+              "sha256": "63083c287e72d1d3cb7ca006dc3b52331aed238b34c4896981aa97cfea6fa751"
+            }
+          ]
+        },
+        {
+          "id": "CW-01-A02",
+          "description": "现有能力与测试证据不被改写为完成新功能",
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/CONTROL_WORKBENCH_DELIVERY.md",
+              "sha256": "759423c8f58d497a691aafb9dd760b5fa4a1a963be56b11fc32599a11feb017e"
+            },
+            {
+              "path": "docs/acceptance/CW-01-tracking-report.json",
+              "sha256": "63083c287e72d1d3cb7ca006dc3b52331aed238b34c4896981aa97cfea6fa751"
+            }
+          ]
+        },
+        {
+          "id": "CW-01-A03",
+          "description": "GUI默认流程、协议、来源/批准及扩展边界冻结",
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/CONTROL_WORKBENCH_DELIVERY.md",
+              "sha256": "759423c8f58d497a691aafb9dd760b5fa4a1a963be56b11fc32599a11feb017e"
+            },
+            {
+              "path": "docs/acceptance/CW-01-tracking-report.json",
+              "sha256": "63083c287e72d1d3cb7ca006dc3b52331aed238b34c4896981aa97cfea6fa751"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CW-02",
+      "title": "三维主动/被动压电杆原生模型基础",
+      "status": "in_progress",
+      "dependsOn": [
+        "CW-01"
+      ],
+      "requirementIds": [
+        "CW-R02",
+        "CW-R05"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-02-A01",
+          "description": "显式active/passive分类持久化且旧格式兼容",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-02-A02",
+          "description": "斜杆/异材料串联/非共线闭合桁架独立参考",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-02-A03",
+          "description": "无假电学端口/分支，结果可用性及错误发布校验",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-03",
+      "title": "轴向压电杆动态与混合杆索求解",
+      "status": "planned",
+      "dependsOn": [
+        "CW-02",
+        "CW-07"
+      ],
+      "requirementIds": [
+        "CW-R02",
+        "CW-R05",
+        "CW-R10"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-03-A01",
+          "description": "主动杆与普通杆质量/刚度/机电功一致",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-03-A02",
+          "description": "预应力杆索混合源与环形桁架模态/瞬态闭环",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-03-A03",
+          "description": "真实输入/端口/接受态及checkpoint连续等价",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-04",
+      "title": "材料、器件和标准传感目录",
+      "status": "planned",
+      "dependsOn": [
+        "CW-01"
+      ],
+      "requirementIds": [
+        "CW-R06",
+        "CW-R07"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-04-A01",
+          "description": "机械/压电本构单位和极化，数据来源及版本验证",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-04-A02",
+          "description": "主动杆/贴片/拉索器件预设，虚拟传感与设备模型分离",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-04-A03",
+          "description": "开路电压/电荷测量边界正确，测量可用性真实",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-05",
+      "title": "梁和平板层合压电动态贴片",
+      "status": "planned",
+      "dependsOn": [
+        "CW-02",
+        "CW-04"
+      ],
+      "requirementIds": [
+        "CW-R03"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-05-A01",
+          "description": "理想粘结贴片一体配置，几何层/偏心/质量/刚度",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-05-A02",
+          "description": "梁与平板弯曲机电耦合及解析/收敛/互易参考",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-05-A03",
+          "description": "电压/电荷作动与传感，不能把准静态dt冒充惯性",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-06",
+      "title": "网格连接完整性与非匹配接口",
+      "status": "in_progress",
+      "dependsOn": [
+        "CW-01"
+      ],
+      "requirementIds": [
+        "CW-R08"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-06-A01",
+          "description": "nearest-node Tie完整唯一覆盖，未知/歧义/非有限容差拒绝",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-06-A02",
+          "description": "独立面投影/插值、间隙和覆盖率报告",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-06-A03",
+          "description": "刚体/常应变/传力/功和网格收敛，不合并不同物理层",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-07",
+      "title": "收放索长和移动锚点动态作动",
+      "status": "planned",
+      "dependsOn": [
+        "CW-01"
+      ],
+      "requirementIds": [
+        "CW-R04",
+        "CW-R10"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-07-A01",
+          "description": "规定有效参考长度及平滑锚点运动，张力由求解产生",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-07-A02",
+          "description": "正长度/张力仅受拉/松弛/速度加速度及功账",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-07-A03",
+          "description": "动态试步/失败回滚/续算一致，不宣传完整卷筒硬件模型",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-08",
+      "title": "v3端口、Python函数和C++程序SDK",
+      "status": "planned",
+      "dependsOn": [
+        "CW-02",
+        "CW-04"
+      ],
+      "requirementIds": [
+        "CW-R09"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-08-A01",
+          "description": "quantity/value/unit及握手端口目录，多通道独立映射",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-08-A02",
+          "description": "函数state显式、stdio常驻/TCP适配和错误日志分离",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-08-A03",
+          "description": "控制器/权重/imports/运行环境身份及旧v1/v2兼容",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-09",
+      "title": "多速率、限制包络及内置控制器",
+      "status": "planned",
+      "dependsOn": [
+        "CW-08"
+      ],
+      "requirementIds": [
+        "CW-R10",
+        "CW-R11"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-09-A01",
+          "description": "FE步/控制tick/相位与逐相位恢复",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-09-A02",
+          "description": "每FE步rate及正确左右加速度，整步接受事务",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-09-A03",
+          "description": "PID anti-windup/Ts，状态空间周期、力与力矩功一致",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-10",
+      "title": "统一少操作建模与控制工作台",
+      "status": "planned",
+      "dependsOn": [
+        "CW-03",
+        "CW-04",
+        "CW-05",
+        "CW-06",
+        "CW-07",
+        "CW-09"
+      ],
+      "requirementIds": [
+        "CW-R01",
+        "CW-R02",
+        "CW-R03",
+        "CW-R04",
+        "CW-R05",
+        "CW-R07"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-10-A01",
+          "description": "选杆替换/选宿主贴片/选索锚点三条一体入口",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-10-A02",
+          "description": "同一实验source/ports/controller/timing整体预览批准",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-10-A03",
+          "description": "当前模型全链运行、图表、调参、保存重开与Undo",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-11",
+      "title": "FE/ROM统一端口对照",
+      "status": "planned",
+      "dependsOn": [
+        "CW-09",
+        "CW-10"
+      ],
+      "requirementIds": [
+        "CW-R11"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-11-A01",
+          "description": "同载荷回放与各自闭环区别，native数据来源固定",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-11-A02",
+          "description": "输入输出/单位/时钟/直接项一致及闭环独立验证",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-11-A03",
+          "description": "不支持模型拒绝，不套用模板或扩大已有ROM矩阵",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-12",
+      "title": "离线确定性诊断与Agent接线",
+      "status": "planned",
+      "dependsOn": [
+        "CW-08",
+        "CW-10"
+      ],
+      "requirementIds": [
+        "CW-R12"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-12-A01",
+          "description": "稳定错误码、阶段/端口/证据/假设/恢复资格",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-12-A02",
+          "description": "错误发生后无需LLM诊断和可预览修复，未知不猜",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-12-A03",
+          "description": "Agent查询/提案复用schema，不自批准/降低门槛",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-13",
+      "title": "用户体验、性能与安装验收",
+      "status": "planned",
+      "dependsOn": [
+        "CW-10",
+        "CW-11",
+        "CW-12"
+      ],
+      "requirementIds": [
+        "CW-R01",
+        "CW-R13"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-13-A01",
+          "description": "真实环形桁架与贴片/索场景Windows完整故事",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-13-A02",
+          "description": "保存实验运行两个主动操作与LiveLink同案例对照",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-13-A03",
+          "description": "20k首图5s/完整CSV30s及内存测量，私有安装和许可",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-14",
+      "title": "区域端口、分布作动与基座运动扩展",
+      "status": "planned",
+      "dependsOn": [
+        "CW-13"
+      ],
+      "requirementIds": [
+        "CW-R07",
+        "CW-R14"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-14-A01",
+          "description": "应力/区域传感及分布作动验证",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-14-A02",
+          "description": "约束/惯性/边界动力学与测量语义",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-14-A03",
+          "description": "沿用同一工作台与统一协议无额外手工接线",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-15",
+      "title": "曲壳、胶层柔度和热耦合扩展",
+      "status": "planned",
+      "dependsOn": [
+        "CW-13"
+      ],
+      "requirementIds": [
+        "CW-R03",
+        "CW-R14"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-15-A01",
+          "description": "曲率/局部方向/层合及胶层传递验证",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-15-A02",
+          "description": "热耦合/材料条件与能力矩阵",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-15-A03",
+          "description": "配置保持简单，未知物理不静默切换假设",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "CW-16",
+      "title": "完整范围收尾与发布证据",
+      "status": "planned",
+      "dependsOn": [
+        "CW-14",
+        "CW-15"
+      ],
+      "requirementIds": [
+        "CW-R13",
+        "CW-R14"
+      ],
+      "acceptance": [
+        {
+          "id": "CW-16-A01",
+          "description": "所有需求和全部acceptance明确通过",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-16-A02",
+          "description": "源冻结完整必跑及安装/GUI/独立审查",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "CW-16-A03",
+          "description": "未完成硬项不得例外算通过或声明product_complete",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    }
+  ]
+}
+

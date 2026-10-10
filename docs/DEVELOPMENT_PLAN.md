@@ -1,10 +1,16 @@
 # 当前开发与验收计划
 
-更新：2026-10-08。本文维护总体阶段、已验收基线及执行入口；总体目标见 `../PROJECT_ROADMAP.md`，实际完成证据见 `../HANDOFF.md`，历史过程见 `../DEVELOPMENT_LOG.md`。阶段号表达依赖，不代表工时或完成百分比。
+更新：2026-10-11。本文维护总体阶段、已验收基线及执行入口；总体目标见 `../PROJECT_ROADMAP.md`，实际完成证据见 `../HANDOFF.md`，历史过程见 `../DEVELOPMENT_LOG.md`。阶段号表达依赖，不代表工时或完成百分比。
 
-## 当前后续交付：全工作流贯通
+## 当前重点：少操作的结构控制工作台
 
-用户要求将缺口补成可供后续 Agent 读取、实施和验收的方案。本轮交付规划与规划检查工具；新增功能状态仍全部为 planned。
+用户已授权按讨论分阶段开发及验收。产品目标和默认流程见 [CONTROL_WORKBENCH_DELIVERY.md](CONTROL_WORKBENCH_DELIVERY.md)，CW-01 至 CW-16 的完整需求、依赖与验收追踪见 [control_workbench_plan.json](control_workbench_plan.json)。主线为主动压电杆、梁/平板贴片和收放索长/移动锚点；简化操作是首要目标。
+
+`python scripts/ci/verify_control_workbench_plan.py --json` 检查范围冻结及证据字节；`--complete` 在任何任务未完成时拒绝。该工具不替代物理、GUI或独立审查。原WF验收和未通过硬项继续保留；CW范围不能由旧179项测试代替。先交付显式主动/被动杆原生基础和Tie覆盖门槛，随后按依赖扩展动态混合结构与一体GUI。
+
+## 原有交付计划：全工作流贯通
+
+此处保留原WF交付契约，实际状态以其计划JSON和较新验收记录为准，不沿用规划创建时的全部planned状态。
 
 - [WORKFLOW_DELIVERY_PLAN.md](WORKFLOW_DELIVERY_PLAN.md)：WF-01 至 WF-14 的设计、代码范围、依赖和 119 条验收标准。当前文档/结果贯通、持久恢复先行，交互、控制、扩展与几何/网格迁移按依赖推进。
 - [workflow_delivery_plan.json](workflow_delivery_plan.json)：后续任务状态、依赖与证据索引的唯一来源；本文不另建同一状态表。
