@@ -1,5 +1,18 @@
 # 续作交接
 
+## 2026-10-11 结构控制工作台：首批源冻结，完整构建仍在运行
+
+用户目标持续 active：按已确认讨论分阶段开发并验收功能完善、操作简单的工作台。首要卖点少操作，主要场景为环形桁架主动压电杆（普通杆替换/嵌段）、梁/平板理想粘结贴片、收放索长/移动锚点；不得将静力基础缩成整个目标。
+
+- 已提交契约/追踪里程碑 `ad5f604`：CONTROL_WORKBENCH_DELIVERY、14需求/16任务/48验收、冻结范围检查器及19/19独立追踪检查。CW-01 done；其它任务未完成，productComplete=false。检查器仅验证追踪和证据字节，不证明科学/GUI正确；占位证据边界探测明确保留。
+- Native工作树尚未提交：model新增显式passiveElementIds，旧空列表语义保留；format升1.3.19并覆盖ASCII/binary及pre19读空/降版拒绝。solver静态3D主动/被动杆不伪造普通杆电学支路，结果availability明确；新增inputFingerprint/resultSeal防同shape旧物理输入或结果篡改发布，含热场实际输入。当前不声称动态、完整环形天线或GUI入口完成。
+- Tie要求完整唯一nearest-node匹配、有限正容差，損坏named集合有typed诊断且保留其它错误；不是非匹配面插值。第一次新测试6fail真因是fixture固定line index破坏无关auto组，已按name选master/slave并检查注入，全部反例保留。对应 `problem-setup-first.xml` 留存，不删除失败证据。
+- 模型/CLI/SDK兼容最后一批5/6通过，唯一problem_setup的fixture修复随后已sourcefreeze。更早测试physical_ids的future-version固定19失败，改为当前版本+1后通过。首批piezo新静态/legacy/nodal/beam测试通过；最终result seal新增测试尚未运行，不能混称已验收。
+- 所有writer已释放。最终只读review无新增P1/P2，Tie集合越界与源/result provenance边界已关闭（待实际最终回归）。root统一构建唯一live工具句柄是 `exec_command session_id=16104`，命令为全目标 `cmake --build build/vs2026 --config Release --parallel 8`，输出写 `build/audit-20261011/control-workbench/foundation-full-build.log`；已重新poll确认仍live，cl CPU持续增长。日志在写，不读取或覆盖；不可因观察timeout另启构建。交接本身不证明存活，续作首先 `write_stdin` 同句柄重新确认。
+- Fullbuild结束后先跑problem_setup/model_physical_ids/piezo_setup/piezo_fe/piezo_network/beam/thermal/model_command_cli/native_document_sdk等受影响完整目标；任何FAIL保留，修复后重build相应目标。随后完整179项required CTest回归（inventory已核179/179）和实际native CLI mixed模型接线；版本更新影响广，不能用旧binary或旧179证据代替。本轮尚无新的完整回归或安装GUI证据。
+- 最终验证/独立审查后分别提交model、solver子模块，再提交root指针/版本测试/验收；用户的未跟踪.agents/.codex/AGENTS.md保持，不混入功能提交。当前root HEAD ad5f604，两个submodule dirty，root CLI/SDK version测试dirty，属于本轮所有修改。
+- 后续实现方法已只读研究：新增mixed TRUSS1动态driver复用native sparse/transaction设施；不把固定M/K的generic integrator伪装为变索长非线性系统。需独立terminal pair、固定质量等效L0适用范围、C²锚点u/v/a、共同residual/tangent、接受态与机电/支承/参数功账，GMRES适配压缩杆切线。此方法尚未落码，仍需独立参考和接口冻结。
+
 ## 2026-10-10 最终交付检查点
 
 - **本轮开发/验证已到本地验收收尾**：实现冻结`c83bf5a4ebd5fde57420e281c2b1c2a3b63b254b`，完整179/179通过1569.51s；测试补充冻结`664ea7b43dcebad5f423e85a877f0e12211267e2`，三个受影响完整目标3/3通过104.59s，仅测试/测试编译定义变化。安装9个exe与构建SHA逐项一致，私有运行时0字节码/0缓存。哈希、原始结果及边界见`docs/acceptance/integrated-20261010.json`。本地提交，不push。
