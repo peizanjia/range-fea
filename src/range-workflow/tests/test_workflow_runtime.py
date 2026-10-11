@@ -95,6 +95,64 @@ class ContractTest(unittest.TestCase):
             callable(*args)
         self.assertEqual(captured.exception.code, code)
 
+    def resume_binding_fixture(self):
+        from range_workflow.service import file_hash
+        path = self.base / "accepted-artifact.bin"
+        path.write_bytes(b"accepted bytes")
+        digest = file_hash(path)
+        self.service._state["jobs"]["binding-source"] = {
+            "artifacts": [{"artifactId": "accepted", "path": str(path), "sha256": digest}],
+            "result": {"configuration": copy.deepcopy(self.service._state["configuration"]),
+                       "sourceArtifacts": {"controller": {"path": str(path), "sha256": digest}}}}
+        return path, digest, {"jobId": "binding-source", "additionalSteps": 1}
+
+    def test_resume_binding_reads_once_and_returns_verified_digest(self):
+        from range_workflow.service import file_hash
+        path, digest, parameters = self.resume_binding_fixture()
+
+        def read_then_change(candidate):
+            actual = file_hash(candidate)
+            if candidate == path:
+                path.write_bytes(b"modified bytes")
+            return actual
+
+        with mock.patch("range_workflow.service.file_hash", side_effect=read_then_change) as reads:
+            binding = self.service._binding("workflow.resume", parameters)
+        self.assertEqual(sum(call.args[0] == path for call in reads.call_args_list), 1)
+        self.assertEqual(binding["accepted"], {"path": str(path), "sha256": digest})
+        self.assertEqual(binding["original/controller"], binding["accepted"])
+        self.assertNotEqual(file_hash(path), digest)
+
+    def test_resume_binding_rechecks_bytes_on_next_invocation(self):
+        from range_workflow.service import file_hash
+        path, digest, parameters = self.resume_binding_fixture()
+        with mock.patch("range_workflow.service.file_hash", wraps=file_hash) as reads:
+            first = self.service._binding("workflow.resume", parameters)
+            stat = path.stat()
+            path.write_bytes(b"modified bytes")
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            self.assertEqual(path.stat().st_size, stat.st_size)
+            self.assertEqual(path.stat().st_mtime_ns, stat.st_mtime_ns)
+            self.assertCode("SOURCE_CHANGED", self.service._binding, "workflow.resume", parameters)
+        self.assertEqual(first["accepted"]["sha256"], digest)
+        self.assertEqual(sum(call.args[0] == path for call in reads.call_args_list), 2)
+
+    def test_resume_binding_rejects_conflicting_alias_digests(self):
+        from range_workflow.service import file_hash
+        for alias_group in ("artifacts", "sourceArtifacts"):
+            with self.subTest(alias_group=alias_group):
+                path, digest, parameters = self.resume_binding_fixture()
+                source = self.service._state["jobs"][parameters["jobId"]]
+                conflicting = {"path": str(path), "sha256": "0" * 64}
+                self.assertNotEqual(conflicting["sha256"], digest)
+                if alias_group == "artifacts":
+                    source["artifacts"].append({"artifactId": "alias", **conflicting})
+                else:
+                    source["result"]["sourceArtifacts"]["controller"] = conflicting
+                with mock.patch("range_workflow.service.file_hash", wraps=file_hash) as reads:
+                    self.assertCode("SOURCE_CHANGED", self.service._binding, "workflow.resume", parameters)
+                self.assertEqual(sum(call.args[0] == path for call in reads.call_args_list), 1)
+
     def test_protocol_exact_schema_duplicate_nonfinite_and_catalog(self):
         catalog = request(self.service, "capabilities.query")
         self.assertNotIn("host.approve", [x["id"] for x in catalog["operations"]])

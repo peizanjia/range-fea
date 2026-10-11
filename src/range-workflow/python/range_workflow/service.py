@@ -741,21 +741,30 @@ class WorkflowService:
             paths.pop("template")
             paths["modelInput"] = Path(source["path"])
             paths["sourceManifest"] = Path(source["manifestPath"])
+        digests = {}
+
+        def binding_hash(path):
+            # Reuse only bytes read for this binding; every approval boundary
+            # creates a fresh map and checks each accepted alias's expected hash.
+            if path not in digests:
+                digests[path] = file_hash(path)
+            return digests[path]
+
         if command == "workflow.resume":
             for artifact in self._job(parameters["jobId"])["artifacts"]:
                 # Bind every original accepted artifact, including original script/gain paths.
                 path = Path(artifact["path"])
-                if not path.is_file() or path.is_symlink() or file_hash(path) != artifact["sha256"]:
+                if not path.is_file() or path.is_symlink() or binding_hash(path) != artifact["sha256"]:
                     raise WorkflowError("SOURCE_CHANGED", "An accepted trajectory artifact changed")
                 paths[artifact["artifactId"]] = path
             source = self._job(parameters["jobId"])["result"]
             for key, artifact in source["sourceArtifacts"].items():
                 path = Path(artifact["path"])
-                if not path.is_file() or path.is_symlink() or file_hash(path) != artifact["sha256"]:
+                if not path.is_file() or path.is_symlink() or binding_hash(path) != artifact["sha256"]:
                     raise WorkflowError("SOURCE_CHANGED", "Original controller or design provenance changed")
                 paths["original/" + key] = path
         try:
-            result = {name: {"path": str(path), "sha256": file_hash(path)} for name, path in paths.items()}
+            result = {name: {"path": str(path), "sha256": binding_hash(path)} for name, path in paths.items()}
         except OSError:
             raise WorkflowError("SOURCE_CHANGED", "A required workflow source is unavailable") from None
         if command in self._commands and self._commands[command]["bind"]:
