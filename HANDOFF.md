@@ -1,5 +1,19 @@
 # 续作交接
 
+## 2026-10-11 重新分析后的第一动力核心增量已验证，继续原生阶段
+
+最新用户授权：计划确定后按阶段持续推进；宗旨是相较现有 LiveLink 方案的易用性和已约定功能完整，不在纯内核交付处提前宣称总目标完成。整体范围仍是14需求/16任务/48验收；用户已澄清“压力”为“压电”笔误。中文交互正体，仓库文档简体。
+
+- Solver源提交 `3f4b1803076fa13a25dcc5a719cdca5d0ac1b3da`，root源冻结 `16f83bc5958a85ea1ba177148147e707d178b3a8`：新增共同mixed装配及固定质量/保持型电压、电荷、索长/外力的纯Newmark动态候选。原生GMRES新鲜残差，解析支座u/v/a、惯性反力、命令跳变左右a与分项功、完整候选无副作用。旧静力/纯索路由没有扩大。
+- 独立review已关闭P1/P2，独立测试含解析V/Q/passive振子、mixed非正定、标量RK4、自由索张紧→松弛分段参考、自由质量受解析锚点驱动、奇异线性和Newton失败完整接受态不变。修复Windows有限结果中间溢出/subnormal能量及decimal dt曲线终点误拒绝。反例日志保留。
+- 全目标Release构建exit0；最新聚焦2/2、0fail、0.49s。必跑182完整注册。首轮`ctest -j2 --timeout240`为181/182通过、954.93s，唯一旧`tst_native_result_journal`在240.03s超时；同二进制/OMP4/相同240s上限串行1/1通过，测试127.23s/总127.26s。旧串行180记录该项141.132s。I/O/并发解释是待确认假设；不能写成一轮全绿182。已逐项取得182通过证据，原始首轮与复測均归档。
+- 完整证据 `docs/acceptance/CW-dynamics-core-20261011.{md,json}`；11文件字节冻结核对一致。日志在`build/audit-20261011/control-resume/`。所有本轮build/test工具句柄已终态：26560 build0、2186 fullCTest8、80316 isolated0；不要恢复这些旧句柄。
+- CW03/CW07保持in_progress且全部acceptance pending，只附增量证据；CW01/02仍done，总productComplete=false，plan_guard有效。非匹配面、动态梁板贴片、材料/设备/传感原生绑定和GUI均保留后续。
+- 续作路线 `docs/CONTROL_WORKBENCH_RESUME.md`，下一有界原生合同 `docs/NATIVE_TRUSS_NEXT_INCREMENT.md`，公平LiveLink对照 `docs/LIVELINK_COMPARISON_ACCEPTANCE.md`。LiveLink官方已有完整模型API/GUI定制，不能人为选繁琐基线；实际同模型/控制律测首次配置、重复运行/调参、手写连接码、接入和诊断时间。用户现有MATLAB/Simulink基线类型询问尚不影响独立原生开发。
+- 下一阶段新增独立mixed setup、1.3.20持久化与完整专用restart；旧cable/piezo同时启用的拒绝保留；稳定physical IDs不能当positional IDs。复用现有StructuralDynamicsSetup的dt/N/output与Newmark参数，固定质量来自初始物理弦长和材料密度或显式器件质量，绝不由受控L0改变。
+- 原生关键缺口：旧generic accepted observer在提交后；checkpoint store先更新observed序号且latest读回失败无pointer回滚；stress同schedule透明重试未证明。必须新增stage/publish/rollback/noexcept commit participant，保存外层pending FE步与run target，旧observer保持通知语义。rollback不完整标不可重试；不宣称多文件断电原子。细节见下一增量合同和本轮只读 checkpoint_contract 审计。
+- 未跟踪`.agents/`、`.codex/`、`AGENTS.md`仍是用户配置，不混入提交；不push、不更新记忆。继续阶段开发，切勿把此增量当全部目标完成。
+
 ## 2026-10-11 CW-02 静力基础已验收，推进共同杆索动力核心
 
 用户目标仍 active：分阶段开发并验收功能完善、操作简单的控制工作台。主要范式是主动压电杆替换桁架杆件/嵌段，贴片为另一条梁/平板路线。不要将静力基础或新的 pure kernel 当成全部产品完成。

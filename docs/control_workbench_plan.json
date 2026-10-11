@@ -224,7 +224,16 @@
           "id": "CW-03-A01",
           "description": "主动杆与普通杆质量/刚度/机电功一致",
           "status": "pending",
-          "evidence": []
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.md",
+              "sha256": "76f5e4452e48d0aa8699dcfc0714bb844d63a755cb54fda13d6dc2c1d4e6e33c"
+            },
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.json",
+              "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            }
+          ]
         },
         {
           "id": "CW-03-A02",
@@ -236,7 +245,16 @@
           "id": "CW-03-A03",
           "description": "真实输入/端口/接受态及checkpoint连续等价",
           "status": "pending",
-          "evidence": []
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.md",
+              "sha256": "76f5e4452e48d0aa8699dcfc0714bb844d63a755cb54fda13d6dc2c1d4e6e33c"
+            },
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.json",
+              "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            }
+          ]
         }
       ]
     },
@@ -360,19 +378,46 @@
           "id": "CW-07-A01",
           "description": "规定有效参考长度及平滑锚点运动，张力由求解产生",
           "status": "pending",
-          "evidence": []
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.md",
+              "sha256": "76f5e4452e48d0aa8699dcfc0714bb844d63a755cb54fda13d6dc2c1d4e6e33c"
+            },
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.json",
+              "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            }
+          ]
         },
         {
           "id": "CW-07-A02",
           "description": "正长度/张力仅受拉/松弛/速度加速度及功账",
           "status": "pending",
-          "evidence": []
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.md",
+              "sha256": "76f5e4452e48d0aa8699dcfc0714bb844d63a755cb54fda13d6dc2c1d4e6e33c"
+            },
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.json",
+              "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            }
+          ]
         },
         {
           "id": "CW-07-A03",
           "description": "动态试步/失败回滚/续算一致，不宣传完整卷筒硬件模型",
           "status": "pending",
-          "evidence": []
+          "evidence": [
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.md",
+              "sha256": "76f5e4452e48d0aa8699dcfc0714bb844d63a755cb54fda13d6dc2c1d4e6e33c"
+            },
+            {
+              "path": "docs/acceptance/CW-dynamics-core-20261011.json",
+              "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            }
+          ]
         }
       ]
     },

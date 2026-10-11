@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-11",
+  "status": "pass",
+  "scope": "CW03-CW07-increment1-pure-fixed-mass-held-input-assembly-and-dynamics-only",
+  "completeTaskAcceptance": false,
+  "productComplete": false,
+  "sourceByteFreeze": {
+    "date": "2026-10-11",
+    "rootSourceCommit": "16f83bc5958a85ea1ba177148147e707d178b3a8",
+    "solverSourceCommit": "3f4b1803076fa13a25dcc5a719cdca5d0ac1b3da",
+    "modelSourceCommit": "4ae71882f5203da29f7d4fdd5c661caef0272486",
+    "sourceFiles": [
+      {
+        "path": "src/range-solver-lib/CMakeLists.txt",
+        "bytes": 5219,
+        "sha256": "031055c242ffb0d515ced7060edcd0fe2472ed983fd384caf997716939a4363d"
+      },
+      {
+        "path": "src/range-solver-lib/tests/CMakeLists.txt",
+        "bytes": 3134,
+        "sha256": "80af662dcf6d69a954b74c20c68ec25dfe8adbdd97b487b1e7750b0ecd92fb4b"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_truss_assembly.h",
+        "bytes": 4067,
+        "sha256": "a0d7c9a4d116a69f240fa462b4ca1700cc89974cd853b5bc0446335e88928364"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_truss_dynamics.h",
+        "bytes": 4218,
+        "sha256": "2ebb0bbb371db37e04602f2805c6d156aa2e4fd01eff13ab35fe19993559f10e"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_assembly.cpp",
+        "bytes": 10659,
+        "sha256": "ae63271a61d55ded772326b22b12ff7b02f3a64d793bc2dc40ed970da592a589"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_dynamics.cpp",
+        "bytes": 24742,
+        "sha256": "f778a0626e049020e7a6ba72205829a73e4767079456248c1e2015835fa4291f"
+      },
+      {
+        "path": "src/range-solver-lib/tests/tst_structural_truss_assembly.cpp",
+        "bytes": 25332,
+        "sha256": "fccb87f00fd4392682d064ce8a0feefbc74d97406095a7a93eaee6e94a12803c"
+      },
+      {
+        "path": "src/range-solver-lib/tests/tst_structural_truss_dynamics.cpp",
+        "bytes": 23677,
+        "sha256": "cecf7b05d183b61019df855b78e0de3a1fe64688170b5cdced47c8400824841e"
+      },
+      {
+        "path": "scripts/ci/required-ctest-tests.json",
+        "bytes": 6856,
+        "sha256": "b43ac30ceecac8272bc6d11dc751c4d6bcb02dc049fa91ad6e8aad688e66da22"
+      },
+      {
+        "path": "docs/NATIVE_TRUSS_DYNAMICS_DESIGN.md",
+        "bytes": 8878,
+        "sha256": "4f8484f574e513d23916bfa9cb42744529e0fcecefc2d768562594ed7f5bb55f"
+      },
+      {
+        "path": "docs/CONTROL_WORKBENCH_RESUME.md",
+        "bytes": 6814,
+        "sha256": "3374f09df06ca0ad2a39b4b8bdc4ed07a9538c761b16ce5c608af9f465ffd6d4"
+      }
+    ]
+  },
+  "fullBuild": {
+    "command": "cmake --build build/vs2026 --config Release --parallel 4",
+    "exitCode": 0,
+    "log": {
+      "path": "build/audit-20261011/control-resume/full-build.log",
+      "bytes": 29797,
+      "sha256": "a530cb16eb0c3d558abf9ffe374d772092877ac87311cd676096cb5ca473e7ca"
+    }
+  },
+  "targetedCoreTests": {
+    "passed": 2,
+    "failed": 0,
+    "elapsedSeconds": 0.49,
+    "junit": {
+      "path": "build/audit-20261011/control-resume/core-final.xml",
+      "bytes": 1735,
+      "sha256": "00c4d1755eb210628b67a5a5fee871bb158b77770f41df0e09bd15b1348c57c5"
+    },
+    "log": {
+      "path": "build/audit-20261011/control-resume/core-test-final.log",
+      "bytes": 381,
+      "sha256": "d6a89a0bcb3fc7840ae2d01f4dd7c2689a636f2e30acc82eae130bd48392cbaa"
+    }
+  },
+  "initialFullRegression": {
+    "command": "ctest --test-dir build/vs2026 -C Release -j 2 --timeout 240 --output-on-failure --output-junit ABSOLUTE_AUDIT_PATH/full-182.xml",
+    "environment": {
+      "OMP_NUM_THREADS": "4"
+    },
+    "exitCode": 8,
+    "required": 182,
+    "registered": 182,
+    "passed": 181,
+    "failed": 1,
+    "skipped": 0,
+    "failures": [
+      {
+        "name": "tst_native_result_journal",
+        "reason": "timeout",
+        "seconds": 240.03
+      }
+    ],
+    "elapsedSeconds": 954.93,
+    "junit": {
+      "path": "build/audit-20261011/control-resume/full-182.xml",
+      "bytes": 150230,
+      "sha256": "3213de5a64346d1d6cc721caf93c5e94f3ce114caa20d26aeb8ad714d3a78110"
+    },
+    "log": {
+      "path": "build/audit-20261011/control-resume/full-ctest.log",
+      "bytes": 25380,
+      "sha256": "0f8a0f7707368a0e9764de2ab0a5416b959a3f99447d114ca11f2f47719e3662"
+    },
+    "inventory": {
+      "path": "build/audit-20261011/control-resume/ctest-inventory.json",
+      "bytes": 161522,
+      "sha256": "b2ba9dec3dea614e01e66b39e4b956bf4abe3e65231104849f7dafe09135dbef"
+    }
+  },
+  "isolatedRerun": {
+    "command": "ctest --test-dir build/vs2026 -C Release -j 1 -R ^tst_native_result_journal$ --timeout 240 --output-on-failure --output-junit ABSOLUTE_AUDIT_PATH/journal-isolated.xml",
+    "environment": {
+      "OMP_NUM_THREADS": "4"
+    },
+    "exitCode": 0,
+    "passed": 1,
+    "failed": 0,
+    "elapsedSeconds": 127.26,
+    "junit": {
+      "path": "build/audit-20261011/control-resume/journal-isolated.xml",
+      "bytes": 374,
+      "sha256": "b4932b429e1beb3466895ef30d94f859bf09485af706c00df3a6151a6d394291"
+    },
+    "log": {
+      "path": "build/audit-20261011/control-resume/journal-isolated.log",
+      "bytes": 263,
+      "sha256": "d6ce84135a401c135ae6b9cb2ee40bb4dfe1812934a0fad9410921e8a7bf7a14"
+    }
+  },
+  "requiredTargetQualification": {
+    "required": 182,
+    "qualified": 182,
+    "remainingFailures": 0,
+    "singleCleanFullRun": false,
+    "note": "181 targets passed initial parallel run; unchanged journal passed isolated under identical 240s limit. I/O/concurrency cause remains a hypothesis; no timeout/size/numerical threshold relaxed."
+  },
+  "independentReview": {
+    "role": "root-created read-only reviewer without model override",
+    "remainingP1P2InBoundedIncrement": 0,
+    "closedFindings": [
+      "representable cable energy and length-derivative overflow on MSVC",
+      "passive subnormal stored energy prematurely rounded to zero",
+      "decimal-step prescribed-motion endpoint incorrectly rejected",
+      "free cable taut/slack dynamics lacked independent branch-crossing reference"
+    ],
+    "independentTestAuthor": true,
+    "note": "Reviewer inspected actual source and independent references; root executed builds/tests. No native checkpoint/GUI qualification implied."
+  },
+  "retainedFailureEvidence": [
+    {
+      "path": "build/audit-20261011/control-resume/endpoint-repro-build.log",
+      "bytes": 1220,
+      "sha256": "bf34857960615a360c2505a846b212e47d0ef0845099d07b60d6b0f0bfcea26a"
+    },
+    {
+      "path": "build/audit-20261011/control-resume/endpoint-repro.xml",
+      "bytes": 19889,
+      "sha256": "c5a9b148bec657cea8218513d4083206f48360cfa83e986fc8fad01a34f87fbb"
+    },
+    {
+      "path": "build/audit-20261011/control-resume/endpoint-repro-test.log",
+      "bytes": 19847,
+      "sha256": "7f00aba7d70c0cfc536f55f96b00f0a02e3d889e001a4e8a9081e4d668d80a3a"
+    },
+    {
+      "path": "build/audit-20261011/control-resume/endpoint-only.txt",
+      "bytes": 571,
+      "sha256": "47e9aa8088c7c3798443c94b1d41ba244590048b28960de585e7e77b5f1aebcd"
+    },
+    {
+      "path": "build/audit-20261011/control-resume/endpoint-only-process.log",
+      "bytes": 994,
+      "sha256": "fb676ad6a969ff217273e2db5175022293f0e1bcade4d9adf30a1b3306da3921"
+    }
+  ],
+  "verification": [
+    "independent local potential gradients/tangents and extreme representable values",
+    "passive, held-voltage and held-charge independent linear oscillator and work",
+    "common mixed indefinite tangent and nonlinear scalar RK4 refinement",
+    "free cable taut-to-slack piecewise oscillator/free-flight and energy refinement",
+    "all-prescribed polynomial and free mass driven by analytic moving support",
+    "V/Q/L0/external command jumps, left/right acceleration, fixed mass",
+    "singular linear certification, Newton failure and accepted-state immutability",
+    "stale inputs/acceleration, wrong system, invalid mass/motion/identity/domain"
+  ],
+  "notVerified": [
+    "new native RModel/RSolverStress/CLI dynamic adapter",
+    "precommit output/checkpoint publication, rollback and disk restart",
+    "control ticks, FE phases, external controllers and complete v3 SDK",
+    "prestress-equilibrated ring-antenna modal/transient/closed-loop story",
+    "continuous actuator input paths, damping, rotation/MPC and shared circuit",
+    "native material tensor reduction, device/sensor binding and calibrated data",
+    "beam/plate dynamic bonded patches and nonmatching-face mesh transfer",
+    "four-card GUI and saved-run click count, FE/ROM comparison",
+    "new clean-machine installation and original WF performance/provider/isolation hard gates"
+  ]
+}
