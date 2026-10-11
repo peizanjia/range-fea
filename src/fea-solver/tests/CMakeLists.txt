@@ -154,7 +154,8 @@ target_link_libraries(tst_native_mixed_run PRIVATE range-solver-lib Qt6::Test)
 target_compile_definitions(tst_native_mixed_run PRIVATE
     RANGE_FEA_SOLVER_EXECUTABLE="$<TARGET_FILE:fea-solver>")
 add_dependencies(tst_native_mixed_run fea-solver)
-add_test(NAME tst_native_mixed_run COMMAND tst_native_mixed_run -o -,txt)
+add_test(NAME tst_native_mixed_run COMMAND tst_native_mixed_run
+    -o "${CMAKE_CURRENT_BINARY_DIR}/native-mixed-detail.txt,txt" -o -,txt)
 if(WIN32)
     set_tests_properties(tst_native_mixed_run PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

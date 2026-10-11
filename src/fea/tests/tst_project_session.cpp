@@ -1385,6 +1385,7 @@ private slots:
         ProblemTree problemTree;
         auto *tolerance = activeProblemChild<ValueLineEdit>(&problemTree, QStringLiteral("modalTolerance"));
         QVERIFY(tolerance);
+        const double acceptedTolerance = session->getModel(0).getProblemSetup().getModalSetup().getConvergenceValue();
         QSignalSpy acceptedValues(tolerance, &ValueLineEdit::valueChanged);
         tolerance->setText(QStringLiteral("1e-"));
         QVERIFY(tolerance->getValidatorState() != QValidator::Acceptable);
@@ -1395,7 +1396,14 @@ private slots:
                  QStringLiteral("pending"));
         QCOMPARE(pending.value(QStringLiteral("draft")).toObject().value(QStringLiteral("scope")).toString(),
                  QStringLiteral("analysis.modal"));
-        QVERIFY(!QJsonDocument(pending).toJson(QJsonDocument::Compact).contains("1e-"));
+        // Inspect draft semantics rather than arbitrary bytes: valid document
+        // and project UUIDs can also contain the substring "1e-".
+        QCOMPARE(pending.value(QStringLiteral("draft")).toObject(),
+                 (QJsonObject{{QStringLiteral("status"), QStringLiteral("pending")},
+                              {QStringLiteral("scope"), QStringLiteral("analysis.modal")},
+                              {QStringLiteral("changedFields"), QJsonArray{QStringLiteral("convergenceValue")}},
+                              {QStringLiteral("otherScopesStatus"), QStringLiteral("unknown")}}));
+        QCOMPARE(session->getModel(0).getProblemSetup().getModalSetup().getConvergenceValue(), acceptedTolerance);
         QVERIFY(session->hasDocumentDraft(0));
         QVERIFY(!session->canMutateDocument(0));
 

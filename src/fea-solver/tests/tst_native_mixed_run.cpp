@@ -6,6 +6,7 @@
 #include <QDataStream>
 #include <QFile>
 #include <QDir>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -64,6 +65,119 @@ RModel fixture(double dt=.0034567890123456789,bool stationary=false)
         {3,{},{},{{202,{{2,0,0}}}}},{5,{{"V-port",-.3},{"Q-port",-.1}},{{609,1.02}},{} }};
     s.bindToModel(m);return m;
 }
+
+RModel movingAnchorFixture()
+{
+    auto m=fixture();const double dt=m.getProblemSetup().getStructuralDynamicsSetup().getTimeStep();
+    const double t0=m.getTimeSolver().getInputStartTime()-dt,finish=t0+12*dt,duration=finish-t0;
+    m.getProblemSetup().getStructuralInteractionSetup().getPrescribedMotions().push_back(
+        {"quadratic moving anchor",{0,RDofType::UX},{{t0,0,0,.4},{finish,.2*duration*duration,.4*duration,.4}}});
+    auto &setup=m.getProblemSetup().getStructuralTrussDynamicsSetup();
+    setup.heldCommands.push_back({7,{},{{609,1.2}}, {}});
+    setup.heldCommands.push_back({9,{},{{609,.98}}, {}});
+    setup.bindToModel(m);return m;
+}
+// Entirely independent scalar mechanics: no production assembly, motion evaluator,
+// dynamics driver, or restart builder supplies this physical/work reference.
+struct AnchorReference {
+    double q=.035,v=.08,a=0,g=0,vg=0,voltage=.7,charge=.15,length=1,force=1.2;
+    double cable=0,stored=0,kinetic=0,reaction=0,initial=0,external=0,support=0,electrical=0,restLength=0;
+};
+constexpr double anchorMass=2.5;
+double anchorCable(double delta,double length)
+{return std::max(0.0,1+(10/length)*(1+delta-length));}
+double anchorCableEnergy(double delta,double length)
+{const double n=anchorCable(delta,length);return .5*n*n/(10/length);}
+double anchorElectricalEnergy(double delta,double voltage,double charge)
+{return .25*voltage*voltage+.25*std::pow((charge+.2*delta)/.5,2);}
+void observeAnchor(AnchorReference &s)
+{
+    const double delta=s.q-s.g;s.cable=anchorCable(delta,s.length);
+    const double f=30.08*delta+.2*s.voltage+.4*s.charge+s.cable;
+    s.a=(s.force-f)/anchorMass;s.reaction=anchorMass*.4-f;
+    s.stored=.5*30*delta*delta+anchorElectricalEnergy(delta,s.voltage,s.charge)+anchorCableEnergy(delta,s.length);
+    s.kinetic=.5*anchorMass*(s.v*s.v+s.vg*s.vg);
+}
+std::vector<AnchorReference> anchorHistory(double dt,double t0)
+{
+    std::vector<AnchorReference> history;AnchorReference state;observeAnchor(state);
+    state.initial=state.stored+state.kinetic;history.push_back(state);
+    for(uint step=1;step<=12;++step){
+        const double oldDelta=state.q-state.g,oldVoltage=state.voltage,oldCharge=state.charge,oldLength=state.length;
+        if(step==1){state.voltage=.8;state.charge=.2;state.length=.99;state.force=.4;}
+        if(step==3)state.force=2;
+        if(step==5){state.voltage=-.3;state.charge=-.1;state.length=1.02;}
+        if(step==7)state.length=1.2;
+        if(step==9)state.length=.98;
+        state.electrical+=anchorElectricalEnergy(oldDelta,state.voltage,state.charge)-anchorElectricalEnergy(oldDelta,oldVoltage,oldCharge);
+        state.restLength+=anchorCableEnergy(oldDelta,state.length)-anchorCableEnergy(oldDelta,oldLength);
+        observeAnchor(state); // Right side of any held-command jump, at fixed geometry.
+        const auto start=state;const double time=t0+double(step)*dt,previous=t0+double(step-1)*dt;
+        const double h=time-previous,tau=time-t0,g=.2*tau*tau,vg=.4*tau;
+        const double predictor=start.q+h*start.v+.25*h*h*start.a,coefficient=4*anchorMass/(h*h);
+        // Solve both affine branches and require exactly one self-consistent root.
+        double next=0;uint roots=0;
+        for(bool taut:{false,true}){
+            const double k=30.08+(taut?10/state.length:0);
+            const double b=.2*state.voltage+.4*state.charge+(taut?1+10/state.length*(1-state.length):0);
+            const double candidate=(coefficient*predictor+state.force+k*g-b)/(coefficient+k);
+            const bool candidateTaut=1+10/state.length*(1+candidate-g-state.length)>0;
+            if(candidateTaut==taut){next=candidate;++roots;}
+        }
+        if(roots!=1)throw std::runtime_error("Independent moving-anchor branch root is ambiguous");
+        state.q=next;state.g=g;state.vg=vg;observeAnchor(state);
+        state.v=start.v+.5*h*(start.a+state.a);observeAnchor(state);
+        const bool expectedTaut=step<7 || step>=9;
+        if((anchorCable(oldDelta,state.length)>0)!=expectedTaut || (state.cable>0)!=expectedTaut)
+            throw std::runtime_error("Independent cable609 left/right taut-slack-retension schedule disagrees");
+        if((10.0/3)*(1+oldDelta-3)>0 || (10.0/3)*(1+state.q-state.g-3)>0)
+            throw std::runtime_error("Independent cable811 must remain slack at both interval ends");
+        state.external+=state.force*(state.q-start.q);
+        state.support+=.5*h*(start.reaction*start.vg+state.reaction*state.vg);
+        state.electrical+=state.voltage*(-.2)*((state.q-state.g)-oldDelta);
+        history.push_back(state);
+    }
+    return history;
+}
+void checkAnchorValue(double actual,double expected,double tolerance,const char *field,uint step)
+{
+    if(!std::isfinite(actual) || std::abs(actual-expected)>tolerance)
+        throw std::runtime_error(qPrintable(QString("Moving anchor step %1 %2: actual %3, independent %4 (tolerance %5)")
+            .arg(step).arg(QString::fromLatin1(field)).arg(actual,0,'g',17).arg(expected,0,'g',17).arg(tolerance,0,'g',8)));
+}
+void checkAnchorRecord(const RModel &m,const std::vector<AnchorReference> &history)
+{
+    const auto &r=m.getProblemSetup().getStructuralTrussDynamicsRestartData();const uint step=r.completedSteps;
+    if(!r.available || step>=history.size() || r.q.size()!=6 || r.v.size()!=6 || r.a.size()!=6 || r.reactions.size()!=6)
+        throw std::runtime_error("Moving anchor accepted record dimensions unavailable");
+    const auto &e=history[step];
+    checkAnchorValue(r.q[0],e.g,2e-12,"anchor displacement",step);
+    checkAnchorValue(r.v[0],e.vg,2e-11,"anchor velocity",step);
+    checkAnchorValue(r.a[0],.4,2e-10,"anchor acceleration",step);
+    checkAnchorValue(r.q[3],e.q,2e-11,"free displacement",step);
+    checkAnchorValue(r.v[3],e.v,2e-10,"free velocity",step);
+    checkAnchorValue(r.a[3],e.a,2e-9,"free acceleration",step);
+    checkAnchorValue(r.reactions[0],e.reaction,2e-9,"support reaction",step);
+    checkAnchorValue(r.reactions[3],0,2e-9,"free residual reaction",step);
+    for(uint dof:{1u,2u,4u,5u}){
+        checkAnchorValue(r.q[dof],0,2e-12,"transverse displacement",step);
+        checkAnchorValue(r.v[dof],0,2e-11,"transverse velocity",step);
+        checkAnchorValue(r.a[dof],0,2e-10,"transverse acceleration",step);
+        checkAnchorValue(r.reactions[dof],0,2e-9,"transverse reaction",step);
+    }
+    checkAnchorValue(r.storedEnergy,e.stored,2e-10,"stored energy",step);
+    checkAnchorValue(r.kineticEnergy,e.kinetic,2e-10,"kinetic energy",step);
+    checkAnchorValue(r.initialTotalEnergy,e.initial,2e-10,"initial total energy",step);
+    checkAnchorValue(r.cumulativeExternalWork,e.external,2e-10,"external work",step);
+    checkAnchorValue(r.cumulativeSupportWork,e.support,2e-10,"support work",step);
+    checkAnchorValue(r.cumulativeElectricalWork,e.electrical,2e-10,"electrical work",step);
+    checkAnchorValue(r.cumulativeRestLengthWork,e.restLength,2e-10,"rest-length work",step);
+    const uint stress=m.findVariable(R_VARIABLE_STRESS_NORMAL);
+    if(stress==RConstants::eod)throw std::runtime_error("Moving anchor cable axial display unavailable");
+    checkAnchorValue(m.getVariable(stress).getValue(0,3),e.cable,2e-9,"cable609 axial force display",step);
+    checkAnchorValue(m.getVariable(stress).getValue(0,4),0,2e-9,"cable811 slack axial force display",step);
+}
+
 QByteArray raw(const QString &path)
 {QFile f(path);if(!f.open(QIODevice::ReadOnly))throw std::runtime_error("Cannot read test artifact");return f.readAll();}
 void write(const QString &path,const QByteArray &bytes)
@@ -151,6 +265,9 @@ class TestNativeMixedRun:public QObject {
     Q_OBJECT
 private slots:
     void sameSolverBudgetAndIndependentPhysics();
+    void movingAnchorIndependentPhysics();
+    void movingAnchorPublicationRollback();
+    void realCliMovingAnchor_data();void realCliMovingAnchor();
     void nonlinearNewtonFailureKeepsInitialState();
     void preparedCandidateTamper_data();void preparedCandidateTamper();
     void checkpointFailures_data();void checkpointFailures();
@@ -187,6 +304,81 @@ void TestNativeMixedRun::sameSolverBudgetAndIndependentPhysics() try
     QVERIFY(std::abs(record(m).q[3]-q)<2e-11);QVERIFY(std::abs(record(m).v[3]-v)<2e-10);
     QCOMPARE(record(m).memberInputKinds,std::vector<uint>({0,1,2,3,3}));QCOMPARE(record(m).orderedPortIds,std::vector<QString>({"V-port","Q-port"}));
 } REPORT_RUN_EXCEPTIONS
+
+void TestNativeMixedRun::movingAnchorIndependentPhysics() try
+{
+    QTemporaryDir dir;auto source=movingAnchorFixture();const double dt=source.getProblemSetup().getStructuralDynamicsSetup().getTimeStep();
+    const double t0=source.getTimeSolver().getInputStartTime()-dt;const auto independent=anchorHistory(dt,t0);
+    // Explicit initial energies are computed from physical initial q/v and source inputs.
+    const auto &initial=independent.front();
+    checkAnchorValue(initial.kinetic,.5*anchorMass*.08*.08,1e-15,"reference initial kinetic",0);
+    const RStructuralTrussNativeRun initialized(source);const auto &initialActual=initialized.acceptedState();
+    checkAnchorValue(initialActual.storedEnergy,initial.stored,2e-10,"initial stored energy",0);
+    checkAnchorValue(initialActual.kineticEnergy,initial.kinetic,2e-10,"initial kinetic energy",0);
+    checkAnchorValue(initialActual.initialTotalEnergy,initial.initial,2e-10,"initial total energy",0);
+    auto m=source;RSolver solver(m,dir.filePath("moving.rbm"),{});std::vector<uint> observed;
+    solver.setAcceptedStructuralStepObserver([&](const RModel &accepted){checkAnchorRecord(accepted,independent);
+        observed.push_back(record(accepted).completedSteps);});
+    solver.run();QCOMPARE(observed.size(),size_t(12));for(uint i=0;i<12;++i)QCOMPARE(observed[i],i+1);
+    QCOMPARE(record(m).runTargetSteps,12u);QCOMPARE(record(m).nextCommandIndex,5u);
+    QCOMPARE(record(m).orderedPhysicalNodeIds,std::vector<uint>({101,202}));
+    QCOMPARE(record(m).orderedMemberPhysicalIds,std::vector<uint>({901,503,777,609,811}));
+    QCOMPARE(record(m).memberInputKinds,std::vector<uint>({0,1,2,3,3}));
+} REPORT_RUN_EXCEPTIONS
+void TestNativeMixedRun::movingAnchorPublicationRollback() try
+{
+    QTemporaryDir dir;auto source=movingAnchorFixture();const auto expected=reference(source,dir.filePath("reference.rbm"));auto m=source;
+    const auto output=dir.filePath("actual.rbm"),checkpointDir=dir.filePath("checkpoints");auto store=participant(checkpointDir,m);
+    const auto sourceFingerprint=source.getProblemSetup().getStructuralTrussDynamicsSetup().computeSourceFingerprint(source);
+    RSolver solver(m,output,{});solver.setAcceptedStepParticipant(store);solver.setNativeMixedStepBudget(1);
+    solver.run(); // The attempted accepted step 2 fails after publishing latest.
+    const auto baseline=recordBytes(record(m)),oldLatest=raw(QDir(checkpointDir).filePath("latest.json"));
+    const auto lastValidPath=QDir(checkpointDir).filePath("lastvalid.json");
+    const bool oldLastExists=QFileInfo::exists(lastValidPath);
+    const auto oldLast=oldLastExists?raw(lastValidPath):QByteArray(),oldLogical=raw(output);
+    const auto recoveryPath=latestPath(checkpointDir),recoveryHash=fileDigest(recoveryPath);
+    const double oldClock=m.getTimeSolver().getComputedTime();
+    store->setPhaseHook(Phase::AfterLatest,[](Phase){throw std::runtime_error("moving anchor accepted-2 AfterLatest publication failure");});
+    const auto diagnostic=failure(solver);QVERIFY2(diagnostic.contains("accepted-2"),qPrintable(diagnostic));
+    QCOMPARE(recordBytes(record(m)),baseline);QCOMPARE(record(m).completedSteps,1u);
+    QCOMPARE(recordBytes(record(latest(checkpointDir))),baseline);
+    QCOMPARE(raw(QDir(checkpointDir).filePath("latest.json")),oldLatest);
+    QCOMPARE(QFileInfo::exists(lastValidPath),oldLastExists);
+    if(oldLastExists)QCOMPARE(raw(lastValidPath),oldLast);
+    QCOMPARE(raw(output),oldLogical);
+    QCOMPARE(fileDigest(recoveryPath),recoveryHash);QCOMPARE(m.getTimeSolver().getComputedTime(),oldClock);
+    QCOMPARE(m.getProblemSetup().getStructuralTrussDynamicsSetup().computeSourceFingerprint(m),sourceFingerprint);
+    QVERIFY(!QFileInfo::exists(RFileUtils::getFileNameWithTimeStep(output,2)));
+    QVERIFY(solver.isNativeMixedRetryable());QVERIFY(store->isRetryable());
+    solver.run();QCOMPARE(record(m).completedSteps,2u);solver.setNativeMixedStepBudget(0);solver.run();
+    QCOMPARE(recordBytes(record(m)),recordBytes(expected));QCOMPARE(recordBytes(record(latest(checkpointDir))),recordBytes(expected));
+    QCOMPARE(fileDigest(recoveryPath),recoveryHash);
+} REPORT_RUN_EXCEPTIONS
+void TestNativeMixedRun::realCliMovingAnchor_data()
+{QTest::addColumn<bool>("binary");QTest::newRow("moving-anchor-ram")<<false;QTest::newRow("moving-anchor-rbm")<<true;}
+void TestNativeMixedRun::realCliMovingAnchor() try
+{
+    QFETCH(bool,binary);QVERIFY(QFileInfo(executable()).isFile());QTemporaryDir dir;auto source=movingAnchorFixture();
+    const double dt=source.getProblemSetup().getStructuralDynamicsSetup().getTimeStep(),t0=source.getTimeSolver().getInputStartTime()-dt;
+    const auto independent=anchorHistory(dt,t0);const auto ext=RModel::getDefaultFileExtension(binary);
+    const auto fullInput=dir.filePath("moving-full."+ext),splitInput=dir.filePath("moving-split."+ext);
+    source.write(fullInput,false);source.write(splitInput,false);
+    const auto fullHash=fileDigest(fullInput),splitHash=fileDigest(splitInput),runtime=fileDigest(executable());
+    const auto fullDir=dir.filePath("full-checkpoints"),splitDir=dir.filePath("split-checkpoints");
+    const auto fullContext=context(fullHash,runtime,dt),splitContext=context(splitHash,runtime,dt);
+    const auto full=cli(fullInput,fullDir,fullContext);QVERIFY2(full.code==0,full.diagnostics.constData());
+    const auto split=cli(splitInput,splitDir,splitContext,4);QVERIFY2(split.code==0,split.diagnostics.constData());
+    const auto checkpoint=latest(splitDir);QCOMPARE(record(checkpoint).completedSteps,4u);
+    QCOMPARE(record(checkpoint).runTargetSteps,12u);QCOMPARE(checkpoint.getProblemSetup().getStructuralDynamicsSetup().getNSteps(),12u);
+    QCOMPARE(record(checkpoint).nextCommandIndex,2u);checkAnchorRecord(checkpoint,independent);
+    const auto recoveryPath=latestPath(splitDir),recoveryHash=fileDigest(recoveryPath);
+    const auto resumed=cli(recoveryPath,splitDir,splitContext,0,true);QVERIFY2(resumed.code==0,resumed.diagnostics.constData());
+    const auto expected=latest(fullDir),actual=latest(splitDir);
+    QCOMPARE(record(actual).completedSteps,12u);QCOMPARE(record(actual).runTargetSteps,12u);
+    QCOMPARE(recordBytes(record(actual)),recordBytes(record(expected)));checkAnchorRecord(expected,independent);checkAnchorRecord(actual,independent);
+    QCOMPARE(fileDigest(recoveryPath),recoveryHash);QCOMPARE(fileDigest(fullInput),fullHash);QCOMPARE(fileDigest(splitInput),splitHash);
+} REPORT_RUN_EXCEPTIONS
+
 void TestNativeMixedRun::nonlinearNewtonFailureKeepsInitialState() try
 {
     QTemporaryDir dir;auto m=fixture(.1);m.getNode(1).setY(1);
