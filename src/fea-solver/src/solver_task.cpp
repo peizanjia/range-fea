@@ -28,6 +28,7 @@
 #include <rstructural_thermal_fe_adapter.h>
 #include <rstructural_control_conditioner.h>
 #include <rstructural_truss_dynamics_restart_adapter.h>
+#include <rstructural_truss_native_run.h>
 #include "typed_control_task.h"
 
 #include "execution_event_journal.h"
@@ -45,13 +46,21 @@ NativeAcceptedCheckpointStateView mixedCheckpointStateView(const RModel &model)
 {
     const RStructuralTrussDynamicsModelAdapter adapter(model);
     auto record = model.getProblemSetup().getStructuralTrussDynamicsRestartData();
+    auto control = model.getProblemSetup().getStructuralNativeControlState();
     if (record.available)
-        RStructuralTrussDynamicsRestartAdapter::restore(adapter,record);
+        RStructuralTrussDynamicsRestartAdapter::restore(adapter,record,control);
     else
-        record = RStructuralTrussDynamicsRestartAdapter::build(adapter,adapter.initialize(),0,0);
+    {
+        RModel fresh(model);
+        fresh.getProblemSetup().setRestart(false);
+        const RStructuralTrussNativeRun initialized(fresh);
+        control = initialized.acceptedControlState();
+        record = RStructuralTrussDynamicsRestartAdapter::build(
+            adapter,initialized.acceptedState(),0,0,control);
+    }
     record.validate();
     const QByteArray fingerprint = QByteArray::fromHex(
-        RStructuralTrussDynamicsRestartAdapter::stateFingerprint(record).toLatin1());
+        RStructuralTrussDynamicsRestartAdapter::stateFingerprint(record,control).toLatin1());
     if (fingerprint.size() != 32)
         throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                      "Native mixed checkpoint state fingerprint is not SHA-256.");
@@ -714,11 +723,15 @@ void SolverTask::run(void)
             // conditions and never infer state from a previous display/result.
             model.getProblemSetup().setRestart(this->restart);
             if (!this->restart)
+            {
                 model.getProblemSetup().setStructuralTrussDynamicsRestartData({});
+                model.getProblemSetup().setStructuralNativeControlState({});
+            }
             const RStructuralTrussDynamicsModelAdapter adapter(model);
             if (this->restart)
                 RStructuralTrussDynamicsRestartAdapter::restore(adapter,
-                    model.getProblemSetup().getStructuralTrussDynamicsRestartData());
+                    model.getProblemSetup().getStructuralTrussDynamicsRestartData(),
+                    model.getProblemSetup().getStructuralNativeControlState());
             nativeMixedSourceValidated = true;
         }
         if (thermalMode && this->convergenceFileName.isEmpty())

@@ -1,5 +1,32 @@
 # 续作交接
 
+## 2026-10-12 PIEZO_CONTROL_DELIVERY 续作：PC-00源冻结准备
+
+本会话首要范围为 `docs/PIEZO_CONTROL_DELIVERY.md`、12阶段/36验收的 `docs/piezo_control_plan.json`；保持全部物理/GUI/安装门槛，productComplete=false。原生格式1.3.21和N=1 PI未提交改动已经重新完整Release构建成功；本轮三个新增目标3/3通过13.59s，相关兼容目标正在验证，完整回归尚未运行。独立pc00_review只读复核未发现实质P1/P2；不将此结论扩大为外部provider、多速率或GUI资格。
+
+新梁/板局部M/K/G/Ce内核和三个测试文件目前仍未注册CMake、未接RModel/RSolver，不属于已验证产品。PC-01/03架构接缝已核实：独立电极读出catalog须持久化；杆终端沿local-x，现有自由应力减缩只取electric-z需要显式轴参数；consistent偏心质量必须进入实际通用FE integrator，不能压回原生truss集中质量。
+
+当前额度监测脚本在 `build/audit-20261012/piezo-delivery/quota/piezo_quota_monitor.py`，工具句柄41213；实际查询74%剩余/1卡，pending=null。按实际剩余<=1%有卡时使用，幂等回执落盘；任务结束/取消须写stop并等待退出。不购买额度/改凭据。
+
+根代理唯一构建/测试协调。pc00_review完成；piezo_architecture完成只读探索；piezo_kernel_review只读；electrical_boundary只写三个全新electrical_system文件，不改既有源码/CMake、不build/test/commit。用户未跟踪.agents/.codex/AGENTS.md保持原样。
+
+## 2026-10-12 当前继续 CW-08/CW-09：原生标准测量与 N=1 本机 PI（整合验证中）
+
+CW07已按下节完成交付；用户目标继续，不能结束在内核验收。下一切片已实际实施，当前工作区新源码尚未构建/验证，不能沿用a72471e的186/186作为这些新源码的证明。
+
+- 根代理已冻结并写入 `src/range-model-lib/include/rml_structural_native_control.h`：独立Spec/State、7类physical-ID测量、F/V/Q/L0动作、PI loops、前后opaque envelope、完整left frame/requested/conditioned/applied/limits/tick/phase。新格式拟1.3.21，在ProblemSetup现有truss setup/restart后追加；默认FrozenTable保留format20的source/record精确哈希，旧版写非默认拒绝。
+- Model worker `native_v3_model` sole-writer owns所有新模型实现/ProblemSetup/FileIO/rml_model gates/rml_structural_truss_dynamics_setup.cpp源分支/modelCMake版本与NEWtst_structural_native_control_model.cpp；Solver worker `native_v3_solver` ownsNEW rstructural_native_control.h/.cpp、native adapter/restart/nativeRun及NEWtst_structural_native_control.cpp。两者禁止build/test/commit；root sole-verification，root owns CLI solver_task.cpp、solverCMake及根跨层测试/manifest/旧版本断言。
+- 纯PI old-I输出：u=bias+Kp*e+Ki*Iold，Inext=Iold+nominalTs*e；provider历史只在候选State，和physical一起接受。Loops按actionId/sensorId匹配可独立排序，积分envelope按冻结loops顺序，动作账按actions catalog顺序。Force是固定背景之上增量，initialCommand0；VQ/L0是绝对唯一所有者、initial值精确等于源初始输入。N>1/delay/noise/hold非默认/seed非零拒绝，basicPI不宣称antiwindup。
+- Amplitude先clamp、rate再clamp，保证前值已在bounds内，applied等价feasible交集；flag记录两个实际clamp是否改变。rate用physical h，PI积分用nominalTs。lastControllerInputState+nextControllerState用于重算最后purePI输出/新state，不能用FP逆运算反推旧I，不能新增每步全FE历史重放。
+- Root将在solverCMake加入provider.cpp/.h/modelcontrol.h的实际SHA编译宏`RANGE_NATIVE_CONTROL_IMPLEMENTATION_SHA256`并CMAKE_CONFIGURE_DEPENDS；factory核对实际code和编译/Qt/ABI/binary64/clock显式environment manifest，不接受仅长得像SHA的声明。Code/依赖/环境声明范围不冒充硬件或完整运行历史认证。
+- CLI mixedCheckpointStateView已root改为complete control overload、fresh NativeRun初始化physical+control、完整fingerprint；fresh同时清除两个restart，保持v1/v2外部旗标拒绝。Solver约定 build(adapter,physical,completed,cursor,controlState)、restore(adapter,record,controlState)、stateFingerprint(record,controlState)，NativeRun acceptedControlState()。尚未编译。
+- 下一必做：source writers停写→rootCMake/版本21断言/新必跑注册→真实RSolver/CLI完整PI/物理参考/left加速度/limits/状态phase磁盘split与发布故障同实例重试→独立审查/修复→源冻结/完整回归/证据提交。CW08/09仅in_progress，所有criteria pending，productComplete=false。
+- GUI seam只读核查完成：production不存在ModelWorkflow/ModelSourceComposer/portCatalog或selected普通杆分类器；实际WorkflowWidget current snapshot只支持固定four-rod/beam模板，不能用于一般mixed。复用GeometryCommandWidget whole preview/apply与ModelCommandHost；将来新增whole native配置Delta/完整fingerprint/undo发布和纯catalog→native compiler，不能假dropdown完成。
+- 三个writer现全部停止：native_v3_model、native_v3_solver、native_v3_run_tests完成；root补齐3个新必跑target（189）/solverCMake实际provider代码SHA/CLIcontrol重启与默认清理/当前版本21断言（20历史fixture保留）。New跨层测试唯一文件 `src/fea-solver/tests/tst_native_control_run.cpp`，74数据行覆盖独立4动作PI/Newmark/四功/LEFT采样、完整spec/control/physical字段bit witness、同solver4→8→12、AfterLatest基线2失败step3完整回滚/同实例重试、RAM/RBM真正CLI及篡改。
+- **当前唯一build/test工具句柄57833：完整Release初次构建正在运行**，`build/audit-20261012/native-control/integrated-build-first.log`；已有model编译完成，无当前编译错误。绝不在构建中修改任何源码/CMake。禁止恢复所有CW07旧句柄。
+- 独立核心源与跨层测试只读review未发现本切片production P1/P2；保留dense replay/full source hash/full modelcopy性能P2。已发现两个P2测试夹具预期失败，必须构建终态后修：restartTamper对phase/samplephase/ticks经验证型setter提前抛错，改为mutable getter装corrupted state再断言constructor拒绝；CLIaction-request只改requested导致writer先拒绝，协同改requested+conditioned并保持limits结构合法以进入真正CLI/PI重算拒绝。root owns修复新跨层测试（writer已停），reviewer `native_v3_core_review`已完成待新证据followup。
+- 下一root顺序：57833真实终态/检查编译→修两fixture并必要compile问题→新三target聚焦+相关旧路径/版本校验→独立证据复核修production/测试→sourcefreeze/version21完整189回归→真实源/阶段证据commit；CW08/09全部criteria仍pending，产品false，不把builtinPI内核资格冒充externalv3协议/SDK/GUI/完整阶段完成。
+
 ## 2026-10-11 原生混合瞬态增量与 CW-07 阶段已验收
 
 用户目标继续：完整工作台按14需求/16任务/48验收推进，首要卖点少操作与已约定功能完整。已澄清“压力”为“压电”；MATLAB和Simulink两种LiveLink分别保留对照，但用户最新确认没有现成算例，允许联网调研或暂不实测，重点简化点击，不再索要路径或阻塞独立功能开发。

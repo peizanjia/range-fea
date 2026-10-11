@@ -37,7 +37,8 @@
       "tst_structural_piezo_setup",
       "tst_structural_truss_dynamics_setup",
       "tst_element_group_io",
-      "tst_model_physical_ids"
+      "tst_model_physical_ids",
+      "tst_structural_native_control_model"
     ],
     "range-application-lib": [
       "tst_model_command_session",
@@ -106,7 +107,8 @@
       "tst_structural_thermo_coupled_fe_adapter",
       "tst_structural_thermo_monolithic_1d",
       "tst_structural_thermo_monolithic_1d_fe_adapter",
-      "tst_native_result_frame_observer"
+      "tst_native_result_frame_observer",
+      "tst_structural_native_control"
     ],
     "fea-solver": [
       "tst_runtime_parameter_gate",
@@ -126,7 +128,8 @@
       "tst_native_progress_journal",
       "tst_native_result_journal",
       "tst_native_accepted_checkpoint",
-      "tst_native_mixed_run"
+      "tst_native_mixed_run",
+      "tst_native_control_run"
     ],
     "gui-contract": [
       "tst_modal_command_widget",

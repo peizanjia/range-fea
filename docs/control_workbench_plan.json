@@ -464,7 +464,7 @@
     {
       "id": "CW-08",
       "title": "v3端口、Python函数和C++程序SDK",
-      "status": "planned",
+      "status": "in_progress",
       "dependsOn": [
         "CW-02",
         "CW-04"
@@ -496,7 +496,7 @@
     {
       "id": "CW-09",
       "title": "多速率、限制包络及内置控制器",
-      "status": "planned",
+      "status": "in_progress",
       "dependsOn": [
         "CW-08"
       ],
