@@ -1,5 +1,39 @@
 # 续作交接
 
+## 2026-10-11 原生混合瞬态增量与 CW-07 阶段已验收
+
+用户目标继续：完整工作台按14需求/16任务/48验收推进，首要卖点少操作与已约定功能完整。已澄清“压力”为“压电”；MATLAB和Simulink两种LiveLink分别保留对照，但用户最新确认没有现成算例，允许联网调研或暂不实测，重点简化点击，不再索要路径或阻塞独立功能开发。
+
+- 原生生产源root `92251e9aca5835a869f18ebd5725a19195eca46a`，model `6a038b7`、solver `a803738`，格式1.3.20；runtime绑定修复 `f80307e`；最后资格源 `7586e45b39afaad158f378229c352c3f812a219e`只改测试/Qt文件日志。model/solver工作区干净，55文件最新源冻结全部一致。
+- 最新完整Release构建77518 exit0；最终**单次**完整CTest35112 exit0：**186/186，0fail/disabled/skipped，1640.79s**，`build/audit-20261011/native-mixed/full-186-anchor.xml/log`。此前三个185/186失败/超时运行分别封存，不拼接、不改写。runtime175.37s在原180s以内，余量仍窄；原门槛没改。
+- 七目标核心聚焦7/7/40.13s；最新2目标聚焦2/2/46.00s，native37Qt cases/project30cases均0fail。真实RAM/RBM保持F/V/Q/L0、解析C2移动锚点、固定集中质量、独立Newmark/张紧松弛重新张紧/惯性反力/四功账、完整磁盘逐比特split、九类checkpoint及真实结果故障、同solver重试、毒化回滚和不可变恢复MODEL均在对应证据边界验证。
+- 独立CW07复核支持关闭保持型索长和冻结C2锚点的A01/A02/A03；计划更新CW07 done，CW03维持in_progress且其完整环形模态/闭环尚pending，CW01/02仍done、CW06仅A01pass；**productComplete=false**。正式证据 `docs/acceptance/CW-native-mixed-20261011.{md,json}`，最新55源指纹/原始证据SHA/全部反例分开保留。
+- 下一真实接缝合同 `docs/NATIVE_CONTROL_V3_NEXT_INCREMENT.md`：标准物理ID测量→MODEL完整provider/controller候选状态→原生N=1闭环→独立v3传输/SDK→多速率/器件GUI。保留旧frozen-table完整日程验证与1.3.20默认源/状态哈希，拟新格式1.3.21非默认资料旧版输出拒绝；提交仍checkpoint LAST再noexcept提升，不能用提交后observer伪装控制。完整FE/controller历史重放为可选审计，不新增每步必需成本。
+- CW03环形工作点/模态/闭环、材料设备及标准传感native绑定、动态梁板贴片、非匹配面、v3/多速率/FE-ROM、四卡GUI/实际点击数、干净安装和扩展继续原计划。密集日程/全源哈希/模型复制仍二次增长，性能P2及首图5s/CSV30s保留；没有LiveLink相对优势实测。
+- 所有build/test句柄现已终态，无遗留进程。当前branch `feature/structural-profile`，用户未跟踪`.agents/`、`.codex/`、`AGENTS.md`保留，不push、不修改记忆。
+
+## 2026-10-11 原生混合动力增量收尾过程（已由上节终态替代）
+
+用户确认 COMSOL＋MATLAB 和 COMSOL＋Simulink 两种 LiveLink 方案都使用，分别对照；无需再问。首要目标仍是少操作与已约定功能完整，按阶段持续实施，不能在内核/目录测试处宣布全部完成。
+
+最新补充：用户目前没有现成 LiveLink 算例，允许联网调研或暂不实测对比，重点关注简化点击等操作流程。已答复先做本软件选杆/贴片/索→集中预览确认、保存实验运行+确认的真实流程，两套LiveLink实测暂记未测；不再索要工程路径，不暂停独立原生/功能开发，CW13对照项仍pending。注册表读到COMSOL6.3.0.290/MATLABR2022a9.12，不等于实际二进制版本、模块许可或可运行案例。
+
+- 最新源冻结 root `92251e9aca5835a869f18ebd5725a19195eca46a`，model `6a038b7`、solver `a803738`；模型格式 1.3.20。两个子模块工作区干净，未 push、未修改记忆，用户 `.agents/`、`.codex/`、`AGENTS.md` 保留未跟踪。
+- 原生 RModel→RSolver 混合普通杆/主动杆/拉索，固定 Lumped 质量，保持 V/Q/L0/F 命令，完整 dedicated restart，canonical 原目标时间表。`--native-mixed-steps=N` 本次边界不改原始 N；checkpoint fresh/resume 工作输出独立，不覆盖源或不可变恢复 MODEL。
+- 最后七目标 CTest **7/7、0 fail、40.13 s**，日志 `build/audit-20261011/native-mixed/integrated-final-gates.xml` / `integrated-test-final-gates.log`。含真正 CLI 六行 RAM/RBM/decimal/tiny/nonzero-t0、完整逐比特 split，对应九类 checkpoint 故障、结果 record/link 碰撞、同 solver 重试、observer 提交后继续、毒化回滚、源/状态/输出名称负例和 native Newton 初态保持。review 无未关闭的本增量 P1/P2 正确性问题。
+- 本轮修复原点微小伸长量化、近坍缩/denorm 平均长度、Newmark 位移差消减、共享 TRUSS 插值权重反向、微小 IC/支座恢复容差、旧电学显示污染、prepared 结果封存、质量选项忽略及不可变 checkpoint 输出碰撞。反例日志保留，未放宽容差。性能 P2 仍另列。
+- 原生生产源 root `92251e9`，Qt CLI 日志注册 `29f01f4`，工作流同请求验证摘要复用 `f80307e`；后两者没有改变 native C++。最新54文件冻结 `build/audit-20261011/native-mixed/source-freeze-final.json`；必跑186完整注册。完整 Release build11467已exit0，日志`full-build.log`。
+- 首轮full186句柄69260已exit8：185/186、1757.30s，旧`tst_solver_audit_cli`失败；相同二进制单独99583已exit0/38case pass，完整带文件日志二轮该项38pass，初次原因未确认。二轮15165已exit8：185/186、1629.55s，`tst_workflow_runtime`在原180s上限超时，但12cases全部OK/179.693s（含逐case清理，不能写成证明退出卡死）。不得把两轮改写为整轮全绿。
+- `f80307e`只在一次_binding内复用刚验过的SHA，每个别名仍验路径/期望摘要，每次preview/approve/execute重新读文件。新ContractTest12/12/.915s，独立review无实质问题；runtime32416已exit0/175.25s（总175.28），原180s未改；related60598已exit0/7项/106.90s。没有已证实≥10秒收益，时间余量仍窄。
+- 第三轮完整186 **3352已终态exit8**：185/186、1639.54s，唯一`tst_project_session`失败：`modalNumericDraftIsScopedAndSurvivesTreeRefresh`对整个pending JSON搜索`1e-`，29 Qt cases通过/1失败。独立只读确认该断言可与合法UUID冲突，本次精确匹配位置未输出，不宣称定因。root改为完整draft元数据与模型已接受值断言；此时测试修改待编译。该轮runtime176.80s通过，audit38cases通过，原日志保留，不改写全绿。
+- 独立CW07逐条核对发现P2验收缺口：真实CLI/磁盘移动C2锚点带动张紧索、非零支座功及移动状态下发布失败重试。v3/多速率/GUI本身不属于CW07关闭前置；但现有fixed-support CLI六行不能替代该证据。worker `native_anchor_qualification` sole-writer owns `src/fea-solver/tests/tst_native_mixed_run.cpp`，已明确放行增补RAM/RBM与独立标量Newmark/能量四功账/AfterLatest失败重试；root owns `tst_project_session.cpp`。禁止worker build/test/commit，root待source稳定后聚焦→冻结→完整回归→独立复核；CW07仍pending，最终证据worker等待新freeze与终态。
+- 最新资格源 root `7586e45b39afaad158f378229c352c3f812a219e`只改两测试和native Qt文件日志，native生产仍922/model6a/solvera803、runtime绑定f803。55文件快照`source-freeze-anchor.json`55/55相同；inventory-anchor-186验证9组186必跑/186注册。测试writer已停止，root修正错用旧restart accessor与首次checkpoint没有lastvalid的测试基线假设，保留存在状态+字节严格回滚。
+- 最新Release77518已exit0，聚焦11867已exit0/2目标全部通过46.00s：native37 Qt cases/0 fail31.819s、project30cases/0 fail，`anchor-qualification-final.xml/log`与`native-anchor-qualified-detail.txt`。新四行覆盖真实逐步C2移动锚点、含支座惯性反力/四功、受力索松弛重新张紧、RAM/RBM CLI完整逐比特split、AfterLatest失败同实例重试；独立review无剩余实质问题，CW07若完整回归全绿可逐项关闭，但此刻仍pending。
+- **当前唯一build/test进程35112正在最终完整186串行回归**，`full-186-anchor.log/xml`，原240全局/180runtime门槛不变；完整终态后才更新正式证据/plan/hash/commit。77518、11867、18843、73639、30244、59764、11467、69260、15165、3352、99583、7380、32416、60598及更早句柄均终态，不恢复；不并行其他build/test。
+- 证据文档 `docs/acceptance/CW-native-mixed-20261011.md` 当前明示完整回归待终态；完成后补同名 JSON、所有原始日志 SHA、全文更新再把增量证据附到 CW03/CW07 **pending** 条款。不得直接关闭完整 CW03/CW07 或 productComplete。
+- 下一接缝只读已核查：native runner 的 AcceptedState/PreparedStep 同步承载 provider/controller/queue/tick/phase；保留 frozen-table 的精确完整 replay，显式新增命令来源与 v3。标准测量从真实 native state/fresh assembly＋物理 node/member/port IDs 抽取；不要从旧显示字段取值，也不能用旧 Node/NamedSet Charge 假装独立电端口。保持 checkpoint LAST→仅 noexcept 提升→observer。
+- 密集日程 replay/full source hash/full RModel copy 仍 O(N²)，性能门槛未关闭；标准器件/传感 native 绑定、live v3＋多速率、环形平衡/模态/闭环、动态贴片、非匹配面、GUI/install 与两种 LiveLink 实测均继续原完整计划。
+
 ## 2026-10-11 重新分析后的第一动力核心增量已验证，继续原生阶段
 
 最新用户授权：计划确定后按阶段持续推进；宗旨是相较现有 LiveLink 方案的易用性和已约定功能完整，不在纯内核交付处提前宣称总目标完成。整体范围仍是14需求/16任务/48验收；用户已澄清“压力”为“压电”笔误。中文交互正体，仓库文档简体。

@@ -1,0 +1,954 @@
+{
+  "schema": "range.control-workbench-increment-evidence/v1",
+  "date": "2026-10-11",
+  "increment": "native-mixed-held-dynamics",
+  "status": "native-held-length-cw07-qualified-full-regression-passed",
+  "productComplete": false,
+  "acceptance": {
+    "CW-03": "PENDING",
+    "CW-07": "done"
+  },
+  "source": {
+    "kind": "source-freeze",
+    "root": "7586e45b39afaad158f378229c352c3f812a219e",
+    "model": "6a038b7d65bfbf3d22a60c920e6b2d0b0d4ae44e",
+    "solver": "a803738142071ae629772a14af39a4671b126edd",
+    "files": [
+      {
+        "path": "scripts/ci/required-ctest-tests.json",
+        "sha256": "f647c2fccb72c38c9e354f610d73f3f0c25365fff1f937743fde22f705a3d613"
+      },
+      {
+        "path": "src/fea-solver/src/main_task.cpp",
+        "sha256": "134f1c07dc687a6eac44a467e1954f2a9d4bb3fe7a6e018109cb38f9074cd5e6"
+      },
+      {
+        "path": "src/fea-solver/src/native_accepted_checkpoint.cpp",
+        "sha256": "4d4e91b19f674e976d94c23fb3e400a007cba148f50629114e00966ec2860d98"
+      },
+      {
+        "path": "src/fea-solver/src/native_accepted_checkpoint.h",
+        "sha256": "2ee655a2c07e3c9cbd4cebc98ba22610a5a69606bfe8468dff3118e8264c58f7"
+      },
+      {
+        "path": "src/fea-solver/src/solver_input.cpp",
+        "sha256": "4e74bd3201802e725c64bb12f6de8e74bbeac9ebcba447f3ecc0570d9f83c55f"
+      },
+      {
+        "path": "src/fea-solver/src/solver_input.h",
+        "sha256": "1fdbe6ba18d43afc150e1a1b9b1a2f50b4a769b2598a89855839d957fef4cc21"
+      },
+      {
+        "path": "src/fea-solver/src/solver_task.cpp",
+        "sha256": "0c2991f9b1943ea94d24811872edd11535fc0dc93dabc4f6fea995f05002b64c"
+      },
+      {
+        "path": "src/fea-solver/src/solver_task.h",
+        "sha256": "75c8ccf6e02da76104b5b7d538e14b4282abe50da115e2599383b900fb3eba3e"
+      },
+      {
+        "path": "src/fea-solver/tests/CMakeLists.txt",
+        "sha256": "a66004d5414c36b97d9e16984309362aa1bfd24d0aa4190f8d71dab66db13f13"
+      },
+      {
+        "path": "src/fea-solver/tests/tst_native_accepted_checkpoint.cpp",
+        "sha256": "8fc820de2c138e25e760ca85c431db0d0a8cbdfee1f484e2faadf0cedfd55c1c"
+      },
+      {
+        "path": "src/fea-solver/tests/tst_native_mixed_run.cpp",
+        "sha256": "fc9bf5009136ebbdbde3137c0b52b33b2bc1ef5a49d8d01a1c77ef759a5e2e1f"
+      },
+      {
+        "path": "src/fea/tests/tst_project_session.cpp",
+        "sha256": "b5b9890aca0fcf827744132a277148b0625a19d086a5e48e649ca1b3a035875e"
+      },
+      {
+        "path": "src/range-application-lib/tests/tst_model_command_cli.cpp",
+        "sha256": "db4b5d8e34c9affdb70c16bbe29dade854fcd52d816f053c6b2e224ec8778902"
+      },
+      {
+        "path": "src/range-model-lib/CMakeLists.txt",
+        "sha256": "52b7d18907d0990c9c9f8d3ba04652a0b625c695133af7fae40fe9ab173b760b"
+      },
+      {
+        "path": "src/range-model-lib/include/rml_file_io.h",
+        "sha256": "10c3bc8c0f170ce206c03bd88dad47a17aa9c67eb6d604c87ceb85087936792c"
+      },
+      {
+        "path": "src/range-model-lib/include/rml_problem_setup.h",
+        "sha256": "abd23749750e0a0977ec3fd2e868b74770fa851e4d65c5b8a9fdc79e311e5c88"
+      },
+      {
+        "path": "src/range-model-lib/include/rml_structural_truss_dynamics_restart_data.h",
+        "sha256": "9e35d1ee272ffcecedcf2efee83ff6c6f7f9ed07a4bbf30614bc4024a6a01b2a"
+      },
+      {
+        "path": "src/range-model-lib/include/rml_structural_truss_dynamics_setup.h",
+        "sha256": "1eac58dd41c35854768af0237e1a83ac064a50fa930086753eb9125bd2bf7a05"
+      },
+      {
+        "path": "src/range-model-lib/src/rml_element.cpp",
+        "sha256": "f5932d516a49057918bd715f8ac01268f1033060a86e64033bb33982e54c52dd"
+      },
+      {
+        "path": "src/range-model-lib/src/rml_file_io.cpp",
+        "sha256": "d63e1ca9a046b9be19ba20672b0be1fa79c21bf644539ba30fa038bbffad6c44"
+      },
+      {
+        "path": "src/range-model-lib/src/rml_model.cpp",
+        "sha256": "243961f3d56193d00c8f5e93e4cc00fd283c1cc0acc133806c5823aee4c0d6cf"
+      },
+      {
+        "path": "src/range-model-lib/src/rml_problem_setup.cpp",
+        "sha256": "bd1f502afe24a4896681a10a8ebd1dcc1875f059c2c9102a7def2ec25450d763"
+      },
+      {
+        "path": "src/range-model-lib/src/rml_structural_truss_dynamics_restart_data.cpp",
+        "sha256": "b6f61d5274a197640e9033020f3a8400556014d6e126c15e3b4f32a27fb5e181"
+      },
+      {
+        "path": "src/range-model-lib/src/rml_structural_truss_dynamics_setup.cpp",
+        "sha256": "ee9acd6519fecf0b55aa79480bc927d8214ba59cc3fc7a957ade536b732f3bf7"
+      },
+      {
+        "path": "src/range-model-lib/tests/CMakeLists.txt",
+        "sha256": "f9e3c30b0eb2a19eef6079e45a6b0683c569ea3f3bb7096202910ffd4ac6df3a"
+      },
+      {
+        "path": "src/range-model-lib/tests/tst_element.cpp",
+        "sha256": "7d717089812b542a4690df357f978653c48751e1a1251bc9a08e4d7ec2ecc85b"
+      },
+      {
+        "path": "src/range-model-lib/tests/tst_model_physical_ids.cpp",
+        "sha256": "12273a11d72d39fb29fa56d69a79a02b55048a723cb72a1f5e5856334e1de542"
+      },
+      {
+        "path": "src/range-model-lib/tests/tst_problem_setup.cpp",
+        "sha256": "04bb237d99cdca97b2fcb470a17c715a470d5517a9675a2dc049146bf3a38347"
+      },
+      {
+        "path": "src/range-model-lib/tests/tst_structural_cable_setup.cpp",
+        "sha256": "1b6e125828d9b8e154867542e38c1adc39a067881f5f91f8ffb076b4eb0807d7"
+      },
+      {
+        "path": "src/range-model-lib/tests/tst_structural_piezo_setup.cpp",
+        "sha256": "869f8b5de1158f84e6be9d80701827a19f1e52170cefa86d26ead387bc8a0f14"
+      },
+      {
+        "path": "src/range-model-lib/tests/tst_structural_truss_dynamics_setup.cpp",
+        "sha256": "7e1e037f959e52555931c4abbe2e9a1d071a8a0a09afa1ce250839cf35b7ee59"
+      },
+      {
+        "path": "src/range-solver-lib/CMakeLists.txt",
+        "sha256": "1820f054eb21a8d4ab3a69e34e2bfbfad8ee93835dec21552efb5eb6fe0aab1f"
+      },
+      {
+        "path": "src/range-solver-lib/include/raccepted_step_publication.h",
+        "sha256": "77010d3513ec7012d7b7d3b622870f9a176e6154181ac8a69c3bbb4fc07dfa55"
+      },
+      {
+        "path": "src/range-solver-lib/include/rsolver.h",
+        "sha256": "e1d57a9c04b510773c418882695fd22011c4409d824606c09d1b0b38ed71c683"
+      },
+      {
+        "path": "src/range-solver-lib/include/rsolverstress.h",
+        "sha256": "075a496b73faae6c4c9959c9eac469d200b53dd95d34b3018ba29bfd336222be"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_static_truss_model.h",
+        "sha256": "8784aaed4cb044272ac18e0ca3e3f7dab78dc41954b9906e4250fee6993345b1"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_truss_assembly.h",
+        "sha256": "12f9a9ea98de2f26c8dfb85f623b1f17868d009f47e18f561a3dddfed5377fea"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_truss_dynamics_model_adapter.h",
+        "sha256": "75955ed0916adf826935d082fba8403dca89f16de179f86353f1f5a8d2c61ae1"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_truss_dynamics_restart_adapter.h",
+        "sha256": "6eb1ede9bdd1bec9dcc6f75735673a72884a2ef0aa9c48a0177d70653b7aebc3"
+      },
+      {
+        "path": "src/range-solver-lib/include/rstructural_truss_native_run.h",
+        "sha256": "a756611c30260cc4902056492e6a9426c01c090a8e87ae6a9625ebfb3fd31f67"
+      },
+      {
+        "path": "src/range-solver-lib/src/rsolver.cpp",
+        "sha256": "43b98be2b09365460f82066b29a8161645cb49f772d6a13b204ca8ed76b8b0e3"
+      },
+      {
+        "path": "src/range-solver-lib/src/rsolverstress.cpp",
+        "sha256": "f3f74ee730e8b709ab7d807ec5b535df6d2c7ff92e0479bf8c5e6e24926843ac"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_static_truss_model.cpp",
+        "sha256": "aa13f69ada1aa7d68733e3c66a1785033e7904a4d46213e4dca62be48d17af0a"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_assembly.cpp",
+        "sha256": "8a8a0433a841dc0cb3b3cca2ba78a82688acdeb43d1f3f61c70e88a97eff0e3e"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_dynamics_model_adapter.cpp",
+        "sha256": "ae19fc2514407ea1bf6771c14356580bc443d0d50aafc32561b18c3b46c64f81"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_dynamics_restart_adapter.cpp",
+        "sha256": "2b0425f3abd8fcd13f1167289ab46ade107a2b8155292ab772660095f438f3aa"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_dynamics.cpp",
+        "sha256": "ca0a653d600f19f69e1a70360d186143549145c061384224ce136b4b6f06f55c"
+      },
+      {
+        "path": "src/range-solver-lib/src/rstructural_truss_native_run.cpp",
+        "sha256": "a7bbbe5f706af74d8bc92859aeb973bf118336687a8323bf0b698052a05b0a96"
+      },
+      {
+        "path": "src/range-solver-lib/tests/CMakeLists.txt",
+        "sha256": "638451028ae4c22c27b39b1465aacb289d4619b506db14df5276080f292aaa9f"
+      },
+      {
+        "path": "src/range-solver-lib/tests/tst_structural_truss_assembly.cpp",
+        "sha256": "3efe4b321d3e69b7664db32c9690ffa2385a91d1f94db0db67e34777c2e81dab"
+      },
+      {
+        "path": "src/range-solver-lib/tests/tst_structural_truss_dynamics_fe.cpp",
+        "sha256": "0c736e684d7fc9bd71b8752a0aced11566e196beab671dd0e1b5eafc2435c951"
+      },
+      {
+        "path": "src/range-solver-lib/tests/tst_structural_truss_dynamics.cpp",
+        "sha256": "b6b594b73dcaade1544c2f2d5d58447769c555382dd22965e8f642974b7964b2"
+      },
+      {
+        "path": "src/range-workflow/python/range_workflow/service.py",
+        "sha256": "a6246df27756bbff0ef6129fce9a4e9af7d31004e91da7af2e90a34d10418b8d"
+      },
+      {
+        "path": "src/range-workflow/tests/test_native_document_client.py",
+        "sha256": "89e9701780efcbeddfed22395ccc9125b77cef9578fdab13c81d8a401355e6e1"
+      },
+      {
+        "path": "src/range-workflow/tests/test_workflow_runtime.py",
+        "sha256": "4a6f1548fe17f38b628a89f514b4be379da3c016df0d5361c6e66af58c1eeed5"
+      }
+    ],
+    "productionSourceRoot": "92251e9aca5835a869f18ebd5725a19195eca46a",
+    "changeSinceProductionFreeze": "Qt assertion file logging plus per-invocation verified workflow digest reuse; native C++ unchanged",
+    "nativeProductionSourceRoot": "92251e9aca5835a869f18ebd5725a19195eca46a",
+    "runtimeBindingSourceRoot": "f80307e6b0b9b5055a305b9b2d96f7fba5a8340d",
+    "qualificationNote": "Test-only moving C2 anchor and semantic numeric draft qualification; native production unchanged."
+  },
+  "sourceValidation": {
+    "source-freeze.json": {
+      "files": 52,
+      "matches": 50,
+      "mismatches": [
+        "src/fea-solver/tests/CMakeLists.txt",
+        "src/fea-solver/tests/tst_native_mixed_run.cpp"
+      ]
+    },
+    "source-freeze-diagnostics.json": {
+      "files": 52,
+      "matches": 50,
+      "mismatches": [
+        "src/fea-solver/tests/CMakeLists.txt",
+        "src/fea-solver/tests/tst_native_mixed_run.cpp"
+      ]
+    },
+    "source-freeze-final.json": {
+      "files": 54,
+      "matches": 52,
+      "mismatches": [
+        "src/fea-solver/tests/CMakeLists.txt",
+        "src/fea-solver/tests/tst_native_mixed_run.cpp"
+      ]
+    },
+    "source-freeze-anchor.json": {
+      "files": 55,
+      "matches": 55,
+      "mismatches": []
+    }
+  },
+  "build": {
+    "configuration": "Release",
+    "session": 11467,
+    "exitCode": 0,
+    "confirmation": "root agent",
+    "artifact": "full-build.log"
+  },
+  "runs": [
+    {
+      "id": "native-focused-final",
+      "tests": 7,
+      "passed": 7,
+      "failures": 0,
+      "elapsedSeconds": 40.13,
+      "xml": "integrated-final-gates.xml",
+      "log": "integrated-test-final-gates.log"
+    },
+    {
+      "id": "full-initial",
+      "tests": 186,
+      "passed": 185,
+      "failures": 1,
+      "elapsedSeconds": 1757.3,
+      "failedTargets": [
+        "tst_solver_audit_cli"
+      ],
+      "xml": "full-186.xml",
+      "log": "full-186.log"
+    },
+    {
+      "id": "audit-isolated-same-binary",
+      "cases": 38,
+      "passed": 38,
+      "failures": 0,
+      "elapsedSeconds": 24.7,
+      "causeConfirmed": false,
+      "artifact": "legacy-audit-first-detail.txt"
+    },
+    {
+      "id": "full-diagnostics",
+      "tests": 186,
+      "passed": 185,
+      "failures": 1,
+      "elapsedSeconds": 1629.55,
+      "failedTargets": [
+        "tst_workflow_runtime"
+      ],
+      "failureKind": "Timeout",
+      "timeoutSeconds": 180,
+      "observedSeconds": 180.02,
+      "runtimeCasesOK": 12,
+      "runtimePythonElapsedSeconds": 179.693,
+      "xml": "full-186-diagnostics.xml",
+      "log": "full-186-diagnostics.log"
+    },
+    {
+      "id": "audit-within-full-diagnostics",
+      "cases": 38,
+      "passed": 38,
+      "failures": 0,
+      "qtElapsedSeconds": 23.934,
+      "ctestElapsedSeconds": 24.1,
+      "causeConfirmed": false,
+      "artifact": "legacy-audit-full-repeat-detail.txt"
+    },
+    {
+      "id": "binding-contract",
+      "cases": 12,
+      "passed": 12,
+      "failures": 0,
+      "elapsedSeconds": 0.915,
+      "log": "runtime-binding-contract.log"
+    },
+    {
+      "id": "runtime-binding-qualification",
+      "tests": 1,
+      "passed": 1,
+      "failures": 0,
+      "targetElapsedSeconds": 175.25,
+      "elapsedSeconds": 175.28,
+      "timeoutSeconds": 180,
+      "xml": "runtime-binding-qualification.xml",
+      "log": "runtime-binding-qualification.log"
+    },
+    {
+      "id": "binding-related",
+      "tests": 7,
+      "passed": 7,
+      "failures": 0,
+      "elapsedSeconds": 106.9,
+      "xml": "binding-related.xml",
+      "log": "binding-related.log"
+    },
+    {
+      "id": "full-binding-first",
+      "session": 3352,
+      "exitCode": 8,
+      "tests": 186,
+      "passed": 185,
+      "failures": 1,
+      "skipped": 0,
+      "elapsedSeconds": 1639.54,
+      "failedTargets": [
+        "tst_project_session"
+      ],
+      "projectSessionQtCases": 30,
+      "projectSessionQtPassed": 29,
+      "projectSessionQtFailures": 1,
+      "failure": "whole pending JSON contains(1e-) assertion",
+      "assertionSemanticsInvalidConfirmed": true,
+      "exactMatchingLocationConfirmed": false,
+      "runtimeElapsedSeconds": 176.8,
+      "xml": "full-186-final.xml",
+      "log": "full-186-final.log"
+    },
+    {
+      "id": "anchor-focused-first",
+      "session": 30244,
+      "tests": 2,
+      "passed": 1,
+      "failures": 1,
+      "elapsedSeconds": 46.22,
+      "failedTargets": [
+        "tst_native_mixed_run"
+      ],
+      "xml": "anchor-qualification-first.xml",
+      "log": "anchor-qualification-first.log"
+    },
+    {
+      "id": "anchor-first-file-diagnostics",
+      "cases": 6,
+      "passed": 5,
+      "failures": 1,
+      "elapsedSeconds": 4.441,
+      "failure": "rollback test fixture read nonexistent baseline lastvalid",
+      "physicsReferencePassed": true,
+      "bothCliRowsPassed": true,
+      "artifact": "anchor-first-detail.txt"
+    },
+    {
+      "id": "anchor-focused-qualified",
+      "session": 11867,
+      "exitCode": 0,
+      "tests": 2,
+      "passed": 2,
+      "failures": 0,
+      "elapsedSeconds": 46.0,
+      "nativeQtPassed": 37,
+      "nativeQtFailures": 0,
+      "nativeQtElapsedSeconds": 31.819,
+      "projectSessionQtPassed": 30,
+      "projectSessionQtFailures": 0,
+      "xml": "anchor-qualification-final.xml",
+      "log": "anchor-qualification-final.log",
+      "nativeQtArtifact": "native-anchor-qualified-detail.txt"
+    },
+    {
+      "id": "full-anchor",
+      "session": 35112,
+      "exitCode": 0,
+      "status": "passed",
+      "tests": 186,
+      "passed": 186,
+      "failures": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "elapsedSeconds": 1640.79,
+      "serial": true,
+      "timeoutSeconds": 240,
+      "runtimeTargetTimeoutSeconds": 180,
+      "runtimeElapsedSeconds": 175.37,
+      "xml": "full-186-anchor.xml",
+      "log": "full-186-anchor.log",
+      "nativeQtPassed": 37,
+      "nativeQtFailures": 0,
+      "nativeQtElapsedSeconds": 32.626,
+      "nativeQtArtifact": "native-anchor-full-detail.txt",
+      "auditQtPassed": 38,
+      "auditQtFailures": 0,
+      "auditQtElapsedSeconds": 24.143,
+      "auditQtArtifact": "legacy-audit-anchor-full-detail.txt"
+    }
+  ],
+  "coverage": [
+    "TRUSS1 rod/cable held V/Q/L0/force native dynamics with fixed lumped mass",
+    "ASCII/binary format 1.3.20 transactional restart persistence and downgrade rejection",
+    "Independent energy/tangent, oscillator/RK4 and Newmark references",
+    "Six actual fea-solver RAM/RBM continuous/split decimal/tiny-dt/nonzero-t0 rows with bitwise accepted state and immutable input model hashes",
+    "Nine checkpoint publication faults, result collision, same solver retry, persistent failed rollback poisoning",
+    "Newton failure preserves initial state and authority",
+    "Workflow digest reuse only within one invocation; new reads at every authorization boundary",
+    "Moving C2 quadratic support: independent scalar affine-branch Newmark reference checks per accepted step q/v/a/reaction/energies and external/support/electrical/rest-length work; taut/slack/retension and permanently slack cables",
+    "Two actual moving-anchor CLI RAM/RBM rows split at4/resume to12 with bitwise accepted record and immutable source/recovery model hashes",
+    "Moving-anchor accepted2 AfterLatest publication fault preserves accepted state, latest/lastvalid existence and bytes, result, clock, source identity and recovery hash; same solver retry matches continuous reference",
+    "Project session numeric draft assertion validates scoped semantic metadata and accepted values rather than whole JSON substring"
+  ],
+  "review": {
+    "nativeNumericalAndTransactions": "independent bounded review: no remaining P1/P2 correctness finding",
+    "workflowBinding": "independent review: no material finding",
+    "performanceP2Open": true,
+    "reviewRanTests": false,
+    "cw07MovingAnchorScope": "Independent scope review: no remaining material finding; closure supported by same-source final full186/186 pass"
+  },
+  "remainingGates": [
+    "Dense command replay, complete source hashing and full model copies retain quadratic growth; full RSolver/CLI scaling remains unqualified",
+    "CW-13 first figure/CSV/memory thresholds",
+    "Continuous electrical/L0 providers, live v3 control, controller phase/state and multirate restart",
+    "Standard material/device/member-port sensor bindings and common electrode network",
+    "Prestressed ring equilibrium/modal/closed-loop qualification",
+    "Dynamic beam/plate patches and nonmatching surfaces",
+    "FE/ROM qualification",
+    "Four-card simplified workflow and GUI product qualification",
+    "Clean installation qualification",
+    "Separate MATLAB and Simulink LiveLink measurements",
+    "CW-03 full acceptance and full control-workbench delivery"
+  ],
+  "limitations": [
+    "No aggregation of separate runs into a single full-suite pass",
+    "Initial legacy audit failure cause unconfirmed",
+    "Workflow runtime margin to unchanged 180-second timeout remains small; no >=10-second speedup claim",
+    "Adapter-only 10k-step evidence does not qualify full native host scaling",
+    "Audit logs are local ignored build artifacts; JSON records paths and hashes, not embedded raw contents",
+    "Native production unchanged; test accessor and lastvalid baseline fixture repairs did not relax tolerances",
+    "CW-07 qualified only for held L0, frozen C2 prescribed support and fixed lumped mass; continuous length provider, full winch hardware, v3 external controller and GUI qualification excluded",
+    "qualification-summary-pending.json is preserved historical interim metadata, not the final qualification status"
+  ],
+  "artifacts": [
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-first-detail-process.log",
+      "bytes": 11945,
+      "sha256": "93f43fd0da3145bba67eddba50eb3b9974b8038c78ede12b0fa8d1f2fba749fd"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-first-detail.txt",
+      "bytes": 805,
+      "sha256": "a00094f81e099859ba569d1856b0bfaea209226b84c8f53077429db0673c41de"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-build-fixed.log",
+      "bytes": 30636,
+      "sha256": "e664734da32be1f766e08d472468182d6ee26cac1036ce3b2a981f9871a7340c"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-build.log",
+      "bytes": 35665,
+      "sha256": "dfde727622ad2673c02c8e2154a810b7db66577680f0003170a752aff7980935"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-final.log",
+      "bytes": 366,
+      "sha256": "a441affbfab20d97e9178c0f4b8247341c1d4c1928b6a6f44a69a8def5423529"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-final.xml",
+      "bytes": 2788,
+      "sha256": "655f5ea2f456bb25c6401a986729d3e392edbfc97638b232de64f48308f690c1"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-first.log",
+      "bytes": 327662,
+      "sha256": "02ada15f139c282b64bc01824c59a947f9b8f42be85d2f63508396afcd432389"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-first.xml",
+      "bytes": 215254,
+      "sha256": "574576b6ad08cb15e2dd81a87b73114867f8fca79ab50c69cf65fc0a6eb6c3e9"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-qualification-release-build.log",
+      "bytes": 31536,
+      "sha256": "eb34006be543349cc32449ed00d992034d47b94d644bacb3a3ef16547d87d26e"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/anchor-rollback-fixture-build.log",
+      "bytes": 1329,
+      "sha256": "e7e434c4db4d8f4f9061774fdbe4a48cb30898bb5bbc9f965e13bbce7f688e38"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/audit-diagnostics-build.log",
+      "bytes": 2410,
+      "sha256": "2073e8f43bd46d38cffa921a655753501a3c4be24a066c75924b6366ff6dd0aa"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/binding-related.log",
+      "bytes": 987,
+      "sha256": "b5c81973bfd8f8bc744d098cb9f9a8f0523d6a5d2a51a935c1a652f2b001d8b5"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/binding-related.xml",
+      "bytes": 5691,
+      "sha256": "625dee676b65c301079361c7864e60bbe080d2e6dc578cb054f389c16fdd69a6"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-build-first.log",
+      "bytes": 2437,
+      "sha256": "c509746c600a9a575e7424938e30197f519ddeeda4a1843d8a134ab4b86e6b37"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-diagnostics-before-fix.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-diagnostics-before-fix.txt",
+      "bytes": 13451,
+      "sha256": "1df6295eb055780e859f682e4aab749bad6beb5e2f9fe394cb82c0d872bd9207"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-diagnostics-only-build.log",
+      "bytes": 1245,
+      "sha256": "47dd74fb142b528ede58a3babd25ba572d145aaae4af89026df61ad3b2d23e2f"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-first-detail.txt",
+      "bytes": 549,
+      "sha256": "92b4a04dc6808bd2a09506e11740b73ef5153774b5ab840988d4fa12ed751e52"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-integrated-first-detail.txt",
+      "bytes": 4249,
+      "sha256": "05a42471714947119fae358bed9e05e924dd457672011e8890405511ad9005b9"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-integrated-first-process.log",
+      "bytes": 73624,
+      "sha256": "ca83ee3ccd66f5b39a0d2af4fb52ce95ffeb11c963c6ef8b5526e7edcf4d2b0d"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/fe-test-first.log",
+      "bytes": 997,
+      "sha256": "487fe2cbb31e489ccfd2ec9ff369515018139b7c99f236fc17cdcbe6989fc259"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186-anchor.log",
+      "bytes": 25846,
+      "sha256": "fbbe6b769a9730fbdbbafaec5916353c7168240d5c2e0399bfc2910b2fc7f92e"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186-anchor.xml",
+      "bytes": 155114,
+      "sha256": "8a1064ed5028fa7fba848908377d1f908ab1a60abbcc791ff5e7b06af23dbf63"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186-diagnostics.log",
+      "bytes": 27808,
+      "sha256": "576810e5654676c186dca293e16579957c3c3459d7aa4774b8ea2ddc5b5073c0"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186-diagnostics.xml",
+      "bytes": 155894,
+      "sha256": "8af3daeb8a4850b5ca68238d556ab8c9853ac9136c09d7dac9ea20123adf85a8"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186-final.log",
+      "bytes": 115940,
+      "sha256": "74d77df91b9c1f24ea34958559ffff75b9490242e92cac061b1d6079a7c19444"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186-final.xml",
+      "bytes": 244021,
+      "sha256": "dc980f8236c4951698d2e84e4779a3b1097c16261ce80d8165200bbc8ddd1c51"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186.log",
+      "bytes": 41386,
+      "sha256": "2ad002e06c19175eaa6025d780e4310bf41582a68535c9cca45216f1e8152e28"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-186.xml",
+      "bytes": 169462,
+      "sha256": "7fa352e7fe06adea567af0335b8d508d7734d6cb9977c1231492a47d573f5f11"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/full-build.log",
+      "bytes": 40413,
+      "sha256": "f4cfe6880e16c0dc18c7e089d28f933fdaa48bcddcb7604d320d9d0df2202f88"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-build-first.log",
+      "bytes": 5465,
+      "sha256": "1044ea9f3b974d28a3368b90c62e75167bd5f443bc25b9291d2a4e115a3acfc8"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-first-components.log",
+      "bytes": 504,
+      "sha256": "6bae6a46c7cfa1d385d39a159b455b1c46c23f1191a04e060261dfebf7aa099e"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-first-components.xml",
+      "bytes": 3043,
+      "sha256": "4c084a1151dad0c87101a5b3041118d185b6996f782efe1e97d8c72a987d366e"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-integrated-first-detail.txt",
+      "bytes": 2292,
+      "sha256": "f5b9964d741394d54baa8d53aef4a8a910947630cbdadd674968f828f5352d4c"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-integrated-first-process.log",
+      "bytes": 200391,
+      "sha256": "4249b8e3bc9a5fe10d60eae2bf6d5967cac10b14c934a4776c2f3c4deb46cb52"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-integrated-fixed-detail.txt",
+      "bytes": 2578,
+      "sha256": "ea3dde21099d9aa5a2fff7ccad4ac6a9040c680ec7b0a2ece3526b14848cb74f"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/host-integrated-fixed-process.log",
+      "bytes": 200941,
+      "sha256": "5dbc8bcc0985678e675fef1053d880045058b5eeb993e1e58371de414604d14d"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-build-final-gates.log",
+      "bytes": 2702,
+      "sha256": "6b312abc19250aee8ad09329ca9c7eade7574f039f9c3e73c4da53d3648b789e"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-build-first.log",
+      "bytes": 9708,
+      "sha256": "6892347fc6c3b2071d326a36c160d4bd743e4733282a7947735882fcbfde5804"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-build-numerical-fix.log",
+      "bytes": 6224,
+      "sha256": "47627273b83b4f589079253fa5ac9253f4e48204c4a68c42996aab5d15069f76"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-build-test-fix.log",
+      "bytes": 1329,
+      "sha256": "594d6799056a407922c748c979c74a0d361dc3473bf882a95c7d16090dbeb081"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-candidate-source.json",
+      "bytes": 7866,
+      "sha256": "9ea73a916a3295795b70f2e32a0eed66398ee6e5e964e1428105919f0199fb59"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-final-gates.xml",
+      "bytes": 6767,
+      "sha256": "ad977dd6295465ce5fdd533c74d362d0e563be25c47c42e9b68a0b4c67167d55"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-first.xml",
+      "bytes": 278389,
+      "sha256": "3198f58f968782ef03caf027ec92f83d37cf9ee7add2cd42ad77d1e84fb569a1"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-fixed.xml",
+      "bytes": 206602,
+      "sha256": "f4535934febfbfc3e77128e8ec7937e7aa0f9087f280da99d1711be4662d5587"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-test-final-gates.log",
+      "bytes": 993,
+      "sha256": "39b13a959ced2a99a6dfda7c97d79b50cdc8d23b88d30ad487293045c80efeeb"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-test-first.log",
+      "bytes": 275053,
+      "sha256": "329d4fad5babef4383732c65f45454224fa61ede94fbd038549a3e392aa5fe16"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/integrated-test-fixed.log",
+      "bytes": 202032,
+      "sha256": "e1aac9d3b764fc7a91a680c2132366d4e81f8dcefe920f4745c03c9bef06e6c1"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/inventory-186.json",
+      "bytes": 164778,
+      "sha256": "5e68c2e3ef4e7d9809d8987eb320b9655891221abf378f37699926f894ccafab"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/inventory-anchor-186.json",
+      "bytes": 165055,
+      "sha256": "699fc2213b466090f24d63d7d2d0abfb3861e07a84ed1df8e3534b65a3abccd4"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/legacy-audit-anchor-full-detail.txt",
+      "bytes": 3234,
+      "sha256": "99e463fa49b9f06c3aa1e762471b595d07dfc53580ec25e6baa658a87f523ed6"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/legacy-audit-final-detail.txt",
+      "bytes": 3234,
+      "sha256": "5f407e85fc6e5c7ec27443edc79450a9ea4d8de79ed5582d6263f60d3533b7f3"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/legacy-audit-first-detail.txt",
+      "bytes": 3234,
+      "sha256": "1b7b6f96a12850f56ebefc0aa58d8e4bf0ff773b4bfbea63ed998153d4263511"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/legacy-audit-first-process.log",
+      "bytes": 15642,
+      "sha256": "50f425234b1c42690eec0bfebea939aa2ad63a706f4e7c7f9adc8f6ebf3bddce"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/legacy-audit-full-repeat-detail.txt",
+      "bytes": 3234,
+      "sha256": "d866944cd6dc65bd97da9c8b765c77a11578aaa45dfb0216e3147b7e93813c67"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/livelink-registry-observation.json",
+      "bytes": 602,
+      "sha256": "25a65d5571c5423917ca7dd61bea562f0569f758042f39b06f3b706a09d3642b"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/native-anchor-full-detail.txt",
+      "bytes": 2781,
+      "sha256": "465a34895aa56b95318a1cfbc61df5f8301b078994ef4e4fb0659d61e38326e5"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/native-anchor-qualified-detail.txt",
+      "bytes": 2781,
+      "sha256": "732bb23c40e4c5598af5dedec578e57a82fffc78d7f71f7393dfe32d1525f9d8"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/qualification-summary-pending.json",
+      "bytes": 10739,
+      "sha256": "d6a025330b2e150a3e0d3a71a88581bbf1961fd0e041df7959411d6505b4e7df"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/regression-binaries.json",
+      "bytes": 391,
+      "sha256": "e5a4e204ad6c4f2c03d1e4c3a53ead835816c38d5d11cd215229fbd8c013fdac"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/runtime-binding-contract.log",
+      "bytes": 116,
+      "sha256": "b2ca57155f2af796fa9aded4ed8ca899e9f3da604350c40b496c2d4bbfba1fc4"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/runtime-binding-qualification.log",
+      "bytes": 258,
+      "sha256": "6cc4344e7bda4881dc5e91cc244bdced930be48516a923e76acf2e30f7ffe177"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/runtime-binding-qualification.xml",
+      "bytes": 1489,
+      "sha256": "36286ced14e0c2b1d4b13057749adf79bbef455b1b8ae3897afcdc0da7548b78"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-first-detail-process.log",
+      "bytes": 728,
+      "sha256": "8c7265a97ad14ad08425d11aceb710905f592f2a2324cdd16563dc7ed05a9364"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-first-detail.txt",
+      "bytes": 4536,
+      "sha256": "d1f8c5ba9f77bfae179f1fd840a712bd24e1ac21e889214199be18f377a32024"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-publication-build-first.log",
+      "bytes": 6962,
+      "sha256": "e82edcbe405622786c56d9a69837ec10159befad072f57ea8b50b37960e04a22"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-publication-build-fixed.log",
+      "bytes": 2446,
+      "sha256": "1c21b834daf4828bcc907dcb1f81792f01801f50db490f193acf878f049dcaab"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-publication-first.xml",
+      "bytes": 2462,
+      "sha256": "1e5c00d29455842431f6e59a3244e4e95b869a6e6b91a29214d1e4711e4d0f83"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-publication-fixed.xml",
+      "bytes": 2430,
+      "sha256": "f1e070823817af985ba89940cf3b48b8c6120b689bee40400d4736a3adeb7efd"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-publication-test-first.log",
+      "bytes": 1239,
+      "sha256": "dc840c163ce76c2456ea6e49ac4ee00a0566ae5f67c5752b62221c81007ae659"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/schema-publication-test-fixed.log",
+      "bytes": 398,
+      "sha256": "691feeac4c03a2639a4090ad0968df44394e415897e7eb21f30546de8e7e8924"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/source-freeze-anchor.json",
+      "bytes": 9948,
+      "sha256": "7a2532594039cadd4f999a62a8398d9c1ab62ddd8fbafbca22ad3ab06478e6a6"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/source-freeze-diagnostics.json",
+      "bytes": 9139,
+      "sha256": "94a58f156527a4c61a183a0e99272ca87dd4b1bea088b550477508067edf5fa0"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/source-freeze-final.json",
+      "bytes": 9516,
+      "sha256": "798176b93d6df8cd39ff9b9d297aac3a53a7d292f619e4f5bb12300b7a49d839"
+    },
+    {
+      "path": "build/audit-20261011/native-mixed/source-freeze.json",
+      "bytes": 8973,
+      "sha256": "a78241786a5719224d1666b11d70029c8b0ae07e24e908438d93ba56b159267a"
+    }
+  ],
+  "previousSourceValidation": {
+    "final": {
+      "files": 54,
+      "matches": 54,
+      "mismatches": []
+    },
+    "diagnostics": {
+      "files": 52,
+      "matches": 52,
+      "mismatches": []
+    },
+    "original": {
+      "files": 52,
+      "matches": 51,
+      "mismatches": [
+        "src/fea-solver/tests/CMakeLists.txt"
+      ],
+      "reason": "Later Qt assertion logging configuration; original source freeze preserved"
+    }
+  },
+  "anchorBuilds": [
+    {
+      "session": 18843,
+      "status": "failed",
+      "reason": "test accessor wrong restart data type",
+      "log": "anchor-qualification-build.log"
+    },
+    {
+      "session": 73639,
+      "exitCode": 0,
+      "log": "anchor-qualification-build-fixed.log"
+    },
+    {
+      "session": 77518,
+      "exitCode": 0,
+      "configuration": "Release",
+      "log": "anchor-qualification-release-build.log"
+    }
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "CW-07-A01",
+      "status": "pass",
+      "evidence": "Held L0 commands, frozen C2 prescribed support, independent tension reference and actual RAM/RBM CLI",
+      "scope": "held effective reference length and source-frozen smooth anchor"
+    },
+    {
+      "id": "CW-07-A02",
+      "status": "pass",
+      "evidence": "Positive-length rejection, taut/slack/retension and permanently slack cable, independent q/v/a/reaction and separated external/support/electrical/rest-length work",
+      "scope": "nonzero support work and command work"
+    },
+    {
+      "id": "CW-07-A03",
+      "status": "pass",
+      "evidence": "Accepted candidate, publication faults, moving-support rollback, same solver retry and RAM/RBM disk split/resume bitwise consistency",
+      "scope": "No complete winch hardware qualification"
+    }
+  ],
+  "contractInventory": {
+    "requirements": 14,
+    "tasks": 16,
+    "acceptanceCriteria": 48,
+    "unchanged": true
+  },
+  "liveLinkBaselines": {
+    "matlab": "unmeasured-deferred",
+    "simulink": "unmeasured-deferred",
+    "existingExamplesSupplied": false,
+    "userAllowsResearchOrDeferral": true,
+    "askForExistingExamplePathsAgain": false,
+    "featureDevelopmentPaused": false,
+    "priority": "simplify operation and reduce clicks",
+    "registryObservation": "livelink-registry-observation.json",
+    "registryProvesQualification": false
+  }
+}

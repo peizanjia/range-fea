@@ -2,11 +2,17 @@
 
 2026-10-11。此文件落实用户再次强调的宗旨：相较现有 LiveLink 方案的易用性和已约定结构控制功能完整。它是验收方法，不是已经优于 LiveLink 的结果。CW-13 与原性能/安装硬项保持原门槛，完整范围仍是 14 项需求、16 项任务和 48 项验收。
 
+用户已确认两种方案都用：COMSOL＋MATLAB 与 COMSOL＋Simulink 分别建立对照，不合并点击数、接入时间或误差统计。
+
+最新指示：用户目前没有现成算例，允许联网调研或暂不实测对比，重点关注简化点击等操作流程。因此当前先执行本软件的真实操作量验收，LiveLink 两套同算例实测暂记未测，不继续索要工件，也不阻塞独立功能开发。完整计划中的对照项保留 pending，日后有工件再补；这不是已优于 LiveLink 的证据。
+
 ## 公平的对照对象
 
 LiveLink for MATLAB 已提供脚本建模、材料/边界函数、Desktop 共用模型、结果提取和定制 GUI；不能把它描述成只支持手工拼接的有限工具。[COMSOL 6.4 官方介绍](https://doc.comsol.com/6.4/doc/com.comsol.help.llmatlab/llmatlab_introduction.2.01.html)。LiveLink for Simulink 另外提供联合仿真和降阶状态空间导出，应在用户实际采用该方案时单独对照。[官方产品说明](https://www.comsol.com/livelink-for-simulink)。以上是文档能力，未证明用户现有安装、模型或脚本的实际状态。
 
 实测记录 COMSOL / MATLAB / Simulink 与本软件的实际版本、所需模块、同一主机及模型/控制器来源。允许基线使用其既有脚本封装、App Designer 界面和预设，不人为要求基线从零书写低层 API。首次配置和已保存实验的重复运行分开，计入必要的初始配置而不重复计入安装。缺少基线环境或工件时记录未测，不以文档推测点击数和耗时。
+
+当前机器的卸载注册表记录为 COMSOL Multiphysics 6.3（6.3.0.290）、MATLAB R2022a（9.12），原始观察在 `build/audit-20261011/native-mixed/livelink-registry-observation.json`。注册表不证明实际运行二进制版本、LiveLink/Simulink 模块许可或现有工程可运行；用户已确认暂无两套基线工件，实测均保持未测，不套用上述 6.4 文档作为已安装 6.3 的运行验收。
 
 ## 功能完整检查
 

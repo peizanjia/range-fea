@@ -232,6 +232,14 @@
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.json",
               "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.md",
+              "sha256": "ea4b7cb334ff8a7ffe25a48cf9b002b03e86e4921be376ea9c07b323833032fc"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.json",
+              "sha256": "5bc0d3aeb377aadac9cecf8baa5a5d178e005c697d950ba5bfa8ccf598869140"
             }
           ]
         },
@@ -253,6 +261,14 @@
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.json",
               "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.md",
+              "sha256": "ea4b7cb334ff8a7ffe25a48cf9b002b03e86e4921be376ea9c07b323833032fc"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.json",
+              "sha256": "5bc0d3aeb377aadac9cecf8baa5a5d178e005c697d950ba5bfa8ccf598869140"
             }
           ]
         }
@@ -365,7 +381,7 @@
     {
       "id": "CW-07",
       "title": "收放索长和移动锚点动态作动",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "CW-01"
       ],
@@ -377,7 +393,7 @@
         {
           "id": "CW-07-A01",
           "description": "规定有效参考长度及平滑锚点运动，张力由求解产生",
-          "status": "pending",
+          "status": "pass",
           "evidence": [
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.md",
@@ -386,13 +402,21 @@
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.json",
               "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.md",
+              "sha256": "ea4b7cb334ff8a7ffe25a48cf9b002b03e86e4921be376ea9c07b323833032fc"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.json",
+              "sha256": "5bc0d3aeb377aadac9cecf8baa5a5d178e005c697d950ba5bfa8ccf598869140"
             }
           ]
         },
         {
           "id": "CW-07-A02",
           "description": "正长度/张力仅受拉/松弛/速度加速度及功账",
-          "status": "pending",
+          "status": "pass",
           "evidence": [
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.md",
@@ -401,13 +425,21 @@
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.json",
               "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.md",
+              "sha256": "ea4b7cb334ff8a7ffe25a48cf9b002b03e86e4921be376ea9c07b323833032fc"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.json",
+              "sha256": "5bc0d3aeb377aadac9cecf8baa5a5d178e005c697d950ba5bfa8ccf598869140"
             }
           ]
         },
         {
           "id": "CW-07-A03",
           "description": "动态试步/失败回滚/续算一致，不宣传完整卷筒硬件模型",
-          "status": "pending",
+          "status": "pass",
           "evidence": [
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.md",
@@ -416,6 +448,14 @@
             {
               "path": "docs/acceptance/CW-dynamics-core-20261011.json",
               "sha256": "0913ef058b063d789d7f2768a69262117423a4cb14df953b0e6404382da35c03"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.md",
+              "sha256": "ea4b7cb334ff8a7ffe25a48cf9b002b03e86e4921be376ea9c07b323833032fc"
+            },
+            {
+              "path": "docs/acceptance/CW-native-mixed-20261011.json",
+              "sha256": "5bc0d3aeb377aadac9cecf8baa5a5d178e005c697d950ba5bfa8ccf598869140"
             }
           ]
         }
