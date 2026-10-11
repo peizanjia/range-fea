@@ -184,7 +184,10 @@ target_compile_definitions(tst_solver_audit_cli PRIVATE
     RANGE_TYPED_CONTROL_EXAMPLE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../examples/control_typed_ndjson_python.py")
 target_link_libraries(tst_solver_audit_cli PRIVATE range-solver-lib Qt6::Test Qt6::Network)
 add_dependencies(tst_solver_audit_cli fea-solver control_ndjson_fixture)
-add_test(NAME tst_solver_audit_cli COMMAND tst_solver_audit_cli)
+# Qt's Windows default logger can omit assertion text from CTest's pipe.
+# Keep a per-case file as well so a full-run failure remains diagnosable.
+add_test(NAME tst_solver_audit_cli COMMAND tst_solver_audit_cli
+    -o "${CMAKE_CURRENT_BINARY_DIR}/solver-audit-detail.txt,txt" -o -,txt)
 if(WIN32)
     set_tests_properties(tst_solver_audit_cli PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
