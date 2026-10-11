@@ -1,0 +1,485 @@
+{
+  "schemaVersion": 1,
+  "project": "range-fea",
+  "objective": "本次会话交付功能完备、交互简单的完整压电结构控制软件",
+  "createdAt": "2026-10-12",
+  "timezone": "Asia/Singapore",
+  "baselineRootCommit": "a72471e414fe709082d6d86961c36eeaa224f2c9",
+  "productComplete": false,
+  "requirements": [
+    {
+      "id": "PC-R01",
+      "title": "少操作完整用户流程",
+      "description": "实际Windows当前模型、整套预览确认、保存实验两个操作及真实点击证据。"
+    },
+    {
+      "id": "PC-R02",
+      "title": "正压电传感",
+      "description": "轴向替换杆和理想粘结梁/平板贴片，开路电压/短路电荷/理想电荷放大器及直接项。"
+    },
+    {
+      "id": "PC-R03",
+      "title": "压电作动与分层物理",
+      "description": "轴向杆替换、空间任意取向平面梁及平板分层贴片质量、自身惯量、偏心和膜弯耦合、连续电极与来源。"
+    },
+    {
+      "id": "PC-R04",
+      "title": "修改后原生有限元算子",
+      "description": "实际修改后同一FE组装M/K/G/Ce、约束、工作点和稳定物理DOF，电学边界参与凝聚。"
+    },
+    {
+      "id": "PC-R05",
+      "title": "用户物理阻尼",
+      "description": "统一/逐模态簇/瑞利/导入C；FE和ROM共用权威C，区分完整与截断基。"
+    },
+    {
+      "id": "PC-R06",
+      "title": "模态与矩阵导出",
+      "description": "M正交、残差及簇检查，选模可选保存FE/ROM和连续离散状态空间含直接项/单位/源。"
+    },
+    {
+      "id": "PC-R07",
+      "title": "无模型内置控制",
+      "description": "速度反馈、PI/PID/PD和离散状态空间，真实动作限幅和速率/状态事务。"
+    },
+    {
+      "id": "PC-R08",
+      "title": "有模型内置控制",
+      "description": "实际LQR Riccati/K/闭环极点和约束MPC QP/KKT，真实FE与ROM投影耦合。"
+    },
+    {
+      "id": "PC-R09",
+      "title": "状态来源与观测器",
+      "description": "仿真全FE接受态投影与仅选传感信号估计分别可用，估计可观性及状态持久化。"
+    },
+    {
+      "id": "PC-R10",
+      "title": "自由与时间受迫振动",
+      "description": "节点时间表达式/表格/外部f(t)，背景力端点与控制保持/耗散/功账一致。"
+    },
+    {
+      "id": "PC-R11",
+      "title": "完整时序恢复",
+      "description": "Ts=N*dtFE、FE/控制计数和相位、所有控制估计QP状态及文件发布共同接受。"
+    },
+    {
+      "id": "PC-R12",
+      "title": "完整交付验证",
+      "description": "真实杆梁板例、独立物理/收敛、GUI/导出/安装/兼容/性能及源许可证据。"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "PC-00",
+      "title": "新合同与现有原生基础整合",
+      "status": "in_progress",
+      "dependsOn": [],
+      "requirementIds": [
+        "PC-R01",
+        "PC-R11",
+        "PC-R12"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-00-A01",
+          "description": "完整范围和实际起点/缺口冻结，不把旧测试用于新源",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-00-A02",
+          "description": "格式21及当前原生PI/完整状态真实FE CLI资格",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-00-A03",
+          "description": "独立审查/旧格式兼容与失败回滚证据",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-01",
+      "title": "材料器件电极和正压电传感",
+      "status": "planned",
+      "dependsOn": [
+        "PC-00"
+      ],
+      "requirementIds": [
+        "PC-R02",
+        "PC-R03",
+        "PC-R04"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-01-A01",
+          "description": "材料d/e介电条件/单位/极化和来源；替换无重复质量刚度",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-01-A02",
+          "description": "先在杆上验证开路/短路/理想电荷放大器及混合电压作动+开路传感；梁板读出由PC-02/10完成",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-01-A03",
+          "description": "角色/连续电极/稳定物理绑定/配置失效和持久化",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-02",
+      "title": "分层梁和真正分层平板内核",
+      "status": "planned",
+      "dependsOn": [
+        "PC-01"
+      ],
+      "requirementIds": [
+        "PC-R02",
+        "PC-R03",
+        "PC-R04"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-02-A01",
+          "description": "平面梁支持运动学完整层质量自身惯量偏心耦合，空间旋转等价和非法扭转/另一平面自由度拒绝",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-02-A02",
+          "description": "平板膜弯剪切及分层A/B/D和I0/I1/I2原生组装",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-02-A03",
+          "description": "刚体/patch test/互易/梁板各读出/混合电压开路/网格收敛独立验证",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-03",
+      "title": "统一有限元操作点和算子",
+      "status": "planned",
+      "dependsOn": [
+        "PC-02"
+      ],
+      "requirementIds": [
+        "PC-R04",
+        "PC-R12"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-03-A01",
+          "description": "同源支持运动学完整平移转角/偏心交叉M进入FE时域/矩阵/传感，q0/V0/Q0/f0和完整切线残差",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-03-A02",
+          "description": "全阶自由/完整DOF及约束/端口映射和单位",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-03-A03",
+          "description": "源变更失效/未知模型拒绝/命名结果与旧入口兼容",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-04",
+      "title": "模态用户阻尼和选模",
+      "status": "planned",
+      "dependsOn": [
+        "PC-03"
+      ],
+      "requirementIds": [
+        "PC-R05",
+        "PC-R06"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-04-A01",
+          "description": "广义特征残差/M正交/近重根簇和用户选模",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-04-A02",
+          "description": "均匀/逐模态簇/Rayleigh/导入C的明确策略和PSD",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-04-A03",
+          "description": "FE/ROM共用同C，完整/截断基及高阶策略不混淆",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-05",
+      "title": "有限元ROM和状态空间导出",
+      "status": "planned",
+      "dependsOn": [
+        "PC-04"
+      ],
+      "requirementIds": [
+        "PC-R06",
+        "PC-R09"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-05-A01",
+          "description": "修改后真实FE M/K/C/G/Ce/B及模态可选导出",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-05-A02",
+          "description": "ROM连续/精确ZOH离散A/B/C/D和电学加速度扰动直接项",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-05-A03",
+          "description": "DOF/单位/源/选模/读回、初始电荷偏置与FE-ROM绝对/增量一致和误差证据",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-06",
+      "title": "节点时间受迫激励和外部函数",
+      "status": "planned",
+      "dependsOn": [
+        "PC-03"
+      ],
+      "requirementIds": [
+        "PC-R10",
+        "PC-R11"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-06-A01",
+          "description": "常值/正弦/多频/扫频/脉冲/表格/受限表达式真实节点激励",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-06-A02",
+          "description": "外部时间唯一输入f(t)命名力/单位/依赖环境与错误语义",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-06-A03",
+          "description": "端点力/控制保持/阻尼耗散/外力功及步长细化和重试",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-07",
+      "title": "内置控制算法投影和观测器",
+      "status": "planned",
+      "dependsOn": [
+        "PC-05",
+        "PC-06"
+      ],
+      "requirementIds": [
+        "PC-R07",
+        "PC-R08",
+        "PC-R09"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-07-A01",
+          "description": "PI/PID/PD/速度反馈/离散状态空间实际算法及限制",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-07-A02",
+          "description": "LQR实际K/Riccati残差极点与MPC QP约束/KKT/失败",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-07-A03",
+          "description": "仿真接受FE投影和sensor-only可观性/观测器独立路径",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-08",
+      "title": "FE ROM闭环多速率和恢复",
+      "status": "planned",
+      "dependsOn": [
+        "PC-07"
+      ],
+      "requirementIds": [
+        "PC-R08",
+        "PC-R09",
+        "PC-R11"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-08-A01",
+          "description": "真实完整FE plant闭环及同载荷回放/各自闭环误差",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-08-A02",
+          "description": "多速率独立FE/控制相位与每相位磁盘恢复",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-08-A03",
+          "description": "积分/观测器/上一applied/QP暖启所有状态共同接受和故障重试",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-09",
+      "title": "少操作建模和控制工作台",
+      "status": "planned",
+      "dependsOn": [
+        "PC-01",
+        "PC-05",
+        "PC-06",
+        "PC-08"
+      ],
+      "requirementIds": [
+        "PC-R01",
+        "PC-R02",
+        "PC-R03",
+        "PC-R06",
+        "PC-R07",
+        "PC-R08",
+        "PC-R10"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-09-A01",
+          "description": "真实当前模型选杆/选宿主器件和读出一次整套配置",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-09-A02",
+          "description": "模态/导出/算法/激励默认与高级参数集中预览批准/Undo",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-09-A03",
+          "description": "保存实验运行+确认两操作，无手写映射路径代码token",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-10",
+      "title": "杆梁板完整代表算例",
+      "status": "planned",
+      "dependsOn": [
+        "PC-09"
+      ],
+      "requirementIds": [
+        "PC-R02",
+        "PC-R03",
+        "PC-R06",
+        "PC-R08",
+        "PC-R10",
+        "PC-R12"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-10-A01",
+          "description": "多杆结构PZT传感作动/预应力/自由受迫与完整闭环",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-10-A02",
+          "description": "梁板真实层/质量信号/模态/LQR/MPC与收敛及FE ROM对照",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-10-A03",
+          "description": "真实窗口配置运行/曲线频谱/导出/保存重开与故障诊断",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "PC-11",
+      "title": "私有安装回归终审和软件交付",
+      "status": "planned",
+      "dependsOn": [
+        "PC-10"
+      ],
+      "requirementIds": [
+        "PC-R01",
+        "PC-R12"
+      ],
+      "acceptance": [
+        {
+          "id": "PC-11-A01",
+          "description": "源冻结完整必跑/兼容/独立审查及许可材料",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-11-A02",
+          "description": "私有安装真实应用故事/点击记录/20k首图CSV内存门槛",
+          "status": "pending",
+          "evidence": []
+        },
+        {
+          "id": "PC-11-A03",
+          "description": "全部本次验收通过并提供可运行软件与操作文档，缺项不算通过",
+          "status": "pending",
+          "evidence": []
+        }
+      ]
+    }
+  ],
+  "deferredExtensions": [
+    "任意导入CAD面跨重网格身份",
+    "面力体力力矩高级接口",
+    "曲壳/任意3D压电实体/胶层损伤",
+    "真实调理硬件/硬实时",
+    "无现成工件的两套LiveLink实测对照"
+  ],
+  "contractDocument": {
+    "path": "docs/PIEZO_CONTROL_DELIVERY.md",
+    "sha256": "5de3d06bca0f049cdd6231b2b71c60c126ca852657ff617eb2662653bcd4b61c"
+  },
+  "frozenScopeSha256": "d1d5fd76a14fba2b68e4b06fbeb2428da796e98c512e0b8b7940fb1545207dda"
+}
