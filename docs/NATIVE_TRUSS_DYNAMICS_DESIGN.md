@@ -1,6 +1,6 @@
 # CW-03/CW-07 原生混合杆索动力实现契约
 
-2026-10-11。状态为设计冻结，尚未实现/验收。完整需求仍以 CONTROL_WORKBENCH_DELIVERY.md 和 control_workbench_plan.json 为准；本设计不缩小任务。
+2026-10-11。状态为设计冻结；共同装配和步内保持输入的纯动态候选核心已实现并完成聚焦验证，完整原生执行/控制/重启尚未验收。增量证据见 acceptance/CW-dynamics-core-20261011.md；完整需求仍以 CONTROL_WORKBENCH_DELIVERY.md 和 control_workbench_plan.json 为准，本设计不缩小任务。
 
 ## 同一结构、同一方程
 
@@ -69,4 +69,6 @@ U          = H + V*Q2  = 0.5*k*delta^2 + 0.5*Ce*V^2
 
 本构理论依据：[COMSOL Piezoelectricity](https://doc.comsol.com/6.3/doc/com.comsol.help.sme/sme_ug_theory.06.043.html)；端口/电极边界依据：[SDTools full-order piezo model](https://www.sdtools.com/help/piezo/pz_full.html)。以上为物理/接口背景，本项目公式由上述显式端电压约定推导，未复制其程序实现。
 
-现有代码复用点：RStructuralCableKernel、RStructuralCableControlInput、RStructuralPrescribedMotion、RMatrixSolver GMRES。边界检查：rstructural_cable_model_adapter 的全 cable/固定零支座要求；rstructural_cable_dynamics 对所有 DOF 的 Newmark 反算；rstructural_cable_dynamics_restart_adapter 的 immutable L0 指纹；rsolvergeneric 提交后 accepted observer。以上边界由只读子任务 cw07_native_route 核对，尚无新动态实现或测试结果。
+现有代码复用点：拉索 tension-only 本构、RStructuralPrescribedMotion、RMatrixSolver GMRES。新 rstructural_truss_assembly 保留原拉索数学定律，采用缩放运算避免 Windows 中间乘法溢出；旧拉索路由不改变。新 rstructural_truss_dynamics 冻结系统副本，以原生 GMRES、新鲜残差和解析支座运动实现保持输入的纯候选步。连续 L0/电学路径、native adapter、控制连接和提交前 checkpoint 发布尚待实现。
+
+旧边界仍保留：rstructural_cable_model_adapter 的全 cable/固定零支座要求；rstructural_cable_dynamics 对所有 DOF 的 Newmark 反算；rstructural_cable_dynamics_restart_adapter 的 immutable L0 指纹；rsolvergeneric 提交后 accepted observer。新核心的局部测试不能扩大这些旧入口能力。

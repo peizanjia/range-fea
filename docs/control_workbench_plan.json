@@ -209,7 +209,7 @@
     {
       "id": "CW-03",
       "title": "轴向压电杆动态与混合杆索求解",
-      "status": "planned",
+      "status": "in_progress",
       "dependsOn": [
         "CW-02",
         "CW-07"
