@@ -230,7 +230,7 @@ class NativeDocumentCliIntegrationTests(unittest.TestCase):
             modal_damping_ratios=[])
         dynamics_output = self.root / "dynamics.ram"
         self.assertEqual(client.execute(dynamics_preview, dynamics_output)["status"], "published")
-        self.assertEqual(dynamics_output.read_bytes().splitlines()[0], b"1.3.19")
+        self.assertEqual(dynamics_output.read_bytes().splitlines()[0], b"1.3.20")
 
         material_client = NativeDocumentClient(CLI_PATH, dynamics_output)
         material_preview = material_client.set_material(
@@ -238,14 +238,14 @@ class NativeDocumentCliIntegrationTests(unittest.TestCase):
             density_kg_m3=7850.0, poisson_ratio=0.3, thermal_expansion_per_k=1.2e-5)
         material_output = self.root / "material.ram"
         self.assertEqual(material_client.execute(material_preview, material_output)["status"], "published")
-        self.assertEqual(material_output.read_bytes().splitlines()[0], b"1.3.19")
+        self.assertEqual(material_output.read_bytes().splitlines()[0], b"1.3.20")
 
         boundary_client = NativeDocumentClient(CLI_PATH, material_output)
         boundary_preview = boundary_client.set_boundary(
             target_id=point["id"], kind="force", values=(1.0, None, -2.0))
         boundary_output = self.root / "boundary.ram"
         self.assertEqual(boundary_client.execute(boundary_preview, boundary_output)["status"], "published")
-        self.assertEqual(boundary_output.read_bytes().splitlines()[0], b"1.3.19")
+        self.assertEqual(boundary_output.read_bytes().splitlines()[0], b"1.3.20")
         self.assertEqual(self.source.read_bytes(), self.original)
 
         # A label query remains a candidate list; it never chooses a target.

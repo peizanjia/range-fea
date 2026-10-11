@@ -35,6 +35,7 @@
       "tst_structural_product_profile",
       "tst_structural_cable_setup",
       "tst_structural_piezo_setup",
+      "tst_structural_truss_dynamics_setup",
       "tst_element_group_io",
       "tst_model_physical_ids"
     ],
@@ -70,6 +71,7 @@
       "tst_structural_cable_equilibrium",
       "tst_structural_truss_assembly",
       "tst_structural_truss_dynamics",
+      "tst_structural_truss_dynamics_fe",
       "tst_structural_cable_fe",
       "tst_structural_piezo_kernel",
       "tst_structural_piezo_fe",
@@ -122,7 +124,9 @@
       "tst_solver_audit_cli",
       "tst_control_typed_ndjson_transport",
       "tst_native_progress_journal",
-      "tst_native_result_journal"
+      "tst_native_result_journal",
+      "tst_native_accepted_checkpoint",
+      "tst_native_mixed_run"
     ],
     "gui-contract": [
       "tst_modal_command_widget",

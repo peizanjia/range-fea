@@ -1,5 +1,15 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+qt_add_executable(tst_native_accepted_checkpoint
+    tst_native_accepted_checkpoint.cpp ../src/native_accepted_checkpoint.cpp)
+target_include_directories(tst_native_accepted_checkpoint PRIVATE ../src)
+target_link_libraries(tst_native_accepted_checkpoint PRIVATE range-solver-lib Qt6::Test)
+add_test(NAME tst_native_accepted_checkpoint COMMAND tst_native_accepted_checkpoint)
+if(WIN32)
+    set_tests_properties(tst_native_accepted_checkpoint PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 qt_add_executable(tst_runtime_control_bridge
     tst_runtime_control_bridge.cpp ../src/runtime_control_bridge.cpp
     ../src/runtime_parameter_gate.cpp ../src/native_execution_gate.cpp
@@ -136,6 +146,19 @@ if(WIN32)
 endif()
 
 qt_add_executable(control_ndjson_fixture control_ndjson_fixture.cpp)
+qt_add_executable(tst_native_mixed_run
+    tst_native_mixed_run.cpp
+    ../src/native_accepted_checkpoint.cpp)
+target_include_directories(tst_native_mixed_run PRIVATE ../src)
+target_link_libraries(tst_native_mixed_run PRIVATE range-solver-lib Qt6::Test)
+target_compile_definitions(tst_native_mixed_run PRIVATE
+    RANGE_FEA_SOLVER_EXECUTABLE="$<TARGET_FILE:fea-solver>")
+add_dependencies(tst_native_mixed_run fea-solver)
+add_test(NAME tst_native_mixed_run COMMAND tst_native_mixed_run -o -,txt)
+if(WIN32)
+    set_tests_properties(tst_native_mixed_run PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
 target_link_libraries(control_ndjson_fixture PRIVATE Qt6::Core)
 
 qt_add_executable(tst_control_ndjson_transport

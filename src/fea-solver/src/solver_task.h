@@ -40,6 +40,7 @@ class SolverTask : public QObject
         QString typedConfigurationFileName;
         QString nativeCheckpointDirectory;
         QByteArray nativeCheckpointContextJson;
+        std::optional<uint> nativeMixedStepBudget;
         std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
         RuntimeControlBridge *runtimeControlBridge = nullptr; // Main application owns lifetime.
         //! Force to restart solver

@@ -21,6 +21,7 @@ void SolverInput::_init(const SolverInput *pSolverInput)
         this->typedConfigurationFileName = pSolverInput->typedConfigurationFileName;
         this->nativeCheckpointDirectory = pSolverInput->nativeCheckpointDirectory;
         this->nativeCheckpointContextJson = pSolverInput->nativeCheckpointContextJson;
+        this->nativeMixedStepBudget = pSolverInput->nativeMixedStepBudget;
         this->nativeExecutionGate = pSolverInput->nativeExecutionGate;
         this->restart = pSolverInput->restart;
     }
@@ -124,4 +125,9 @@ void SolverInput::setNativeExecutionGate(
     const std::shared_ptr<NativeExecutionGate> &gate)
 {
     this->nativeExecutionGate = gate;
+}
+
+void SolverInput::setNativeMixedStepBudget(uint steps)
+{
+    this->nativeMixedStepBudget = steps;
 }

@@ -54,6 +54,7 @@ void MainTask::run()
         validOptions.append(RArgumentOption("typed-controller-id",RArgumentOption::String,QVariant(),"Expected typed controller implementation/revision identity",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("restart",RArgumentOption::Switch,QVariant(),"Restart solver",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("native-checkpoint-dir",RArgumentOption::Path,QVariant(),"Enable periodic accepted structural checkpoints in this directory",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-mixed-steps",RArgumentOption::String,QVariant(),"Maximum native mixed FE steps in this invocation; unsigned decimal, zero runs to original target",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("native-checkpoint-context-json",RArgumentOption::String,QVariant(),"Canonical range.native-checkpoint-context/v1 JSON; required with --native-checkpoint-dir",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("pause-at-accepted-seq",RArgumentOption::String,QVariant(),"Positive decimal accepted Newmark structural sequence to pause at; requires --native-execution-state",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("native-execution-state",RArgumentOption::Path,QVariant(),"Atomically publish bounded accepted-boundary pause/resume state to this new absolute path",RArgumentOption::Optional,false));
@@ -127,7 +128,7 @@ void MainTask::run()
 
         if (argumentsParser.isSet("linear-model-output"))
         {
-            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server","native-checkpoint-dir","native-checkpoint-context-json","pause-at-accepted-seq","native-execution-state"})
+            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server","native-checkpoint-dir","native-checkpoint-context-json","native-mixed-steps","pause-at-accepted-seq","native-execution-state"})
                 if (argumentsParser.isSet(option))
                     throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                                  "Linear-model export cannot combine simulation/control/task output options.");
@@ -150,6 +151,22 @@ void MainTask::run()
         }
 
         SolverInput solverInput(argumentsParser.getValue("file").toString());
+        if (argumentsParser.isSet("native-mixed-steps"))
+        {
+            bool valid = false;
+            const QString value = argumentsParser.getValue("native-mixed-steps").toString();
+            const uint steps = value.toUInt(&valid,10);
+            if (!valid || QString::number(steps) != value)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--native-mixed-steps must be an unsigned decimal integer (zero means unlimited).");
+            for (const auto *option : {"thermal-steps","thermal-checkpoint","typed-config",
+                                      "typed-steps","typed-checkpoint","typed-controller-id",
+                                      "control-program","control-args-json","control-timeout-ms"})
+                if (argumentsParser.isSet(option))
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "Native mixed step budgets cannot combine with thermal, typed FE or external control options.");
+            solverInput.setNativeMixedStepBudget(steps);
+        }
         QByteArray nativeCheckpointContextJson;
         if (argumentsParser.isSet("native-checkpoint-dir") !=
             argumentsParser.isSet("native-checkpoint-context-json"))

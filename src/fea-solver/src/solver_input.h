@@ -42,6 +42,8 @@ class SolverInput
         QString nativeCheckpointDirectory;
         //! Canonical range.native-checkpoint-context/v1 JSON bytes.
         QByteArray nativeCheckpointContextJson;
+        //! Per-invocation mixed FE step budget; zero runs to the original target.
+        std::optional<uint> nativeMixedStepBudget;
         //! Shared command/worker gate for an explicitly enabled run.
         std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
         //! Force to restart solver
@@ -89,6 +91,8 @@ class SolverInput
 
         //! Enable native accepted structural checkpoints with versioned context.
         void setNativeCheckpointRun(const QString &directory,const QByteArray &contextJson);
+
+        void setNativeMixedStepBudget(uint steps);
 
         //! Bind the per-run accepted-boundary gate shared with command IPC.
         void setNativeExecutionGate(const std::shared_ptr<NativeExecutionGate> &gate);

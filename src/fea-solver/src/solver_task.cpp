@@ -27,6 +27,7 @@
 #include <rsolver.h>
 #include <rstructural_thermal_fe_adapter.h>
 #include <rstructural_control_conditioner.h>
+#include <rstructural_truss_dynamics_restart_adapter.h>
 #include "typed_control_task.h"
 
 #include "execution_event_journal.h"
@@ -40,6 +41,23 @@
 
 namespace
 {
+NativeAcceptedCheckpointStateView mixedCheckpointStateView(const RModel &model)
+{
+    const RStructuralTrussDynamicsModelAdapter adapter(model);
+    auto record = model.getProblemSetup().getStructuralTrussDynamicsRestartData();
+    if (record.available)
+        RStructuralTrussDynamicsRestartAdapter::restore(adapter,record);
+    else
+        record = RStructuralTrussDynamicsRestartAdapter::build(adapter,adapter.initialize(),0,0);
+    record.validate();
+    const QByteArray fingerprint = QByteArray::fromHex(
+        RStructuralTrussDynamicsRestartAdapter::stateFingerprint(record).toLatin1());
+    if (fingerprint.size() != 32)
+        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                     "Native mixed checkpoint state fingerprint is not SHA-256.");
+    return {record.completedSteps,record.time,record.fixedTimeStep,fingerprint};
+}
+
 class ResultFrameObserverScope final
 {
 public:
@@ -111,6 +129,54 @@ QString canonicalTargetPath(const QString &fileName)
     }
     throw RError(RError::Type::InvalidFileName,R_ERROR_REF,
                  "Checkpoint target symlink chain is too deep.");
+}
+
+QString nativeMixedWorkingOutputPath(const QString &checkpointDirectory,const QString &inputTargetPath)
+{
+    const QString absoluteRoot = QDir::cleanPath(QFileInfo(checkpointDirectory).absoluteFilePath());
+    // The checkpoint store has already verified and locked this directory.
+    // Recheck all components before creating the separate working output.
+    QString component = absoluteRoot;
+    for (;;)
+    {
+        const QFileInfo info(component);
+        if (info.isSymLink())
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "Native mixed working output cannot traverse a symbolic link.");
+        const QString parent = QDir::cleanPath(info.absolutePath());
+        if (parent == component) break;
+        component = parent;
+    }
+    const QString canonicalRoot = QFileInfo(absoluteRoot).canonicalFilePath();
+    if (canonicalRoot.isEmpty() || !QFileInfo(canonicalRoot).isDir())
+        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                     "Native mixed working output requires the verified checkpoint directory.");
+    const QString outputDirectory = QDir(canonicalRoot).filePath(QStringLiteral("run-results"));
+    const QString inputRelative = QDir(outputDirectory).relativeFilePath(
+        QFileInfo(inputTargetPath).canonicalFilePath());
+    if (!QDir::isAbsolutePath(inputRelative) && inputRelative != QStringLiteral("..") &&
+        !inputRelative.startsWith(QStringLiteral("../")))
+        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                     "Native mixed input MODEL cannot occupy the reserved run-results output directory; restart from the verified checkpoint MODEL.");
+    QFileInfo outputInfo(outputDirectory);
+    if (outputInfo.isSymLink() || (outputInfo.exists() && !outputInfo.isDir()))
+        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                     "Native mixed run-results must be a regular directory.");
+    if (!QDir().mkpath(outputDirectory))
+        throw RError(RError::Type::WriteFile,R_ERROR_REF,
+                     "Cannot create native mixed working output directory.");
+    outputInfo.refresh();
+    if (outputInfo.isSymLink() || !outputInfo.isDir() ||
+        QDir::cleanPath(outputInfo.canonicalFilePath()) != QDir::cleanPath(outputDirectory))
+        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                     "Native mixed working output escaped its checkpoint directory.");
+    const QString outputPath = QDir(outputDirectory).filePath(
+        QStringLiteral("native-mixed.") + RModel::getDefaultFileExtension(true));
+    const QFileInfo modelInfo(outputPath);
+    if (modelInfo.isSymLink() || (modelInfo.exists() && !modelInfo.isFile()))
+        throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                     "Native mixed working MODEL path must be a regular file or absent.");
+    return outputPath;
 }
 
 QString resolveModelTargetPath(const QString &inputPath)
@@ -303,6 +369,7 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , typedConfigurationFileName(solverInput.typedConfigurationFileName)
     , nativeCheckpointDirectory(solverInput.nativeCheckpointDirectory)
     , nativeCheckpointContextJson(solverInput.nativeCheckpointContextJson)
+    , nativeMixedStepBudget(solverInput.nativeMixedStepBudget)
     , nativeExecutionGate(solverInput.nativeExecutionGate)
     , restart(solverInput.restart)
     , app(app)
@@ -319,6 +386,29 @@ void SolverTask::run(void)
 {
     if (this->typedControlSteps>0)
     {
+        // Typed bundles have their own reader. A native source must be checked
+        // before that mode can produce any candidate/checkpoint output.
+        try
+        {
+            if (this->nativeMixedStepBudget)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native mixed step budgets cannot combine with typed FE mode.");
+            if (!this->typedConfigurationFileName.isEmpty())
+            {
+                RModel source;
+                source.read(this->modelFileName);
+                if (source.getProblemSetup().getStructuralTrussDynamicsSetup().enabled)
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "Native mixed dynamics cannot combine with typed FE mode.");
+            }
+        }
+        catch (const RError &error)
+        {
+            RLogger::error("%s\n",qPrintable(error.getMessage()));
+            this->app->exit(1);
+            emit this->finished();
+            return;
+        }
         TypedControlTaskInput input;
         input.inputFile=this->modelFileName;
         input.checkpointFile=this->typedCheckpointFileName;
@@ -381,12 +471,16 @@ void SolverTask::run(void)
     bool loggerIndented = false;
     bool solverEntered = false;
     bool finalModelWritten = false;
+    bool nativeMixedMode = false;
+    bool nativeMixedSourceValidated = false;
+    std::shared_ptr<NativeAcceptedCheckpointStore> acceptedCheckpointStore;
     std::unique_ptr<ControlNdjsonTransport> controlTransport;
     std::shared_ptr<RuntimeParameterGate> runtimeParameterGate;
     std::optional<QString> frozenRuntimeProposal;
     RuntimeParameterGate::State initialRuntimeState;
     QJsonObject runtimeIdentity;
     const QString inputPath = QFileInfo(this->modelFileName).absoluteFilePath();
+    QString solverModelFileName = this->modelFileName;
     const bool thermalMode = this->thermalMacrosteps > 0;
     const QString requestedThermalCheckpointPath = thermalMode
         ? QFileInfo(this->thermalCheckpointFileName).absoluteFilePath() : QString();
@@ -445,16 +539,39 @@ void SolverTask::run(void)
                 failureMessage += QStringLiteral(
                     " Thermal checkpoint was already atomically published to '%1'; this process failed afterward, so the checkpoint may be committed despite the nonzero exit.")
                     .arg(thermalCheckpointPath);
-            const QJsonObject payload{
+            QJsonObject payload{
                 {QStringLiteral("phase"),phase},
                 {QStringLiteral("message"),failureMessage},
                 {QStringLiteral("resultLinkPath"),thermalMode ? thermalCheckpointPath
-                    : QFileInfo(this->modelFileName).absoluteFilePath()},
+                    : QFileInfo(solverModelFileName).absoluteFilePath()},
                 {QStringLiteral("resultsMayAlreadyExist"),solverEntered || finalModelWritten ||
                     thermalCheckpointExists},
                 {QStringLiteral("thermalCheckpointPreserved"),preservedThermalCheckpoint},
                 {QStringLiteral("thermalCheckpointCommitted"),thermalMode && finalModelWritten}
             };
+            if (nativeMixedMode)
+            {
+                const auto &accepted = model.getProblemSetup().getStructuralTrussDynamicsRestartData();
+                const bool acceptedAvailable = nativeMixedSourceValidated && accepted.available;
+                payload.insert(QStringLiteral("nativeMixedAcceptedStateAvailable"),acceptedAvailable);
+                if (acceptedAvailable)
+                {
+                    payload.insert(QStringLiteral("lastAcceptedSequence"),double(accepted.completedSteps));
+                    payload.insert(QStringLiteral("lastAcceptedTimeS"),accepted.time);
+                }
+                const auto *receipt = acceptedCheckpointStore
+                    ? acceptedCheckpointStore->committedReceipt() : nullptr;
+                payload.insert(QStringLiteral("nativeCheckpointCommitted"),receipt != nullptr);
+                if (receipt)
+                {
+                    payload.insert(QStringLiteral("nativeCheckpointModelPath"),receipt->modelPath);
+                    payload.insert(QStringLiteral("nativeCheckpointAcceptedSequence"),
+                                   receipt->envelope.value(QStringLiteral("acceptedSeq")));
+                }
+                if (acceptedCheckpointStore)
+                    payload.insert(QStringLiteral("nativeCheckpointStoreRetryable"),
+                                   acceptedCheckpointStore->isRetryable());
+            }
             if (!journal->append(QStringLiteral("RunFailed"),QStringLiteral("failed"),
                                  payload,QUuid::createUuid(),&error))
             {
@@ -582,6 +699,28 @@ void SolverTask::run(void)
                          "Input model link or target changed while it was being loaded.");
         RLogger::info("Model has been successfully loaded from file '%s'.\n",
                       qPrintable(this->modelFileName));
+        nativeMixedMode = model.getProblemSetup().getStructuralTrussDynamicsSetup().enabled;
+        if (this->nativeMixedStepBudget && (!nativeMixedMode || thermalMode))
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--native-mixed-steps requires native mixed structural dynamics and cannot combine with thermal FE mode.");
+        if (nativeMixedMode)
+        {
+            phase = QStringLiteral("native-mixed-preflight");
+            if (thermalMode || this->typedControlSteps > 0 || !this->controlProgram.isEmpty() ||
+                this->runtimeControlBridge || RuntimeControlBridge::environmentConfig().has_value())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native mixed dynamics rejects thermal, typed FE, v1/v2 force control and runtime parameter modes.");
+            // CLI restart is authoritative. Fresh runs retain source initial
+            // conditions and never infer state from a previous display/result.
+            model.getProblemSetup().setRestart(this->restart);
+            if (!this->restart)
+                model.getProblemSetup().setStructuralTrussDynamicsRestartData({});
+            const RStructuralTrussDynamicsModelAdapter adapter(model);
+            if (this->restart)
+                RStructuralTrussDynamicsRestartAdapter::restore(adapter,
+                    model.getProblemSetup().getStructuralTrussDynamicsRestartData());
+            nativeMixedSourceValidated = true;
+        }
         if (thermalMode && this->convergenceFileName.isEmpty())
         {
             model.getMatrixSolverConf(RMatrixSolverConf::CG).setOutputFileName(QString());
@@ -728,7 +867,6 @@ void SolverTask::run(void)
                          "Enabled structural control requires --control-program; disabled control rejects one.");
         QString controlRevision;
         quint64 nextControlStepId = 1;
-        std::unique_ptr<NativeAcceptedCheckpointStore> acceptedCheckpointStore;
         if (controlSetup.enabled)
         {
             controlRevision = controllerRevision(this->controlProgram,this->controlArguments);
@@ -744,7 +882,16 @@ void SolverTask::run(void)
             const QString runtimeSha256 = sha256File(QCoreApplication::applicationFilePath());
             acceptedCheckpointStore.reset(new NativeAcceptedCheckpointStore(
                 this->nativeCheckpointDirectory,this->nativeCheckpointContextJson,
-                inputTargetHash,activeControlSha256,runtimeSha256,this->restart,model));
+                inputTargetHash,activeControlSha256,runtimeSha256,this->restart,model,
+                nativeMixedMode ? NativeAcceptedCheckpointStore::StateViewExtractor(mixedCheckpointStateView)
+                                : NativeAcceptedCheckpointStore::StateViewExtractor{}));
+            if (nativeMixedMode)
+            {
+                phase = QStringLiteral("native-mixed-working-output");
+                solverModelFileName = nativeMixedWorkingOutputPath(this->nativeCheckpointDirectory,inputTargetPath);
+                RLogger::info("Native mixed working result link: '%s'.\n",
+                              qPrintable(solverModelFileName));
+            }
         }
 
         quint64 acceptedBaselineSequence = 0;
@@ -752,7 +899,13 @@ void SolverTask::run(void)
         quint64 targetAcceptedSequence = 0;
         const RStructuralDynamicsRestartData &initialRestartData =
             model.getProblemSetup().getStructuralDynamicsRestartData();
-        if (initialRestartData.available)
+        if (nativeMixedMode)
+        {
+            const auto initialView = mixedCheckpointStateView(model);
+            acceptedBaselineSequence = initialView.sequence;
+            acceptedBaselineTimeS = initialView.timeS;
+        }
+        else if (initialRestartData.available)
         {
             initialRestartData.validate();
             acceptedBaselineSequence = initialRestartData.completedSteps;
@@ -775,7 +928,8 @@ void SolverTask::run(void)
                 acceptedBaselineSequence > std::numeric_limits<quint64>::max()-requestedSteps)
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                              "Native execution target accepted sequence overflows its supported range.");
-            targetAcceptedSequence = acceptedBaselineSequence + requestedSteps;
+            targetAcceptedSequence = nativeMixedMode ? requestedSteps
+                                                    : acceptedBaselineSequence + requestedSteps;
             QString gateError;
             if (!this->nativeExecutionGate->configureAcceptedRange(
                     acceptedBaselineSequence,targetAcceptedSequence,
@@ -871,6 +1025,7 @@ void SolverTask::run(void)
             {QStringLiteral("inputArgumentSha256"),inputArgumentHash},
             {QStringLiteral("inputModelTargetPath"),inputTargetPath},
             {QStringLiteral("inputModelTargetSha256"),inputTargetHash},
+            {QStringLiteral("resultLinkPath"),QFileInfo(solverModelFileName).absoluteFilePath()},
             {QStringLiteral("restartRequested"),this->restart},
             {QStringLiteral("modelParallelConfig"),modelParallelConfig(
                 model.getProblemSetup().getParallelExecutionConfig())},
@@ -881,13 +1036,55 @@ void SolverTask::run(void)
         RLogger::info("\n********* SOLVER - BEGIN *********\n\n");
         RLogger::indent();
         loggerIndented = true;
-        RSolver solver(model,this->modelFileName,this->convergenceFileName);
+        RSolver solver(model,solverModelFileName,this->convergenceFileName);
+        if (nativeMixedMode)
+        {
+            solver.setNativeMixedStepBudget(this->nativeMixedStepBudget.value_or(0));
+            if (acceptedCheckpointStore)
+                solver.setAcceptedStepParticipant(acceptedCheckpointStore);
+        }
         quint64 lastCheckpointSequence = acceptedBaselineSequence;
         double lastCheckpointTimeS = acceptedBaselineTimeS;
         NativeAcceptedCheckpointStore::VerifiedCheckpoint latestCheckpoint;
         bool hasLatestCheckpoint = false;
         if (acceptedCheckpointStore)
         {
+            if (nativeMixedMode)
+            {
+                solver.setAcceptedStructuralStepObserver([&](const RModel &acceptedModel)
+                {
+                    // Publication and participant promotion already succeeded.
+                    // Receipts are in-memory; this observer performs no store I/O.
+                    const auto &state = acceptedModel.getProblemSetup()
+                        .getStructuralTrussDynamicsRestartData();
+                    if (this->nativeExecutionGate)
+                    {
+                        NativeExecutionGate::CheckpointReceipt receipt;
+                        const auto *committed = acceptedCheckpointStore->committedReceipt();
+                        if (committed)
+                        {
+                            receipt.available = true;
+                            receipt.acceptedSequence = quint64(committed->envelope
+                                .value(QStringLiteral("acceptedSeq")).toDouble());
+                            receipt.timeS = committed->envelope.value(QStringLiteral("timeS")).toDouble();
+                            receipt.modelSha256 = committed->envelope
+                                .value(QStringLiteral("checkpointModelSha256")).toString();
+                            receipt.envelopeSha256 = QString::fromLatin1(QCryptographicHash::hash(
+                                QJsonDocument(committed->envelope).toJson(QJsonDocument::Compact),
+                                QCryptographicHash::Sha256).toHex());
+                        }
+                        QString gateError;
+                        this->nativeExecutionGate->acceptedBoundary(
+                            state.completedSteps,state.time,receipt,&gateError);
+                        if (!gateError.isEmpty())
+                            throw RError(RError::Type::Application,R_ERROR_REF,
+                                         "Native execution state gate failed after commit: %s",
+                                         qPrintable(gateError));
+                    }
+                });
+            }
+            else
+            {
             const QString latestPointerPath = QDir(this->nativeCheckpointDirectory)
                 .filePath(QStringLiteral("latest.json"));
             if (QFileInfo::exists(latestPointerPath))
@@ -956,6 +1153,7 @@ void SolverTask::run(void)
                                          qPrintable(gateError));
                     }
                 });
+            }
         }
         const bool resultJournalRequested =
             !qEnvironmentVariable(NativeResultJournal::jobIdEnvironmentVariable).isEmpty() ||
@@ -1135,9 +1333,9 @@ void SolverTask::run(void)
                     if (persisted)
                     {
                         payload.insert(QStringLiteral("resultLinkPath"),
-                                       QFileInfo(this->modelFileName).absoluteFilePath());
+                                       QFileInfo(solverModelFileName).absoluteFilePath());
                         payload.insert(QStringLiteral("resultModelTargetPath"),
-                                       resolveModelTargetPath(this->modelFileName));
+                                       resolveModelTargetPath(solverModelFileName));
                     }
                     appendAudit(QStringLiteral("ControlStepAccepted"),
                                 QStringLiteral("accepted"),payload);
@@ -1171,16 +1369,16 @@ void SolverTask::run(void)
         phase = QStringLiteral("run-computed-audit");
         appendAudit(QStringLiteral("RunComputed"),QStringLiteral("computed"),
                     {{QStringLiteral("computedTime"),model.getTimeSolver().getComputedTime()},
-                     {QStringLiteral("resultLinkPath"),QFileInfo(this->modelFileName).absoluteFilePath()}});
+                     {QStringLiteral("resultLinkPath"),QFileInfo(solverModelFileName).absoluteFilePath()}});
 
         phase = QStringLiteral("final-model-write");
-        this->modelFileName = model.write(this->modelFileName);
+        solverModelFileName = model.write(solverModelFileName);
         finalModelWritten = true;
         RLogger::info("Model has been successfully saved to file '%s'.\n",
-                      qPrintable(this->modelFileName));
+                      qPrintable(solverModelFileName));
 
         phase = QStringLiteral("result-link-hash");
-        const QString resultLinkPath = QFileInfo(this->modelFileName).absoluteFilePath();
+        const QString resultLinkPath = QFileInfo(solverModelFileName).absoluteFilePath();
         const QString resultLinkHash = sha256File(resultLinkPath);
         const QString resultTargetPath = resolveModelTargetPath(resultLinkPath);
         const QString resultTargetHash = sha256File(resultTargetPath);

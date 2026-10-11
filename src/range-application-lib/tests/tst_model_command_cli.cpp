@@ -264,7 +264,7 @@ void TestModelCommandCli::queryReturnsHashAndModalSettings()
 
 void TestModelCommandCli::sharedCommandsAndStableTargetPagesRoundTrip()
 {
-    QCOMPARE(RModel::version.toString(), QStringLiteral("1.3.19"));
+    QCOMPARE(RModel::version.toString(), QStringLiteral("1.3.20"));
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QString setupError;
