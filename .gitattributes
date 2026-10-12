@@ -1,3 +1,6 @@
 # These shipped reference artifacts carry byte-level provenance digests.
 src/fea-solver/examples/stage9/stage9_truss4.ram -text
 src/fea-solver/examples/stage9/stage9_truss4_linear_model.json -text
+# The private numerical/runtime identity includes exact package source bytes.
+# Preserve verified LF/CRLF bytes across checkouts rather than applying autocrlf.
+src/range-workflow/python/range_workflow/** -text
