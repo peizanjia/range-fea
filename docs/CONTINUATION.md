@@ -4,6 +4,8 @@
 
 ## Resume order
 
+The final deletion/migration record is [portable deletion handoff](acceptance/deletion-handoff-20261030.md). It includes recursive-clone commands, computation provenance, and the completed hosted regression: build passed; CTest finished 239/246 with seven failures. This supersedes earlier statements that hosted CTest was still running.
+
 1. Read the [phase checkpoint](acceptance/phase-checkpoint-20261030.md) and root [handoff rules](../HANDOFF.md).
 2. For this handoff, use the personal `origin/feature/structural-profile` branch recorded in the phase checkpoint, then run `git submodule update --init --recursive`. Check out the root commit and each pinned gitlink before building. Changes in `src/range-*-lib/` are separate Git repositories and must be committed and pushed in their own repositories before changing the root gitlinks.
 3. Follow the [Linux build guide](../README.md) and [CI validation notes](CI_VALIDATION.md). The Windows Release result recorded in the phase checkpoint does not claim a Linux build.

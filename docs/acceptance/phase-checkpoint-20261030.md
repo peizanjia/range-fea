@@ -59,7 +59,7 @@ Portable requirements, designs, plans, and status summaries belong under `docs/`
 
 ## Required follow-up after publication
 
-1. Inspect the hosted Windows Regression run for the new root commit; verify it gets past Qt installation and report its final test result.
+1. Hosted Windows Regression run 41016043003 completed: build and inventory passed, CTest finished 239/246 with seven failures. See the [final migration handoff](deletion-handoff-20261030.md) for the exact hosted failure list and verified recursive-clone evidence; resolve those failures in the next phase.
 2. Build and test the fresh clone on Linux. This checkpoint contains no Linux verification.
 3. Close the Stage 6 live-provider identity/report and Stage 8 installed-UI/source-provenance gates before calling the course project complete.
 4. Complete the deferred source-contribution and license/use inventory before a final delivery freeze.

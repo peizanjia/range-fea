@@ -174,3 +174,7 @@ For a new device: clone `origin/feature/structural-profile`, check out its recor
 The first pushed checkpoint triggered [Windows Regression run 41015683084](https://github.com/peizanjia/range-fea/actions/runs/41015683084). Checkout, MSVC, Ninja, Python, numeric dependencies, and Qt installation passed. The workflow-plan verifier then failed while printing valid JSON: the Windows runner redirected Python stdout through `cp1252`, which cannot encode the Chinese detail text. This was an output-encoding failure, not a plan-validation failure; build and CTest were skipped by the workflow dependency chain.
 
 The verifier now ASCII-escapes JSON output so it remains valid Unicode JSON after decoding and safe for legacy Windows output code pages. The fix passed the seven workflow-plan unit tests and a local PowerShell pipeline with `PYTHONIOENCODING=cp1252`. The follow-up GitHub Actions run for this repair commit is the next remote acceptance gate; until it completes, no green remote regression is claimed.
+
+## 2026-10-30 final deletion/migration handoff
+
+Hosted run 41016043003 for `446b62a` completed: Windows build and test inventory passed, CTest finished 239/246 with seven failures, and logs uploaded. The final [portable deletion handoff](acceptance/deletion-handoff-20261030.md) records the exact failure list, computation algorithms/provenance, local numerical-test evidence, clone commands and local-only data loss boundary. Unfinished product plans remain active. This documentation closeout does not mark the full regression or installed product accepted.
