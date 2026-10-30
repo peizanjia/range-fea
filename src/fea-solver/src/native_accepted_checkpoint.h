@@ -10,8 +10,9 @@
 #include <memory>
 
 #include <raccepted_step_publication.h>
+#include <piezo_accepted_trace.h>
+#include <native_checkpoint_recovery.h>
 
-class QLockFile;
 class RModel;
 
 //! Exact accepted restart identity; the extractor validates the complete
@@ -57,14 +58,44 @@ public:
         AfterLatestReadBack, BeforeRollbackLatest, AfterRollbackLatest,
         BeforeRollbackLastValid, AfterRollbackLastValid,
         BeforeEvidenceWrite, AfterEvidenceReadBack,
-        BeforeMarkerWrite, AfterMarkerWrite, BeforeMarkerRemove
+        BeforeMarkerWrite, AfterMarkerWrite, BeforeMarkerRemove,
+        BeforeTraceHeaderWrite, AfterTraceHeaderReadBack,
+        BeforeTraceAppend, AfterTraceAppend, AfterTraceRecordReadBack,
+        BeforeTraceTruncate, AfterTraceTruncate, AfterTraceRollbackReadBack,
+        BeforeTracePrefixScan, AfterTracePrefixScan
     };
     using PhaseHook = std::function<void(Phase)>;
+    using PayloadExtractor = std::function<QByteArray(const RModel &)>;
+    //! Must bind the frozen actual source/configuration/backend and validate
+    //! codec, physics, opaque/actions and canonical runtime, without a MODEL copy.
+    using PayloadCertifier = std::function<NativeAcceptedCheckpointStateView(const QByteArray &)>;
+    using AcceptedModelRebuilder = std::function<RModel(const RModel &,const QByteArray &)>;
+    struct TraceOptions
+    {
+        bool enabled = false;
+        //! New/imported stores use baseSeq as their first accepted baseline.
+        //! Reopening v2 retains its verified persisted baseline; initialModel
+        //! must equal its periodic full MODEL or its terminal accepted MODEL.
+        PiezoAcceptedTrace::Header header;
+        PayloadExtractor extractPayload;
+        PayloadCertifier certifyPayload;
+        AcceptedModelRebuilder rebuildAcceptedModel;
+        //! Optional one-shot construction fault hook; no production callback required.
+        Phase initialHookPhase = Phase::BeforeTraceHeaderWrite;
+        PhaseHook initialHook;
+    };
     struct VerifiedCheckpoint
     {
         QString modelPath;
         QJsonObject envelope;
         bool usedLastValid = false;
+        //! modelPath is periodic full MODEL authority, possibly older than acceptedSeq.
+        quint64 modelSequence = 0;
+        QByteArray acceptedRuntime;
+        //! Populated by strict readLatest/recovery or a due full MODEL. A cheap
+        //! non-due committedReceipt leaves this null; never substitutes an older MODEL.
+        std::shared_ptr<const RModel> acceptedModel;
+        PiezoAcceptedTrace::Cursor traceCursor;
     };
 
     NativeAcceptedCheckpointStore(const QString &directory,
@@ -75,6 +106,10 @@ public:
                                   bool restart,
                                   const RModel &initialModel,
                                   StateViewExtractor extractor = {});
+    NativeAcceptedCheckpointStore(const QString &directory,const QByteArray &contextJson,
+                                  const QString &inputModelSha256,const QString &controlSha256,
+                                  const QString &runtimeSha256,bool restart,const RModel &initialModel,
+                                  StateViewExtractor extractor,TraceOptions traceOptions);
     ~NativeAcceptedCheckpointStore();
 
     NativeAcceptedCheckpointStore(const NativeAcceptedCheckpointStore &) = delete;
@@ -100,6 +135,8 @@ public:
     const VerifiedCheckpoint *committedReceipt() const noexcept;
     //! One invocation at the selected phase, cleared before invoking the hook.
     void setPhaseHook(Phase phase, PhaseHook hook);
+    //! Persist an explicitly requested pause before entering its boundary.
+    void setRequiredPublicationPredicate(std::function<bool(quint64)> predicate);
     QString rollbackDiagnostic() const;
     //! Diagnostic artifacts only: never scanned or used as restart authority.
     const QStringList &rollbackEvidencePaths() const noexcept;
@@ -110,11 +147,13 @@ public:
     const NativeAcceptedCheckpointContext &context() const;
 
 private:
+    class ModelPin;
+    std::function<bool(quint64)> requiredPublicationPredicate;
     struct PublicationState;
     class Publication;
     QString directory;
     NativeAcceptedCheckpointContext checkpointContext;
-    std::unique_ptr<QLockFile> writerLock;
+    std::unique_ptr<NativeCheckpointRecovery::WriterLease> writerLock;
     quint64 lastObservedSequence = 0;
     quint64 lastPublishedSequence = 0;
     double lastPublishedTimeS = 0.0;
@@ -127,8 +166,19 @@ private:
     std::unique_ptr<PublicationState> failedRollbackState;
     std::exception_ptr rollbackFailure;
     QStringList failedRollbackEvidencePaths;
-    Phase hookPhase = Phase::BeforeModelWrite;
-    PhaseHook phaseHook;
+    mutable Phase hookPhase = Phase::BeforeModelWrite;
+    mutable PhaseHook phaseHook;
+    TraceOptions traceOptions;
+    PiezoAcceptedTrace::Header traceHeader;
+    PiezoAcceptedTrace::Cursor traceCursor;
+    QByteArray cachedLatestBytes, cachedLastValidBytes;
+    //! Constructor-only allowance for strict admission while an inspected
+    //! recovery plan retains the original PENDING marker through certification.
+    QByteArray recoveringMarkerBytes;
+    std::shared_ptr<const RModel> cachedFullModel;
+    std::shared_ptr<const ModelPin> baseModelPin, currentModelPin;
+    quint64 lastFullModelSequence = 0;
+    double lastFullModelTimeS = 0.0;
 
     VerifiedCheckpoint readPointer(const QString &pointerName,
                                   bool usedLastValid) const;
@@ -138,7 +188,13 @@ private:
     std::unique_ptr<RAcceptedStepPublication> stageImpl(
         const RModel &candidateModel, const RAcceptedStepIdentity &identity,
         bool allowLegacyFirstCallback);
-    void invokePhase(Phase phase);
+    void invokePhase(Phase phase) const;
+    std::unique_ptr<RAcceptedStepPublication> stageTrace(
+        const RModel &,const RAcceptedStepIdentity &,bool baseline=false);
+    VerifiedCheckpoint readTraceEnvelope(const QJsonObject &,bool) const;
+    void initializeTrace(const RModel &,const NativeAcceptedCheckpointStateView &,bool);
+    void verifyStagedTrace(const PublicationState &) const;
+    void verifyModelPins() const;
 };
 
 #endif // NATIVE_ACCEPTED_CHECKPOINT_H

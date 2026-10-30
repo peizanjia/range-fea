@@ -5,12 +5,18 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
+#include <QDateTime>
+#include <QEvent>
+#include <QPointer>
+#include <QLockFile>
+#include <QScopeGuard>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRunnable>
 #include <QSaveFile>
+#include <QSignalSpy>
 #include <QSet>
 #include <QSemaphore>
 #include <QThreadPool>
@@ -24,6 +30,9 @@
 
 #include <rml_time_solver.h>
 #include <rnative_result_broker.h>
+#include <rmodel_command_service.h>
+#include <rtrusted_experiment_service.h>
+#include <rtrusted_mechanics_service.h>
 
 #include <rbl_job.h>
 
@@ -37,6 +46,45 @@ bool terminateVerifiedOwnRecoverySolver(const QString &solverPath, QString *erro
 
 namespace
 {
+QJsonObject trustedTestQuantity(double value, const char *unit)
+{
+    return {{QStringLiteral("value"), value}, {QStringLiteral("unit"), QString::fromLatin1(unit)}};
+}
+
+QJsonObject trustedRodProblemSpec()
+{
+    const auto vector = [](double x, double y, double z) {
+        return QJsonArray{trustedTestQuantity(x, "N"), trustedTestQuantity(y, "N"), trustedTestQuantity(z, "N")};
+    };
+    return {{QStringLiteral("schemaVersion"), 1},
+            {QStringLiteral("modelType"), QStringLiteral("axialRod")},
+            {QStringLiteral("name"), QStringLiteral("trusted detached solver regression")},
+            {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("length"), trustedTestQuantity(1.0, "m")},
+                                                       {QStringLiteral("segments"), 4}}},
+            {QStringLiteral("material"), QJsonObject{{QStringLiteral("name"), QStringLiteral("Steel")},
+                                                       {QStringLiteral("source"), QStringLiteral("fixture")},
+                                                       {QStringLiteral("youngModulus"), trustedTestQuantity(210e9, "Pa")},
+                                                       {QStringLiteral("poissonRatio"), 0.3},
+                                                       {QStringLiteral("density"), trustedTestQuantity(7850.0, "kg/m3")}}},
+            {QStringLiteral("section"), QJsonObject{{QStringLiteral("area"), trustedTestQuantity(1e-4, "m2")}}},
+            {QStringLiteral("analysis"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("static")}}},
+            {QStringLiteral("supports"), QJsonArray{
+                 QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("fixedEnd")}}},
+                             {QStringLiteral("dofs"), QJsonArray{QStringLiteral("ux"), QStringLiteral("uy"), QStringLiteral("uz")}}},
+                 QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("allNodes")}}},
+                             {QStringLiteral("dofs"), QJsonArray{QStringLiteral("uy"), QStringLiteral("uz")}}}}},
+            {QStringLiteral("loads"), QJsonArray{
+                 QJsonObject{{QStringLiteral("kind"), QStringLiteral("pointForce")},
+                             {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+                             {QStringLiteral("components"), vector(1000.0, 0.0, 0.0)}}}},
+            {QStringLiteral("initialConditions"), QJsonArray{}},
+            {QStringLiteral("observables"), QJsonArray{
+                 QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+                             {QStringLiteral("quantity"), QStringLiteral("displacement")},
+                             {QStringLiteral("component"), QStringLiteral("ux")}}}},
+            {QStringLiteral("precision"), QJsonObject{{QStringLiteral("displacementRelative"), 0.01}}}};
+}
+
 class GateJob : public RJob
 {
 public:
@@ -119,6 +167,40 @@ struct GateReleaseGuard
 {
     std::shared_ptr<QSemaphore> release;
     ~GateReleaseGuard() { if (release) release->release(); }
+};
+
+// Isolated queued-terminal evidence fixture; this never executes an FE task
+// and does not claim process or numerical qualification from injected signals.
+class DeletedSenderTerminalProbe : public SolverManager
+{
+public:
+    void retainFixtureLease(const QString &jobId, const std::shared_ptr<QLockFile> &lease)
+    {
+        nativeRecoveryLogicalLocks.insert(jobId, lease);
+    }
+    void holdSenderOutsideWorkerQueue(SolverTask *task)
+    {
+        QMutexLocker<QRecursiveMutex> locker(&jobsMutex);
+        waitingJobs.removeAll(task);
+        waitingParallelJobs.removeAll(task);
+        runningJobs.append(task);
+    }
+    void detachSenderBeforeDeletion(SolverTask *task)
+    {
+        QMutexLocker<QRecursiveMutex> locker(&jobsMutex);
+        waitingJobs.removeAll(task);
+        waitingParallelJobs.removeAll(task);
+        runningJobs.removeAll(task);
+    }
+    bool retainsFixtureLease(const QString &jobId) const
+    {
+        return nativeRecoveryLogicalLocks.contains(jobId);
+    }
+    void cleanupFixtureLease(const QString &jobId)
+    {
+        const auto lease = nativeRecoveryLogicalLocks.take(jobId);
+        if (lease && lease->isLocked()) lease->unlock();
+    }
 };
 
 class SessionModelGuard
@@ -458,6 +540,287 @@ class TestNativeJobRegistry : public QObject
     Q_OBJECT
 
 private slots:
+    void trustedDetachedCandidateSolvesWithoutPublishingToSource()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model source;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("trusted-detached-source"), source));
+        const uint sourceModelID = models.add(source);
+        const QPair<QString, quint64> sourceStamp = session->modelCommandStamp(sourceModelID);
+        const QString sourceSha256 = RModelCommandService::stateFingerprint(session->getModel(sourceModelID));
+        const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+                ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+        const QString experimentStorage = QDir(dataRoot).filePath(QStringLiteral("trusted-experiments"));
+        RTrustedExperimentService experiments(experimentStorage);
+        RTrustedExperimentService::SourceIdentity sourceIdentity;
+        sourceIdentity.workspaceId = session->getModelCommandHost()->projectWorkspace();
+        sourceIdentity.sessionEpoch = session->getModelCommandHost()->sessionEpoch();
+        sourceIdentity.sessionId = session->getID();
+        sourceIdentity.documentId = sourceStamp.first;
+        sourceIdentity.documentRevision = QString::number(sourceStamp.second);
+        sourceIdentity.snapshotSha256 = sourceSha256;
+        const QJsonObject spec = trustedRodProblemSpec();
+        const auto issued = experiments.authorize({{QStringLiteral("schemaVersion"), 1},
+                                                     {QStringLiteral("sourceBinding"), sourceIdentity.toJson()},
+                                                     {QStringLiteral("problemSpec"), spec},
+                                                     {QStringLiteral("budgets"), QJsonObject{
+                                                         {QStringLiteral("solves"), 1},
+                                                         {QStringLiteral("repairs"), 0},
+                                                         {QStringLiteral("modelTurns"), 1}}}}, sourceIdentity);
+        QVERIFY2(issued.ok, qPrintable(issued.message));
+        const QString experimentId = issued.data.value(QStringLiteral("experimentId")).toString();
+        const QJsonObject authorization = issued.data.value(QStringLiteral("authorization")).toObject();
+        QVERIFY(experiments.create(experimentId, sourceIdentity).ok);
+        QVERIFY(experiments.run(experimentId, sourceIdentity).ok);
+        const auto candidate = RTrustedMechanicsService::createCandidate(spec, sourceStamp.first,
+                                                                          QString::number(sourceStamp.second));
+        QVERIFY2(candidate.valid, qPrintable(candidate.message));
+        Model detached;
+        static_cast<RModel&>(detached) = candidate.model;
+        const QString artifactRoot = QDir(dataRoot).filePath(QStringLiteral("trusted-experiments/") + experimentId);
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(),
+                                    detached, sourceStamp,
+                                    authorization, artifactRoot,
+                                    manager.getTaskServerName(), SolverTask::TrustedExperimentCandidateTag{});
+        QString error;
+        QVERIFY2(task->captureTrustedCandidateSnapshot(detached, &error), qPrintable(error));
+        const auto started = experiments.beginSolve(experimentId, sourceIdentity, spec,
+            QString::fromLatin1(task->getInputSnapshotSha256().toHex()),
+            QString::fromLatin1(task->getInputPackageSha256().toHex()));
+        QVERIFY2(started.ok, qPrintable(started.message));
+        const QString attemptId = started.data.value(QStringLiteral("attemptId")).toString();
+        QVERIFY(task->setTrustedExperimentAttemptId(attemptId));
+        const QString jobId = manager.submitTrustedDetached(task, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+
+        SolverManager restartedManager;
+        Model replayCandidate;
+        static_cast<RModel&>(replayCandidate) = candidate.model;
+        auto *replayedTask = new SolverTask(Application::instance()->getApplicationSettings(),
+                                            replayCandidate, sourceStamp, authorization, artifactRoot,
+                                            restartedManager.getTaskServerName(), SolverTask::TrustedExperimentCandidateTag{});
+        QString replayError;
+        QVERIFY2(replayedTask->captureTrustedCandidateSnapshot(replayCandidate, &replayError),
+                 qPrintable(replayError));
+        QVERIFY(replayedTask->setTrustedExperimentAttemptId(attemptId));
+        QVERIFY(restartedManager.submitTrustedDetached(replayedTask, &replayError).isEmpty());
+        QVERIFY(replayError.contains(QStringLiteral("already submitted and cannot be replayed")));
+
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("succeeded"), 120000);
+        QVERIFY(waitForManagerIdle(manager));
+
+        const QJsonObject job = manager.jobQuery(jobId);
+        QCOMPARE(job.value(QStringLiteral("resultPublication")).toString(), QStringLiteral("detached-candidate"));
+        QCOMPARE(job.value(QStringLiteral("modelIdAtSubmit")).type(), QJsonValue::Null);
+        QCOMPARE(job.value(QStringLiteral("trustedExperimentId")).toString(), experimentId);
+        QCOMPARE(job.value(QStringLiteral("trustedExperimentAttemptId")).toString(), attemptId);
+        QCOMPARE(job.value(QStringLiteral("trustedAuthorizationDigest")).toString(),
+                 authorization.value(QStringLiteral("authorizationDigest")).toString());
+        QVERIFY(job.value(QStringLiteral("resultManifestVerified")).toBool());
+        QVERIFY(manager.nativeResultQuery(jobId, QStringLiteral("catalog"), {})
+                    .value(QStringLiteral("valid")).toBool());
+        QCOMPARE(session->modelCommandStamp(sourceModelID), sourceStamp);
+        QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(sourceModelID)), sourceSha256);
+    }
+
+    void trustedDetachedRejectsCallerMintedAuthorization()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model source;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("trusted-detached-forged"), source));
+        const uint sourceModelID = models.add(source);
+        const QPair<QString, quint64> sourceStamp = session->modelCommandStamp(sourceModelID);
+        const auto *host = session->getModelCommandHost();
+        const QString sourceSha256 = RModelCommandService::stateFingerprint(session->getModel(sourceModelID));
+        const QString experimentId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+        QJsonObject authorization{
+            {QStringLiteral("schema"), QStringLiteral("range.trusted-experiment-authorization/v1")},
+            {QStringLiteral("experimentId"), experimentId},
+            {QStringLiteral("sourceBinding"), QJsonObject{
+                {QStringLiteral("sessionEpoch"), host->sessionEpoch()},
+                {QStringLiteral("sessionId"), session->getID()},
+                {QStringLiteral("workspaceId"), host->projectWorkspace()},
+                {QStringLiteral("documentId"), sourceStamp.first},
+                {QStringLiteral("documentRevision"), QString::number(sourceStamp.second)},
+                {QStringLiteral("snapshotSha256"), sourceSha256}}},
+            {QStringLiteral("problemSpecDigest"), QString(64, QLatin1Char('a'))},
+            {QStringLiteral("physicalSummaryDigest"), QString(64, QLatin1Char('b'))},
+            {QStringLiteral("numericalConfigDigest"), QString(64, QLatin1Char('c'))},
+            {QStringLiteral("experimentPolicy"), QJsonObject{}}};
+        authorization.insert(QStringLiteral("authorizationDigest"), QString::fromLatin1(
+            QCryptographicHash::hash(QJsonDocument(authorization).toJson(QJsonDocument::Compact),
+                                     QCryptographicHash::Sha256).toHex()));
+        const auto candidate = RTrustedMechanicsService::createCandidate(trustedRodProblemSpec(),
+            sourceStamp.first, QString::number(sourceStamp.second));
+        QVERIFY2(candidate.valid, qPrintable(candidate.message));
+        Model detached;
+        static_cast<RModel&>(detached) = candidate.model;
+        const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+                ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+        const QString artifactRoot = QDir(dataRoot).filePath(QStringLiteral("trusted-experiments/") + experimentId);
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(), detached, sourceStamp,
+                                    authorization, artifactRoot, manager.getTaskServerName(),
+                                    SolverTask::TrustedExperimentCandidateTag{});
+        QString error;
+        QVERIFY2(task->captureTrustedCandidateSnapshot(detached, &error), qPrintable(error));
+        QVERIFY(task->setTrustedExperimentAttemptId(QUuid::createUuid().toString(QUuid::WithoutBraces).toLower()));
+        QVERIFY(manager.submitTrustedDetached(task, &error).isEmpty());
+        QVERIFY(error.contains(QStringLiteral("persisted active experiment authorization attempt")));
+    }
+
+    void trustedDetachedAuthorizationRejectsChangedSource()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model source;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("trusted-detached-stale"), source));
+        const uint sourceModelID = models.add(source);
+        const QPair<QString, quint64> sourceStamp = session->modelCommandStamp(sourceModelID);
+        const QString sourceSha256 = RModelCommandService::stateFingerprint(session->getModel(sourceModelID));
+        const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+                ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+        const QString experimentStorage = QDir(dataRoot).filePath(QStringLiteral("trusted-experiments"));
+        RTrustedExperimentService experiments(experimentStorage);
+        RTrustedExperimentService::SourceIdentity sourceIdentity;
+        sourceIdentity.workspaceId = session->getModelCommandHost()->projectWorkspace();
+        sourceIdentity.sessionEpoch = session->getModelCommandHost()->sessionEpoch();
+        sourceIdentity.sessionId = session->getID();
+        sourceIdentity.documentId = sourceStamp.first;
+        sourceIdentity.documentRevision = QString::number(sourceStamp.second);
+        sourceIdentity.snapshotSha256 = sourceSha256;
+        const QJsonObject spec = trustedRodProblemSpec();
+        const auto issued = experiments.authorize({{QStringLiteral("schemaVersion"), 1},
+                                                     {QStringLiteral("sourceBinding"), sourceIdentity.toJson()},
+                                                     {QStringLiteral("problemSpec"), spec},
+                                                     {QStringLiteral("budgets"), QJsonObject{
+                                                         {QStringLiteral("solves"), 1},
+                                                         {QStringLiteral("repairs"), 0},
+                                                         {QStringLiteral("modelTurns"), 1}}}}, sourceIdentity);
+        QVERIFY2(issued.ok, qPrintable(issued.message));
+        const QString experimentId = issued.data.value(QStringLiteral("experimentId")).toString();
+        const QJsonObject authorization = issued.data.value(QStringLiteral("authorization")).toObject();
+        QVERIFY(experiments.create(experimentId, sourceIdentity).ok);
+        QVERIFY(experiments.run(experimentId, sourceIdentity).ok);
+        const auto candidate = RTrustedMechanicsService::createCandidate(spec, sourceStamp.first,
+                                                                          QString::number(sourceStamp.second));
+        QVERIFY2(candidate.valid, qPrintable(candidate.message));
+        Model detached;
+        static_cast<RModel&>(detached) = candidate.model;
+        const QString artifactRoot = QDir(dataRoot).filePath(QStringLiteral("trusted-experiments/") + experimentId);
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(),
+                                    detached, sourceStamp,
+                                    authorization, artifactRoot,
+                                    manager.getTaskServerName(), SolverTask::TrustedExperimentCandidateTag{});
+        QString error;
+        QVERIFY2(task->captureTrustedCandidateSnapshot(detached, &error), qPrintable(error));
+        const auto started = experiments.beginSolve(experimentId, sourceIdentity, spec,
+            QString::fromLatin1(task->getInputSnapshotSha256().toHex()),
+            QString::fromLatin1(task->getInputPackageSha256().toHex()));
+        QVERIFY2(started.ok, qPrintable(started.message));
+        QVERIFY(task->setTrustedExperimentAttemptId(started.data.value(QStringLiteral("attemptId")).toString()));
+        session->getModel(sourceModelID).setDescription(QStringLiteral("Changed after trusted authorization"));
+        QVERIFY(session->getModelCommandHost()->recordExternalChange(
+                    sourceModelID, QStringLiteral("trusted experiment stale-source regression"), &error));
+        const QString rejected = manager.submitTrustedDetached(task, &error);
+        QVERIFY(rejected.isEmpty());
+        QVERIFY(error.contains(QStringLiteral("source document or revision")));
+    }
+
+    void trustedDetachedAuthorizationRejectsMismatchedSessionIdAndEpoch()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model source;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("trusted-detached-session-identity"), source));
+        const uint sourceModelID = models.add(source);
+        const QPair<QString, quint64> sourceStamp = session->modelCommandStamp(sourceModelID);
+        const QString sourceSha256 = RModelCommandService::stateFingerprint(session->getModel(sourceModelID));
+        const auto *host = session->getModelCommandHost();
+        const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+                ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+        const QString experimentStorage = QDir(dataRoot).filePath(QStringLiteral("trusted-experiments"));
+        RTrustedExperimentService experiments(experimentStorage);
+        const QJsonObject spec = trustedRodProblemSpec();
+
+        for (const QString &mismatchedField : {QStringLiteral("sessionId"), QStringLiteral("sessionEpoch")})
+        {
+            RTrustedExperimentService::SourceIdentity sourceIdentity;
+            sourceIdentity.workspaceId = host->projectWorkspace();
+            sourceIdentity.sessionEpoch = host->sessionEpoch();
+            sourceIdentity.sessionId = session->getID();
+            if (mismatchedField == QStringLiteral("sessionId"))
+                sourceIdentity.sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+            else
+                sourceIdentity.sessionEpoch = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+            sourceIdentity.documentId = sourceStamp.first;
+            sourceIdentity.documentRevision = QString::number(sourceStamp.second);
+            sourceIdentity.snapshotSha256 = sourceSha256;
+
+            const auto issued = experiments.authorize({{QStringLiteral("schemaVersion"), 1},
+                                                         {QStringLiteral("sourceBinding"), sourceIdentity.toJson()},
+                                                         {QStringLiteral("problemSpec"), spec},
+                                                         {QStringLiteral("budgets"), QJsonObject{
+                                                             {QStringLiteral("solves"), 1},
+                                                             {QStringLiteral("repairs"), 0},
+                                                             {QStringLiteral("modelTurns"), 1}}}}, sourceIdentity);
+            QVERIFY2(issued.ok, qPrintable(issued.message));
+            const QString experimentId = issued.data.value(QStringLiteral("experimentId")).toString();
+            const QJsonObject authorization = issued.data.value(QStringLiteral("authorization")).toObject();
+            QVERIFY(experiments.create(experimentId, sourceIdentity).ok);
+            QVERIFY(experiments.run(experimentId, sourceIdentity).ok);
+
+            const auto candidate = RTrustedMechanicsService::createCandidate(
+                spec, sourceStamp.first, QString::number(sourceStamp.second));
+            QVERIFY2(candidate.valid, qPrintable(candidate.message));
+            Model detached;
+            static_cast<RModel&>(detached) = candidate.model;
+            const QString artifactRoot = QDir(dataRoot).filePath(
+                QStringLiteral("trusted-experiments/") + experimentId);
+            auto *task = new SolverTask(Application::instance()->getApplicationSettings(),
+                                        detached, sourceStamp, authorization, artifactRoot,
+                                        manager.getTaskServerName(), SolverTask::TrustedExperimentCandidateTag{});
+            QString error;
+            QVERIFY2(task->captureTrustedCandidateSnapshot(detached, &error), qPrintable(error));
+            const auto started = experiments.beginSolve(experimentId, sourceIdentity, spec,
+                QString::fromLatin1(task->getInputSnapshotSha256().toHex()),
+                QString::fromLatin1(task->getInputPackageSha256().toHex()));
+            QVERIFY2(started.ok, qPrintable(started.message));
+            QVERIFY(task->setTrustedExperimentAttemptId(
+                started.data.value(QStringLiteral("attemptId")).toString()));
+
+            const QString rejected = manager.submitTrustedDetached(task, &error);
+            QVERIFY(rejected.isEmpty());
+            QVERIFY2(error.contains(QStringLiteral("source session changed")), qPrintable(error));
+            const auto stopped = experiments.stop(experimentId, sourceIdentity,
+                QStringLiteral("SESSION_IDENTITY_MISMATCH_TEST"), error);
+            QVERIFY2(stopped.ok, qPrintable(stopped.message));
+            const QJsonObject record = experiments.query(experimentId).data
+                .value(QStringLiteral("experiment")).toObject();
+            QCOMPARE(record.value(QStringLiteral("state")).toString(), QStringLiteral("failed"));
+            QCOMPARE(record.value(QStringLiteral("terminalCode")).toString(),
+                     QStringLiteral("SESSION_IDENTITY_MISMATCH_TEST"));
+        }
+    }
+
     void restartCapturePreservesCompactOriginsAcrossCatalogPages()
     {
         // Metadata/capture fixture only: these persisted MODELs exercise the
@@ -1318,6 +1681,483 @@ private slots:
                  RModel::getDefaultFileExtension(true));
     }
 
+    void gracefulRegisteredStopRetainsAcceptedPrefix_data()
+    {
+        QTest::addColumn<bool>("staleSource");
+        QTest::newRow("current-source") << false;
+        QTest::newRow("stale-source") << true;
+    }
+
+    void gracefulRegisteredStopRetainsAcceptedPrefix()
+    {
+        QFETCH(bool, staleSource);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("graceful-stop"), model));
+        configureSingleOutputDynamics(model, 20, 1);
+        const uint modelID = models.add(model);
+        NativeThreadPoolGate gate;
+        QVERIFY(gate.start());
+        QString error;
+        const QString jobId = manager.submitValidated(modelID, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QVERIFY2(manager.requestNativeAcceptedBoundaryPause(jobId, 10, &error), qPrintable(error));
+        const auto queued = manager.jobQuery(jobId);
+        const QString executionPath = queued.value(QStringLiteral("nativeExecutionStateRef")).toString();
+        gate.releaseNow();
+        const auto cleanup = qScopeGuard([&] {
+            try { manager.stopRunningTasks(); } catch (const RError &) {}
+            waitForManagerIdle(manager);
+        });
+        QTRY_COMPARE_WITH_TIMEOUT(nativeExecutionStateObject(executionPath).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("paused"), 30000);
+        QCOMPARE(nativeExecutionStateObject(executionPath).value(QStringLiteral("acceptedSeq")).toInt(), 10);
+        QTRY_VERIFY_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("processStarted")).toBool(), 10000);
+        const auto before = manager.jobQuery(jobId);
+        const QString inputPath = before.value(QStringLiteral("inputSnapshotRef")).toString();
+        const QString inputHash = fileSha256(inputPath);
+        const QString inputPackage = before.value(QStringLiteral("inputPackageRef")).toString();
+        const QString packageHash = directorySha256(inputPackage);
+        if (staleSource)
+        {
+            session->storeCurentModelVersion(modelID, QStringLiteral("Edit source while paused"));
+            session->getModel(modelID).setDescription(QStringLiteral("Source changed after native input freeze"));
+            session->setProblemChanged(modelID);
+        }
+        bool durableBeforeStopSignal = false;
+        QString firstCancellationTime;
+        const auto duplicate = QObject::connect(&manager, &SolverManager::nativeJobUpdated, &manager,
+            [&](const QString &updatedId, const QJsonObject &fields) {
+                if (updatedId != jobId || !fields.value(QStringLiteral("cancellationRequested")).toBool()) return;
+                const auto durable = persistedNativeJobRecord(manager.jobQuery(jobId));
+                firstCancellationTime = durable.value(QStringLiteral("cancelRequestedAt")).toString();
+                durableBeforeStopSignal = durable.value(QStringLiteral("state")).toString() == QStringLiteral("cancelling") &&
+                    durable.value(QStringLiteral("cancellationRequested")).toBool() &&
+                    !firstCancellationTime.isEmpty() &&
+                    nativeExecutionStateObject(executionPath).value(QStringLiteral("state")).toString() == QStringLiteral("paused");
+                // Direct reentry must not replace the first durable request time.
+                manager.stopRunningTasks();
+            }, Qt::DirectConnection);
+        const QString stopFailure = [&] {
+            try { manager.stopRunningTasks(); return QString(); }
+            catch (const RError &e) { return e.getMessage(); }
+        }();
+        QObject::disconnect(duplicate);
+        QVERIFY2(stopFailure.isEmpty(), qPrintable(stopFailure));
+        QVERIFY(durableBeforeStopSignal);
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("cancelled"), 30000);
+        QVERIFY(waitForManagerIdle(manager));
+        const auto stopped = manager.jobQuery(jobId);
+        QVERIFY(stopped.value(QStringLiteral("cancellationRequested")).toBool());
+        QCOMPARE(stopped.value(QStringLiteral("cancelRequestedAt")).toString(), firstCancellationTime);
+        QVERIFY(QDateTime::fromString(firstCancellationTime, Qt::ISODateWithMs).isValid());
+        QVERIFY(stopped.value(QStringLiteral("processStarted")).toBool());
+        QVERIFY(stopped.value(QStringLiteral("processExited")).toBool());
+        QCOMPARE(stopped.value(QStringLiteral("processExitCode")).toInt(-1), 0);
+        QVERIFY(stopped.value(QStringLiteral("resultReadbackComplete")).toBool());
+        QVERIFY(stopped.value(QStringLiteral("resultArtifactVerified")).toBool());
+        QVERIFY(stopped.value(QStringLiteral("resultManifestVerified")).toBool());
+        QCOMPARE(persistedNativeJobRecord(stopped).value(QStringLiteral("cancelRequestedAt")).toString(), firstCancellationTime);
+        QCOMPARE(fileSha256(inputPath), inputHash);
+        QCOMPARE(directorySha256(inputPackage), packageHash);
+        RModel accepted;
+        accepted.read(stopped.value(QStringLiteral("resultArtifactRef")).toString());
+        QCOMPARE(accepted.getProblemSetup().getStructuralDynamicsRestartData().completedSteps, 10u);
+        QCOMPARE(accepted.getProblemSetup().getStructuralDynamicsSetup().getNSteps(), 20u);
+        // Explicit Stop is a terminal cancellation, not an accidental interruption.
+        // Its accepted prefix remains intact without silently making it resumable.
+        const QString cancelledRecordHash = fileSha256(stopped.value(QStringLiteral("nativeJobRecordRef")).toString());
+        const auto recovery = manager.nativeJobRecoveryQuery(jobId);
+        QCOMPARE(recovery.value(QStringLiteral("eligibility")).toString(), QStringLiteral("recompute_required"));
+        QCOMPARE(recovery.value(QStringLiteral("state")).toString(), QStringLiteral("cancelled"));
+        QCOMPARE(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(), QStringLiteral("cancelled"));
+        QCOMPARE(persistedNativeJobRecord(stopped).value(QStringLiteral("cancelRequestedAt")).toString(), firstCancellationTime);
+        QCOMPARE(fileSha256(stopped.value(QStringLiteral("nativeJobRecordRef")).toString()), cancelledRecordHash);
+        const auto checkpoint = latestNativeCheckpointEnvelope(stopped);
+        QVERIFY(!checkpoint.isEmpty());
+        QCOMPARE(checkpoint.value(QStringLiteral("acceptedSeq")).toInt(), 10);
+        const QString checkpointName = checkpoint.value(QStringLiteral("modelFile")).toString();
+        QVERIFY(!checkpointName.isEmpty());
+        QCOMPARE(QFileInfo(checkpointName).fileName(), checkpointName);
+        const QString checkpointPath = QDir(stopped.value(QStringLiteral("nativeCheckpointDirectory")).toString()).filePath(checkpointName);
+        QCOMPARE(fileSha256(checkpointPath), checkpoint.value(QStringLiteral("checkpointModelSha256")).toString());
+        RModel checkpointModel;
+        checkpointModel.read(checkpointPath);
+        QCOMPARE(checkpointModel.getProblemSetup().getStructuralDynamicsRestartData().completedSteps, 10u);
+        QCOMPARE(checkpointModel.getProblemSetup().getStructuralDynamicsSetup().getNSteps()
+                 - checkpointModel.getProblemSetup().getStructuralDynamicsRestartData().completedSteps, 10u);
+        if (staleSource)
+            QCOMPARE(session->getModel(modelID).getDescription(), QStringLiteral("Source changed after native input freeze"));
+        const QString finalRecordHash = fileSha256(stopped.value(QStringLiteral("nativeJobRecordRef")).toString());
+        manager.stopRunningTasks();
+        QCOMPARE(fileSha256(stopped.value(QStringLiteral("nativeJobRecordRef")).toString()), finalRecordHash);
+    }
+
+    void gracefulStopPersistenceFailureSendsNoStop()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("graceful-stop-persistence"), model));
+        configureSingleOutputDynamics(model, 20, 1);
+        const uint modelID = models.add(model);
+        NativeThreadPoolGate gate;
+        QVERIFY(gate.start());
+        QString error;
+        const QString jobId = manager.submitValidated(modelID, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QVERIFY2(manager.requestNativeAcceptedBoundaryPause(jobId, 10, &error), qPrintable(error));
+        const QString executionPath = manager.jobQuery(jobId).value(QStringLiteral("nativeExecutionStateRef")).toString();
+        gate.releaseNow();
+        QLockFile writerLock(QDir(QFileInfo(manager.jobQuery(jobId).value(QStringLiteral("nativeJobRecordRef")).toString()).absolutePath())
+                             .filePath(QStringLiteral(".job-record.lock")));
+        writerLock.setStaleLockTime(0);
+        const auto cleanup = qScopeGuard([&] {
+            writerLock.unlock();
+            try { manager.stopRunningTasks(); } catch (const RError &) {}
+            waitForManagerIdle(manager);
+        });
+        QTRY_COMPARE_WITH_TIMEOUT(nativeExecutionStateObject(executionPath).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("paused"), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("processStarted")).toBool(), 10000);
+        const auto before = manager.jobQuery(jobId);
+        const QString recordPath = before.value(QStringLiteral("nativeJobRecordRef")).toString();
+        const QString recordHash = fileSha256(recordPath);
+        const QString pausedHash = fileSha256(executionPath);
+        QVERIFY(writerLock.tryLock(0));
+        qint64 liveLockPid = 0;
+        QString liveLockHost;
+        QString liveLockApp;
+        QVERIFY(writerLock.getLockInfo(&liveLockPid, &liveLockHost, &liveLockApp));
+        QCOMPARE(liveLockPid, QCoreApplication::applicationPid());
+        bool rejected = false;
+        try { manager.stopRunningTasks(); } catch (const RError &) { rejected = true; }
+        QVERIFY(rejected);
+        QTest::qWait(100);
+        const auto failedRequest = manager.jobQuery(jobId);
+        QCOMPARE(failedRequest.value(QStringLiteral("state")).toString(), QStringLiteral("running"));
+        QVERIFY(!failedRequest.value(QStringLiteral("cancellationRequested")).toBool());
+        QVERIFY(!failedRequest.contains(QStringLiteral("cancelRequestedAt")));
+        QCOMPARE(failedRequest.value(QStringLiteral("diagnostic")).toObject().value(QStringLiteral("code")).toString(),
+                 QStringLiteral("NATIVE_JOB_PERSISTENCE_FAILED"));
+        const QString lockDiagnostic = failedRequest.value(QStringLiteral("diagnostic")).toObject()
+                                           .value(QStringLiteral("message")).toString();
+        QVERIFY(lockDiagnostic.contains(QStringLiteral("PID %1").arg(liveLockPid)));
+        if (!liveLockHost.isEmpty()) QVERIFY(lockDiagnostic.contains(liveLockHost));
+        if (!liveLockApp.isEmpty()) QVERIFY(lockDiagnostic.contains(liveLockApp));
+        QCOMPARE(fileSha256(recordPath), recordHash);
+        QCOMPARE(fileSha256(executionPath), pausedHash);
+        QVERIFY(!failedRequest.value(QStringLiteral("processExited")).toBool());
+        writerLock.unlock();
+
+        // Exercise QLockFile's stale-owner decisions through the same
+        // registry persistence path: an aged same-process owner remains live,
+        // while a dead same-host PID is recoverable.
+        const QString recordDirectory = QFileInfo(recordPath).absolutePath();
+        const QString recordLockPath = QDir(recordDirectory).filePath(QStringLiteral(".job-record.lock"));
+        const QByteArray liveOwnerLockContents = QByteArray::number(liveLockPid) + '\n' + liveLockApp.toUtf8() + '\n' +
+                                                 liveLockHost.toUtf8() + '\n';
+        QFile liveOwnerLockFile(recordLockPath);
+        QVERIFY(liveOwnerLockFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(liveOwnerLockFile.write(liveOwnerLockContents), qint64(liveOwnerLockContents.size()));
+        QVERIFY(liveOwnerLockFile.flush());
+        liveOwnerLockFile.close();
+        QFile agedLiveLockAge(recordLockPath);
+        QVERIFY(agedLiveLockAge.open(QIODevice::ReadWrite));
+        QVERIFY(agedLiveLockAge.setFileTime(QDateTime::currentDateTimeUtc().addSecs(-300),
+                                            QFileDevice::FileModificationTime));
+        agedLiveLockAge.close();
+        const QString agedLiveLockHash = fileSha256(recordLockPath);
+        bool agedLiveLockRejected = false;
+        try { manager.stopRunningTasks(); } catch (const RError &) { agedLiveLockRejected = true; }
+        QVERIFY(agedLiveLockRejected);
+        QTest::qWait(100);
+        const auto agedLiveLockRequest = manager.jobQuery(jobId);
+        QCOMPARE(agedLiveLockRequest.value(QStringLiteral("state")).toString(), QStringLiteral("running"));
+        QVERIFY(!agedLiveLockRequest.value(QStringLiteral("cancellationRequested")).toBool());
+        QVERIFY(!agedLiveLockRequest.contains(QStringLiteral("cancelRequestedAt")));
+        QCOMPARE(agedLiveLockRequest.value(QStringLiteral("diagnostic")).toObject().value(QStringLiteral("code")).toString(),
+                 QStringLiteral("NATIVE_JOB_PERSISTENCE_FAILED"));
+        const QString agedLockDiagnostic = agedLiveLockRequest.value(QStringLiteral("diagnostic")).toObject()
+                                               .value(QStringLiteral("message")).toString();
+        QVERIFY(agedLockDiagnostic.contains(QStringLiteral("PID %1").arg(liveLockPid)));
+        if (!liveLockHost.isEmpty()) QVERIFY(agedLockDiagnostic.contains(liveLockHost));
+        if (!liveLockApp.isEmpty()) QVERIFY(agedLockDiagnostic.contains(liveLockApp));
+        QCOMPARE(fileSha256(recordPath), recordHash);
+        QCOMPARE(fileSha256(executionPath), pausedHash);
+        QCOMPARE(fileSha256(recordLockPath), agedLiveLockHash);
+        QVERIFY(!agedLiveLockRequest.value(QStringLiteral("processExited")).toBool());
+
+        constexpr qint64 deadOwnerPid = 2147483647;
+        const QByteArray staleLockContents = QByteArray::number(deadOwnerPid) + '\n' + liveLockApp.toUtf8() + '\n' +
+                                             liveLockHost.toUtf8() + '\n';
+        QFile staleLockFile(recordLockPath);
+        QVERIFY(staleLockFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(staleLockFile.write(staleLockContents), qint64(staleLockContents.size()));
+        QVERIFY(staleLockFile.flush());
+        staleLockFile.close();
+        QFile staleLockAge(recordLockPath);
+        QVERIFY(staleLockAge.open(QIODevice::ReadWrite));
+        QVERIFY(staleLockAge.setFileTime(QDateTime::currentDateTimeUtc().addSecs(-300),
+                                         QFileDevice::FileModificationTime));
+        staleLockAge.close();
+        QLockFile staleLockProbe(recordLockPath);
+        qint64 observedDeadPid = 0;
+        QString observedDeadHost;
+        QString observedDeadApp;
+        QVERIFY(staleLockProbe.getLockInfo(&observedDeadPid, &observedDeadHost, &observedDeadApp));
+        QCOMPARE(observedDeadPid, deadOwnerPid);
+        QCOMPARE(observedDeadHost, liveLockHost);
+        QCOMPARE(observedDeadApp, liveLockApp);
+
+        const QDateTime retryTime = QDateTime::currentDateTimeUtc();
+        manager.stopRunningTasks();
+        QVERIFY(!QFileInfo::exists(recordLockPath));
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("cancelled"), 30000);
+        const auto stopped = manager.jobQuery(jobId);
+        QCOMPARE(stopped.value(QStringLiteral("processExitCode")).toInt(-1), 0);
+        QVERIFY(QDateTime::fromString(stopped.value(QStringLiteral("cancelRequestedAt")).toString(), Qt::ISODateWithMs) >= retryTime);
+        QVERIFY(waitForManagerIdle(manager));
+    }
+
+    void gracefulStopWinsAlreadyReportedSuccessRace()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("graceful-stop-success-race"), model));
+        configureSingleOutputDynamics(model, 20, 1);
+        const uint modelID = models.add(model);
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
+        QVERIFY(task->captureInputSnapshot(session->getModel(modelID), session->modelCommandStamp(modelID), modelID));
+        bool observedRealSuccess = false;
+        QString stopError;
+        // Registered before the manager's terminal handler: the real worker has
+        // already selected succeeded, but cannot queue it until Stop is durable.
+        QObject::connect(task, &SolverTask::terminalReported, &manager,
+            [&](const QString &, const QString &reportedState) {
+                observedRealSuccess = reportedState == QStringLiteral("succeeded");
+                if (observedRealSuccess)
+                    try { manager.stopRunningTasks(); }
+                    catch (const RError &e) { stopError = e.getMessage(); }
+            }, Qt::BlockingQueuedConnection);
+        QString error;
+        const QString jobId = manager.submitValidated(task, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("cancelled"), 30000);
+        QVERIFY(observedRealSuccess);
+        QVERIFY2(stopError.isEmpty(), qPrintable(stopError));
+        const auto stopped = manager.jobQuery(jobId);
+        QVERIFY(stopped.value(QStringLiteral("cancellationRequested")).toBool());
+        QVERIFY(stopped.value(QStringLiteral("resultManifestVerified")).toBool());
+        QCOMPARE(stopped.value(QStringLiteral("processExitCode")).toInt(-1), 0);
+        QVERIFY(waitForManagerIdle(manager));
+    }
+
+    void gracefulStopCannotHideChangedResult()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("graceful-stop-result-tamper"), model));
+        configureSingleOutputDynamics(model, 20, 1);
+        const uint modelID = models.add(model);
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
+        QVERIFY(task->captureInputSnapshot(session->getModel(modelID), session->modelCommandStamp(modelID), modelID));
+        bool changed = false;
+        QString changeError;
+        QObject::connect(task, &SolverTask::resultArtifactCreated, &manager,
+            [&](const QString &, const QString &, const QJsonObject &binding) {
+                try
+                {
+                    manager.stopRunningTasks();
+                    RModel replacement;
+                    const QString path = binding.value(QStringLiteral("resolvedSourcePath")).toString();
+                    replacement.read(path);
+                    replacement.setDescription(QStringLiteral("Invalid result after graceful Stop request"));
+                    replacement.write(path, true);
+                    changed = true;
+                }
+                catch (const RError &e) { changeError = e.getMessage(); }
+            }, Qt::BlockingQueuedConnection);
+        QString error;
+        const QString jobId = manager.submitValidated(task, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("failed"), 30000);
+        QVERIFY2(changeError.isEmpty(), qPrintable(changeError));
+        QVERIFY(changed);
+        const auto failed = manager.jobQuery(jobId);
+        QVERIFY(failed.value(QStringLiteral("cancellationRequested")).toBool());
+        QVERIFY(!failed.value(QStringLiteral("resultManifestVerified")).toBool());
+        QVERIFY(waitForManagerIdle(manager));
+    }
+
+    void gracefulDeletedSenderCannotBypassTerminalEvidence_data()
+    {
+        QTest::addColumn<bool>("denyTerminalPersistence");
+        QTest::newRow("durable-failed-before-lease-release") << false;
+        QTest::newRow("failed-persistence-retains-lease") << true;
+    }
+
+    void gracefulDeletedSenderCannotBypassTerminalEvidence()
+    {
+        QFETCH(bool, denyTerminalPersistence);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        QVERIFY(waitForManagerIdle(SolverManager::getInstance()));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("deleted-terminal-sender"), model));
+        configureSingleOutputDynamics(model, 20, 1);
+        const uint modelID = models.add(model);
+        DeletedSenderTerminalProbe manager;
+        auto started = std::make_shared<QSemaphore>();
+        auto release = std::make_shared<QSemaphore>();
+        GateReleaseGuard releaseGuard{release};
+        manager.RJobManager::submit(new GateJob(started, release));
+        QVERIFY(waitForGate(started));
+        auto *task = new SolverTask(Application::instance()->getApplicationSettings(), modelID);
+        QVERIFY(task->captureInputSnapshot(session->getModel(modelID), session->modelCommandStamp(modelID), modelID));
+        const QString jobId = task->getTaskID().toString();
+        auto lease = std::make_shared<QLockFile>(directory.filePath(QStringLiteral("terminal-evidence-lease.lock")));
+        lease->setStaleLockTime(0);
+        QVERIFY(lease->tryLock(0));
+        manager.retainFixtureLease(jobId, lease);
+        QString error;
+        QCOMPARE(manager.submitValidated(task, {}, true, &error), jobId);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        manager.holdSenderOutsideWorkerQueue(task);
+        manager.stopRunningTasks();
+        const auto cancelling = manager.jobQuery(jobId);
+        QCOMPARE(cancelling.value(QStringLiteral("state")).toString(), QStringLiteral("cancelling"));
+        const QString cancelTime = cancelling.value(QStringLiteral("cancelRequestedAt")).toString();
+        const QString recordDirectory = QFileInfo(cancelling.value(QStringLiteral("nativeJobRecordRef")).toString()).absolutePath();
+        QLockFile writerLock(QDir(recordDirectory).filePath(QStringLiteral(".job-record.lock")));
+        writerLock.setStaleLockTime(0);
+        const auto cleanup = qScopeGuard([&] {
+            writerLock.unlock();
+            manager.cleanupFixtureLease(jobId);
+            release->release();
+            waitForManagerIdle(manager);
+        });
+        bool observedDurableFailureWhileLeaseHeld = false;
+        const auto committed = QObject::connect(&manager, &SolverManager::nativeJobUpdated, &manager,
+            [&](const QString &updatedId, const QJsonObject &fields) {
+                if (updatedId != jobId || fields.value(QStringLiteral("state")).toString() != QStringLiteral("failed")) return;
+                const auto durable = persistedNativeJobRecord(manager.jobQuery(jobId));
+                observedDurableFailureWhileLeaseHeld = lease->isLocked() &&
+                    durable.value(QStringLiteral("state")).toString() == QStringLiteral("failed") &&
+                    durable.value(QStringLiteral("cancelRequestedAt")).toString() == cancelTime;
+            }, Qt::DirectConnection);
+        if (denyTerminalPersistence) QVERIFY(writerLock.tryLock(0));
+        QPointer<SolverTask> senderGuard(task);
+        // Negative metadata injection only: an unverified prefix is never valid
+        // terminal evidence. Queue the production handler, then destroy sender.
+        task->terminalReported(jobId, QStringLiteral("cancelled"), true, true, 0,
+                               false, {}, {}, false, QStringLiteral("Stopped by the user; verified prefix retained."));
+        manager.detachSenderBeforeDeletion(task);
+        delete task;
+        QVERIFY(senderGuard.isNull());
+        QCoreApplication::sendPostedEvents(&manager, QEvent::MetaCall);
+        QObject::disconnect(committed);
+        const auto terminal = manager.jobQuery(jobId);
+        QCOMPARE(terminal.value(QStringLiteral("state")).toString(), QStringLiteral("failed"));
+        QCOMPARE(terminal.value(QStringLiteral("cancelRequestedAt")).toString(), cancelTime);
+        QVERIFY(!terminal.value(QStringLiteral("resultArtifactVerified")).toBool());
+        QVERIFY(terminal.value(QStringLiteral("message")).toString().contains(QStringLiteral("failed")));
+        const auto durable = persistedNativeJobRecord(terminal);
+        if (denyTerminalPersistence)
+        {
+            QCOMPARE(durable.value(QStringLiteral("state")).toString(), QStringLiteral("cancelling"));
+            QVERIFY(!observedDurableFailureWhileLeaseHeld);
+            QVERIFY(lease->isLocked());
+            QVERIFY(manager.retainsFixtureLease(jobId));
+            QCOMPARE(terminal.value(QStringLiteral("diagnostic")).toObject().value(QStringLiteral("code")).toString(),
+                     QStringLiteral("NATIVE_JOB_PERSISTENCE_FAILED"));
+        }
+        else
+        {
+            QCOMPARE(durable.value(QStringLiteral("state")).toString(), QStringLiteral("failed"));
+            QVERIFY(observedDurableFailureWhileLeaseHeld);
+            QVERIFY(!lease->isLocked());
+            QVERIFY(!manager.retainsFixtureLease(jobId));
+        }
+        writerLock.unlock();
+        release->release();
+        releaseGuard.release.reset();
+        QVERIFY(waitForManagerIdle(manager));
+    }
+
+    void gracefulStopBeforeRealChildConnectionIsDelivered()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Session *session = Application::instance()->getSession();
+        SolverManager &manager = SolverManager::getInstance();
+        QVERIFY(waitForManagerIdle(manager));
+        SessionModelGuard models(session);
+        Model model;
+        QVERIFY(loadTinyTruss(directory, QStringLiteral("stop-before-real-connection"), model));
+        configureSingleOutputDynamics(model, 20, 1);
+        const uint modelID = models.add(model);
+        NativeThreadPoolGate gate;
+        QVERIFY(gate.start());
+        QString error;
+        const QString jobId = manager.submitValidated(modelID, {}, true, &error);
+        QVERIFY2(!jobId.isEmpty(), qPrintable(error));
+        QVERIFY2(manager.requestNativeAcceptedBoundaryPause(jobId, 10, &error), qPrintable(error));
+        const auto queued = manager.jobQuery(jobId);
+        QVERIFY(!queued.value(QStringLiteral("processStarted")).toBool());
+        // Pause bounds even a late socket delivery before the original target.
+        // The manager has started its RJob, while its real worker and command
+        // socket are still held by the unrelated thread-pool gate.
+        manager.stopRunningTasks();
+        const auto requested = manager.jobQuery(jobId);
+        QCOMPARE(requested.value(QStringLiteral("state")).toString(), QStringLiteral("cancelling"));
+        QVERIFY(persistedNativeJobRecord(requested).value(QStringLiteral("cancellationRequested")).toBool());
+        const QString cancelTime = requested.value(QStringLiteral("cancelRequestedAt")).toString();
+        gate.releaseNow();
+        const auto cleanup = qScopeGuard([&] {
+            try { manager.stopRunningTasks(); } catch (const RError &) {}
+            waitForManagerIdle(manager);
+        });
+        QTRY_COMPARE_WITH_TIMEOUT(manager.jobQuery(jobId).value(QStringLiteral("state")).toString(),
+                                  QStringLiteral("cancelled"), 30000);
+        QVERIFY(waitForManagerIdle(manager));
+        const auto terminal = manager.jobQuery(jobId);
+        QVERIFY(terminal.value(QStringLiteral("processStarted")).toBool());
+        QVERIFY(terminal.value(QStringLiteral("processExited")).toBool());
+        QCOMPARE(terminal.value(QStringLiteral("processExitCode")).toInt(-1), 0);
+        QCOMPARE(terminal.value(QStringLiteral("cancelRequestedAt")).toString(), cancelTime);
+        QVERIFY(terminal.value(QStringLiteral("resultManifestVerified")).toBool());
+        RModel accepted;
+        accepted.read(terminal.value(QStringLiteral("resultArtifactRef")).toString());
+        QVERIFY(accepted.getProblemSetup().getStructuralDynamicsRestartData().completedSteps < 20u);
+        QCOMPARE(accepted.getProblemSetup().getStructuralDynamicsSetup().getNSteps(), 20u);
+    }
+
     void nativeRecoveryContinuesFromAcceptedCheckpointAndKeepsPrefixProvenance()
     {
 #ifndef Q_OS_WIN
@@ -1590,16 +2430,19 @@ private slots:
                  int(secondInterruptionSequence));
         QVERIFY(recoveryPauseAck.value(QStringLiteral("checkpointAvailable")).toBool());
         QCOMPARE(recoveryPauseAck.value(QStringLiteral("checkpointAcceptedSeq")).toInt(),
-                 int(checkpointSequence));
+                 int(secondInterruptionSequence));
         QJsonObject recoveryCheckpointPointer;
         const QJsonObject recoveryCheckpointEnvelope =
                 latestNativeCheckpointEnvelope(recoveryPauseRequest, &recoveryCheckpointPointer);
         QVERIFY(!recoveryCheckpointEnvelope.isEmpty());
-        QCOMPARE(recoveryCheckpointEnvelope.value(QStringLiteral("acceptedSeq")).toInt(), int(checkpointSequence));
+        QCOMPARE(recoveryCheckpointEnvelope.value(QStringLiteral("acceptedSeq")).toInt(),
+                 int(secondInterruptionSequence));
         QCOMPARE(recoveryPauseAck.value(QStringLiteral("checkpointEnvelopeSha256")).toString(),
                  recoveryCheckpointPointer.value(QStringLiteral("envelopeSha256")).toString());
         QCOMPARE(recoveryPauseAck.value(QStringLiteral("checkpointModelSha256")).toString(),
                  recoveryCheckpointEnvelope.value(QStringLiteral("checkpointModelSha256")).toString());
+        QCOMPARE(recoveryPauseAck.value(QStringLiteral("checkpointTimeS")).toDouble(),
+                 recoveryCheckpointEnvelope.value(QStringLiteral("timeS")).toDouble());
         const QJsonObject recoveryPauseContext =
                 recoveryPauseRequest.value(QStringLiteral("nativeCheckpointContext")).toObject();
         QCOMPARE(recoveryPauseAck.value(QStringLiteral("contextSha256")).toString(),
@@ -1618,7 +2461,7 @@ private slots:
         QVERIFY(waitForManagerIdle(recovered));
         double latestRecoverySequence = -1.0;
         QVERIFY(latestAcceptedSequence(recovered.jobQuery(recoveryJobId), &latestRecoverySequence));
-        QCOMPARE(latestRecoverySequence, 10.0);
+        QCOMPARE(latestRecoverySequence, double(secondInterruptionSequence));
         QVERIFY(persistAsInterruptedForTest(recovered, recoveryJobId, nullptr));
 
         SolverManager recoveredAgain;
@@ -1627,33 +2470,42 @@ private slots:
                  qPrintable(recoveryQualificationSummary(secondQualification)));
         const QJsonObject secondCheckpoint = secondQualification.value(QStringLiteral("checkpoint")).toObject();
         const QJsonObject secondSeedProof = secondQualification.value(QStringLiteral("nativeCheckpointSeed")).toObject();
-        QCOMPARE(secondCheckpoint.value(QStringLiteral("acceptedSeq")).toInt(), int(checkpointSequence));
+        // A pause between periodic checkpoints durably commits its accepted
+        // boundary. The immutable seed remains at 10; recovery now selects 15.
+        QCOMPARE(secondCheckpoint.value(QStringLiteral("acceptedSeq")).toInt(),
+                 int(secondInterruptionSequence));
         QCOMPARE(secondCheckpoint.value(QStringLiteral("targetSteps")).toInt(), int(targetSteps));
         QCOMPARE(secondCheckpoint.value(QStringLiteral("remainingSteps")).toInt(),
-                 int(targetSteps - checkpointSequence));
+                 int(targetSteps - secondInterruptionSequence));
+        QCOMPARE(secondSeedProof, seedProof);
+        QCOMPARE(secondSeedProof.value(QStringLiteral("acceptedSeq")).toInt(), int(checkpointSequence));
         QCOMPARE(secondCheckpoint.value(QStringLiteral("checkpointSha256")).toString(),
-                 secondSeedProof.value(QStringLiteral("seedModelSha256")).toString());
+                 recoveryCheckpointEnvelope.value(QStringLiteral("checkpointModelSha256")).toString());
         QCOMPARE(secondCheckpoint.value(QStringLiteral("envelopeSha256")).toString(),
-                 secondSeedProof.value(QStringLiteral("seedEnvelopeSha256")).toString());
+                 recoveryCheckpointPointer.value(QStringLiteral("envelopeSha256")).toString());
+        QVERIFY(secondCheckpoint.value(QStringLiteral("checkpointSha256")).toString() !=
+                secondSeedProof.value(QStringLiteral("seedModelSha256")).toString());
         const QJsonObject secondPartialResult = secondQualification.value(QStringLiteral("partialResult")).toObject();
         const int secondPartialAcceptedSequence = secondPartialResult.value(QStringLiteral("acceptedSeq")).toInt(-1);
-        QVERIFY(secondPartialAcceptedSequence >= int(secondInterruptionSequence));
+        QCOMPARE(secondPartialAcceptedSequence, int(secondInterruptionSequence));
         QVERIFY(secondPartialAcceptedSequence < secondCheckpoint.value(QStringLiteral("targetSteps")).toInt());
         QVERIFY(secondPartialAcceptedSequence >= int(observedSecondPartialSequence));
         QCOMPARE(secondPartialResult.value(QStringLiteral("discardedAcceptedSteps")).toInt(),
                  secondPartialAcceptedSequence - secondCheckpoint.value(QStringLiteral("acceptedSeq")).toInt());
+        QCOMPARE(secondPartialResult.value(QStringLiteral("discardedAcceptedSteps")).toInt(), 0);
         QVERIFY(secondPartialResult.value(QStringLiteral("discardedAcceptedSteps")).toInt() <= 10);
         QVERIFY(secondPartialResult.value(QStringLiteral("discardedSimulationSeconds")).isDouble());
         const double secondDiscardedSimulationSeconds =
                 secondPartialResult.value(QStringLiteral("discardedSimulationSeconds")).toDouble();
         QVERIFY(secondDiscardedSimulationSeconds >= 0.0 && secondDiscardedSimulationSeconds <= 1.0);
+        QCOMPARE(secondDiscardedSimulationSeconds, 0.0);
         QCOMPARE(secondQualification.value(QStringLiteral("checkpoint")).toObject()
                      .value(QStringLiteral("checkpointSha256")).toString(),
-                 seedProof.value(QStringLiteral("seedModelSha256")).toString());
+                 recoveryCheckpointEnvelope.value(QStringLiteral("checkpointModelSha256")).toString());
 
         const QString completedRecoveryJobId = recoveredAgain.submitNativeRecovery(
             recoveryJobId, secondCheckpoint.value(QStringLiteral("checkpointSha256")).toString(),
-            targetSteps - checkpointSequence, &error);
+            targetSteps - secondInterruptionSequence, &error);
         QVERIFY2(!completedRecoveryJobId.isEmpty(), qPrintable(error));
         QCOMPARE(fileSha256(firstRecoveryInputSnapshotPath), firstRecoveryInputSnapshotSha);
         QCOMPARE(directorySha256(firstRecoveryInputPackagePath), firstRecoveryInputPackageSha);
@@ -1713,19 +2565,45 @@ private slots:
         }
         QCOMPARE(recordNumbers.size(), int(targetSteps));
         const QJsonArray reusedHistory = manifest.value(QStringLiteral("reusedHistory")).toArray();
-        QCOMPARE(reusedHistory.size(), 10);
+        QCOMPARE(reusedHistory.size(), int(secondInterruptionSequence));
+        QSet<int> originalPrefixRecords;
+        QSet<int> recoveryPrefixRecords;
         for (const QJsonValue &historyValue : reusedHistory)
         {
             const QJsonObject history = historyValue.toObject();
             QCOMPARE(history.value(QStringLiteral("originKind")).toString(), QStringLiteral("legacy-history-unattributed"));
             QVERIFY(history.value(QStringLiteral("origin")).isNull());
             const QJsonObject origin = history.value(QStringLiteral("recoveryPrefixOrigin")).toObject();
-            QCOMPARE(origin.value(QStringLiteral("sourceJobId")).toString(), interruptedJobId);
-            QCOMPARE(origin.value(QStringLiteral("acceptedSeq")).toInt(), 10);
-            QCOMPARE(history.value(QStringLiteral("recoveryInheritance")).toObject()
-                         .value(QStringLiteral("sourceJobId")).toString(), recoveryJobId);
-            QVERIFY(history.value(QStringLiteral("recordNo")).toInt() <= 10);
+            const int recordNo = history.value(QStringLiteral("recordNo")).toInt();
+            QVERIFY(recordNo > 0 && recordNo <= int(secondInterruptionSequence));
+            QCOMPARE(origin.value(QStringLiteral("sourceRecordNo")).toInt(), recordNo);
+            if (recordNo <= int(checkpointSequence))
+            {
+                QVERIFY(!originalPrefixRecords.contains(recordNo));
+                originalPrefixRecords.insert(recordNo);
+                QCOMPARE(origin.value(QStringLiteral("sourceJobId")).toString(), interruptedJobId);
+                QCOMPARE(origin.value(QStringLiteral("acceptedSeq")).toInt(), int(checkpointSequence));
+                QCOMPARE(origin.value(QStringLiteral("selectedEnvelopeSha256")).toString(),
+                         selectedCheckpoint.value(QStringLiteral("envelopeSha256")).toString());
+                const QJsonObject inheritance = history.value(QStringLiteral("recoveryInheritance")).toObject();
+                QCOMPARE(inheritance.value(QStringLiteral("sourceJobId")).toString(), recoveryJobId);
+                QCOMPARE(inheritance.value(QStringLiteral("acceptedSeq")).toInt(), int(secondInterruptionSequence));
+                QCOMPARE(inheritance.value(QStringLiteral("selectedEnvelopeSha256")).toString(),
+                         secondCheckpoint.value(QStringLiteral("envelopeSha256")).toString());
+            }
+            else
+            {
+                QVERIFY(!recoveryPrefixRecords.contains(recordNo));
+                recoveryPrefixRecords.insert(recordNo);
+                QCOMPARE(origin.value(QStringLiteral("sourceJobId")).toString(), recoveryJobId);
+                QCOMPARE(origin.value(QStringLiteral("acceptedSeq")).toInt(), int(secondInterruptionSequence));
+                QCOMPARE(origin.value(QStringLiteral("selectedEnvelopeSha256")).toString(),
+                         secondCheckpoint.value(QStringLiteral("envelopeSha256")).toString());
+                QVERIFY(!history.contains(QStringLiteral("recoveryInheritance")));
+            }
         }
+        QCOMPARE(originalPrefixRecords.size(), int(checkpointSequence));
+        QCOMPARE(recoveryPrefixRecords.size(), int(secondInterruptionSequence - checkpointSequence));
     }
 
     void persistentJobRecordReopensAndExternalReplacementIsIsolated()
@@ -1748,6 +2626,8 @@ private slots:
                                   QStringLiteral("succeeded"), 120000);
 
         const QJsonObject original = manager.jobQuery(jobId);
+        QVERIFY(!original.value(QStringLiteral("cancellationRequested")).toBool());
+        QVERIFY(!original.contains(QStringLiteral("cancelRequestedAt")));
         QVERIFY(original.value(QStringLiteral("resultManifestVerified")).toBool());
         QString recordPath = original.value(QStringLiteral("nativeJobRecordRef")).toString();
         QVERIFY(!recordPath.isEmpty());
@@ -1762,6 +2642,40 @@ private slots:
         QVERIFY(loaded.value(QStringLiteral("resultManifestVerified")).toBool());
         QCOMPARE(reopened.nativeJobRecoveryQuery(jobId).value(QStringLiteral("eligibility")).toString(),
                  QStringLiteral("recompute_required"));
+
+        QFile durableRecord(recordPath);
+        QVERIFY(durableRecord.open(QIODevice::ReadOnly));
+        const QByteArray durableBytesBeforeFailedCommit = durableRecord.readAll();
+        durableRecord.close();
+        QVERIFY(!durableBytesBeforeFailedCommit.isEmpty());
+        const QJsonObject managerRecordBeforeFailedCommit = manager.nativeJobs.value(jobId);
+        const QJsonObject managerDiagnosticBeforeFailedCommit = manager.nativeJobDiagnostics.value(jobId);
+        QLockFile writeFailureLock(QDir(QFileInfo(recordPath).absolutePath())
+                                       .filePath(QStringLiteral(".job-record.lock")));
+        writeFailureLock.setStaleLockTime(0);
+        QVERIFY(writeFailureLock.tryLock(0));
+        QSignalSpy nativeJobUpdatedSpy(&manager, &SolverManager::nativeJobUpdated);
+        QVERIFY(!manager.updateNativeJob(jobId,
+            {{QStringLiteral("trustedFailureDiagnosis"),
+              QJsonObject{{QStringLiteral("schemaVersion"), 1},
+                          {QStringLiteral("status"), QStringLiteral("complete")},
+                          {QStringLiteral("packageSha256"), QStringLiteral("fixture-digest")}}}}));
+        QCOMPARE(nativeJobUpdatedSpy.count(), 0);
+        QCOMPARE(manager.nativeJobDiagnostics.value(jobId).value(QStringLiteral("code")).toString(),
+                 QStringLiteral("NATIVE_JOB_PERSISTENCE_FAILED"));
+        QFile durableRecordAfterFailure(recordPath);
+        QVERIFY(durableRecordAfterFailure.open(QIODevice::ReadOnly));
+        QCOMPARE(durableRecordAfterFailure.readAll(), durableBytesBeforeFailedCommit);
+        durableRecordAfterFailure.close();
+        SolverManager reopenedAfterFailedCommit;
+        const QJsonObject afterFailedCommit = reopenedAfterFailedCommit.jobQuery(jobId);
+        QVERIFY(afterFailedCommit.value(QStringLiteral("found")).toBool());
+        QCOMPARE(afterFailedCommit.value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
+        QVERIFY(!afterFailedCommit.contains(QStringLiteral("trustedFailureDiagnosis")));
+        writeFailureLock.unlock();
+        manager.nativeJobs.insert(jobId, managerRecordBeforeFailedCommit);
+        if (managerDiagnosticBeforeFailedCommit.isEmpty()) manager.nativeJobDiagnostics.remove(jobId);
+        else manager.nativeJobDiagnostics.insert(jobId, managerDiagnosticBeforeFailedCommit);
 
         QVERIFY(loaded.value(QStringLiteral("nativeCheckpointEnabled")).toBool());
         const QJsonObject checkpointContext = loaded.value(QStringLiteral("nativeCheckpointContext")).toObject();

@@ -93,9 +93,10 @@ def _plot(service, parameters):
             try:
                 if chosen["kind"] != "native" or chosen["mode"] != "active":
                     sources.fail("CHANNEL_UNAVAILABLE", "Accepted controller work is available only on actual active native records")
-                if chosen["channelId"] != "control:work":
-                    sources.resolve_many(service, [chosen])
-                    chosen = {**{k: chosen[k] for k in ("kind", "jobId", "mode", "artifactId")}, "channelId": "control:work"}
+                if chosen["channelId"] not in {"control:work", "piezo:electricalWork"}:
+                    held = sources.resolve_many(service, [chosen])[0]
+                    work_channel = "piezo:electricalWork" if "nativeAcceptedIdentity" in held["pin"] else "control:work"
+                    chosen = {**{k: chosen[k] for k in ("kind", "jobId", "mode", "artifactId")}, "channelId": work_channel}
                 actual = sources.resolve_many(service, [chosen])[0]
                 traces.append(_trace(index, _label(actual), "J", [actual["metadata"]],
                     _time_points(actual["dto"]), len(actual["dto"]["samples"]), limit))
@@ -105,8 +106,8 @@ def _plot(service, parameters):
                     raise
                 unavailable.append({"source": chosen, "code": error.code, "message": error.message})
         return {"schemaId": "range.series-plot/v1", "methodVersion": METHOD_VERSION,
-            "view": view, "title": "Accepted controller work",
-            "axes": {"x": {"label": "Time", "unit": "s"}, "y": {"label": "Cumulative controller work", "unit": "J"}},
+            "view": view, "title": "Accepted cumulative work",
+            "axes": {"x": {"label": "Time", "unit": "s"}, "y": {"label": "Cumulative work", "unit": "J"}},
             "traces": traces, "unavailable": unavailable,
             "export": {"available": bool(export_sources), "scope": "complete-raw", "sources": export_sources}}
     if view == "energy":

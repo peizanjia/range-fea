@@ -1,5 +1,7 @@
 #include "workflow_widget.h"
 
+#include <QAction>
+#include <QActionGroup>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -13,7 +15,9 @@
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
+#include <QPointer>
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QTableWidget>
@@ -24,12 +28,14 @@
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QToolButton>
 #include "control_monitor_widget.h"
 #include "task_plan_widget.h"
 #include "runtime_control_widget.h"
 #include "series_workbench_widget.h"
 #include "geometry_command_widget.h"
 #include "mesh_command_widget.h"
+#include "piezo_workbench_widget.h"
 #include "native_results_widget.h"
 #include "solver_manager.h"
 #include <QUuid>
@@ -100,7 +106,7 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     connect(&nativeJobTimer, &QTimer::timeout, this, &WorkflowWidget::refreshNativeJobs);
     nativeJobTimer.start();
     auto *layout = new QVBoxLayout(experiment);
-    auto *intro = new QLabel(tr("Run bounded rod / beam control from a template or an accepted document snapshot. Review the source, units and controller mapping before approval."));
+    auto *intro = new QLabel(tr("This is an independent rod / beam workflow. Choose a template or explicitly capture a document snapshot. For the selected document's piezoelectric experiment, use Piezo control."));
     intro->setWordWrap(true);
     intro->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     layout->addWidget(intro);
@@ -360,6 +366,57 @@ WorkflowWidget::WorkflowWidget(QWidget *parent) : QWidget(parent), service(this)
     pages->addTab(geometryCommands, tr("Geometry commands"));
     meshCommands = new MeshCommandWidget;
     pages->addTab(meshCommands, tr("Mesh candidates"));
+    piezoWorkbench = new PiezoWorkbenchWidget;
+    pages->addTab(piezoWorkbench, tr("Piezo control"));
+    connect(piezoWorkbench, &PiezoWorkbenchWidget::experimentApplied, this, [this] {
+        invalidateStaleSourceActions();
+        queueSourceContextRefresh();
+    });
+    connect(piezoWorkbench, &PiezoWorkbenchWidget::runSubmitted, this, [this](const QString &jobId) {
+        if(!jobId.isEmpty()){
+            pendingPiezoResultJobs.insert(jobId);
+            pendingPiezoResultFailures.remove(jobId);
+        }
+    });
+
+    auto *moduleButton = new QToolButton(pages);
+    moduleButton->setObjectName("workflowModuleMenu");
+    moduleButton->setAccessibleName(tr("Select workspace module"));
+    moduleButton->setText(tr("Modules"));
+    moduleButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    moduleButton->setPopupMode(QToolButton::InstantPopup);
+    moduleButton->setAutoRaise(true);
+    auto *moduleMenu = new QMenu(moduleButton);
+    auto *moduleGroup = new QActionGroup(moduleMenu);
+    moduleGroup->setExclusive(true);
+    QList<QPair<QAction *, QPointer<QWidget>>> moduleActions;
+    for (int index = 0; index < pages->count(); ++index)
+    {
+        auto *page = pages->widget(index);
+        auto *action = moduleMenu->addAction(pages->tabText(index));
+        action->setCheckable(true);
+        moduleGroup->addAction(action);
+        moduleActions.append(qMakePair(action, QPointer<QWidget>(page)));
+        connect(action, &QAction::triggered, pages, [pages = pages, page = QPointer<QWidget>(page)] {
+            if (!page) return;
+            const int currentIndex = pages->indexOf(page.data());
+            if (currentIndex >= 0) pages->setCurrentIndex(currentIndex);
+        });
+    }
+    const auto updateModuleChecks = [pages = pages, moduleActions] {
+        for (const auto &entry : moduleActions)
+        {
+            auto *page = entry.second.data();
+            entry.first->setChecked(page && pages->indexOf(page) >= 0
+                                    && pages->currentWidget() == page);
+        }
+    };
+    connect(moduleMenu, &QMenu::aboutToShow, moduleMenu, updateModuleChecks);
+    connect(pages, &QTabWidget::currentChanged, moduleMenu,
+            [updateModuleChecks](int) { updateModuleChecks(); });
+    updateModuleChecks();
+    moduleButton->setMenu(moduleMenu);
+    pages->setCornerWidget(moduleButton, Qt::TopRightCorner);
     setActionAvailability();
 }
 
@@ -372,6 +429,7 @@ void WorkflowWidget::setSession(Session *value)
     session = value;
     geometryCommands->setSession(value);
     meshCommands->setSession(value);
+    piezoWorkbench->setSession(value);
     meshCommands->setController(value ? value->getModelCommandHost()->meshController() : nullptr);
     nativeRecoveryPreviewId.clear(); nativeRecoveryJobId.clear();
     nativeRecoveryApply->setEnabled(false);
@@ -1071,7 +1129,46 @@ void WorkflowWidget::showResult(const QJsonObject &result)
 
 void WorkflowWidget::refreshNativeJobs()
 {
-    if (!session || !isVisible()) return;
+    if (!session) return;
+    auto &manager = SolverManager::getInstance();
+    const auto pendingJobs = pendingPiezoResultJobs.values();
+    for (const auto &id : pendingJobs)
+    {
+        // Pending Piezo IDs come from the exact accepted command response.
+        // Query them directly so selector pagination and tab visibility cannot
+        // prevent their completion from being observed.
+        const auto job = manager.jobQuery(id);
+        if (job.value("found") != QJsonValue(true) || job.value("jobId").toString() != id)
+        {
+            const int misses = pendingPiezoResultFailures.value(id) + 1;
+            if (misses >= 120) {
+                pendingPiezoResultJobs.remove(id);
+                pendingPiezoResultFailures.remove(id);
+            } else pendingPiezoResultFailures.insert(id, misses);
+            continue;
+        }
+        const QString state = job.value("state").toString();
+        if (state == "succeeded")
+        {
+            bool retryable = false;
+            const bool bound = piezoWorkbench && piezoWorkbench->bindCompletedNativeJob(id, &retryable);
+            // A busy source can outlast one poll; a transient lock can also
+            // interrupt a later render/context check. Bound both retry paths.
+            const int failures = bound ? 0 : pendingPiezoResultFailures.value(id) + 1;
+            if (bound || failures >= (retryable ? 120 : 3)) {
+                pendingPiezoResultJobs.remove(id);
+                pendingPiezoResultFailures.remove(id);
+            } else pendingPiezoResultFailures.insert(id, failures);
+        }
+        else if (state == "failed" || state == "cancelled" || state == "interrupted")
+        {
+            // Terminal failures never enter the accepted-result binder.
+            pendingPiezoResultJobs.remove(id);
+            pendingPiezoResultFailures.remove(id);
+        }
+        else pendingPiezoResultFailures.remove(id);
+    }
+    if (!isVisible()) return;
     const QString selected = nativeJobChoice->currentData().toString();
     const QSignalBlocker blocker(nativeJobChoice);
     QJsonArray records;

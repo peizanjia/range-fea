@@ -1,0 +1,256 @@
+ M .github/workflows/windows-regression.yml
+ M DEVELOPMENT_LOG.md
+ M HANDOFF.md
+ M scripts/benchmark/pc11_working_set.py
+ M scripts/benchmark/test_pc11_working_set.py
+ M scripts/ci/required-ctest-tests.json
+ M src/CMakeLists.txt
+ M src/fea-solver/CMakeLists.txt
+ M src/fea-solver/examples/stage9/stage9_velocity_controller.py
+ M src/fea-solver/src/main_task.cpp
+ M src/fea-solver/src/native_accepted_checkpoint.cpp
+ M src/fea-solver/src/native_accepted_checkpoint.h
+ M src/fea-solver/src/solver_input.cpp
+ M src/fea-solver/src/solver_input.h
+ M src/fea-solver/src/solver_task.cpp
+ M src/fea-solver/src/solver_task.h
+ M src/fea-solver/tests/CMakeLists.txt
+ M src/fea-solver/tests/tst_native_accepted_checkpoint.cpp
+ M src/fea-solver/tests/tst_native_mixed_run.cpp
+ M src/fea-solver/tests/tst_solver_audit_cli.cpp
+ M src/fea/CMakeLists.txt
+ M src/fea/src/agent_widget.cpp
+ M src/fea/src/application_settings_widget.cpp
+ M src/fea/src/central_tab_widget.cpp
+ M src/fea/src/central_tab_widget.h
+ M src/fea/src/main.cpp
+ M src/fea/src/main_window.cpp
+ M src/fea/src/model.cpp
+ M src/fea/src/model.h
+ M src/fea/src/model_command_host.cpp
+ M src/fea/src/model_command_host.h
+ M src/fea/src/series_plot_widget.cpp
+ M src/fea/src/series_plot_widget.h
+ M src/fea/src/session.cpp
+ M src/fea/src/solver_manager.cpp
+ M src/fea/src/solver_manager.h
+ M src/fea/src/solver_task.cpp
+ M src/fea/src/solver_task.h
+ M src/fea/src/workflow_widget.cpp
+ M src/fea/src/workflow_widget.h
+ M src/fea/tests/tst_gui_host_context.cpp
+ M src/fea/tests/tst_gui_model_lifecycle.cpp
+ M src/fea/tests/tst_native_job_registry.cpp
+ M src/fea/tests/tst_project_session.cpp
+ M src/fea/tests/tst_runtime_control_widget.cpp
+ M src/fea/tests/tst_solver_snapshot.cpp
+ M src/range-application-lib/CMakeLists.txt
+ M src/range-application-lib/include/rmodel_command_service.h
+ M src/range-application-lib/src/rmodel_command_service.cpp
+ M src/range-application-lib/src/rmodel_command_session.cpp
+ M src/range-application-lib/src/rnative_result_broker.cpp
+ M src/range-application-lib/tests/tst_model_command_cli.cpp
+ M src/range-application-lib/tests/tst_model_command_service.cpp
+ M src/range-application-lib/tests/tst_model_command_session.cpp
+ M src/range-application-lib/tests/tst_native_result_broker.cpp
+ M src/range-base-lib
+ M src/range-cloud-lib
+ M src/range-gui-lib
+ M src/range-model-lib
+ M src/range-solver-lib
+ M src/range-workflow/CMakeLists.txt
+ M src/range-workflow/python/range_workflow/series_analysis.py
+ M src/range-workflow/python/range_workflow/series_service.py
+ M src/range-workflow/python/range_workflow/series_sources.py
+ M src/range-workflow/python/range_workflow/series_workbench.py
+ M src/range-workflow/python/range_workflow/service.py
+ M src/range-workflow/tests/task_widget_bootstrap.py
+ M src/range-workflow/tests/test_extensions.py
+ M src/range-workflow/tests/test_imported_workflow.py
+ M src/range-workflow/tests/test_native_document_client.py
+ M src/range-workflow/tests/test_read_query_lane.py
+ M src/range-workflow/tests/test_recovery_runtime.py
+ M src/range-workflow/tests/test_runtime_control_integration.py
+ M src/range-workflow/tests/test_runtime_failure.py
+ M src/range-workflow/tests/test_runtime_final_receipt.py
+ M src/range-workflow/tests/test_runtime_interrupt.py
+ M src/range-workflow/tests/test_scientific_extensions.py
+ M src/range-workflow/tests/test_series_analysis.py
+ M src/range-workflow/tests/test_series_service.py
+ M src/range-workflow/tests/test_series_workbench.py
+ M src/range-workflow/tests/test_series_workbench_integration.py
+ M src/range-workflow/tests/test_task_runtime.py
+ M src/range-workflow/tests/test_task_scheduler.py
+?? $p
+?? $report
+?? (Join-Path
+?? .agents/skills/astra-orchestrator/SKILL.md
+?? .codex/agents/explorer.toml
+?? .codex/agents/researcher.toml
+?? .codex/agents/reviewer.toml
+?? .codex/agents/tester.toml
+?? .codex/agents/worker.toml
+?? .codex/config.toml
+?? .planning/.active_plan
+?? .planning/2026-10-13-piezo-control-handoff/findings.md
+?? .planning/2026-10-13-piezo-control-handoff/progress.md
+?? .planning/2026-10-13-piezo-control-handoff/task_plan.md
+?? .planning/2026-10-14-local-delivery/2026-10-18-checkpoint-recovery.md
+?? .planning/2026-10-14-local-delivery/2026-10-18-pending-gap-closure.md
+?? .planning/2026-10-14-local-delivery/findings.md
+?? .planning/2026-10-14-local-delivery/progress.md
+?? .planning/2026-10-14-local-delivery/task_plan.md
+?? .planning/2026-10-20-external-interfaces/findings.md
+?? .planning/2026-10-20-external-interfaces/progress.md
+?? .planning/2026-10-20-external-interfaces/task_plan.md
+?? AGENTS.md
+?? audit/gui-module-nav-v24.md
+?? audit/native-axial-fixture-v9.patch
+?? audit/piezo-workbench-visibility-v13.patch
+?? docs/PIEZO_CONTROL_CONTINUATION_HANDOFF.md
+?? docs/PIEZO_CONTROL_HANDOFF_20261014_1440.md
+?? docs/PIEZO_CONTROL_INTERACTION_LOG.md
+?? docs/PIEZO_DEPENDENCY_PROVENANCE.md
+?? docs/PIEZO_EXTERNAL_INTERFACES_DESIGN.md
+?? docs/acceptance/PC-00-A01-freeze-20261020.md
+?? docs/evidence/piezo_delivery_performance_contract.json
+?? docs/evidence/piezo_dependency_provenance.json
+?? docs/evidence/piezo_gui_operation_acceptance_matrix.md
+?? docs/evidence/piezo_incremental_checkpoint_20261013.json
+?? docs/evidence/piezo_pc04_08_gap_audit.md
+?? docs/evidence/piezo_pc09_11_gap_audit.md
+?? docs/evidence/piezo_representative_cases_spec.json
+?? scripts/benchmark/pc11_gui_cancel.ps1
+?? scripts/benchmark/pc11_gui_cancel_picker.ps1
+?? scripts/benchmark/pc11_gui_close.ps1
+?? scripts/benchmark/pc11_gui_diagnostic_read.ps1
+?? scripts/benchmark/pc11_gui_native.cs
+?? scripts/benchmark/pc11_gui_registry.py
+?? scripts/benchmark/pc11_gui_resize.ps1
+?? scripts/benchmark/pc11_gui_terminal.py
+?? scripts/benchmark/pc11_gui_terminal_tests.py
+?? scripts/benchmark/pc11_gui_uia.cs
+?? scripts/benchmark/pc11_gui_uia.ps1
+?? scripts/benchmark/pc11_gui_verify.py
+?? scripts/benchmark/pc11_gui_verify_tests.py
+?? scripts/benchmark/pc11_gui_windows.ps1
+?? scripts/benchmark/test_installed_profile.py
+?? scripts/benchmark/test_pc11_gui_exposure_classifier.ps1
+?? scripts/benchmark/test_pc11_gui_uia_static.py
+?? scripts/packaging/README-off-link-map-v44.md
+?? scripts/packaging/README-piezo-inventory-v43.md
+?? scripts/packaging/inventory_v43.py
+?? scripts/packaging/piezo_gui_static_v43/README-v43-static-chain.md
+?? scripts/packaging/piezo_gui_static_v43/README-v43.md
+?? scripts/packaging/piezo_gui_static_v43/admission_v43.py
+?? scripts/packaging/piezo_gui_static_v43/candidate-manifest-v43.admission-template.json
+?? scripts/packaging/piezo_gui_static_v43/finalize-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/freeze-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/inventory_adapter_v43.py
+?? scripts/packaging/piezo_gui_static_v43/package-tree-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/release-build-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/contract-common-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/native-launch-boundary-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/root-bootstrap-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/sampler-arguments-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/supervisor-core-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/watchdog-contract-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/runtime/worker-handshake-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/source-preflight-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/__init__.py
+?? scripts/packaging/piezo_gui_static_v43/tests/admission-source-scope-probe-v43.py
+?? scripts/packaging/piezo_gui_static_v43/tests/fixtures/worker-fixture-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-build-off-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-fixture-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-candidate-gate-aggregate-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-candidate-path-root-snapshot-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-candidate-path-root-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-final-readiness-candidate-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-fixture-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-finalize-scalar-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-harness-path-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-manifest-single-read-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-negative-static-chain-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-package-tree-scalar-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-path-shadow-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-preflight-gates-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-producer-module-boundary-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-relative-create-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43-fixture.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-sampler-arguments-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-save-environment-preflight-v43-fixture.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-save-environment-preflight-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-save-predicate-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-source-scope-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-static-chain-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-static-gates-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test-supervisor-worker-contract-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tests/test_admission_v43.py
+?? scripts/packaging/piezo_gui_static_v43/tests/test_install_tree_review_v43.py
+?? scripts/packaging/piezo_gui_static_v43/tests/test_inventory_adapter_v43.py
+?? scripts/packaging/piezo_gui_static_v43/tools/save-predicate-v43.ps1
+?? scripts/packaging/piezo_gui_static_v43/tools/system-module-boundary-v43.ps1
+?? scripts/packaging/test_inventory_v43.py
+?? scripts/packaging/test_verify_off_link_map_v44.py
+?? scripts/packaging/verify_off_link_map_v44.py
+?? src/fea-solver/tests/test_stage9_runtime_startup.py
+?? src/fea-solver/tests/tst_native_axial_run.cpp
+?? src/fea-solver/tests/tst_native_layered_run.cpp
+?? src/fea-solver/tests/tst_native_piezo_accepted_trace.cpp
+?? src/fea-solver/tests/tst_piezo_native_backend_bridge.cpp
+?? src/fea/src/piezo_workbench_widget.cpp
+?? src/fea/src/piezo_workbench_widget.h
+?? src/fea/tests/tst_piezo_experiment_history.cpp
+?? src/fea/tests/tst_piezo_solver_recovery.cpp
+?? src/fea/tests/tst_piezo_workbench_widget.cpp
+?? src/range-application-lib/include/native_checkpoint_recovery.h
+?? src/range-application-lib/include/piezo_accepted_trace.h
+?? src/range-application-lib/include/piezo_axial_backend_bridge.h
+?? src/range-application-lib/include/piezo_certification_batch_cache.h
+?? src/range-application-lib/include/piezo_native_backend_bridge.h
+?? src/range-application-lib/include/piezo_numeric_transport.h
+?? src/range-application-lib/include/piezo_result_series.h
+?? src/range-application-lib/include/piezo_runtime_identity.h
+?? src/range-application-lib/include/piezo_spectrum.h
+?? src/range-application-lib/include/rpiezo_artifact_service.h
+?? src/range-application-lib/include/rpiezo_axial_experiment_service.h
+?? src/range-application-lib/include/rpiezo_experiment_service.h
+?? src/range-application-lib/src/native_checkpoint_recovery.cpp
+?? src/range-application-lib/src/piezo_accepted_trace.cpp
+?? src/range-application-lib/src/piezo_axial_backend_bridge.cpp
+?? src/range-application-lib/src/piezo_certification_batch_cache.cpp
+?? src/range-application-lib/src/piezo_native_backend_bridge.cpp
+?? src/range-application-lib/src/piezo_numeric_transport.cpp
+?? src/range-application-lib/src/piezo_result_series.cpp
+?? src/range-application-lib/src/piezo_runtime_identity.cpp
+?? src/range-application-lib/src/piezo_spectrum.cpp
+?? src/range-application-lib/src/rpiezo_artifact_service.cpp
+?? src/range-application-lib/src/rpiezo_axial_experiment_service.cpp
+?? src/range-application-lib/src/rpiezo_experiment_service.cpp
+?? src/range-application-lib/tests/tst_piezo_accepted_trace.cpp
+?? src/range-application-lib/tests/tst_piezo_artifact_service.cpp
+?? src/range-application-lib/tests/tst_piezo_axial_backend_bridge.cpp
+?? src/range-application-lib/tests/tst_piezo_axial_experiment_service.cpp
+?? src/range-application-lib/tests/tst_piezo_certification_batch_cache.cpp
+?? src/range-application-lib/tests/tst_piezo_delivery_examples.cpp
+?? src/range-application-lib/tests/tst_piezo_experiment_commands.cpp
+?? src/range-application-lib/tests/tst_piezo_experiment_service.cpp
+?? src/range-application-lib/tests/tst_piezo_local_directions.cpp
+?? src/range-application-lib/tests/tst_piezo_numeric_transport.cpp
+?? src/range-application-lib/tests/tst_piezo_pzt_prestress.cpp
+?? src/range-application-lib/tests/tst_piezo_result_series.cpp
+?? src/range-application-lib/tests/tst_piezo_spectrum.cpp
+?? src/range-workflow/python/range_workflow/piezo_control_design.py
+?? src/range-workflow/python/range_workflow/piezo_design.py
+?? src/range-workflow/python/range_workflow/piezo_excitation.py
+?? src/range-workflow/python/range_workflow/piezo_external_time.py
+?? src/range-workflow/python/range_workflow/piezo_native_backend.py
+?? src/range-workflow/tests/test_piezo_control_design.py
+?? src/range-workflow/tests/test_piezo_design.py
+?? src/range-workflow/tests/test_piezo_excitation.py
+?? src/range-workflow/tests/test_piezo_external_time.py
+?? src/range-workflow/tests/test_piezo_native_backend.py

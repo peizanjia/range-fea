@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow import WorkflowClient
 import test_runtime_interrupt as interrupt_tests
 

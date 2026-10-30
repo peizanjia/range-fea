@@ -1,0 +1,104 @@
+{
+  "schema": "range.pc11-fresh-run-v43-admission-candidate/v1",
+  "candidateVersion": "v43",
+  "candidateState": "PREPARATION_ONLY_WAITING_FOR_OFF_INSTALL_AND_SOURCE_FREEZE",
+  "goPermitted": false,
+  "productActions": {
+    "guiLaunched": false,
+    "savePerformed": false,
+    "runPerformed": false,
+    "confirmPerformed": false
+  },
+  "installBinding": {
+    "requiredVariant": "OFF",
+    "installRoot": "PENDING_OFF_INSTALL_ROOT",
+    "inventoryReportPath": "PENDING_SCHEMA_V2_OFF_INVENTORY_REPORT_PATH",
+    "inventoryReportSha256": "PENDING_EXTERNAL_SHA256_PIN",
+    "inventorySchemaVersion": 2,
+    "inventoryStatus": "PENDING_OFF_INSTALL_INVENTORY",
+    "fileCountSource": "inventoryReport.fileCount == length(inventoryReport.files)",
+    "releaseQualificationStatus": "PENDING_LINK_MAP_AND_SEPARATE_REVIEW"
+  },
+  "installedPathLayout": {
+    "guiExecutableRelativePath": "bin/fea.exe",
+    "privatePythonRelativePath": "runtime/python/python.exe",
+    "solverExecutableRelativePath": "bin/fea-solver.exe",
+    "providerRootRelativePath": "share/range-workflow/range_workflow",
+    "productionControlRelativePath": "share/range-workflow/range_workflow/runtime_control.py",
+    "nativeBackendRelativePath": "share/range-workflow/range_workflow/piezo_native_backend.py",
+    "guiExecutableSha256": "PENDING_OFF_INSTALL_BYTES",
+    "privatePythonSha256": "PENDING_OFF_INSTALL_BYTES",
+    "solverExecutableSha256": "PENDING_OFF_INSTALL_BYTES",
+    "productionControlSha256": "PENDING_OFF_INSTALL_BYTES",
+    "nativeBackendSha256": "PENDING_OFF_INSTALL_BYTES"
+  },
+  "sourceAndAuthorityPins": {
+    "sourceRootPath": "PENDING_FROZEN_SOURCE_ROOT",
+    "sourceFreezeReceiptPath": "PENDING_SOURCE_FREEZE_RECEIPT_PATH",
+    "sourceFreezeReceiptSha256": "PENDING_SOURCE_FREEZE_RECEIPT_SHA256",
+    "rootCommit": "PENDING_SOURCE_FREEZE",
+    "submoduleCommits": [],
+    "sourceTreeSha256": "PENDING_SOURCE_TREE_SHA256",
+    "requiredCTestManifestPath": "PENDING_REQUIRED_CTEST_MANIFEST_PATH",
+    "requiredCTestManifestSha256": "PENDING_REQUIRED_CTEST_MANIFEST_SHA256",
+    "cmakeCachePath": "PENDING_OFF_CMAKE_CACHE_PATH",
+    "cmakeCacheSha256": "PENDING_OFF_CMAKE_CACHE_SHA256",
+    "releaseBuildReceiptPath": "PENDING_OFF_RELEASE_BUILD_RECEIPT_PATH",
+    "releaseBuildReceiptSha256": "PENDING_OFF_RELEASE_BUILD_RECEIPT_SHA256",
+    "authorityBinding": {
+      "authorityReceiptPath": "PENDING_FRESH_ORIGINAL_AUTHORITY_RECEIPT_PATH",
+      "authorityReceiptSha256": "PENDING_EXTERNAL_SHA256_PIN",
+      "additionalOriginalAuthorities": [
+        {
+          "path": "PENDING_ADDITIONAL_ORIGINAL_AUTHORITY_PATH",
+          "sha256": "PENDING_ADDITIONAL_ORIGINAL_AUTHORITY_SHA256"
+        }
+      ],
+      "authorityCountSource": "unique paths derived from authorityReceipt rows plus additionalOriginalAuthorities; exactly 10"
+    }
+  },
+  "candidateEvidencePins": {
+    "offLinkMapReceiptPath": "PENDING_OFF_LINK_MAP_V44_RECEIPT_PATH",
+    "offLinkMapReceiptSha256": "PENDING_EXTERNAL_SHA256_PIN",
+    "packageTreeReceiptPath": "PENDING_V43_PACKAGE_TREE_RECEIPT_PATH",
+    "packageTreeReceiptSha256": "PENDING_V43_PACKAGE_TREE_RECEIPT_SHA256",
+    "requiredStaticTestIds": [
+      "source_preflight",
+      "source_freeze",
+      "package_tree",
+      "module_boundary_build",
+      "module_boundary_source",
+      "watchdog_preflight",
+      "save_predicate_preflight",
+      "path_shadow",
+      "root_seal",
+      "save_predicate",
+      "watchdog_contract",
+      "sampler_arguments",
+      "supervisor",
+      "worker_handshake",
+      "native_launch_boundary",
+      "parser",
+      "finalize_integrity",
+      "source_static_tests",
+      "root_bootstrap"
+    ],
+    "staticTestReceipts": [
+      {
+        "name": "v43-static-suite",
+        "path": "PENDING_STATIC_TEST_RECEIPT_PATH",
+        "sha256": "PENDING_STATIC_TEST_RECEIPT_SHA256"
+      }
+    ]
+  },
+  "workflowBoundary": {
+    "staticReadinessDoesNotGrantProductGo": true,
+    "externalIndependentReviewRequired": true,
+    "separateRootTechnicalDecisionRequired": true,
+    "goSealRequiredBeforeAnyProductAction": true,
+    "independentReviewReceiptPath": "PENDING_EXTERNAL_REVIEW_RECEIPT_PATH",
+    "independentReviewReceiptSha256": "PENDING_EXTERNAL_REVIEW_RECEIPT_SHA256",
+    "rootDecisionReceiptPath": "PENDING_EXTERNAL_ROOT_DECISION_PATH",
+    "rootDecisionReceiptSha256": "PENDING_EXTERNAL_ROOT_DECISION_SHA256"
+  }
+}

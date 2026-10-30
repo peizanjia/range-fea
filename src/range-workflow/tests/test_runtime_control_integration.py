@@ -9,6 +9,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow import WorkflowClient
 from range_workflow.model_sources import register_snapshot_source
 from range_workflow.service import file_hash

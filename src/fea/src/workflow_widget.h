@@ -24,6 +24,7 @@ class ControlMonitorWidget;
 class NativeResultsWidget;
 class GeometryCommandWidget;
 class MeshCommandWidget;
+class PiezoWorkbenchWidget;
 class Session;
 
 //! A user-facing host of the actual persisted rod/beam workflow service.
@@ -51,8 +52,10 @@ signals:
     void openResultRequested(const QString &artifactPath);
 
 private:
+    friend class TestPiezoWorkbenchWidget;
     GeometryCommandWidget *geometryCommands = nullptr;
     MeshCommandWidget *meshCommands = nullptr;
+    PiezoWorkbenchWidget *piezoWorkbench = nullptr;
     WorkflowProcess service;
     QTimer refreshTimer;
     QTabWidget *pages;
@@ -64,6 +67,8 @@ private:
     QPushButton *nativeRecoveryButton, *nativeRecoveryApply;
     QLabel *nativeRecoveryStatus;
     QString nativeRecoveryPreviewId, nativeRecoveryJobId;
+    QSet<QString> pendingPiezoResultJobs;
+    QMap<QString, int> pendingPiezoResultFailures;
     QTimer nativeJobTimer;
     QLineEdit *workspaceEdit;
     QCheckBox *trustedExtensions;

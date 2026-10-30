@@ -7,6 +7,7 @@
 #include <QTextCursor>
 #include <QTimer>
 #include <QHash>
+#include <QSet>
 #include <QStringList>
 #include <memory>
 #include <rai_agent_settings.h>
@@ -28,6 +29,18 @@ class QVBoxLayout;
 class QDialog;
 class RAgentConversationStore;
 
+struct AgentEvaluationSlotBinding
+{
+    bool enabled = false;
+    QString runId;
+    QString holdoutId;
+    QString slotId;
+    QString caseId;
+    QString manifestCommitmentSha256;
+    QString promptSha256;
+    int repeat = 0;
+};
+
 //! Compact conversation UI. Provider credentials remain in memory only.
 class AgentWidget : public QWidget
 {
@@ -37,23 +50,42 @@ public:
     AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent = nullptr,
                 QNetworkAccessManager *networkAccessManager = nullptr,
                 AgentTaskRunner::AccessPolicy policy = AgentTaskRunner::AccessPolicy::ReadWrite,
-                bool restoreLastConversation = false);
+                bool restoreLastConversation = false,
+                AgentTaskRunner::EvaluationArm evaluationArm = AgentTaskRunner::EvaluationArm::Standard,
+                AgentEvaluationSlotBinding evaluationSlotBinding = {});
     ~AgentWidget() override;
     AgentTaskRunner *taskRunner() { return &runner; }
     void setProviderSettings(const RAgentSettings &settings);
     RAgentSettings getProviderSettings() const;
     static QWidget *createSettingsPage(QWidget *parent = nullptr);
+    //! Build the immutable content shown before arming one trusted experiment.
+    //! Error diagnostics reject the authorization; warning diagnostics require acknowledgement.
+    static QJsonObject trustedExperimentAuthorizationReview(const QJsonObject &candidate,
+                                                             bool *warningAcknowledgementRequired = nullptr,
+                                                             QString *error = nullptr);
+    //! Show the same validated Host review used by the authorization control.
+    //! Returns true only after the dialog is accepted (and any warning acknowledged).
+    static bool confirmTrustedExperimentAuthorization(QWidget *parent, const QJsonObject &candidate,
+                                                       QString *error = nullptr);
     void startTask(const QString &goal, bool authorized = false);
     void startReadOnlyQuestion(const QString &text);
     AgentWidget *readOnlyWidget() const { return readOnlySidecar; }
     QString conversationId() const { return currentConversationId; }
     bool loadConversation(const QString &id, QString *error = nullptr);
+    //! Trusted opt-in evaluation sink. Must durably accept an intent before dispatch.
+    //! Configure only while idle; a rejected capture stops the Agent task.
+    using ProviderCaptureRecorder = std::function<bool(const QJsonObject &)>;
+    bool setProviderCaptureRecorder(ProviderCaptureRecorder recorder);
 
 signals:
     void providerUsage(const QJsonObject &usage);
+    //! Sanitized provider-turn attribution for evaluation; contains no request or credential data.
+    void providerTurnTelemetry(const QJsonObject &event);
 
 private:
     const AgentTaskRunner::AccessPolicy accessPolicy;
+    const AgentTaskRunner::EvaluationArm evaluationArm;
+    const AgentEvaluationSlotBinding evaluationSlotBinding;
     AgentTaskRunner runner;
     QNetworkAccessManager defaultNetwork;
     QPointer<QNetworkAccessManager> network;
@@ -121,6 +153,18 @@ private:
     int liveStreamEndPosition = -1;
     bool finalizingStreamMessage = false;
     QString finalizingStreamText;
+    bool trustedExperimentReviewComplete = true;
+    ProviderCaptureRecorder providerCaptureRecorder;
+    bool providerCaptureFailed = false;
+    int providerCaptureCallbackDepth = 0;
+    bool providerCaptureTaskFinalizing = false;
+    QString initialEvaluationPrompt;
+    bool evaluationSlotBindingRecorded = false;
+    QJsonObject activeProviderCaptureContext, lastProviderCaptureContext;
+    QHash<QString, QString> providerCaptureToolIds;
+    QHash<QString, QString> providerCaptureToolCallNames;
+    QSet<QString> providerCaptureToolNames;
+    bool recordProviderCapture(const QJsonObject &event);
 
     void submitDraft();
     void answerQuestion(const QString &questionId, const QString &answer, bool clearDraft);

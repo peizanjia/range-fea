@@ -30,9 +30,36 @@ _RUNTIME_BOOTSTRAP = r'''
 import json, os, sys, threading, time
 from pathlib import Path
 
+sys.path.insert(0, sys.argv.pop(1))
 fault = __FAULT_JSON__
 arguments = sys.argv[1:]
 workspace = Path(arguments[arguments.index("--workspace") + 1])
+
+def read_checkpoint_bytes(path):
+    if os.name != "nt":
+        return path.read_bytes()
+    import ctypes, msvcrt
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    handle = create_file(str(path), 0x80000000, 0x1 | 0x2 | 0x4,
+                         None, 3, 0x80, None)
+    if not handle or handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        close_handle(handle)
+        raise
+    with os.fdopen(descriptor, "rb") as stream:
+        return stream.read()
 
 def mark_and_exit(exit_code, payload):
     temporary = workspace / ".recovery-test-crash.tmp"
@@ -60,9 +87,9 @@ if fault:
             while True:
                 for pointer_path in jobs.glob("*/" + variant + "/checkpoints/latest.json"):
                     try:
-                        pointer = json.loads(pointer_path.read_bytes())
+                        pointer = json.loads(read_checkpoint_bytes(pointer_path))
                         envelope_path = pointer_path.parent / pointer["envelopeFile"]
-                        envelope = json.loads(envelope_path.read_bytes())
+                        envelope = json.loads(read_checkpoint_bytes(envelope_path))
                         accepted = envelope.get("acceptedSeq")
                     except (OSError, ValueError, KeyError, TypeError):
                         continue
@@ -80,8 +107,8 @@ if fault:
                 marker = None
                 for pointer_path in (workspace / "jobs").glob("*/" + fault["variant"] + "/checkpoints/latest.json"):
                     try:
-                        pointer = json.loads(pointer_path.read_bytes())
-                        envelope = json.loads((pointer_path.parent / pointer["envelopeFile"]).read_bytes())
+                        pointer = json.loads(read_checkpoint_bytes(pointer_path))
+                        envelope = json.loads(read_checkpoint_bytes(pointer_path.parent / pointer["envelopeFile"]))
                         marker = {"acceptedSeq": envelope.get("acceptedSeq"),
                                   "checkpointDirectory": str(pointer_path.parent)}
                     except (OSError, ValueError, KeyError, TypeError):
@@ -122,7 +149,8 @@ class InjectedRuntimeClient:
         self._mutex = threading.Lock()
         self._closed = False
         python = Path(ARGS.python or sys.executable).resolve()
-        arguments = [str(python), "-c", _bootstrap(fault), "--stdio",
+        package_path = Path(__file__).resolve().parents[1] / "python"
+        arguments = [str(python), "-I", "-B", "-c", _bootstrap(fault), str(package_path), "--stdio",
                      "--workspace", str(self.workspace), "--solver", str(ARGS.solver),
                      "--native", str(ARGS.native), "--examples", str(ARGS.examples),
                      "--python", str(python)]

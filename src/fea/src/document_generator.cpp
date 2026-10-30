@@ -60,6 +60,13 @@ int DocumentGenerator::perform()
     this->docBody = new QTextDocument;
     this->printer = new QPrinter(QPrinter::ScreenResolution);
 
+    // Selecting PDF output can change the printer's effective resolution.
+    // Choose it before deriving QTextDocument page sizes from the printer.
+    if (this->exportTypes.contains(DocumentGenerator::PDF))
+    {
+        this->printer->setOutputFormat(QPrinter::PdfFormat);
+    }
+
     this->printer->setPageSize(QPageSize(QPageSize::A4));
     this->printer->setPageMargins(QMarginsF(20.0,15.0,20.0,10.0),QPageLayout::Millimeter);
 

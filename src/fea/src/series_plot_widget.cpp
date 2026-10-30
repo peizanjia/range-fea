@@ -85,6 +85,8 @@ class SeriesPlotCanvas : public QWidget
 {
 public:
     std::function<void(const QString &, quint64)> cursorObserved;
+    std::function<void(quint64)> datasetPaintObserved;
+    quint64 datasetGeneration = 0, paintedGeneration = 0;
     std::optional<QPointF> cursorPoint;
     explicit SeriesPlotCanvas(QWidget *parent = nullptr) : QWidget(parent)
     {
@@ -96,11 +98,12 @@ public:
         setFocusPolicy(Qt::StrongFocus);
     }
 
-    void setDataset(const SeriesPlotWidget::Dataset *nextDataset, bool preserveView)
+    void setDataset(const SeriesPlotWidget::Dataset *nextDataset, bool preserveView, quint64 generation)
     {
         const double oldXScale = xScale;
         const double oldYScale = yScale;
         dataset = nextDataset;
+        datasetGeneration = generation;
         calculateScales();
         if (!preserveView || !hasView)
         {
@@ -205,7 +208,9 @@ protected:
         painter.drawText(QRectF(-area.height() / 2, -10, area.height(), 20), Qt::AlignCenter, verticalTitle);
         painter.restore();
 
-        if (hasDisplayedPoints()) drawTraces(painter, area);
+        const bool drewSamples = hasDisplayedPoints();
+        const quint64 generation = datasetGeneration;
+        if (drewSamples) drawTraces(painter, area);
         else
         {
             painter.setPen(palette().color(QPalette::PlaceholderText));
@@ -217,6 +222,14 @@ protected:
             painter.setPen(QPen(palette().color(QPalette::Text), 1, Qt::DashLine));
             painter.drawLine(QPointF(point.x(), area.top()), QPointF(point.x(), area.bottom()));
             painter.drawEllipse(point, 4, 4);
+        }
+        // Finish the actual trace painter before observers can inspect or replace
+        // the dataset. Repaints, cursor movement and empty generations do not emit.
+        const bool ended = painter.end();
+        if (ended && drewSamples && generation != paintedGeneration)
+        {
+            paintedGeneration = generation;
+            if (datasetPaintObserved) datasetPaintObserved(generation);
         }
     }
 
@@ -673,6 +686,7 @@ SeriesPlotWidget::SeriesPlotWidget(QWidget *parent) : QWidget(parent)
     layout->addLayout(toolbar);
 
     canvas = new SeriesPlotCanvas(this);
+    canvas->datasetPaintObserved = [this](quint64 generation) { emit datasetPainted(generation); };
     canvas->cursorObserved = [this](const QString &id, quint64 ordinal) { setCursor({id, ordinal}); };
     layout->addWidget(canvas, 1);
     connect(holdCheck, &QCheckBox::toggled, this, &SeriesPlotWidget::setDisplayHeld);
@@ -847,7 +861,8 @@ void SeriesPlotWidget::presentDataset(const Dataset &nextDataset)
     const bool preserveView = datasetAvailable && samePlotIdentity(displayedDataset, nextDataset);
     displayedDataset = nextDataset;
     datasetAvailable = true;
-    canvas->setDataset(&displayedDataset, preserveView);
+    ++displayedGeneration;
+    canvas->setDataset(&displayedDataset, preserveView, displayedGeneration);
     if (!preserveView || (displayedCursor && !setCursor(*displayedCursor)))
     {
         displayedCursor.reset(); canvas->cursorPoint.reset(); canvas->update();

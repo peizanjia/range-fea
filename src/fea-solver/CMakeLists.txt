@@ -37,10 +37,21 @@ qt_add_executable(fea-solver
 )
 
 add_dependencies(fea-solver range-base-lib range-model-lib range-solver-lib)
+target_compile_definitions(fea-solver PRIVATE
+    RANGE_PIEZO_BACKEND_PYTHON="${RANGE_PRIVATE_PYTHON_DIRECTORY_CMAKE}/python.exe"
+    RANGE_PIEZO_BACKEND_MODULE_ROOT="${CMAKE_SOURCE_DIR}/range-workflow/python")
 
 qt_add_executable(range-control-velocity examples/control_velocity_cpp.cpp)
 target_link_libraries(range-control-velocity PRIVATE Qt6::Core)
 install(TARGETS range-control-velocity RUNTIME DESTINATION bin COMPONENT Application)
+
+# Reference implementation of the versioned external excitation/controller
+# contract. It uses stdio so it can be launched with an executable and argv.
+qt_add_executable(range-external-io-cpp examples/external_io/cpp_provider.cpp)
+target_link_libraries(range-external-io-cpp PRIVATE Qt6::Core)
+install(TARGETS range-external-io-cpp RUNTIME DESTINATION bin COMPONENT Application)
+install(FILES examples/external_io/README.md
+    DESTINATION examples/control/external_io COMPONENT Application)
 
 install(DIRECTORY examples/ DESTINATION examples/control COMPONENT Application
     FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "*.ram" PATTERN "*.m" PATTERN "*.cpp"
@@ -60,6 +71,7 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/STAGE9_CONTROL_ANALYSIS.md
 target_link_libraries(fea-solver
     PRIVATE
         range-solver-lib
+        range-application-lib
         Qt6::Network
         common_defines
 )

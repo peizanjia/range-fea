@@ -55,7 +55,9 @@ void SolverSetupChecker::checkElements(QStringList &warnings, QStringList &error
         return;
     }
 
-    if (this->rModel.getNVolumes() == 0)
+    // A line-only structural model is a complete 1D finite-element model; the
+    // absence of volume entities is not a setup warning for rods and beams.
+    if (this->rModel.getNVolumes() == 0 && this->rModel.getNLines() == 0)
     {
         warnings.append(QObject::tr("Model does not contain any volume elements."));
     }
@@ -201,7 +203,9 @@ void SolverSetupChecker::checkBoundaryConditions(QStringList &warnings, QStringL
         {
             warnings.append("<b>" + RProblem::getName(problemTypes[i]) + ":</b> " + QObject::tr("No explicit boundary condition assigned."));
         }
-        if (!hasImplicit)
+        // Modal eigenvalue analysis is defined by the constrained stiffness and
+        // mass operators; it does not require an implicit load boundary condition.
+        if (!hasImplicit && problemTypes[i] != R_PROBLEM_STRESS_MODAL)
         {
             warnings.append("<b>" + RProblem::getName(problemTypes[i]) + ":</b> " + QObject::tr("No implicit boundary condition assigned."));
         }

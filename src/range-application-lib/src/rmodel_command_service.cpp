@@ -1,4 +1,5 @@
 #include <rmodel_command_service.h>
+#include <piezo_axial_backend_bridge.h>
 
 #include <QCryptographicHash>
 #include <QJsonDocument>
@@ -24,6 +25,8 @@
 #include <rml_variable.h>
 #include <rml_file_io.h>
 #include <rmesh_rebind_service.h>
+#include <rpiezo_experiment_service.h>
+#include <piezo_native_backend_bridge.h>
 
 namespace
 {
@@ -697,7 +700,7 @@ void appendSamples(RConditionComponent &component, double timeS, double value)
 
 // Rebinding replaces the complete reset analysis setup. Its history guard is
 // deliberately separate from the existing journal hash scope (v3).
-QString rebindBindingFingerprint(const RModel &model)
+QString analysisFingerprint(const RModel &model, bool complete)
 {
     const auto &restart = model.getProblemSetup().getStructuralDynamicsRestartData();
     const auto fields = [](const RStructuralDynamicsRestartData &s) {
@@ -711,7 +714,7 @@ QString rebindBindingFingerprint(const RModel &model)
     const RStructuralDynamicsRestartData defaults;
     const auto &setup = model.getProblemSetup();
     const auto &interactions = setup.getStructuralInteractionSetup();
-    if (fields(restart) != fields(defaults) || model.getNVariables()
+    if (!complete && (fields(restart) != fields(defaults) || model.getNVariables()
         || !model.getMonitoringPointManager().empty() || model.getNVectorFields()
         || model.getNScalarFields() || model.getNStreamLines() || model.getNCuts() || model.getNIsos()
         || !interactions.getLinearConstraints().empty() || !interactions.getCouplings().empty()
@@ -722,13 +725,13 @@ QString rebindBindingFingerprint(const RModel &model)
         || !setup.getStructuralPiezoSetup().nodalBoundaryConditions.empty()
         || !setup.getRadiationSetup().getViewFactorMatrixFile().isEmpty()
         || !setup.getStructuralThermalControlSetup().channels.empty() || !setup.getStructuralThermalControlSetup().sparseObservationNodeIds.empty()
-        || !setup.getStructuralDynamicsSetup().getModalDampingRatios().empty() || !setup.getMeshSetup().getVariables().empty()) return {};
+        || !setup.getStructuralDynamicsSetup().getModalDampingRatios().empty() || !setup.getMeshSetup().getVariables().empty())) return {};
     QVector<QPair<uint, QJsonObject>> orderedGroups;
     for (uint g = 0; g < model.getNElementGroups(); ++g)
     {
         const auto *group = model.getElementGroupPtr(g);
-        if (group->getNInitialConditions() || group->getNEnvironmentConditions()
-            || !group->getData().getVariableData().empty()) return {};
+        if (!complete && (group->getNInitialConditions() || group->getNEnvironmentConditions()
+            || !group->getData().getVariableData().empty())) return {};
         QJsonArray members;
         QList<uint> physicalIds;
         for (uint e = 0; e < group->size(); ++e)
@@ -741,6 +744,20 @@ QString rebindBindingFingerprint(const RModel &model)
         QJsonObject entry{{"physicalId", double(group->getPhysicalId())}, {"members", members}};
         if (model.getEntityGroupType(g, true) == R_ENTITY_GROUP_POINT)
             entry.insert("volume", model.getPoint(model.getEntityGroupPosition(g, true)).getVolume());
+        if (complete && model.getEntityGroupType(g,true)==R_ENTITY_GROUP_LINE)
+        {
+            const auto &line=model.getLine(model.getEntityGroupPosition(g,true));
+            const auto &axis=line.getLocalYDirection();
+            entry.insert("section",QJsonArray{line.getCrossArea(),line.getSecondMomentY(),line.getSecondMomentZ(),
+                line.getTorsionalConstant(),line.getSectionModulusY(),line.getSectionModulusZ(),
+                line.getTorsionalSectionModulus(),axis[0],axis[1],axis[2]});
+        }
+        if (complete && model.getEntityGroupType(g,true)==R_ENTITY_GROUP_SURFACE)
+        {
+            const auto &surface=model.getSurface(model.getEntityGroupPosition(g,true));
+            entry.insert("thickness",surface.getThickness());
+            entry.insert("structuralFormulation",int(surface.getStructuralFormulation()));
+        }
         orderedGroups.append({group->getPhysicalId(), entry});
     }
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
@@ -755,6 +772,39 @@ QString rebindBindingFingerprint(const RModel &model)
     RFileIO::writeBinary(output, model.getProblemTaskTree());
     RFileIO::writeBinary(output, model.getProblemSetup());
     RFileIO::writeBinary(output, model.getTimeSolver());
+    if (complete)
+    {
+    RFileIO::writeBinary(output,model.getMonitoringPointManager());
+    for(int type=RMatrixSolverConf::CG;type<RMatrixSolverConf::NTypes;++type)
+        RFileIO::writeBinary(output,model.getMatrixSolverConf(type));
+    for (uint g=0;g<model.getNElementGroups();++g)
+    {
+        const auto *group=model.getElementGroupPtr(g);
+        RFileIO::writeBinary(output,group->getPhysicalId());
+        RFileIO::writeBinary(output,group->getNInitialConditions());
+        for(uint i=0;i<group->getNInitialConditions();++i)RFileIO::writeBinary(output,group->getInitialCondition(i));
+        RFileIO::writeBinary(output,group->getNEnvironmentConditions());
+        for(uint i=0;i<group->getNEnvironmentConditions();++i)RFileIO::writeBinary(output,group->getEnvironmentCondition(i));
+        const auto &data=group->getData().getVariableData();
+        RFileIO::writeBinary(output,uint(data.size()));
+        for(const auto &entry:data){RFileIO::writeBinary(output,entry.first);RFileIO::writeBinary(output,entry.second);}
+    }
+    const auto &results=static_cast<const RResults &>(model);
+    RFileIO::writeBinary(output,results.getNNodes());
+    RFileIO::writeBinary(output,results.getNElements());
+    RFileIO::writeBinary(output,model.getNVariables());
+    for(uint i=0;i<model.getNVariables();++i)RFileIO::writeBinary(output,model.getVariable(i));
+    RFileIO::writeBinary(output,model.getNVectorFields());
+    for(uint i=0;i<model.getNVectorFields();++i)RFileIO::writeBinary(output,model.getVectorField(i));
+    RFileIO::writeBinary(output,model.getNScalarFields());
+    for(uint i=0;i<model.getNScalarFields();++i)RFileIO::writeBinary(output,model.getScalarField(i));
+    RFileIO::writeBinary(output,model.getNStreamLines());
+    for(uint i=0;i<model.getNStreamLines();++i)RFileIO::writeBinary(output,model.getStreamLine(i));
+    RFileIO::writeBinary(output,model.getNCuts());
+    for(uint i=0;i<model.getNCuts();++i)RFileIO::writeBinary(output,model.getCut(i));
+    RFileIO::writeBinary(output,model.getNIsos());
+    for(uint i=0;i<model.getNIsos();++i)RFileIO::writeBinary(output,model.getIso(i));
+    }
     if (!output.commit()) throw std::runtime_error("Cannot commit rebinding history verification.");
     QFile input(path);
     if (!input.open(QIODevice::ReadOnly)) throw std::runtime_error("Cannot read rebinding history verification.");
@@ -762,6 +812,11 @@ QString rebindBindingFingerprint(const RModel &model)
     if (input.error() != QFile::NoError) throw std::runtime_error("Cannot finish rebinding history verification.");
     bytes.append(QJsonDocument(QJsonObject{{"groups", groups}}).toJson(QJsonDocument::Compact));
     return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+
+QString rebindBindingFingerprint(const RModel &model)
+{
+    return analysisFingerprint(model,false);
 }
 
 void rebindMetadata(RModelCommandService::PreviewResult &result, bool forward)
@@ -833,7 +888,10 @@ QString RModelCommandService::stateFingerprint(const RModel &model)
     orderedGroups.reserve(static_cast<qsizetype>(model.getNElementGroups()));
     for (uint i = 0; i < model.getNElementGroups(); ++i)
     {
-        const QJsonObject group = fullGroupState(model, i);
+        QJsonObject group = fullGroupState(model, i);
+        // Presentation labels survive whole experiment publication and Undo.
+        // Physical group IDs, membership, materials and conditions bind history.
+        group.remove(QStringLiteral("label"));
         orderedGroups.append({model.getElementGroupPtr(i)->getPhysicalId(), group});
     }
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &left, const auto &right) {
@@ -846,7 +904,8 @@ QString RModelCommandService::stateFingerprint(const RModel &model)
                                  model.getProblemSetup().getStructuralDynamicsSetup())},
                             {QStringLiteral("timeSolver"), timeSolverParameters(model.getTimeSolver())},
                             {QStringLiteral("groups"), groups},
-                            {QStringLiteral("geometrySha256"), RGeometryCandidateService::geometryFingerprint(model)}};
+                            {QStringLiteral("geometrySha256"), RGeometryCandidateService::geometryFingerprint(model)},
+                            {QStringLiteral("completeAnalysisSha256"), analysisFingerprint(model,true)}};
     return QString::fromLatin1(QCryptographicHash::hash(
         QJsonDocument(state).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
 }
@@ -858,6 +917,10 @@ QJsonObject RModelCommandService::capabilities(const RModel &model)
     const bool stressOnly = taskMask == R_PROBLEM_STRESS;
     const bool structural = stressOnly || taskMask == R_PROBLEM_STRESS_MODAL;
     QJsonArray commands{
+        QJsonObject{{QStringLiteral("id"),QStringLiteral("piezo.configure-experiment")},
+                    {QStringLiteral("version"),1}, {QStringLiteral("supported"),true},
+                    {QStringLiteral("units"),QStringLiteral("SI")},
+                    {QStringLiteral("approval"),QStringLiteral("one-whole-experiment-preview")}},
         QJsonObject{{QStringLiteral("id"), QStringLiteral("analysis.modal.configure")},
                     {QStringLiteral("version"), 1}, {QStringLiteral("supported"), modal},
                     {QStringLiteral("units"), QJsonObject{{QStringLiteral("tolerance"), QStringLiteral("1")}}},
@@ -1064,6 +1127,63 @@ RModelCommandService::PreviewResult RModelCommandService::preview(
 
     try
     {
+        if (commandId == QStringLiteral("piezo.configure-experiment"))
+        {
+            const auto composed = RPiezoExperimentService::preview(model,arguments);
+            if (!composed.valid) return reject(composed.code,composed.message);
+            result.candidate=composed.candidate;
+            result.normalizedArguments=composed.normalizedArguments;
+            result.before={{QStringLiteral("stateSha256"),stateFingerprint(model)},
+                           {QStringLiteral("configured"),model.getProblemSetup().getStructuralPiezoLayeredSetup().enabled
+                                || model.getProblemSetup().getStructuralPiezoAxialSetup().enabled}};
+            result.after=composed.report;
+            const auto package=result.candidate.getProblemSetup().getStructuralPiezoAxialSetup().enabled
+                ? PiezoAxialBackendBridge::create(result.candidate).exportPackage
+                : PiezoNativeBackendBridge::create(result.candidate).exportPackage;
+            result.after.insert("designBackendRequired",false);
+            result.after.insert("modalBackendRequired",false);
+            result.after.insert("certification","Actual FE, modal damping, controller and excitation certified by production backend");
+            result.after.insert("backendIdentity",package.value("backendIdentity"));
+            result.after.insert("backend",package.value("backend"));
+            const auto design=package.value("design").toObject();
+            QJsonObject summary;
+            for(const auto *key:{"selectedModes","omega","clusters","modalResiduals","massOrthogonalityError",
+                "samplingPeriod","samplingContract","samplingQualification"})
+                if(design.contains(key))summary.insert(key,design.value(key));
+            const auto controller=design.value("controller").toObject();
+            QJsonObject controllerCertificate;
+            for(const auto *key:{"kind","riccatiRelativeResidual","closedPoles","qualification","horizon"})
+                if(controller.contains(key))controllerCertificate.insert(key,controller.value(key));
+            summary.insert("controller",controllerCertificate);
+            const auto forcing=design.value("forceAware").toObject();
+            QJsonObject forceCertificate;
+            for(const auto *key:{"qualification","allConfiguredForcesMapped","outputContract","interpolation",
+                "initialTime","runtimeTimeContract","exportPeriodContract"})
+                if(forcing.contains(key))forceCertificate.insert(key,forcing.value(key));
+            summary.insert("forceAware",forceCertificate);
+            result.after.insert("design",summary);
+            result.after.insert("declarationValidation","Production numerical validation passed for this frozen source");
+            result.after.insert("exportPackageSha256",QString::fromLatin1(QCryptographicHash::hash(
+                QJsonDocument(package).toJson(QJsonDocument::Compact),QCryptographicHash::Sha256).toHex()));
+            result.changedPaths=composed.changedPaths;
+            result.report=result.after;result.units=composed.units;result.invalidation=composed.invalidation;
+            result.readSet={{QStringLiteral("scope"),QStringLiteral("complete-physics-and-topology")},
+                            {QStringLiteral("stateSha256"),stateFingerprint(model)}};
+            result.delta.kind=Delta::Kind::PiezoExperiment;
+            auto &capture=result.delta.piezoExperiment;
+            capture.before=std::make_shared<const RModel>(model);
+            capture.after=std::make_shared<const RModel>(result.candidate);
+            capture.beforeStateSha256=stateFingerprint(model);
+            capture.afterStateSha256=stateFingerprint(result.candidate);
+            capture.report=result.report;capture.units=composed.units;capture.invalidation=composed.invalidation;
+            result.delta.normalizedArguments=result.normalizedArguments;
+            result.delta.changedPaths=result.changedPaths;
+            result.delta.changedPath=QStringLiteral("problemSetup.piezoExperiment");
+            result.valid=true;
+            result.fingerprint=resultFingerprint(model,result.candidate,sourceId,revision,commandId,
+                                                result.normalizedArguments,result.before,result.after);
+            return result;
+        }
         if (commandId == QStringLiteral("mesh.rebind.static"))
         {
             const auto rebound = RMeshRebindService::preview(model, arguments);
@@ -1446,6 +1566,29 @@ RModelCommandService::PreviewResult RModelCommandService::applyDelta(
         return reject(QStringLiteral("empty_history"), QStringLiteral("No supported model change is stored in this history entry."));
     try
     {
+        if (delta.kind == Delta::Kind::PiezoExperiment)
+        {
+            const auto &capture=delta.piezoExperiment;
+            const auto &target=forward?capture.after:capture.before;
+            const QString expected=forward?capture.beforeStateSha256:capture.afterStateSha256;
+            const QString targetHash=forward?capture.afterStateSha256:capture.beforeStateSha256;
+            if (!target || expected.isEmpty() || targetHash.isEmpty()
+                || stateFingerprint(model)!=expected || stateFingerprint(*target)!=targetHash)
+                return reject(QStringLiteral("stale_history"),QStringLiteral("The complete piezo experiment differs from its captured history."));
+            result.candidate=model;
+            QString publicationError;
+            if(!result.candidate.applyPiezoExperimentCandidate(*target,
+                [&](const RModel &prepared){return stateFingerprint(prepared)==targetHash;},&publicationError))
+                return reject(QStringLiteral("stale_history"),publicationError);
+            result.delta=delta;result.normalizedArguments=delta.normalizedArguments;
+            result.before={{QStringLiteral("stateSha256"),expected}};
+            result.after={{QStringLiteral("stateSha256"),targetHash}};
+            result.changedPaths=delta.changedPaths;result.report=capture.report;
+            result.units=capture.units;result.invalidation=capture.invalidation;
+            result.readSet={{QStringLiteral("scope"),QStringLiteral("complete-physics-and-topology")},
+                            {QStringLiteral("stateSha256"),expected}};
+            result.valid=true;return result;
+        }
         if (delta.kind == Delta::Kind::MeshRebind)
         {
             const auto &binding = delta.meshRebind;

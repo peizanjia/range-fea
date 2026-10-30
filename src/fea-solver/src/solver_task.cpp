@@ -1,5 +1,6 @@
 #include <omp.h>
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -29,6 +30,8 @@
 #include <rstructural_control_conditioner.h>
 #include <rstructural_truss_dynamics_restart_adapter.h>
 #include <rstructural_truss_native_run.h>
+#include <rstructural_piezo_layered_restart_codec.h>
+#include <rstructural_piezo_axial_restart_codec.h>
 #include "typed_control_task.h"
 
 #include "execution_event_journal.h"
@@ -39,6 +42,8 @@
 #include "native_execution_gate.h"
 #include "runtime_control_bridge.h"
 #include "solver_task.h"
+#include "piezo_native_backend_bridge.h"
+#include "piezo_axial_backend_bridge.h"
 
 namespace
 {
@@ -65,6 +70,74 @@ NativeAcceptedCheckpointStateView mixedCheckpointStateView(const RModel &model)
         throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                      "Native mixed checkpoint state fingerprint is not SHA-256.");
     return {record.completedSteps,record.time,record.fixedTimeStep,fingerprint};
+}
+
+NativeAcceptedCheckpointStateView layeredCheckpointStateView(
+    const RModel &model,const RStructuralPiezoLayeredRuntimeCallbacks &callbacks)
+{
+    // The complete runtime codec is authority, never display variables. Restore
+    // through the facade to recertify physical, electrical and controller state.
+    RModel source(model);
+    source.getProblemSetup().setRestart(
+        source.getProblemSetup().getStructuralPiezoLayeredRestart().available);
+    const RStructuralPiezoLayeredNativeRun certified(source,callbacks);
+    const auto &state = certified.acceptedRuntime();
+    const QByteArray bytes = RStructuralPiezoLayeredRestartCodec::encode(state);
+    return {state.completedFE,state.physical.integrator.state.time,state.dt,
+            QCryptographicHash::hash(bytes,QCryptographicHash::Sha256)};
+}
+
+NativeAcceptedCheckpointStateView axialCheckpointStateView(
+    const RModel &model,const RStructuralPiezoAxialRuntimeCallbacks &callbacks)
+{
+    RModel source(model);
+    source.getProblemSetup().setRestart(
+        source.getProblemSetup().getStructuralPiezoAxialRestart().available);
+    const RStructuralPiezoAxialNativeRun certified(source,callbacks);
+    const auto &state = certified.acceptedRuntime();
+    const QByteArray bytes = RStructuralPiezoAxialRestartCodec::encode(state);
+    return {state.completedFE,state.physical.time,state.dt,
+            QCryptographicHash::hash(bytes,QCryptographicHash::Sha256)};
+}
+
+template<class Run,class Codec,class Callbacks,class Payload,class Time>
+NativeAcceptedCheckpointStore::TraceOptions completeTraceOptions(
+    const RModel &model,const Callbacks &callbacks,const QString &family,
+    Payload payload,Time physicalTime)
+{
+    auto frozen=std::make_shared<Run>(model,callbacks);
+    const auto &initial=frozen->acceptedRuntime();
+    NativeAcceptedCheckpointStore::TraceOptions options;
+    options.enabled=true;
+    options.header.family=family;
+    options.header.sourceFingerprint=initial.sourceFingerprint;
+    options.header.configurationIdentity=QString::fromLatin1(initial.configurationIdentity.toHex());
+    options.header.backendIdentity=initial.backendIdentity;
+    options.header.baseSeq=initial.completedFE;
+    options.header.targetSteps=initial.targetSteps;
+    options.header.initialTime=initial.initialTime;
+    options.header.dt=initial.dt;
+    options.extractPayload=[frozen,payload](const RModel &candidate) {
+        frozen->validateCurrentSource(candidate);
+        const auto bytes=payload(candidate);
+        return bytes.isEmpty()?Codec::encode(frozen->acceptedRuntime()):bytes;
+    };
+    options.certifyPayload=[frozen,physicalTime](const QByteArray &bytes) {
+        const auto state=Codec::decode(bytes);
+        frozen->certifyAcceptedRuntime(state);
+        return NativeAcceptedCheckpointStateView{state.completedFE,physicalTime(state),state.dt,
+            QCryptographicHash::hash(Codec::encode(state),QCryptographicHash::Sha256)};
+    };
+    options.rebuildAcceptedModel=[frozen](const RModel &base,const QByteArray &bytes) {
+        return frozen->modelForAcceptedRuntime(base,Codec::decode(bytes));
+    };
+    return options;
+}
+
+QString nativeBackendControlSha256(const QString &backendIdentity)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(
+        backendIdentity.toUtf8(),QCryptographicHash::Sha256).toHex());
 }
 
 class ResultFrameObserverScope final
@@ -140,7 +213,8 @@ QString canonicalTargetPath(const QString &fileName)
                  "Checkpoint target symlink chain is too deep.");
 }
 
-QString nativeMixedWorkingOutputPath(const QString &checkpointDirectory,const QString &inputTargetPath)
+QString nativeWorkingOutputPath(const QString &checkpointDirectory,const QString &inputTargetPath,
+                                bool layered,bool axial)
 {
     const QString absoluteRoot = QDir::cleanPath(QFileInfo(checkpointDirectory).absoluteFilePath());
     // The checkpoint store has already verified and locked this directory.
@@ -180,7 +254,9 @@ QString nativeMixedWorkingOutputPath(const QString &checkpointDirectory,const QS
         throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                      "Native mixed working output escaped its checkpoint directory.");
     const QString outputPath = QDir(outputDirectory).filePath(
-        QStringLiteral("native-mixed.") + RModel::getDefaultFileExtension(true));
+        (axial ? QStringLiteral("native-axial.") :
+         layered ? QStringLiteral("native-layered.") : QStringLiteral("native-mixed.")) +
+        RModel::getDefaultFileExtension(true));
     const QFileInfo modelInfo(outputPath);
     if (modelInfo.isSymLink() || (modelInfo.exists() && !modelInfo.isFile()))
         throw RError(RError::Type::InvalidInput,R_ERROR_REF,
@@ -360,7 +436,7 @@ bool isSupportedThermalTaskTree(const RProblemTaskItem &root)
 }
 }
 
-SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QObject *parent)
+SolverTask::SolverTask(const SolverInput &solverInput, QObject *parent)
     : QObject(parent)
     , modelFileName(solverInput.modelFileName)
     , convergenceFileName(solverInput.convergenceFileName)
@@ -378,10 +454,12 @@ SolverTask::SolverTask(const SolverInput &solverInput, QCoreApplication *app, QO
     , typedConfigurationFileName(solverInput.typedConfigurationFileName)
     , nativeCheckpointDirectory(solverInput.nativeCheckpointDirectory)
     , nativeCheckpointContextJson(solverInput.nativeCheckpointContextJson)
+    , nativeAcceptedTrace(solverInput.nativeAcceptedTrace)
     , nativeMixedStepBudget(solverInput.nativeMixedStepBudget)
+    , nativeLayeredStepBudget(solverInput.nativeLayeredStepBudget)
+    , nativeAxialStepBudget(solverInput.nativeAxialStepBudget)
     , nativeExecutionGate(solverInput.nativeExecutionGate)
     , restart(solverInput.restart)
-    , app(app)
 {
     if (this->nThreads)
     {
@@ -399,23 +477,23 @@ void SolverTask::run(void)
         // before that mode can produce any candidate/checkpoint output.
         try
         {
-            if (this->nativeMixedStepBudget)
+            if (this->nativeMixedStepBudget || this->nativeLayeredStepBudget || this->nativeAxialStepBudget)
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
-                             "Native mixed step budgets cannot combine with typed FE mode.");
+                             "Native FE step budgets cannot combine with typed FE mode.");
             if (!this->typedConfigurationFileName.isEmpty())
             {
                 RModel source;
                 source.read(this->modelFileName);
-                if (source.getProblemSetup().getStructuralTrussDynamicsSetup().enabled)
+                if (source.getProblemSetup().getStructuralTrussDynamicsSetup().enabled ||
+                    source.getProblemSetup().getStructuralPiezoLayeredSetup().enabled)
                     throw RError(RError::Type::InvalidInput,R_ERROR_REF,
-                                 "Native mixed dynamics cannot combine with typed FE mode.");
+                                 "Dedicated native dynamics cannot combine with typed FE mode.");
             }
         }
         catch (const RError &error)
         {
             RLogger::error("%s\n",qPrintable(error.getMessage()));
-            this->app->exit(1);
-            emit this->finished();
+            emit this->finished(1);
             return;
         }
         TypedControlTaskInput input;
@@ -431,8 +509,7 @@ void SolverTask::run(void)
         QString error;
         const int exitCode=runTypedControlTask(input,error);
         if (exitCode) RLogger::error("%s\n",qPrintable(error));
-        this->app->exit(exitCode);
-        emit this->finished();
+        emit this->finished(exitCode);
         return;
     }
     const QString progressJobId = qEnvironmentVariable(
@@ -482,6 +559,14 @@ void SolverTask::run(void)
     bool finalModelWritten = false;
     bool nativeMixedMode = false;
     bool nativeMixedSourceValidated = false;
+    bool nativeLayeredMode = false;
+    bool nativeLayeredSourceValidated = false;
+    bool nativeAxialMode = false;
+    bool nativeAxialSourceValidated = false;
+    // Seam for the source-bound backend bridge: use this same bundle for
+    // preflight, checkpoint read-back certification, and the real FE solver.
+    RStructuralPiezoLayeredRuntimeCallbacks layeredCallbacks;
+    RStructuralPiezoAxialRuntimeCallbacks axialCallbacks;
     std::shared_ptr<NativeAcceptedCheckpointStore> acceptedCheckpointStore;
     std::unique_ptr<ControlNdjsonTransport> controlTransport;
     std::shared_ptr<RuntimeParameterGate> runtimeParameterGate;
@@ -581,6 +666,72 @@ void SolverTask::run(void)
                     payload.insert(QStringLiteral("nativeCheckpointStoreRetryable"),
                                    acceptedCheckpointStore->isRetryable());
             }
+            if (nativeLayeredMode)
+            {
+                const auto &accepted = model.getProblemSetup().getStructuralPiezoLayeredRestart();
+                const bool acceptedAvailable = nativeLayeredSourceValidated && accepted.available;
+                payload.insert(QStringLiteral("nativeLayeredAcceptedStateAvailable"),acceptedAvailable);
+                if (acceptedAvailable)
+                {
+                    try
+                    {
+                        const auto state = RStructuralPiezoLayeredRestartCodec::decode(accepted.stateBytes);
+                        payload.insert(QStringLiteral("lastAcceptedSequence"),double(state.completedFE));
+                        payload.insert(QStringLiteral("lastAcceptedTimeS"),state.physical.integrator.state.time);
+                    }
+                    catch (...)
+                    {
+                        // Failure reporting must preserve the original failure
+                        // even if a caller damaged its mutable model afterward.
+                        payload.insert(QStringLiteral("nativeLayeredAcceptedStateAvailable"),false);
+                    }
+                }
+                const auto *receipt = acceptedCheckpointStore
+                    ? acceptedCheckpointStore->committedReceipt() : nullptr;
+                payload.insert(QStringLiteral("nativeCheckpointCommitted"),receipt != nullptr);
+                if (receipt)
+                {
+                    payload.insert(QStringLiteral("nativeCheckpointModelPath"),receipt->modelPath);
+                    payload.insert(QStringLiteral("nativeCheckpointAcceptedSequence"),
+                                   receipt->envelope.value(QStringLiteral("acceptedSeq")));
+                }
+                if (acceptedCheckpointStore)
+                    payload.insert(QStringLiteral("nativeCheckpointStoreRetryable"),
+                                   acceptedCheckpointStore->isRetryable());
+            }
+            if (nativeAxialMode)
+            {
+                const auto &accepted = model.getProblemSetup().getStructuralPiezoAxialRestart();
+                const bool acceptedAvailable = nativeAxialSourceValidated && accepted.available;
+                payload.insert(QStringLiteral("nativeAxialAcceptedStateAvailable"),acceptedAvailable);
+                if (acceptedAvailable)
+                {
+                    try
+                    {
+                        const auto state = RStructuralPiezoAxialRestartCodec::decode(accepted.runtimeState);
+                        payload.insert(QStringLiteral("lastAcceptedSequence"),double(state.completedFE));
+                        payload.insert(QStringLiteral("lastAcceptedTimeS"),state.physical.time);
+                    }
+                    catch (...)
+                    {
+                        // Failure reporting must preserve the original failure
+                        // even if a caller damaged its mutable model afterward.
+                        payload.insert(QStringLiteral("nativeAxialAcceptedStateAvailable"),false);
+                    }
+                }
+                const auto *receipt = acceptedCheckpointStore
+                    ? acceptedCheckpointStore->committedReceipt() : nullptr;
+                payload.insert(QStringLiteral("nativeCheckpointCommitted"),receipt != nullptr);
+                if (receipt)
+                {
+                    payload.insert(QStringLiteral("nativeCheckpointModelPath"),receipt->modelPath);
+                    payload.insert(QStringLiteral("nativeCheckpointAcceptedSequence"),
+                                   receipt->envelope.value(QStringLiteral("acceptedSeq")));
+                }
+                if (acceptedCheckpointStore)
+                    payload.insert(QStringLiteral("nativeCheckpointStoreRetryable"),
+                                   acceptedCheckpointStore->isRetryable());
+            }
             if (!journal->append(QStringLiteral("RunFailed"),QStringLiteral("failed"),
                                  payload,QUuid::createUuid(),&error))
             {
@@ -603,8 +754,7 @@ void SolverTask::run(void)
         }
         thermalCheckpointLock.reset();
         journal.reset();
-        emit this->finished();
-        this->app->exit(1);
+        emit this->finished(1);
     };
 
     try
@@ -661,6 +811,8 @@ void SolverTask::run(void)
         const QString inputTargetHash = thermalCheckpointInput ? inputArgumentHash
                                                                 : sha256File(inputTargetPath);
         std::optional<NativeAcceptedCheckpointContext> nativeCheckpointContext;
+        if(this->nativeAcceptedTrace && this->nativeCheckpointDirectory.isEmpty())
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,"Complete accepted trace requires its checkpoint context and directory.");
         if (this->nativeCheckpointDirectory.isEmpty())
         {
             if (!this->nativeCheckpointContextJson.isEmpty())
@@ -708,10 +860,37 @@ void SolverTask::run(void)
                          "Input model link or target changed while it was being loaded.");
         RLogger::info("Model has been successfully loaded from file '%s'.\n",
                       qPrintable(this->modelFileName));
-        nativeMixedMode = model.getProblemSetup().getStructuralTrussDynamicsSetup().enabled;
-        if (this->nativeMixedStepBudget && (!nativeMixedMode || thermalMode))
+        nativeAxialMode = model.getProblemSetup().getStructuralPiezoAxialSetup().enabled;
+        nativeMixedMode = model.getProblemSetup().getStructuralTrussDynamicsSetup().enabled && !nativeAxialMode;
+        nativeLayeredMode = model.getProblemSetup().getStructuralPiezoLayeredSetup().enabled;
+        if (this->nativeLayeredStepBudget && (!nativeLayeredMode || thermalMode || this->nativeMixedStepBudget || this->nativeAxialStepBudget))
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--native-layered-steps requires native layered structural dynamics and cannot combine with thermal or mixed FE mode.");
+        if (this->nativeMixedStepBudget && (!nativeMixedMode || thermalMode || this->nativeLayeredStepBudget || this->nativeAxialStepBudget))
             throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                          "--native-mixed-steps requires native mixed structural dynamics and cannot combine with thermal FE mode.");
+        if (this->nativeAxialStepBudget && (!nativeAxialMode || thermalMode ||
+            this->nativeMixedStepBudget || this->nativeLayeredStepBudget))
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "--native-axial-steps requires native axial dynamics and cannot combine with thermal, mixed or layered FE mode.");
+        if (nativeAxialMode)
+        {
+            phase = QStringLiteral("native-axial-preflight");
+            if (nativeLayeredMode || thermalMode || this->typedControlSteps > 0 ||
+                !this->controlProgram.isEmpty() || this->runtimeControlBridge ||
+                RuntimeControlBridge::environmentConfig().has_value())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native axial dynamics rejects layered, thermal, typed FE, legacy force control and runtime parameter modes.");
+            model.getProblemSetup().setRestart(this->restart);
+            if (!this->restart)
+                model.getProblemSetup().setStructuralPiezoAxialRestart({});
+            axialCallbacks = PiezoAxialBackendBridge::create(model).callbacks;
+            const RStructuralPiezoAxialNativeRun certified(model,axialCallbacks);
+            if (!model.getMonitoringPointManager().empty())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native axial dynamics cannot map legacy monitoring points.");
+            nativeAxialSourceValidated = true;
+        }
         if (nativeMixedMode)
         {
             phase = QStringLiteral("native-mixed-preflight");
@@ -733,6 +912,40 @@ void SolverTask::run(void)
                     model.getProblemSetup().getStructuralTrussDynamicsRestartData(),
                     model.getProblemSetup().getStructuralNativeControlState());
             nativeMixedSourceValidated = true;
+        }
+        if (nativeLayeredMode)
+        {
+            phase = QStringLiteral("native-layered-preflight");
+            if (nativeMixedMode || nativeAxialMode || thermalMode || this->typedControlSteps > 0 ||
+                !this->controlProgram.isEmpty() || this->runtimeControlBridge ||
+                RuntimeControlBridge::environmentConfig().has_value())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native layered dynamics rejects mixed, thermal, typed FE, legacy force control and runtime parameter modes.");
+            model.getProblemSetup().setRestart(this->restart);
+            if (!this->restart)
+                model.getProblemSetup().setStructuralPiezoLayeredRestart({});
+            const auto &layered=model.getProblemSetup().getStructuralPiezoLayeredSetup();
+            const auto damping=layered.damping.kind;
+            const bool modalDamping=damping==RStructuralPiezoDampingKind::UniformModal
+                || damping==RStructuralPiezoDampingKind::PerMode || damping==RStructuralPiezoDampingKind::PerCluster;
+            if(this->nativeAcceptedTrace || !layered.excitationConfiguration.isEmpty() || !layered.controllerConfiguration.isEmpty()
+                || !layered.designConfiguration.isEmpty() || modalDamping)
+            {
+                const QDir installed(QCoreApplication::applicationDirPath()+QStringLiteral("/.."));
+                QString python=installed.filePath(QStringLiteral("runtime/python/python.exe"));
+                QString modules=installed.filePath(QStringLiteral("share/range-workflow"));
+                if(!QFileInfo(python).isFile() || !QFileInfo(modules+QStringLiteral("/range_workflow/piezo_native_backend.py")).isFile())
+                {
+                    python=QString::fromUtf8(RANGE_PIEZO_BACKEND_PYTHON);
+                    modules=QString::fromUtf8(RANGE_PIEZO_BACKEND_MODULE_ROOT);
+                }
+                layeredCallbacks=PiezoNativeBackendBridge::create(model,python,modules).callbacks;
+            }
+            const RStructuralPiezoLayeredNativeRun certified(model,layeredCallbacks);
+            if (!model.getMonitoringPointManager().empty())
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Native layered dynamics cannot map legacy monitoring points.");
+            nativeLayeredSourceValidated = true;
         }
         if (thermalMode && this->convergenceFileName.isEmpty())
         {
@@ -857,7 +1070,7 @@ void SolverTask::run(void)
                  {QStringLiteral("acceptedTimeSeconds"),acceptedThermalState.acceptedTimeSeconds}});
             thermalCheckpointLock.reset();
             journal.reset();
-            emit this->finished();
+            emit this->finished(0);
             return;
         }
 
@@ -890,19 +1103,62 @@ void SolverTask::run(void)
 
         if (nativeCheckpointContext)
         {
-            const QString activeControlSha256 = controlSetup.enabled
-                ? controlRevision : NativeAcceptedCheckpointContext::noControlSha256();
+            if(this->nativeAcceptedTrace && !nativeAxialMode && !nativeLayeredMode)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "Complete accepted trace requires native axial or layered piezo dynamics.");
+            NativeAcceptedCheckpointStore::TraceOptions traceOptions;
+            if(this->nativeAcceptedTrace) {
+                if(nativeAxialMode)
+                    traceOptions=completeTraceOptions<RStructuralPiezoAxialNativeRun,RStructuralPiezoAxialRestartCodec>(
+                        model,axialCallbacks,QStringLiteral("axial"),
+                        [](const RModel &m){return m.getProblemSetup().getStructuralPiezoAxialRestart().runtimeState;},
+                        [](const auto &s){return s.physical.time;});
+                else
+                    traceOptions=completeTraceOptions<RStructuralPiezoLayeredNativeRun,RStructuralPiezoLayeredRestartCodec>(
+                        model,layeredCallbacks,QStringLiteral("layered"),
+                        [](const RModel &m){return m.getProblemSetup().getStructuralPiezoLayeredRestart().stateBytes;},
+                        [](const auto &s){return s.physical.integrator.state.time;});
+            }
+            const QString activeControlSha256 = nativeAxialMode
+                ? nativeBackendControlSha256(axialCallbacks.backendIdentity)
+                : nativeLayeredMode && layeredCallbacks.propose
+                    ? nativeBackendControlSha256(layeredCallbacks.backendIdentity)
+                    : controlSetup.enabled ? controlRevision
+                                           : NativeAcceptedCheckpointContext::noControlSha256();
             const QString runtimeSha256 = sha256File(QCoreApplication::applicationFilePath());
             acceptedCheckpointStore.reset(new NativeAcceptedCheckpointStore(
                 this->nativeCheckpointDirectory,this->nativeCheckpointContextJson,
                 inputTargetHash,activeControlSha256,runtimeSha256,this->restart,model,
-                nativeMixedMode ? NativeAcceptedCheckpointStore::StateViewExtractor(mixedCheckpointStateView)
-                                : NativeAcceptedCheckpointStore::StateViewExtractor{}));
-            if (nativeMixedMode)
+                this->nativeAcceptedTrace ? NativeAcceptedCheckpointStore::StateViewExtractor(
+                    [extract=traceOptions.extractPayload,certify=traceOptions.certifyPayload](const RModel &candidate) {
+                        return certify(extract(candidate));
+                    }) : nativeAxialMode ? NativeAcceptedCheckpointStore::StateViewExtractor(
+                    [axialCallbacks](const RModel &candidate) {
+                        return axialCheckpointStateView(candidate,axialCallbacks);
+                    }) : nativeLayeredMode ? NativeAcceptedCheckpointStore::StateViewExtractor(
+                    [layeredCallbacks](const RModel &candidate) {
+                        return layeredCheckpointStateView(candidate,layeredCallbacks);
+                    }) : nativeMixedMode ? NativeAcceptedCheckpointStore::StateViewExtractor(mixedCheckpointStateView)
+                                         : NativeAcceptedCheckpointStore::StateViewExtractor{},traceOptions));
+            if(this->nativeAcceptedTrace && this->restart) {
+                const auto latest=acceptedCheckpointStore->readLatest();
+                if(!latest.acceptedModel)
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,"Complete accepted trace has no certified terminal MODEL.");
+                model=*latest.acceptedModel;
+                model.getProblemSetup().setRestart(true);
+            }
+            if(this->nativeExecutionGate) {
+                const auto gate=this->nativeExecutionGate;
+                acceptedCheckpointStore->setRequiredPublicationPredicate(
+                    [gate](quint64 sequence){return gate->hasPauseAt(sequence);});
+            }
+            if (nativeMixedMode || nativeLayeredMode || nativeAxialMode)
             {
-                phase = QStringLiteral("native-mixed-working-output");
-                solverModelFileName = nativeMixedWorkingOutputPath(this->nativeCheckpointDirectory,inputTargetPath);
-                RLogger::info("Native mixed working result link: '%s'.\n",
+                phase = nativeAxialMode ? QStringLiteral("native-axial-working-output")
+                                        : nativeLayeredMode ? QStringLiteral("native-layered-working-output")
+                                          : QStringLiteral("native-mixed-working-output");
+                solverModelFileName = nativeWorkingOutputPath(this->nativeCheckpointDirectory,inputTargetPath,nativeLayeredMode,nativeAxialMode);
+                RLogger::info("Native working result link: '%s'.\n",
                               qPrintable(solverModelFileName));
             }
         }
@@ -912,7 +1168,19 @@ void SolverTask::run(void)
         quint64 targetAcceptedSequence = 0;
         const RStructuralDynamicsRestartData &initialRestartData =
             model.getProblemSetup().getStructuralDynamicsRestartData();
-        if (nativeMixedMode)
+        if (nativeAxialMode)
+        {
+            const auto initialView = axialCheckpointStateView(model,axialCallbacks);
+            acceptedBaselineSequence = initialView.sequence;
+            acceptedBaselineTimeS = initialView.timeS;
+        }
+        else if (nativeLayeredMode)
+        {
+            const auto initialView = layeredCheckpointStateView(model,layeredCallbacks);
+            acceptedBaselineSequence = initialView.sequence;
+            acceptedBaselineTimeS = initialView.timeS;
+        }
+        else if (nativeMixedMode)
         {
             const auto initialView = mixedCheckpointStateView(model);
             acceptedBaselineSequence = initialView.sequence;
@@ -941,7 +1209,7 @@ void SolverTask::run(void)
                 acceptedBaselineSequence > std::numeric_limits<quint64>::max()-requestedSteps)
                 throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                              "Native execution target accepted sequence overflows its supported range.");
-            targetAcceptedSequence = nativeMixedMode ? requestedSteps
+            targetAcceptedSequence = (nativeMixedMode || nativeLayeredMode || nativeAxialMode) ? requestedSteps
                                                     : acceptedBaselineSequence + requestedSteps;
             QString gateError;
             if (!this->nativeExecutionGate->configureAcceptedRange(
@@ -1049,29 +1317,62 @@ void SolverTask::run(void)
         RLogger::info("\n********* SOLVER - BEGIN *********\n\n");
         RLogger::indent();
         loggerIndented = true;
-        RSolver solver(model,solverModelFileName,this->convergenceFileName);
+        RSolver solver(model,solverModelFileName,this->convergenceFileName,
+                       RSolver::ExecutionPolicy::AllRegisteredSolvers,layeredCallbacks,axialCallbacks);
         if (nativeMixedMode)
         {
             solver.setNativeMixedStepBudget(this->nativeMixedStepBudget.value_or(0));
             if (acceptedCheckpointStore)
                 solver.setAcceptedStepParticipant(acceptedCheckpointStore);
         }
-        quint64 lastCheckpointSequence = acceptedBaselineSequence;
-        double lastCheckpointTimeS = acceptedBaselineTimeS;
+        if (nativeLayeredMode)
+        {
+            solver.setNativeLayeredStepBudget(this->nativeLayeredStepBudget.value_or(0));
+            if (acceptedCheckpointStore)
+                solver.setAcceptedStepParticipant(acceptedCheckpointStore);
+        }
+        if (nativeAxialMode)
+        {
+            solver.setNativeAxialStepBudget(this->nativeAxialStepBudget.value_or(0));
+            if (acceptedCheckpointStore)
+                solver.setAcceptedStepParticipant(acceptedCheckpointStore);
+        }
+        if(this->nativeAcceptedTrace)
+            solver.setNativeAcceptedTraceOutput(true);
         NativeAcceptedCheckpointStore::VerifiedCheckpoint latestCheckpoint;
         bool hasLatestCheckpoint = false;
         if (acceptedCheckpointStore)
         {
-            if (nativeMixedMode)
+            if (nativeMixedMode || nativeLayeredMode || nativeAxialMode)
             {
                 solver.setAcceptedStructuralStepObserver([&](const RModel &acceptedModel)
                 {
                     // Publication and participant promotion already succeeded.
                     // Receipts are in-memory; this observer performs no store I/O.
-                    const auto &state = acceptedModel.getProblemSetup()
-                        .getStructuralTrussDynamicsRestartData();
                     if (this->nativeExecutionGate)
                     {
+                        quint64 acceptedSequence;
+                        double acceptedTimeS;
+                        if (nativeAxialMode)
+                        {
+                            const auto state = RStructuralPiezoAxialRestartCodec::decode(
+                                acceptedModel.getProblemSetup().getStructuralPiezoAxialRestart().runtimeState);
+                            acceptedSequence = state.completedFE;
+                            acceptedTimeS = state.physical.time;
+                        }
+                        else if (nativeLayeredMode)
+                        {
+                            const auto state = RStructuralPiezoLayeredRestartCodec::decode(
+                                acceptedModel.getProblemSetup().getStructuralPiezoLayeredRestart().stateBytes);
+                            acceptedSequence = state.completedFE;
+                            acceptedTimeS = state.physical.integrator.state.time;
+                        }
+                        else
+                        {
+                            const auto &state = acceptedModel.getProblemSetup().getStructuralTrussDynamicsRestartData();
+                            acceptedSequence = state.completedSteps;
+                            acceptedTimeS = state.time;
+                        }
                         NativeExecutionGate::CheckpointReceipt receipt;
                         const auto *committed = acceptedCheckpointStore->committedReceipt();
                         if (committed)
@@ -1088,7 +1389,7 @@ void SolverTask::run(void)
                         }
                         QString gateError;
                         this->nativeExecutionGate->acceptedBoundary(
-                            state.completedSteps,state.time,receipt,&gateError);
+                            acceptedSequence,acceptedTimeS,receipt,&gateError);
                         if (!gateError.isEmpty())
                             throw RError(RError::Type::Application,R_ERROR_REF,
                                          "Native execution state gate failed after commit: %s",
@@ -1104,40 +1405,22 @@ void SolverTask::run(void)
             {
                 latestCheckpoint = acceptedCheckpointStore->readLatest();
                 hasLatestCheckpoint = true;
-                lastCheckpointSequence = quint64(latestCheckpoint.envelope
-                    .value(QStringLiteral("acceptedSeq")).toDouble());
-                lastCheckpointTimeS = latestCheckpoint.envelope
-                    .value(QStringLiteral("timeS")).toDouble();
             }
             solver.setAcceptedStructuralStepObserver(
-                [&,lastCheckpointSequence,lastCheckpointTimeS](const RModel &acceptedModel) mutable
+                [&](const RModel &acceptedModel)
                 {
                     const RStructuralDynamicsRestartData &restartData =
                         acceptedModel.getProblemSetup().getStructuralDynamicsRestartData();
-                    const RTimeSolver &timeSolver = acceptedModel.getTimeSolver();
                     const quint64 acceptedSequence = restartData.completedSteps;
                     const double acceptedTimeS = restartData.time;
-                    const double elapsedSinceCheckpoint = acceptedTimeS-lastCheckpointTimeS;
-                    if (acceptedSequence < lastCheckpointSequence ||
-                        !std::isfinite(elapsedSinceCheckpoint) || elapsedSinceCheckpoint < 0.0)
-                        throw RError(RError::Type::Application,R_ERROR_REF,
-                                     "Native checkpoint schedule moved backwards at an accepted step.");
-                    const bool checkpointDue =
-                        acceptedSequence-lastCheckpointSequence >=
-                            nativeCheckpointContext->maxAcceptedSteps ||
-                        elapsedSinceCheckpoint >= nativeCheckpointContext->maxSimulationSeconds ||
-                        elapsedSinceCheckpoint+restartData.fixedTimeStep >
-                            nativeCheckpointContext->maxSimulationSeconds ||
-                        timeSolver.getCurrentTimeStep()+1 >= timeSolver.getNTimeSteps();
                     acceptedCheckpointStore->accept(acceptedModel);
-                    if (checkpointDue)
+                    // The store owns the publication schedule, including a pause
+                    // requested between periodic checkpoints. Report its actual
+                    // committed receipt instead of predicting that schedule here.
+                    if (const auto *committed = acceptedCheckpointStore->committedReceipt())
                     {
-                        latestCheckpoint = acceptedCheckpointStore->readLatest();
+                        latestCheckpoint = *committed;
                         hasLatestCheckpoint = true;
-                        lastCheckpointSequence = quint64(latestCheckpoint.envelope
-                            .value(QStringLiteral("acceptedSeq")).toDouble());
-                        lastCheckpointTimeS = latestCheckpoint.envelope
-                            .value(QStringLiteral("timeS")).toDouble();
                     }
                     if (this->nativeExecutionGate)
                     {
@@ -1418,5 +1701,5 @@ void SolverTask::run(void)
         return;
     }
     journal.reset();
-    emit this->finished();
+    emit this->finished(0);
 }

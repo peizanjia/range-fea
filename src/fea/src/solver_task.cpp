@@ -22,10 +22,13 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <stdexcept>
 #include <limits>
 #include <mutex>
 
 #include <rml_file_utils.h>
+#include <piezo_result_series.h>
+#include <piezo_accepted_trace.h>
 #include <rml_structural_control_setup.h>
 #include <rml_view_factor_matrix.h>
 #include <rbl_utils.h>
@@ -45,6 +48,7 @@
 #include "solver_task.h"
 #include "application.h"
 #include <rnative_result_broker.h>
+#include <piezo_runtime_identity.h>
 
 namespace
 {
@@ -52,13 +56,14 @@ QString makeRunArtifactFileName(const Model &model,
                                 const ApplicationSettings *applicationSettings,
                                 const SolverTaskID &taskID,
                                 const QString &artifactRoot = QString(),
-                                bool nativeRecoveryAttempt = false)
+                                bool nativeRecoveryAttempt = false,
+                                bool trustedDetachedAttempt = false)
 {
     const QString sourceFileName = RFileUtils::getFileNameWithOutTimeStep(model.getFileName());
     const QFileInfo sourceInfo(sourceFileName);
 
     QString sourceDirectory = artifactRoot.isEmpty() ? sourceInfo.absolutePath() : artifactRoot;
-    if (sourceFileName.isEmpty())
+    if (sourceFileName.isEmpty() && !trustedDetachedAttempt)
     {
         sourceDirectory = applicationSettings->getDataDir();
         if (sourceDirectory.isEmpty()) sourceDirectory = QDir::tempPath();
@@ -66,7 +71,8 @@ QString makeRunArtifactFileName(const Model &model,
 
     QString baseName = nativeRecoveryAttempt
             ? QStringLiteral("recovery-solver-input")
-            : sourceInfo.completeBaseName();
+            : (trustedDetachedAttempt ? QStringLiteral("trusted-candidate")
+                                      : sourceInfo.completeBaseName());
     if (baseName.isEmpty()) baseName = QFileInfo(model.getName()).fileName();
     if (baseName.isEmpty()) baseName = QStringLiteral("model");
     if (!nativeRecoveryAttempt &&
@@ -97,9 +103,18 @@ QString makeRunArtifactFileName(const Model &model,
     return QFileInfo(QDir(runDirectory).filePath(QStringLiteral("result/") + baseName + "." + extension)).absoluteFilePath();
 }
 
+bool isNativeWorkingResultPath(const QString &resultFileName)
+{
+    const QFileInfo file(resultFileName);QDir directory(file.absolutePath());
+    if(file.fileName()!=QStringLiteral("native-axial.rbm") && file.fileName()!=QStringLiteral("native-layered.rbm") &&
+       file.fileName()!=QStringLiteral("native-mixed.rbm"))return false;
+    return directory.dirName()==QStringLiteral("run-results") && directory.cdUp() && directory.dirName()==QStringLiteral("checkpoints");
+}
 QString getRunRoot(const QString &resultFileName)
 {
-    return QFileInfo(QDir(QFileInfo(resultFileName).absolutePath()).filePath(QStringLiteral(".."))).absoluteFilePath();
+    QDir directory(QFileInfo(resultFileName).absolutePath());
+    if(isNativeWorkingResultPath(resultFileName))directory.cdUp();
+    directory.cdUp();return QDir::cleanPath(directory.absolutePath());
 }
 
 bool writeProvenance(const QString &runRoot,
@@ -211,39 +226,6 @@ bool samePathText(const QString &left, const QString &right)
     if (left.isEmpty() || right.isEmpty()) return false;
     return QDir::cleanPath(QFileInfo(left).absoluteFilePath()).compare(
         QDir::cleanPath(QFileInfo(right).absoluteFilePath()), Qt::CaseInsensitive) == 0;
-}
-
-bool sameRestartState(const RStructuralDynamicsRestartData &left,
-                      const RStructuralDynamicsRestartData &right)
-{
-    return left.available == right.available &&
-           left.completedSteps == right.completedSteps &&
-           left.time == right.time && left.fixedTimeStep == right.fixedTimeStep &&
-           left.meshNodeCount == right.meshNodeCount &&
-           left.meshElementCount == right.meshElementCount &&
-           left.physicalDofCount == right.physicalDofCount &&
-           left.meshFingerprint == right.meshFingerprint &&
-           left.dofFingerprint == right.dofFingerprint &&
-           left.systemFingerprint == right.systemFingerprint &&
-           left.q == right.q && left.v == right.v && left.a == right.a &&
-           left.externalForce == right.externalForce &&
-           left.cumulativeExternalWork == right.cumulativeExternalWork &&
-           left.cumulativeDampingDissipation == right.cumulativeDampingDissipation &&
-           left.initialMechanicalEnergy == right.initialMechanicalEnergy &&
-           left.supportResponseAvailable == right.supportResponseAvailable &&
-           left.supportFingerprint == right.supportFingerprint &&
-           left.supportReactions == right.supportReactions &&
-           left.supportPowers == right.supportPowers &&
-           left.cumulativeSupportWork == right.cumulativeSupportWork &&
-           left.controlAvailable == right.controlAvailable &&
-           left.controlProtocolVersion == right.controlProtocolVersion &&
-           left.controlFingerprint == right.controlFingerprint &&
-           left.controlChannelIds == right.controlChannelIds &&
-           left.controlLastCommands == right.controlLastCommands &&
-           left.controlPowers == right.controlPowers &&
-           left.cumulativeControlWork == right.cumulativeControlWork &&
-           left.controlControllerState == right.controlControllerState &&
-           left.controlDeterministicSeed == right.controlDeterministicSeed;
 }
 
 bool flushNativeRecoveryFile(QFile &file, QString *error)
@@ -635,8 +617,9 @@ bool stageNativeRecoveryHistory(const Model &model,
                                 const QString &inputFileName,
                                 QString *error)
 {
-    const RStructuralDynamicsRestartData &restart =
-            model.getProblemSetup().getStructuralDynamicsRestartData();
+    RPiezoRuntimeCertificate restart;
+    try {restart=rPiezoRuntimeCertify(model,true);}
+    catch(const RError &failure){if(error)*error=QStringLiteral("The complete recovery state cannot be certified: %1").arg(failure.getMessage());return false;}
     const QString sourceJobId = recoveryProvenance.value(QStringLiteral("recoverySourceJobId")).toString();
     const QString sourceResult = recoveryProvenance.value(QStringLiteral("sourceResultArtifactRef")).toString();
     const QString journalPath = recoveryProvenance.value(QStringLiteral("sourceResultJournalRef")).toString();
@@ -686,10 +669,17 @@ bool stageNativeRecoveryHistory(const Model &model,
     const QString sourceBase = RFileUtils::getFileNameWithOutTimeStep(sourceResult);
     const QFileInfo sourceBaseInfo(sourceBase);
     const QString resultDirectory = sourceBaseInfo.absolutePath();
+    const QString sourceRunRoot=getRunRoot(sourceResult);
+    const QString expectedResultDirectory=QDir(sourceRunRoot).filePath(isNativeWorkingResultPath(sourceResult)
+        ?QStringLiteral("checkpoints/run-results"):QStringLiteral("result"));
+    const QString expectedJournalPath=QDir(sourceRunRoot).filePath(QStringLiteral("events/native-results.ndjson"));
     if (sourceBase.isEmpty() || sourceBaseInfo.suffix().isEmpty() ||
         !samePathText(sourceResultInfo.absolutePath(), resultDirectory) ||
-        !samePathText(QFileInfo(journalPath).absolutePath(),
-                      QFileInfo(QDir(resultDirectory).filePath(QStringLiteral("../events/native-results.ndjson"))).absolutePath()))
+        !samePathText(resultDirectory,expectedResultDirectory) ||
+        !samePathText(sourceInputPackagePath,QDir(sourceRunRoot).filePath(QStringLiteral("input"))) ||
+        hasSymlinkComponent(sourceRunRoot) || hasSymlinkComponent(resultDirectory) ||
+        !samePathText(journalPath,expectedJournalPath) ||
+        (isNativeWorkingResultPath(sourceResult) && sourceResultInfo.fileName()!=QStringLiteral("native-%1.rbm").arg(restart.family)))
     {
         if (error) *error = QStringLiteral("The original native result-frame journal is outside the interrupted job run.");
         return false;
@@ -879,26 +869,16 @@ bool stageNativeRecoveryHistory(const Model &model,
                         .arg(QString::fromLocal8Bit(readError.what()));
                 return false;
             }
-            const RStructuralDynamicsRestartData &inheritedRestart =
-                    inheritedModel.getProblemSetup().getStructuralDynamicsRestartData();
-            const double inheritedTime = inheritedModel.getTimeSolver().getCurrentTime();
-            try { inheritedRestart.validate(); }
-            catch (const RError &validationError)
-            {
-                if (error) *error = QStringLiteral("The interrupted job's inherited history frame has invalid accepted state: %1")
-                        .arg(validationError.getMessage());
-                return false;
-            }
-            if (!inheritedRestart.available || inheritedRestart.completedSteps != recordNo ||
-                !std::isfinite(inheritedTime) || inheritedRestart.meshFingerprint != restart.meshFingerprint ||
-                inheritedRestart.dofFingerprint != restart.dofFingerprint ||
-                inheritedRestart.systemFingerprint != restart.systemFingerprint ||
-                std::abs(inheritedRestart.time - inheritedTime) > 1.0e-12 * qMax(1.0, std::abs(inheritedTime)) ||
-                std::abs(inheritedRestart.fixedTimeStep - restart.fixedTimeStep) >
-                    1.0e-12 * qMax(1.0, std::abs(restart.fixedTimeStep)))
-            {
-                if (error) *error = QStringLiteral("The interrupted job's inherited history frame does not match its pinned structural system.");
-                return false;
+            RPiezoRuntimeCertificate inheritedRestart;
+            const double inheritedTime=inheritedModel.getTimeSolver().getCurrentTime();
+            try {inheritedRestart=rPiezoRuntimeCertify(inheritedModel,true);}
+            catch(const RError &failure){if(error)*error=QStringLiteral("The inherited complete history state is invalid: %1").arg(failure.getMessage());return false;}
+            if(!inheritedRestart.available || inheritedRestart.completedSteps!=recordNo ||
+               inheritedRestart.family!=restart.family || inheritedRestart.sourceFingerprint!=restart.sourceFingerprint ||
+               (restart.canonicalTarget && inheritedRestart.targetSteps!=restart.targetSteps) ||
+               !std::isfinite(inheritedTime) || std::abs(inheritedRestart.time-inheritedTime)>1.0e-12*qMax(1.0,std::abs(inheritedTime)) ||
+               std::abs(inheritedRestart.fixedTimeStep-restart.fixedTimeStep)>1.0e-12*qMax(1.0,std::abs(restart.fixedTimeStep))) {
+                if(error)*error=QStringLiteral("The inherited complete frame differs from its pinned actual source and original clock.");return false;
             }
             inheritedOrigins.insert(recordNo, origin);
             inheritedFramePaths.insert(recordNo, inheritedPath);
@@ -1165,13 +1145,37 @@ SolverTask::SolverTask(const ApplicationSettings *applicationSettings, const Mod
     this->initializeTaskPaths(model, this->nativeRecoveryArtifactRoot, taskServerName);
 }
 
+SolverTask::SolverTask(const ApplicationSettings *applicationSettings, const Model &model,
+                       const QPair<QString, quint64> &sourceStamp,
+                       const QJsonObject &trustedExperimentProvenance,
+                       const QString &artifactRoot,
+                       const QString &taskServerName,
+                       SolverTask::TrustedExperimentCandidateTag)
+    : applicationSettings{applicationSettings}
+    , modelID{RConstants::eod}
+    , sourceDocumentId{sourceStamp.first}
+    , trustedSourceStamp{sourceStamp}
+    , solverProcess{nullptr}
+    , trustedExperimentProvenance{trustedExperimentProvenance}
+    , nativeRecoveryArtifactRoot{QFileInfo(artifactRoot).absoluteFilePath()}
+{
+    this->setBlocking(false);
+    this->taskID.generate();
+    SolverManager &solverManager = SolverManager::getInstance();
+    if (!solverManager.ensureUniqueNativeTaskId(&this->taskID))
+        RLogger::error("Could not reserve an unused persistent native solver task ID.\n");
+    this->initializeTaskPaths(model, this->nativeRecoveryArtifactRoot, taskServerName, true);
+}
+
 void SolverTask::initializeTaskPaths(const Model &rModel, const QString &artifactRoot,
-                                     const QString &taskServerName)
+                                     const QString &taskServerName,
+                                     bool trustedDetachedTask)
 {
     this->solverExecutable = this->applicationSettings->getSolverPath();
 
     this->modelFileName = makeRunArtifactFileName(rModel, this->applicationSettings, this->taskID,
-                                                  artifactRoot, this->isNativeRecoveryTask());
+                                                  artifactRoot, this->isNativeRecoveryTask(),
+                                                  trustedDetachedTask);
     this->inputSnapshotFileName = this->modelFileName;
     this->resultArtifactFileName = this->modelFileName;
 
@@ -1212,6 +1216,23 @@ bool SolverTask::captureInputSnapshot(const Model &model,
                                      inputDerivedFrom, frozenSnapshotPath, frozenSnapshotSha256);
 }
 
+bool SolverTask::captureTrustedCandidateSnapshot(const Model &model, QString *error)
+{
+    if (error) error->clear();
+    if (!this->isTrustedDetachedTask())
+    {
+        if (error) *error = QStringLiteral("A detached candidate requires a trusted experiment authorization.");
+        return false;
+    }
+    if (!this->captureInputSnapshot(model, this->trustedSourceStamp, RConstants::eod,
+                                    QStringLiteral("trusted_experiment_candidate")))
+    {
+        if (error) *error = QStringLiteral("The authorized detached candidate could not be frozen as solver input.");
+        return false;
+    }
+    return true;
+}
+
 bool SolverTask::captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
                                       const QPair<QString, quint64> &sourceStamp,
                                       uint currentModelID,
@@ -1226,22 +1247,59 @@ bool SolverTask::captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
             QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(frozenSnapshotSha256).hasMatch();
     const bool validUnlinked = derivedFrom == QStringLiteral("live_unlinked") &&
             frozenSnapshotPath.isEmpty() && frozenSnapshotSha256.isEmpty();
+    const bool validTrustedCandidate = this->isTrustedDetachedTask() &&
+            derivedFrom == QStringLiteral("trusted_experiment_candidate") &&
+            frozenSnapshotPath.isEmpty() && frozenSnapshotSha256.isEmpty();
     if (QThread::currentThread() != this->thread() ||
         sourceStamp.first.isEmpty() || sourceStamp.first != this->sourceDocumentId ||
         !this->sourceStamp.first.isEmpty() || !modelSnapshot ||
-        (!frozenVerified && !validUnlinked))
+        (!frozenVerified && !validUnlinked && !validTrustedCandidate))
     {
         return false;
     }
 
+    if (validTrustedCandidate)
+    {
+        const QString artifactRoot = QDir::cleanPath(QFileInfo(this->nativeRecoveryArtifactRoot).absoluteFilePath());
+        const QString runRoot = QDir::cleanPath(getRunRoot(this->resultArtifactFileName));
+        const QString expectedPrefix = QDir(artifactRoot).filePath(QStringLiteral(".range-runs")) + QDir::separator();
+        if (this->nativeRecoveryArtifactRoot.isEmpty() || hasSymlinkComponent(artifactRoot) ||
+            !runRoot.startsWith(QDir::cleanPath(expectedPrefix), Qt::CaseInsensitive) || hasSymlinkComponent(runRoot))
+        {
+            RLogger::error("Trusted experiment artifacts must remain under an unlinked experiment directory.\n");
+            return false;
+        }
+    }
+
     this->sourceModelFileName = absoluteModelPath(modelSnapshot->getFileName());
     this->inputSnapshot = std::move(modelSnapshot);
+    const auto &nativeSetup=this->inputSnapshot->getProblemSetup();
+    if(nativeSetup.getStructuralPiezoAxialSetup().enabled)
+        this->solverArguments.append(QStringLiteral("--native-axial-steps=0"));
+    else if(nativeSetup.getStructuralPiezoLayeredSetup().enabled)
+        this->solverArguments.append(QStringLiteral("--native-layered-steps=0"));
+    else if(nativeSetup.getStructuralTrussDynamicsSetup().enabled)
+        this->solverArguments.append(QStringLiteral("--native-mixed-steps=0"));
     this->resultSnapshot = std::make_unique<Model>(*this->inputSnapshot);
 
     const QString runRoot = QDir::cleanPath(getRunRoot(this->resultArtifactFileName));
     const QString inputDirectory = QFileInfo(this->inputSnapshotFileName).absolutePath();
     const QString resultDirectory = QFileInfo(this->resultArtifactFileName).absolutePath();
     const QString logDirectory = QFileInfo(this->logFileName).absolutePath();
+    if (this->isTrustedDetachedTask())
+    {
+        const QString artifactRoot = QDir::cleanPath(QFileInfo(this->nativeRecoveryArtifactRoot).absoluteFilePath());
+        const QString expectedPrefix = QDir(artifactRoot).filePath(QStringLiteral(".range-runs")) + QDir::separator();
+        if (this->nativeRecoveryArtifactRoot.isEmpty() ||
+            !runRoot.startsWith(QDir::cleanPath(expectedPrefix), Qt::CaseInsensitive) ||
+            hasSymlinkComponent(artifactRoot) || hasSymlinkComponent(runRoot))
+        {
+            RLogger::error("Trusted experiment run path escaped its private artifact directory.\n");
+            this->inputSnapshot.reset();
+            this->resultSnapshot.reset();
+            return false;
+        }
+    }
     if (!QDir().mkpath(inputDirectory) || !QDir().mkpath(resultDirectory) ||
         !QDir().mkpath(logDirectory) ||
         !QDir().mkpath(QDir(inputDirectory).filePath(QStringLiteral("references"))) ||
@@ -1252,6 +1310,24 @@ bool SolverTask::captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
         this->inputSnapshot.reset();
         this->resultSnapshot.reset();
         return false;
+    }
+
+    if (this->isTrustedDetachedTask())
+    {
+        const QString artifactRoot = QDir::cleanPath(QFileInfo(this->nativeRecoveryArtifactRoot).absoluteFilePath());
+        const QString expectedPrefix = QDir(artifactRoot).filePath(QStringLiteral(".range-runs")) + QDir::separator();
+        const QFileInfo artifactRootInfo(artifactRoot);
+        const QFileInfo runRootInfo(runRoot);
+        if (hasSymlinkComponent(artifactRoot) || hasSymlinkComponent(runRoot) ||
+            !runRoot.startsWith(QDir::cleanPath(expectedPrefix), Qt::CaseInsensitive) ||
+            !samePathText(artifactRoot, artifactRootInfo.canonicalFilePath()) ||
+            !samePathText(runRoot, runRootInfo.canonicalFilePath()))
+        {
+            RLogger::error("Trusted experiment directories are not canonical private paths.\n");
+            this->inputSnapshot.reset();
+            this->resultSnapshot.reset();
+            return false;
+        }
     }
 
     QString dependencyError;
@@ -1351,9 +1427,36 @@ const QJsonObject &SolverTask::getNativeRecoveryProvenance() const
     return this->nativeRecoveryProvenance;
 }
 
+const QJsonObject &SolverTask::getTrustedExperimentProvenance() const
+{
+    return this->trustedExperimentProvenance;
+}
+
+bool SolverTask::setTrustedExperimentAttemptId(const QString &attemptId)
+{
+    static const QRegularExpression attemptPattern(QStringLiteral("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"));
+    if (QThread::currentThread() != this->thread() || this->performStarted.load(std::memory_order_acquire)
+        || !this->isTrustedDetachedTask() || !this->trustedExperimentAttemptId.isEmpty()
+        || !attemptPattern.match(attemptId).hasMatch())
+        return false;
+    this->trustedExperimentAttemptId = attemptId;
+    return true;
+}
+
+const QString &SolverTask::getTrustedExperimentAttemptId() const
+{
+    return this->trustedExperimentAttemptId;
+}
+
 bool SolverTask::isNativeRecoveryTask() const
 {
     return !this->nativeRecoveryProvenance.isEmpty();
+}
+
+bool SolverTask::isTrustedDetachedTask() const
+{
+    return this->trustedExperimentProvenance.value(QStringLiteral("schema")).toString() ==
+            QStringLiteral("range.trusted-experiment-authorization/v1");
 }
 
 bool SolverTask::hasNativeRecoveryLogicalLock() const
@@ -1420,6 +1523,22 @@ bool SolverTask::freezeNativeResultProvenance(const QJsonObject &sourceRuntimeSt
         control = nativeControlProvenance(this->inputSnapshot->getProblemSetup().getStructuralControlSetup(),
                                           this->inputSnapshotSha256,
                                           normalizedArguments);
+        QJsonObject nativeNumericalRuntime;
+        const auto &setup=this->inputSnapshot->getProblemSetup();
+        if(setup.getStructuralPiezoAxialSetup().enabled || setup.getStructuralPiezoLayeredSetup().enabled)
+        {
+            const auto certificate=rPiezoRuntimeCertify(*this->inputSnapshot);
+            const QString backendSha=QString::fromLatin1(rPiezoRuntimeControlSha256(*this->inputSnapshot).toHex());
+            const QByteArray configuration=setup.getStructuralPiezoAxialSetup().enabled
+                ? setup.getStructuralPiezoAxialSetup().recipeConfiguration:setup.getStructuralPiezoLayeredSetup().controllerConfiguration;
+            const auto declared=QJsonDocument::fromJson(configuration).object();
+            const QString kind=(setup.getStructuralPiezoAxialSetup().enabled?declared.value(QStringLiteral("controller")).toObject():declared)
+                .value(QStringLiteral("kind")).toString(QStringLiteral("none"));
+            nativeNumericalRuntime={{QStringLiteral("family"),certificate.family},{QStringLiteral("sourceFingerprint"),certificate.sourceFingerprint},
+                                    {QStringLiteral("backendControlSha256"),backendSha},{QStringLiteral("identityScope"),QStringLiteral("compatibility-not-authentication")}};
+            if(kind!=QStringLiteral("none"))control={{QStringLiteral("enabled"),true},{QStringLiteral("controllerId"),QStringLiteral("internal-native-piezo/")+kind},
+                                                    {QStringLiteral("controllerVersionSha256"),backendSha}};
+        }
         runtimeDescriptor = QJsonObject{
             {QStringLiteral("solverExecutableSha256"), QString::fromLatin1(executableSha256.toHex())},
             {QStringLiteral("applicationVersion"), QString::fromLatin1(VERSION)},
@@ -1432,6 +1551,7 @@ bool SolverTask::freezeNativeResultProvenance(const QJsonObject &sourceRuntimeSt
                 {QStringLiteral("buildAbi"), QSysInfo::buildAbi()},
                 {QStringLiteral("currentCpuArchitecture"), QSysInfo::currentCpuArchitecture()}}},
             {QStringLiteral("normalizedArguments"), normalizedArguments},
+            {QStringLiteral("nativeNumericalRuntime"), nativeNumericalRuntime},
             {QStringLiteral("control"), control}};
     }
     catch (...)
@@ -1454,6 +1574,11 @@ bool SolverTask::freezeNativeResultProvenance(const QJsonObject &sourceRuntimeSt
         {QStringLiteral("proofScope"), proofScope}};
     if (this->isNativeRecoveryTask())
         provenance.insert(QStringLiteral("recovery"), this->nativeRecoveryProvenance);
+    if (this->isTrustedDetachedTask())
+        provenance.insert(QStringLiteral("trustedExperiment"), this->trustedExperimentProvenance);
+    if (!this->nativeAcceptedTraceExecutionContext.isEmpty())
+        provenance.insert(QStringLiteral("executionContext"), QJsonObject{
+            {QStringLiteral("nativeAcceptedTrace"), this->nativeAcceptedTraceExecutionContext}});
 
     this->nativeResultProvenance = provenance;
     this->frozenSolverExecutableSha256 = executableSha256;
@@ -1466,8 +1591,7 @@ bool SolverTask::prepareNativeCheckpointInput(QString *error)
     if (error) error->clear();
     if (QThread::currentThread() != this->thread() ||
         this->performStarted.load(std::memory_order_acquire) || !this->inputSnapshot ||
-        !this->resultSnapshot || this->sourceStamp.first.isEmpty() ||
-        !this->nativeCheckpointInputModelFileName.isEmpty())
+        !this->resultSnapshot || this->sourceStamp.first.isEmpty())
     {
         if (error) *error = QStringLiteral("The detached solver input is unavailable for checkpoint preparation.");
         return false;
@@ -1482,6 +1606,21 @@ bool SolverTask::prepareNativeCheckpointInput(QString *error)
     }
     const QString frozenModelPath = QDir(inputDirectory).filePath(
         QStringLiteral("native-checkpoint-input.") + extension);
+    if (!this->nativeCheckpointInputModelFileName.isEmpty())
+    {
+        const QString storedPath = QDir::cleanPath(QFileInfo(this->nativeCheckpointInputModelFileName).absoluteFilePath());
+        if (!samePathText(storedPath, QFileInfo(frozenModelPath).absoluteFilePath()) ||
+            QFileInfo(storedPath).isSymLink() || hasSymlinkComponent(storedPath) ||
+            !QFileInfo(storedPath).isFile() || this->nativeCheckpointModelSha256.size() != 32 ||
+            sha256File(storedPath) != this->nativeCheckpointModelSha256 ||
+            this->inputPackageSha256.size() != 32 ||
+            sha256Directory(inputDirectory) != this->inputPackageSha256)
+        {
+            if (error) *error = QStringLiteral("The frozen checkpoint input or its package identity changed after preparation.");
+            return false;
+        }
+        return true;
+    }
     if (QFileInfo(frozenModelPath).exists() || QFileInfo(frozenModelPath).isSymLink())
     {
         if (error) *error = QStringLiteral("The immutable checkpoint input path already exists.");
@@ -1580,14 +1719,48 @@ bool SolverTask::enableNativeAcceptedCheckpoints(const QString &directory,
         document.toJson(QJsonDocument::Compact) != canonicalContextJson)
         return false;
 
-    if (this->isNativeRecoveryTask() &&
-        !this->seedNativeAcceptedCheckpoint(directory, document.object(), error))
+    const QString checkpointDirectory=QDir::cleanPath(QFileInfo(directory).absoluteFilePath());
+    const QString runRoot=getRunRoot(this->modelFileName);
+    if(!this->inputSnapshot || !samePathText(checkpointDirectory,QDir(runRoot).filePath(QStringLiteral("checkpoints"))) ||
+       hasSymlinkComponent(checkpointDirectory) || hasSymlinkComponent(runRoot) ||
+       !samePathText(runRoot,QFileInfo(runRoot).canonicalFilePath())) {
+        if(error)*error=QStringLiteral("Native checkpoint output must remain inside this task's canonical private run directory.");return false;
+    }
+    const auto &setup=this->inputSnapshot->getProblemSetup();
+    const QString family=setup.getStructuralPiezoAxialSetup().enabled?QStringLiteral("axial"):
+        setup.getStructuralPiezoLayeredSetup().enabled?QStringLiteral("layered"):
+        setup.getStructuralTrussDynamicsSetup().enabled?QStringLiteral("mixed"):QString();
+    const bool compactTrace=(family==QStringLiteral("axial") || family==QStringLiteral("layered")) &&
+        (!this->isNativeRecoveryTask() || !this->nativeRecoveryProvenance.value("sourceNativeAcceptedTrace").toObject().isEmpty());
+    if (this->isNativeRecoveryTask() && !this->seedNativeAcceptedCheckpoint(directory, document.object(), error))
         return false;
-
+    QString workingResult;
+    if(!family.isEmpty()) {
+        const QString workingDirectory=QDir(checkpointDirectory).filePath(QStringLiteral("run-results"));
+        if(hasSymlinkComponent(workingDirectory) || !QDir().mkpath(workingDirectory) || hasSymlinkComponent(workingDirectory) ||
+           !samePathText(workingDirectory,QFileInfo(workingDirectory).canonicalFilePath())) {
+            if(error)*error=QStringLiteral("Native working results require an owned canonical directory without linked ancestors.");return false;
+        }
+        workingResult=QDir(workingDirectory).filePath(QStringLiteral("native-%1.rbm").arg(family));
+        if(QFileInfo(workingResult).exists() || QFileInfo(workingResult).isSymLink()) {
+            if(error)*error=QStringLiteral("The new task's native working result path already exists.");return false;
+        }
+    }
+    // Prebind the CLI's fixed private output before the manager registers it.
+    // modelFileName remains the independent exact MODEL opened by the child.
+    if(!workingResult.isEmpty())this->resultArtifactFileName=workingResult;
     this->solverArguments.append(QStringLiteral("--native-checkpoint-dir=") +
                                  QDir::cleanPath(QFileInfo(directory).absoluteFilePath()));
     this->solverArguments.append(QStringLiteral("--native-checkpoint-context-json=") +
                                  QString::fromUtf8(canonicalContextJson));
+    if(compactTrace){
+        this->solverArguments.append(QStringLiteral("--native-accepted-trace"));
+        this->nativeAcceptedTraceExecutionContext={
+            {QStringLiteral("checkpointDirectory"),checkpointDirectory},
+            {QStringLiteral("context"),document.object()},
+            {QStringLiteral("inputModelPath"),this->nativeCheckpointInputModelFileName},
+            {QStringLiteral("inputModelSha256"),QString::fromLatin1(this->nativeCheckpointModelSha256.toHex())}};
+    }
     return true;
 }
 
@@ -1624,30 +1797,13 @@ bool SolverTask::requestNativeAcceptedBoundaryPause(
     if (checkpointDirectoryArguments != 1 || checkpointContextArguments != 1)
         return reject(QStringLiteral("Accepted-boundary pauses require exactly one pinned native checkpoint context."));
 
-    const RProblemSetup &problemSetup = this->inputSnapshot->getProblemSetup();
-    const RStructuralDynamicsSetup &dynamics = problemSetup.getStructuralDynamicsSetup();
-    const RStructuralDynamicsRestartData &initialRestart = problemSetup.getStructuralDynamicsRestartData();
-    if (this->inputSnapshot->getProblemTaskTree().getProblemTypeMask() != R_PROBLEM_STRESS ||
-        !dynamics.getEnabled() || dynamics.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
-        problemSetup.getStructuralControlSetup().enabled || problemSetup.getStructuralCableSetup().enabled ||
-        problemSetup.getStructuralPiezoSetup().enabled || problemSetup.getStructuralThermalControlSetup().enabled)
-        return reject(QStringLiteral("Accepted-boundary pauses are supported only for uncontrolled Newmark structural dynamics."));
-
-    quint64 baselineSteps = 0;
-    if (initialRestart.available)
-    {
-        try { initialRestart.validate(); }
-        catch (const RError &validationError)
-        {
-            return reject(QStringLiteral("The queued restart baseline is invalid: %1")
-                          .arg(validationError.getMessage()));
-        }
-        baselineSteps = initialRestart.completedSteps;
-    }
-    const quint64 plannedSteps = dynamics.getNSteps();
-    if (plannedSteps == 0 || baselineSteps > std::numeric_limits<quint64>::max() - plannedSteps)
-        return reject(QStringLiteral("The queued Newmark run has an invalid accepted-step target."));
-    const quint64 targetSteps = baselineSteps + plannedSteps;
+    RPiezoRuntimeCertificate baseline;
+    try {baseline=rPiezoRuntimeCertify(*this->inputSnapshot);}
+    catch(const RError &failure){return reject(QStringLiteral("The queued complete runtime cannot be certified: %1").arg(failure.getMessage()));}
+    const quint64 baselineSteps=baseline.completedSteps;
+    const quint64 targetSteps=baseline.targetSteps;
+    if(targetSteps==0 || targetSteps>std::numeric_limits<uint>::max())
+        return reject(QStringLiteral("The queued native run has an invalid original accepted-step target."));
     if (quint64(acceptedSequence) <= baselineSteps || quint64(acceptedSequence) > targetSteps)
         return reject(QStringLiteral("The requested accepted sequence must be after the baseline and no later than the pinned target."));
 
@@ -1730,8 +1886,9 @@ bool SolverTask::seedNativeAcceptedCheckpoint(const QString &directory,
     QStringList actualContextKeys = checkpointContext.keys();
     expectedContextKeys.sort();
     actualContextKeys.sort();
-    const QByteArray expectedNoControlSha = QCryptographicHash::hash(
-        QByteArrayLiteral("range.native-checkpoint.no-control.v1"), QCryptographicHash::Sha256);
+    QByteArray expectedControlSha;
+    try {if(this->inputSnapshot)expectedControlSha=rPiezoRuntimeControlSha256(*this->inputSnapshot);}
+    catch(const RError &failure){return reject(QStringLiteral("The recovery numerical runtime identity is unavailable: %1").arg(failure.getMessage()));}
     if (!this->isNativeRecoveryTask() || !this->nativeCheckpointSeedProvenance.isEmpty() ||
         QThread::currentThread() != this->thread() || this->performStarted.load(std::memory_order_acquire) ||
         !QFileInfo(directory).isAbsolute() || !samePathText(directory, expectedDirectory) ||
@@ -1755,7 +1912,7 @@ bool SolverTask::seedNativeAcceptedCheckpoint(const QString &directory,
         !validSha(checkpointContext.value(QStringLiteral("runtimeSha256")).toString()) ||
         !validSha(checkpointContext.value(QStringLiteral("packageSha256")).toString()) ||
         checkpointContext.value(QStringLiteral("controlSha256")).toString() !=
-            QString::fromLatin1(expectedNoControlSha.toHex()) ||
+            QString::fromLatin1(expectedControlSha.toHex()) ||
         checkpointContext.value(QStringLiteral("runtimeSha256")).toString() !=
             QString::fromLatin1(sha256File(this->solverExecutable).toHex()) ||
         checkpointContext.value(QStringLiteral("policy")).toString() !=
@@ -1763,6 +1920,63 @@ bool SolverTask::seedNativeAcceptedCheckpoint(const QString &directory,
         checkpointContext.value(QStringLiteral("maxAcceptedSteps")).toInt(-1) != 10 ||
         checkpointContext.value(QStringLiteral("maxSimulationSeconds")).toDouble(-1.0) != 1.0)
         return reject(QStringLiteral("The recovery checkpoint seed is not bound to this task's exact input and context."));
+
+    const auto sourceTrace=this->nativeRecoveryProvenance.value("sourceNativeAcceptedTrace").toObject();
+    if(!sourceTrace.isEmpty()){
+        try{
+            const QString sourceInput=sourceTrace.value("inputModelPath").toString();
+            const auto sourceContext=sourceTrace.value("context").toObject();const QString sourceDirectory=sourceTrace.value("checkpointDirectory").toString();
+            if(sourceTrace.size()!=4 || !sourceTrace.contains("inputModelSha256") || !QFileInfo(sourceInput).isAbsolute() ||
+               !samePathText(sourceDirectory,QFileInfo(sourceEnvelopePath).absolutePath()) || hasSymlinkComponent(sourceInput) || hasSymlinkComponent(sourceEnvelopePath) ||
+               QString::fromLatin1(sha256File(sourceInput).toHex())!=sourceTrace.value("inputModelSha256").toString() ||
+               sourceTrace.value("inputModelSha256")!=sourceContext.value("modelSha256") ||
+               QString::fromLatin1(sha256File(sourceEnvelopePath).toHex())!=sourceEnvelopeSha ||
+               QFileInfo(QDir(sourceDirectory).filePath("pending-publication.json")).exists())
+                return reject(QStringLiteral("Source native trace seed authority changed before queueing."));
+            QFile envelopeFile(sourceEnvelopePath);if(!envelopeFile.open(QIODevice::ReadOnly) || envelopeFile.size()>64*1024)return reject(QStringLiteral("Source trace seed envelope is unavailable."));
+            const auto envelopeBytes=envelopeFile.readAll();QJsonParseError parse;const auto document=QJsonDocument::fromJson(envelopeBytes,&parse);const auto envelope=document.object();
+            const auto cursor=envelope.value("traceCursor").toObject();
+            QStringList expectedEnvelopeKeys{"schema","sourceSha256","inputModelSha256","controlSha256","runtimeSha256","packageSha256","policy",
+                "maxAcceptedSteps","maxSimulationSeconds","acceptedSeq","timeS","dtS","modelFile","checkpointModelSha256","modelAcceptedSeq",
+                "stateFingerprintSha256","traceFile","traceHeaderSha256","traceCursor"};
+            QStringList expectedCursorKeys{"byteEnd","lastRecordOffset","sequence","recordSha256","stateSha256"};
+            auto actualEnvelopeKeys=envelope.keys(),actualCursorKeys=cursor.keys();expectedEnvelopeKeys.sort();expectedCursorKeys.sort();actualEnvelopeKeys.sort();actualCursorKeys.sort();
+            if(parse.error!=QJsonParseError::NoError || !document.isObject() || QJsonDocument(envelope).toJson(QJsonDocument::Compact)!=envelopeBytes ||
+               envelope.value("schema").toString()!=QStringLiteral("range.native-checkpoint/v2") || actualEnvelopeKeys!=expectedEnvelopeKeys || actualCursorKeys!=expectedCursorKeys ||
+               envelope.value("acceptedSeq").toDouble(-1)!=acceptedSeq || envelope.value("timeS").toDouble()!=acceptedTime ||
+               envelope.value("stateFingerprintSha256")!=this->nativeRecoveryProvenance.value("sourceStateFingerprintSha256") ||
+               envelope.value("traceFile").toString()!=QStringLiteral("accepted-trace.rpt") || !validSha(envelope.value("traceHeaderSha256").toString()) ||
+               !validSha(cursor.value("stateSha256").toString()) || !validSha(cursor.value("recordSha256").toString()))
+                return reject(QStringLiteral("Source native trace seed envelope no longer binds selected runtime."));
+            auto expectedSourceContext=sourceContext;expectedSourceContext.remove("schema");expectedSourceContext.remove("modelSha256");expectedSourceContext["inputModelSha256"]=sourceContext.value("modelSha256");
+            for(auto it=expectedSourceContext.begin();it!=expectedSourceContext.end();++it)if(envelope.value(it.key())!=it.value())return reject(QStringLiteral("Source native seed context changed."));
+            const auto integer=[](const QJsonValue &value,quint64 maximum){const double number=value.toDouble(-1.);
+                if(!value.isDouble() || !std::isfinite(number) || number<0 || std::floor(number)!=number || number>double(maximum))throw std::invalid_argument("Invalid source trace seed cursor integer");return quint64(number);};
+            PiezoAcceptedTrace::Cursor authority;authority.byteEnd=qint64(integer(cursor.value("byteEnd"),PiezoAcceptedTrace::MaxFileBytes));authority.lastRecordOffset=qint64(integer(cursor.value("lastRecordOffset"),quint64(authority.byteEnd)));
+            authority.sequence=integer(cursor.value("sequence"),std::numeric_limits<uint>::max());authority.recordSha32=QByteArray::fromHex(cursor.value("recordSha256").toString().toLatin1());
+            authority.stateSha32=QByteArray::fromHex(cursor.value("stateSha256").toString().toLatin1());
+            const QString tracePath=QDir(sourceDirectory).filePath("accepted-trace.rpt");if(hasSymlinkComponent(tracePath))return reject(QStringLiteral("Source native trace seed is linked."));
+            QFile trace(tracePath);if(!trace.open(QIODevice::ReadOnly))return reject(QStringLiteral("Source native trace seed is unavailable."));
+            const auto prefix=PiezoAcceptedTrace::verifyPrefix(trace,authority);RModel source;source.read(sourceInput);const auto sourceCertificate=rPiezoRuntimeCertify(source);
+            PiezoResultSeries::TraceProof proof;proof.tracePath=tracePath;proof.baseModelPath=QDir(sourceDirectory).filePath(prefix.header.baseModelFile);
+            proof.baseModelSha256=prefix.header.baseModelSha256;proof.expectedHeaderSha256=QByteArray::fromHex(envelope.value("traceHeaderSha256").toString().toLatin1());
+            proof.expectedContextSha256=QCryptographicHash::hash(QJsonDocument(sourceContext).toJson(QJsonDocument::Compact),QCryptographicHash::Sha256);
+            proof.expectedSourceFingerprint=sourceCertificate.sourceFingerprint;proof.cursor=authority;
+            const auto certified=PiezoResultSeries::streamAcceptedTrace(proof,{},[](const auto &,const auto &){});
+            RModel queued;queued.read(this->nativeCheckpointInputModelFileName);const auto queuedState=rPiezoRuntimeCertify(queued,true);
+            if(!certified.valid || queuedState.completedSteps!=quint64(acceptedSeq) || queuedState.stateIdentity!=authority.stateSha32 ||
+               QString::fromLatin1(queuedState.stateIdentity.toHex())!=this->nativeRecoveryProvenance.value("sourceStateFingerprintSha256").toString() ||
+               QString::fromLatin1(sha256File(sourceEnvelopePath).toHex())!=sourceEnvelopeSha)
+                return reject(QStringLiteral("Queued recovery input differs from certified terminal native trace runtime."));
+            this->nativeCheckpointSeedProvenance={{"schema","range.native-checkpoint-trace-seed/v2"},{"sourceJobId",sourceJobId},
+                {"sourceEnvelopeRef",sourceEnvelopePath},{"sourceEnvelopeSha256",sourceEnvelopeSha},{"stateFingerprintSha256",QString::fromLatin1(queuedState.stateIdentity.toHex())},
+                {"inputModelSha256",checkpointContext.value("modelSha256")},{"packageSha256",checkpointContext.value("packageSha256")},{"acceptedSeq",acceptedSeq},{"timeS",acceptedTime}};
+            // The child creates a new trace from this exact immutable restart
+            // input and the new context. No interval is invented before its base.
+            return true;
+        }catch(const RError &failure){return reject(failure.getMessage());}
+        catch(const std::exception &failure){return reject(QString::fromLocal8Bit(failure.what()));}
+    }
 
     const QFileInfo sourceModelInfo(sourceModelPath);
     const QFileInfo sourceEnvelopeInfo(sourceEnvelopePath);
@@ -1820,34 +2034,15 @@ bool SolverTask::seedNativeAcceptedCheckpoint(const QString &directory,
         return reject(QStringLiteral("The selected checkpoint or exact queued input could not be decoded: %1")
                       .arg(readError.getMessage()));
     }
-    const RStructuralDynamicsRestartData &selectedRestart =
-            selectedModel.getProblemSetup().getStructuralDynamicsRestartData();
-    const RStructuralDynamicsRestartData &queuedRestart =
-            queuedInputModel.getProblemSetup().getStructuralDynamicsRestartData();
-    const RStructuralDynamicsSetup &queuedDynamics =
-            queuedInputModel.getProblemSetup().getStructuralDynamicsSetup();
-    try
-    {
-        selectedRestart.validate();
-        queuedRestart.validate();
-    }
-    catch (const RError &validationError)
-    {
-        return reject(QStringLiteral("The selected or queued accepted restart state is invalid: %1")
-                      .arg(validationError.getMessage()));
-    }
-    if (!selectedRestart.available || selectedRestart.completedSteps != quint64(acceptedSeq) ||
-        !sameRestartState(selectedRestart, queuedRestart) ||
-        selectedModel.getNNodes() != queuedInputModel.getNNodes() ||
-        selectedModel.getNElements() != queuedInputModel.getNElements() ||
-        !queuedDynamics.getEnabled() || queuedDynamics.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
-        queuedInputModel.getProblemSetup().getStructuralControlSetup().enabled ||
-        queuedInputModel.getProblemSetup().getStructuralCableSetup().enabled ||
-        queuedInputModel.getProblemSetup().getStructuralPiezoSetup().enabled ||
-        queuedInputModel.getProblemSetup().getStructuralThermalControlSetup().enabled ||
-        std::abs(selectedRestart.time - acceptedTime) > 1.0e-12 * qMax(1.0, std::abs(acceptedTime)) ||
-        std::abs(selectedRestart.fixedTimeStep - dtS) > 1.0e-12 * qMax(1.0, std::abs(dtS)))
-        return reject(QStringLiteral("The exact queued recovery input does not preserve the selected checkpoint q/v/a/work state."));
+    RPiezoRuntimeCertificate selectedRestart,queuedRestart;
+    try {selectedRestart=rPiezoRuntimeCertify(selectedModel,true);queuedRestart=rPiezoRuntimeCertify(queuedInputModel,true);}
+    catch(const RError &failure){return reject(QStringLiteral("The selected or queued complete accepted state is invalid: %1").arg(failure.getMessage()));}
+    if(!selectedRestart.available || selectedRestart.completedSteps!=quint64(acceptedSeq) ||
+       !rPiezoRuntimeSameAcceptedState(selectedRestart,queuedRestart) ||
+       selectedModel.getNNodes()!=queuedInputModel.getNNodes() || selectedModel.getNElements()!=queuedInputModel.getNElements() ||
+       std::abs(selectedRestart.time-acceptedTime)>1.0e-12*qMax(1.0,std::abs(acceptedTime)) ||
+       std::abs(selectedRestart.fixedTimeStep-dtS)>1.0e-12*qMax(1.0,std::abs(dtS)))
+        return reject(QStringLiteral("The exact queued recovery input does not preserve the selected complete physical/controller/work state."));
 
     if (!QDir().mkpath(directory) || QFileInfo(directory).isSymLink() || hasSymlinkComponent(directory) ||
         QFileInfo(directory).canonicalFilePath().isEmpty() ||
@@ -2017,10 +2212,26 @@ const QString SolverTask::getStopCommand() const
     return QString(this->taskID.toString() + ":STOP");
 }
 
+void SolverTask::requestGracefulStop() noexcept
+{
+    this->completionIntent->gracefulStopRequested.store(true, std::memory_order_release);
+}
+
+bool SolverTask::hasGracefulStopRequest() const noexcept
+{
+    // An existing hard cancellation retains its cleanup and terminal contract.
+    return this->completionIntent->isGracefulStop();
+}
+
+std::shared_ptr<const SolverTask::CompletionIntent> SolverTask::getCompletionIntent() const noexcept
+{
+    return this->completionIntent;
+}
+
 void SolverTask::kill()
 {
     RLogger::info("Killing solver task (#%s).\n",this->taskID.toString().toUtf8().constData());
-    this->killRequested.store(true, std::memory_order_release);
+    this->completionIntent->killRequested.store(true, std::memory_order_release);
 }
 
 const QString &SolverTask::getLogFileName() const
@@ -2402,7 +2613,7 @@ int SolverTask::perform()
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver input snapshot was not captured before scheduling.");
         }
-        if (this->killRequested.load(std::memory_order_acquire))
+        if (this->completionIntent->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver task was cancelled before execution.");
         }
@@ -2446,12 +2657,12 @@ int SolverTask::perform()
                 throw RError(RError::Type::Application, R_ERROR_REF,
                              "Could not stage restart history: %s", historyError.toUtf8().constData());
             }
-            // Numbered history writes publish a logical latest LINK. Restore
-            // the prepared input MODEL last so the worker opens the requested
-            // continuation settings, rather than the old checkpoint's setup.
-            ModelIO::save(*this->resultSnapshot, this->resultArtifactFileName, false);
+            // Keep the exact child input separate from its native output LINK
+            // and numbered history. Non-native solvers still use their input
+            // path as the output, as before.
+            ModelIO::save(*this->resultSnapshot, this->modelFileName, false);
             if (!this->nativeCheckpointModelSha256.isEmpty() &&
-                sha256File(this->resultArtifactFileName) != this->nativeCheckpointModelSha256)
+                sha256File(this->modelFileName) != this->nativeCheckpointModelSha256)
             {
                 throw RError(RError::Type::Application, R_ERROR_REF,
                              "The solver's initial MODEL bytes differ from the checkpoint's frozen modelSha256.");
@@ -2467,7 +2678,7 @@ int SolverTask::perform()
             RLogger::error("%s Result: '%s'\n",error.getMessage().toUtf8().constData(),this->resultArtifactFileName.toUtf8().constData());
             throw RError(RError::Type::Application,R_ERROR_REF,"Failed to prepare the detached solver result artifact.");
         }
-        if (this->killRequested.load(std::memory_order_acquire))
+        if (this->completionIntent->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver task was cancelled before process start.");
         }
@@ -2484,6 +2695,13 @@ int SolverTask::perform()
         RLogger::info("Executing \'%s\'\n",cmdLine.toUtf8().constData());
 
         this->solverProcess = new QProcess;
+#ifdef Q_OS_WIN
+        // Keep the standard-stream pipes, task server and QProcess ownership
+        // while starting the worker without a console attachment.
+        this->solverProcess->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
+            arguments->flags = (arguments->flags & ~DWORD(CREATE_NO_WINDOW)) | DETACHED_PROCESS;
+        });
+#endif
         QProcessEnvironment processEnvironment = QProcessEnvironment::systemEnvironment();
         processEnvironment.insert(QStringLiteral("RANGE_NATIVE_JOB_ID"), this->taskID.toString());
         processEnvironment.insert(QStringLiteral("RANGE_NATIVE_PROGRESS_PATH"),
@@ -2511,7 +2729,7 @@ int SolverTask::perform()
             pollNativeProgress();
             pollNativeResults();
             if (processFinished) break;
-            if (this->killRequested.load(std::memory_order_acquire))
+            if (this->completionIntent->killRequested.load(std::memory_order_acquire))
             {
                 if (this->solverProcess->state() != QProcess::NotRunning)
                 {
@@ -2542,7 +2760,7 @@ int SolverTask::perform()
             progressUnavailable(QStringLiteral("Native solver produced no valid progress events."));
         processExited = this->solverProcess->state() == QProcess::NotRunning;
         if (processExited) processExitCode = this->solverProcess->exitCode();
-        if (this->killRequested.load(std::memory_order_acquire))
+        if (this->completionIntent->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver execution was cancelled.");
         }
@@ -2621,12 +2839,12 @@ int SolverTask::perform()
         resultSourceBinding = sourceBindingJson(loadedSourceBinding);
         resultArtifactVerified = true;
         resultReadbackComplete = true;
-        if (this->killRequested.load(std::memory_order_acquire))
+        if (this->completionIntent->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "Solver result publication was cancelled.");
         }
         emit this->resultArtifactCreated(resultArtifactPath, resultArtifactSha256, resultSourceBinding);
-        if (this->killRequested.load(std::memory_order_acquire))
+        if (this->completionIntent->killRequested.load(std::memory_order_acquire))
         {
             throw RError(RError::Type::Application, R_ERROR_REF,
                          "Solver result was retained as an artifact after cancellation and was not published.");
@@ -2711,14 +2929,14 @@ int SolverTask::perform()
             // Cancellation can arrive after the worker's pre-post check but
             // before this GUI-thread callback runs. Check again immediately
             // before touching the live document.
-            if (this->killRequested.load(std::memory_order_acquire))
+            if (this->completionIntent->killRequested.load(std::memory_order_acquire))
             {
                 publicationCancelled = true;
                 return;
             }
             // Recovery is an independent artifact even if an old source stamp
             // happens to match a live document in this host instance.
-            if (this->isNativeRecoveryTask()) return;
+            if (this->isNativeRecoveryTask() || this->isTrustedDetachedTask()) return;
             accepted = session->acceptSolverResult(this->sourceStamp,
                                                    *this->resultSnapshot,
                                                    this->resultArtifactFileName,
@@ -2742,7 +2960,7 @@ int SolverTask::perform()
         {
             throw RError(RError::Type::Application, R_ERROR_REF, "%s", publicationError.toUtf8().constData());
         }
-        if (!accepted && !this->isNativeRecoveryTask())
+        if (!accepted && !this->isNativeRecoveryTask() && !this->isTrustedDetachedTask())
         {
             RLogger::warning("Solver result (#%s) completed for a stale or closed source; retained at '%s'.\n",
                              this->taskID.toString().toUtf8().constData(),
@@ -2757,7 +2975,13 @@ int SolverTask::perform()
             throw RError(RError::Type::Application, R_ERROR_REF,
                          "Solver completion evidence is incomplete; the result was not marked successful.");
         }
-        reportTerminal(QStringLiteral("succeeded"), QString());
+        // A graceful user Stop retains the fully verified accepted prefix. A
+        // normal child exit is process success, not completion of this request.
+        if (this->hasGracefulStopRequest())
+            reportTerminal(QStringLiteral("cancelled"),
+                           QStringLiteral("Stopped by the user; the verified accepted result prefix was retained."));
+        else
+            reportTerminal(QStringLiteral("succeeded"), QString());
     }
     catch (const RError &error)
     {
@@ -2796,7 +3020,7 @@ int SolverTask::perform()
         }
         if (loggerIndented) RLogger::unindent();
         RLogger::error("Solver task (#%s) failed: %s\n",this->taskID.toString().toUtf8().constData(),error.getMessage().toUtf8().constData());
-        reportTerminal(this->killRequested.load(std::memory_order_acquire)
+        reportTerminal(this->completionIntent->killRequested.load(std::memory_order_acquire)
                            ? QStringLiteral("cancelled") : QStringLiteral("failed"),
                        error.getMessage());
         return 1;

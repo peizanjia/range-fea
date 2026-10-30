@@ -1,0 +1,48 @@
+{
+  "schema": "range.piezo-incremental-checkpoint/v1",
+  "recordedAt": "2026-10-13T06:41:29.8766299+08:00",
+  "classification": "INCREMENTAL_CODE_CHECKPOINT_NOT_FINAL_FREEZE",
+  "rootCommit": "93e56a7912c0eb4a6e64b28e882f910ca4866807",
+  "submodules": {
+    "src/range-base-lib": "10297a12e25f1cd5cd9c677a50b7acf7131da56c",
+    "src/range-cloud-lib": "76259e054789c96482efa64524bf3a11ba971d3d",
+    "src/range-gui-lib": "ebd9df30fa21f3d405b22a32793685f86d110f3f"
+  },
+  "scope": [
+    "Native SHA-256 implementation and its targeted tests",
+    "HTTP completion ownership and startup update request deadline",
+    "Saved GUI layout compatibility and background update settings"
+  ],
+  "priorTargetedValidation": [
+    {
+      "receipt": "build/audit-20261012/piezo-delivery/sha256-v29/root-production-tests.log",
+      "result": "7/7 production targets passed; 233.60 seconds"
+    },
+    {
+      "receipt": "build/audit-20261012/piezo-delivery/startup-quit-v25/root-production-test-v3.log",
+      "result": "1/1 startup HTTP completion target passed; 2.65 seconds"
+    },
+    {
+      "receipt": "build/audit-20261012/piezo-delivery/gui-saved-layout-v28.txt",
+      "result": "3 Qt functions passed; 235 milliseconds"
+    }
+  ],
+  "pendingCandidates": [
+    "detached-pipes-v34: runtime validation and new immutable install pending",
+    "results-layout-v34 revision 4: build, geometry and actual GUI validation pending",
+    "lazy-sdk-v34: audit-only candidate; production integration pending compatibility and cold measurements"
+  ],
+  "activeMeasurement": {
+    "install": "pc11-install-v33-current",
+    "family": "axialRod",
+    "state": "FULL_RUN_ACTIVE",
+    "memoryGate": "FAILED",
+    "observedPeakBytes": 517238784,
+    "limitBytes": 512000000,
+    "installedBytesUnchangedByCommits": true
+  },
+  "finalSourceMatchedRegressionRequired": true,
+  "productComplete": false,
+  "publicDistributionClearance": false,
+  "remotePushPerformed": false
+}

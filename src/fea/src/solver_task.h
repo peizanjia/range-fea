@@ -23,6 +23,20 @@ class SolverTask : public RJob
 
     Q_OBJECT
 
+    public:
+        struct TrustedExperimentCandidateTag {};
+        //! Monotone cancellation intent shared with queued completion handlers.
+        //! The manager gets read-only access; storage outlives this QObject.
+        struct CompletionIntent
+        {
+            std::atomic_bool killRequested{false}, gracefulStopRequested{false};
+            bool isGracefulStop() const noexcept
+            {
+                return gracefulStopRequested.load(std::memory_order_acquire) &&
+                       !killRequested.load(std::memory_order_acquire);
+            }
+        };
+
     protected:
 
         //! Application settings.
@@ -33,14 +47,16 @@ class SolverTask : public RJob
         QString sourceDocumentId;
         //! Source identity and revision captured when the task is scheduled.
         QPair<QString, quint64> sourceStamp;
+        //! Trusted detached authorization source stamp retained until candidate capture.
+        QPair<QString, quint64> trustedSourceStamp;
         //! Original source model path retained for provenance and dependency resolution.
         QString sourceModelFileName;
         //! Solver task ID.
         SolverTaskID taskID;
         //! Solver process.
         QProcess *solverProcess;
-        //! Cross-thread cancellation request; the worker owns all QProcess calls.
-        std::atomic_bool killRequested{false};
+        //! The worker owns QProcess; only these monotone request bits are shared.
+        const std::shared_ptr<CompletionIntent> completionIntent = std::make_shared<CompletionIntent>();
         //! Solver executable.
         QString solverExecutable;
         //! Solver executable arguments.
@@ -60,6 +76,8 @@ class SolverTask : public RJob
         //! Frozen bytes for the exact initial MODEL opened by a checkpoint-enabled solver.
         QString nativeCheckpointInputModelFileName;
         QByteArray nativeCheckpointModelSha256;
+        //! Frozen by the manager before queueing, never inferred from artifacts.
+        QJsonObject nativeAcceptedTraceExecutionContext;
         //! Detached model copy captured on the document thread at scheduling.
         std::unique_ptr<Model> inputSnapshot;
         //! Detached result copy owned and updated by the worker.
@@ -77,11 +95,15 @@ class SolverTask : public RJob
         bool nativeResultProvenanceFrozen = false;
         //! Provenance assigned by the validated manager before queueing.
         QString inputDerivedFrom;
+        //! Service attempt identity paired with this detached experiment child job.
+        QString trustedExperimentAttemptId;
         QString frozenSnapshotPath;
         QString frozenSnapshotSha256;
         bool frozenSnapshotVerified = false;
         //! Immutable ancestry and source-frame proof for a detached native recovery attempt.
         QJsonObject nativeRecoveryProvenance;
+        //! One-shot trusted experiment binding for a detached candidate that must never publish to Session.
+        QJsonObject trustedExperimentProvenance;
         QString nativeRecoveryArtifactRoot;
         //! Cross-process lease for this logical recovery lineage, held while the attempt is active.
         std::shared_ptr<QLockFile> nativeRecoveryLogicalLock;
@@ -109,6 +131,15 @@ class SolverTask : public RJob
                    const QString &taskServerName,
                    std::shared_ptr<QLockFile> logicalRecoveryLock = {});
 
+        //! Construct a solver task for an authorized, detached trusted-experiment candidate.
+        //! Completion is retained as an artifact and can never update the live Session model.
+        SolverTask(const ApplicationSettings *applicationSettings, const Model &model,
+                   const QPair<QString, quint64> &sourceStamp,
+                   const QJsonObject &trustedExperimentProvenance,
+                   const QString &artifactRoot,
+                   const QString &taskServerName,
+                   TrustedExperimentCandidateTag);
+
         //! Capture the input model and its source stamp before the job is queued.
         bool captureInputSnapshot(const Model &model,
                                   const QPair<QString, quint64> &sourceStamp,
@@ -116,6 +147,9 @@ class SolverTask : public RJob
                                   const QString &inputDerivedFrom = QString(),
                                   const QString &frozenSnapshotPath = QString(),
                                   const QString &frozenSnapshotSha256 = QString());
+
+        //! Capture the detached model bound to this immutable experiment authorization.
+        bool captureTrustedCandidateSnapshot(const Model &model, QString *error = nullptr);
 
         //! Capture an already detached model copy and source stamp.
         bool captureInputSnapshot(std::unique_ptr<Model> modelSnapshot,
@@ -136,7 +170,11 @@ class SolverTask : public RJob
 
         //! Return the pinned ancestry facts for this detached recovery attempt.
         const QJsonObject &getNativeRecoveryProvenance() const;
+        const QJsonObject &getTrustedExperimentProvenance() const;
+        bool setTrustedExperimentAttemptId(const QString &attemptId);
+        const QString &getTrustedExperimentAttemptId() const;
         bool isNativeRecoveryTask() const;
+        bool isTrustedDetachedTask() const;
         bool hasNativeRecoveryLogicalLock() const;
         void releaseNativeRecoveryLogicalLock();
 
@@ -215,6 +253,11 @@ class SolverTask : public RJob
         //! Return const reference to solver task ID.
         const QString getStopCommand() const;
 
+        //! Called only after the registered job's cancellation intent is durable.
+        void requestGracefulStop() noexcept;
+        bool hasGracefulStopRequest() const noexcept;
+        std::shared_ptr<const CompletionIntent> getCompletionIntent() const noexcept;
+
         //! Kill task.
         void kill();
 
@@ -227,7 +270,8 @@ class SolverTask : public RJob
     protected:
 
         void initializeTaskPaths(const Model &model, const QString &artifactRoot = QString(),
-                                 const QString &taskServerName = QString());
+                                 const QString &taskServerName = QString(),
+                                 bool trustedDetachedTask = false);
         bool seedNativeAcceptedCheckpoint(const QString &directory,
                                           const QJsonObject &checkpointContext,
                                           QString *error);

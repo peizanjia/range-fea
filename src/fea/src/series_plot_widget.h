@@ -58,6 +58,7 @@ public:
     bool setDataset(const Dataset &dataset, QString *error = nullptr);
     const Dataset &dataset() const { return displayedDataset; }
     bool hasDataset() const { return datasetAvailable; }
+    quint64 datasetGeneration() const { return displayedGeneration; }
     bool isDisplayHeld() const { return displayHeld; }
 
     //! Set a finite, increasing visible range in raw dataset units.
@@ -75,12 +76,15 @@ public slots:
     void fitToData();
 
 signals:
+    //! One notification per presented generation after nonempty canvas painting.
+    void datasetPainted(quint64 datasetGeneration);
     void exportFullSeriesRequested();
     void displayHoldChanged(bool held);
     void cursorChanged(const QString &traceId, quint64 ordinal);
 
 private:
     Dataset displayedDataset;
+    quint64 displayedGeneration = 0;
     std::optional<Dataset> pendingDataset;
     std::optional<Cursor> displayedCursor;
     bool datasetAvailable = false;

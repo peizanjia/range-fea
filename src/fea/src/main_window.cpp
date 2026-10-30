@@ -8,11 +8,16 @@
 #include <QScrollBar>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QSet>
 #include <QFileDialog>
 #include <QMessageBox>
 
 #include <rbl_error.h>
 #include <rbl_job_manager.h>
+
+#if RANGE_ENABLE_AGENT
+#include <ragent_evaluation_capture_store.h>
+#endif
 
 #include <rgl_first_run_dialog.h>
 #include <rgl_progress_handler.h>
@@ -41,16 +46,163 @@
 #include "session.h"
 #include "geometry_transform_widget.h"
 #include "workflow_widget.h"
+#if RANGE_ENABLE_AGENT
 #include "agent_widget.h"
+#endif
 #include "extension_widget.h"
 #include "model_io.h"
 #include "model_command_host.h"
+
+#if RANGE_ENABLE_AGENT
+namespace
+{
+class AgentEvaluationCaptureSession final
+{
+public:
+    AgentEvaluationCaptureSession(AgentTaskRunner::EvaluationArm arm,
+                                  std::shared_ptr<RAgentEvaluationCaptureStore> store,
+                                  AgentEvaluationSlotBinding slotBinding)
+        : expectedArm(AgentTaskRunner::evaluationArmId(arm)), store(std::move(store)),
+          expectedSlotBinding(std::move(slotBinding))
+    {
+    }
+
+    bool append(const QJsonObject &event)
+    {
+        const QString kind = event.value(QStringLiteral("kind")).toString();
+        const bool isTerminal = kind == QStringLiteral("task_terminal");
+        if (!store || terminalSeen) return false;
+        const auto reject = [this, isTerminal] {
+            if (isTerminal) terminalSeen = true;
+            return false;
+        };
+        const QString task = event.value(QStringLiteral("taskId")).toString();
+        const QString conversation = event.value(QStringLiteral("conversationId")).toString();
+        if (task.isEmpty() || conversation.isEmpty()
+            || event.value(QStringLiteral("evaluationArm")).toString() != expectedArm)
+            return reject();
+        if (expectedSlotBinding.enabled && slotBindingRejectedSeen && !isTerminal)
+            return reject();
+
+        if (taskId.isEmpty())
+        {
+            taskId = task;
+            conversationId = conversation;
+        }
+        else if (task != taskId || conversation != conversationId)
+        {
+            return reject();
+        }
+
+        if (kind.isEmpty()) return reject();
+        if (kind == QStringLiteral("slot_binding"))
+        {
+            static const QSet<QString> expectedFields{
+                QStringLiteral("kind"), QStringLiteral("requestId"), QStringLiteral("taskId"),
+                QStringLiteral("conversationId"), QStringLiteral("evaluationArm"), QStringLiteral("runId"),
+                QStringLiteral("holdoutId"), QStringLiteral("slotId"), QStringLiteral("caseId"),
+                QStringLiteral("repeat"), QStringLiteral("manifestCommitmentSha256"),
+                QStringLiteral("promptSha256")};
+            bool hasUnknownField = event.size() != expectedFields.size();
+            for (auto it = event.constBegin(); !hasUnknownField && it != event.constEnd(); ++it)
+                hasUnknownField = !expectedFields.contains(it.key());
+            if (!expectedSlotBinding.enabled || slotBindingSeen || slotBindingAwaitingDispatch
+                || slotDispatchSeen || isTerminal || hasUnknownField
+                || event.value(QStringLiteral("runId")).toString() != expectedSlotBinding.runId
+                || event.value(QStringLiteral("holdoutId")).toString() != expectedSlotBinding.holdoutId
+                || event.value(QStringLiteral("slotId")).toString() != expectedSlotBinding.slotId
+                || event.value(QStringLiteral("caseId")).toString() != expectedSlotBinding.caseId
+                || !event.value(QStringLiteral("repeat")).isDouble()
+                || event.value(QStringLiteral("repeat")).toDouble() != double(expectedSlotBinding.repeat)
+                || event.value(QStringLiteral("promptSha256")).toString() != expectedSlotBinding.promptSha256
+                || event.value(QStringLiteral("manifestCommitmentSha256")).toString()
+                    != expectedSlotBinding.manifestCommitmentSha256
+                || event.value(QStringLiteral("requestId")).toString().isEmpty())
+                return reject();
+            boundRequestId = event.value(QStringLiteral("requestId")).toString();
+            slotBindingSeen = true;
+            slotBindingAwaitingDispatch = true;
+        }
+        else if (expectedSlotBinding.enabled && kind == QStringLiteral("slot_binding_rejected"))
+        {
+            static const QSet<QString> expectedFields{
+                QStringLiteral("kind"), QStringLiteral("requestId"), QStringLiteral("taskId"),
+                QStringLiteral("conversationId"), QStringLiteral("evaluationArm"), QStringLiteral("runId"),
+                QStringLiteral("holdoutId"), QStringLiteral("slotId"), QStringLiteral("caseId"),
+                QStringLiteral("repeat"), QStringLiteral("manifestCommitmentSha256"),
+                QStringLiteral("promptSha256"), QStringLiteral("reasonCode")};
+            bool hasUnknownField = event.size() != expectedFields.size();
+            for (auto it = event.constBegin(); !hasUnknownField && it != event.constEnd(); ++it)
+                hasUnknownField = !expectedFields.contains(it.key());
+            if (slotBindingSeen || slotBindingAwaitingDispatch || slotDispatchSeen || hasUnknownField
+                || event.value(QStringLiteral("reasonCode")).toString().isEmpty()
+                || event.value(QStringLiteral("runId")).toString() != expectedSlotBinding.runId
+                || event.value(QStringLiteral("holdoutId")).toString() != expectedSlotBinding.holdoutId
+                || event.value(QStringLiteral("slotId")).toString() != expectedSlotBinding.slotId
+                || event.value(QStringLiteral("caseId")).toString() != expectedSlotBinding.caseId
+                || !event.value(QStringLiteral("repeat")).isDouble()
+                || event.value(QStringLiteral("repeat")).toDouble() != double(expectedSlotBinding.repeat)
+                || event.value(QStringLiteral("manifestCommitmentSha256")).toString()
+                    != expectedSlotBinding.manifestCommitmentSha256
+                || event.value(QStringLiteral("promptSha256")).toString() != expectedSlotBinding.promptSha256
+                || event.value(QStringLiteral("requestId")).toString().isEmpty())
+                return reject();
+            slotBindingRejectedSeen = true;
+        }
+        else if (expectedSlotBinding.enabled && kind == QStringLiteral("dispatch_intent"))
+        {
+            if (!slotBindingSeen)
+                return reject();
+            if (!slotDispatchSeen)
+            {
+                if (!slotBindingAwaitingDispatch
+                    || event.value(QStringLiteral("requestId")).toString() != boundRequestId)
+                    return reject();
+                slotBindingAwaitingDispatch = false;
+            }
+            else if (slotBindingAwaitingDispatch
+                     || event.value(QStringLiteral("requestId")).toString() == boundRequestId)
+                return reject();
+            slotDispatchSeen = true;
+        }
+        else if (expectedSlotBinding.enabled && slotBindingAwaitingDispatch)
+        {
+            // The slot binding must be immediately followed by its first dispatch intent.
+            return reject();
+        }
+        QString error;
+        const bool accepted = store->append(event, &error);
+        if (isTerminal) terminalSeen = true;
+        return accepted;
+    }
+
+private:
+    const QString expectedArm;
+    const std::shared_ptr<RAgentEvaluationCaptureStore> store;
+    const AgentEvaluationSlotBinding expectedSlotBinding;
+    QString taskId;
+    QString conversationId;
+    QString boundRequestId;
+    bool slotBindingSeen = false;
+    bool slotBindingAwaitingDispatch = false;
+    bool slotDispatchSeen = false;
+    bool slotBindingRejectedSeen = false;
+    bool terminalSeen = false;
+};
+}
+#endif
 
 MainWindow::MainWindow(Session *session,
                        RCloudSessionManager *cloudSession,
                        RApplicationSettings *applicationSettings,
                        ActionList *actionList,
-                       QWidget *parent)
+                       QWidget *parent
+#if RANGE_ENABLE_AGENT
+                       , AgentTaskRunner::EvaluationArm evaluationArm,
+                       std::shared_ptr<RAgentEvaluationCaptureStore> evaluationCaptureStore,
+                       AgentEvaluationSlotBinding evaluationSlotBinding
+#endif
+                       )
     : QMainWindow{parent}
     , session{session}
     , cloudSession{cloudSession}
@@ -82,6 +234,18 @@ MainWindow::MainWindow(Session *session,
     this->createStatusBar();
     this->createCentralWidget();
 
+    // A tab stack includes the minimum size of every page, including inactive
+    // forms. Keep the original page objects and give long content its own
+    // scrolling viewport instead of forcing the entire window to grow.
+    const auto scrollable = [](QWidget *widget, const QString &name) {
+        auto *scroll = new QScrollArea;
+        scroll->setObjectName(name);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidget(widget);
+        return scroll;
+    };
+
     QDockWidget *modelDock = new QDockWidget(this);
     modelDock->setObjectName(QString::fromUtf8("modelDock"));
     modelDock->setWindowTitle(tr("Models"));
@@ -93,13 +257,13 @@ MainWindow::MainWindow(Session *session,
     modelDock->setWidget(modelDockTabWidget);
 
     this->modelsTab = this->createModelTab();
-    modelDockTabWidget->addTab(this->modelsTab,tr("Model"));
+    modelDockTabWidget->addTab(scrollable(this->modelsTab, "modelTabScroll"),tr("Model"));
 
     this->documentsTab = this->createDocumentTab();
-    modelDockTabWidget->addTab(this->documentsTab,tr("Documents"));
+    modelDockTabWidget->addTab(scrollable(this->documentsTab, "documentsTabScroll"),tr("Documents"));
 
     this->recordsTab = this->createRecordsTab();
-    modelDockTabWidget->addTab(this->recordsTab,tr("Records"));
+    modelDockTabWidget->addTab(scrollable(this->recordsTab, "recordsTabScroll"),tr("Records"));
 
     QDockWidget *solverDock = new QDockWidget(this);
     solverDock->setObjectName(QString::fromUtf8("solverDock"));
@@ -112,60 +276,89 @@ MainWindow::MainWindow(Session *session,
     solverDock->setWidget(solverDockTabWidget);
 
     this->problemTab = this->createProblemTab();
-    solverDockTabWidget->addTab(this->problemTab,tr("Problem"));
+    solverDockTabWidget->addTab(scrollable(this->problemTab, "problemTabScroll"),tr("Problem"));
 
     this->bcTab = this->createBcTab();
-    solverDockTabWidget->addTab(this->bcTab,tr("Boundary conditions"));
+    solverDockTabWidget->addTab(scrollable(this->bcTab, "boundaryConditionsTabScroll"),tr("Boundary conditions"));
 
     this->icTab = this->createIcTab();
-    solverDockTabWidget->addTab(this->icTab,tr("Initial conditions"));
+    solverDockTabWidget->addTab(scrollable(this->icTab, "initialConditionsTabScroll"),tr("Initial conditions"));
 
     this->ecTab = this->createEcTab();
-    solverDockTabWidget->addTab(this->ecTab,tr("Environment conditions"));
+    solverDockTabWidget->addTab(scrollable(this->ecTab, "environmentConditionsTabScroll"),tr("Environment conditions"));
 
     this->materialTab = this->createMaterialTab();
-    solverDockTabWidget->addTab(this->materialTab,tr("Material"));
+    solverDockTabWidget->addTab(scrollable(this->materialTab, "materialTabScroll"),tr("Material"));
 
     this->resultsTab = this->createResultsTab();
-    solverDockTabWidget->addTab(this->resultsTab,tr("Results"));
+    solverDockTabWidget->addTab(scrollable(this->resultsTab, "resultsTabScroll"),tr("Results"));
     auto *controlDock = new QDockWidget(tr("Dynamics & control"), this);
     controlDock->setObjectName("controlDock");
     auto *workflowWidget = new WorkflowWidget(controlDock);
     workflowWidget->setSession(session);
-    controlDock->setWidget(workflowWidget);
+    controlDock->setWidget(scrollable(workflowWidget, "controlWorkflowScroll"));
     addDockWidget(Qt::BottomDockWidgetArea, controlDock);
-    const auto scrollable = [solverDockTabWidget](QWidget *widget) {
-        auto *scroll = new QScrollArea(solverDockTabWidget);
-        scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame); scroll->setWidget(widget);
-        return scroll;
-    };
     connect(session, &Session::solverResultAvailable, workflowWidget, &WorkflowWidget::showDocumentResult);
     connect(workflowWidget, &WorkflowWidget::openResultRequested, this, [](const QString &path) {
         RJobManager::getInstance().submit(new ModelIO(MODEL_IO_OPEN, path));
     });
+#if RANGE_ENABLE_AGENT
     auto *agentDock = new QDockWidget(tr("Assistant"), this);
     agentDock->setObjectName("agentDock");
     agentDock->setMinimumWidth(340);
-    agentDock->setWidget(new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), agentDock,
-                                         nullptr, AgentTaskRunner::AccessPolicy::ReadWrite, true));
+    auto *agent = new AgentWidget(session->getModelCommandHost(), workflowWidget->transport(), agentDock,
+                                  nullptr, AgentTaskRunner::AccessPolicy::ReadWrite,
+                                  !evaluationSlotBinding.enabled, evaluationArm,
+                                  evaluationSlotBinding);
+    if (evaluationCaptureStore)
+    {
+        auto captureSession = std::make_shared<AgentEvaluationCaptureSession>(evaluationArm,
+                                                                              evaluationCaptureStore,
+                                                                              evaluationSlotBinding);
+        if (!agent->setProviderCaptureRecorder([captureSession](const QJsonObject &event) {
+                return captureSession->append(event);
+            }))
+        {
+            agent->setEnabled(false);
+            if (auto *status = agent->findChild<QLabel *>(QStringLiteral("agentConversationStatus")))
+                status->setText(tr("Evaluation capture setup failed; the Assistant is disabled."));
+        }
+    }
+    agentDock->setWidget(agent);
     addDockWidget(Qt::RightDockWidgetArea, agentDock);
     tabifyDockWidget(solverDock, agentDock);
+#endif
     setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
     setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
-    solverDockTabWidget->addTab(scrollable(new ExtensionWidget(workflowWidget->transport(), solverDockTabWidget)), tr("Extensions"));
+    solverDockTabWidget->addTab(scrollable(new ExtensionWidget(workflowWidget->transport(), solverDockTabWidget), "extensionsTabScroll"), tr("Extensions"));
 
     this->restoreGeometry(this->applicationSettings->value("mainWindow/geometry").toByteArray());
-    this->restoreState(this->applicationSettings->value("mainWindow/windowState").toByteArray());
+    const bool restoredLayout = this->restoreState(this->applicationSettings->value("mainWindow/windowState").toByteArray());
     // Feature panels have their own dock surfaces: the conversation composer
     // stays visible and the control monitor can use the full viewport width.
     auto *panelsMenu = menuBar()->addMenu(tr("Panels"));
+#if RANGE_ENABLE_AGENT
     for (auto *dock : {modelDock, solverDock, agentDock, controlDock})
+#else
+    for (auto *dock : {modelDock, solverDock, controlDock})
+#endif
         panelsMenu->addAction(dock->toggleViewAction());
     if (this->applicationSettings->value("mainWindow/featureLayoutVersion", 0).toInt() < 1)
     {
-        resizeDocks({agentDock}, {400}, Qt::Horizontal);
-        resizeDocks({controlDock}, {300}, Qt::Vertical);
-        agentDock->raise();
+        if (!restoredLayout)
+        {
+#if RANGE_ENABLE_AGENT
+            resizeDocks({modelDock, agentDock}, {190, 340}, Qt::Horizontal);
+#else
+            resizeDocks({modelDock}, {190}, Qt::Horizontal);
+#endif
+            resizeDocks({controlDock}, {220}, Qt::Vertical);
+#if RANGE_ENABLE_AGENT
+            agentDock->raise();
+#else
+            solverDock->raise();
+#endif
+        }
         this->applicationSettings->setValue("mainWindow/featureLayoutVersion", 1);
     }
 
@@ -888,13 +1081,19 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QString quitQuestion;
     if (ModelCommandHost::isBusy())
     {
+#if RANGE_ENABLE_AGENT
         quitQuestion = "<b>" + tr("The application will finish queued document jobs before exiting. Assistant steps and reference-workflow connections will stop.") + "</b><br/>";
+#else
+        quitQuestion = "<b>" + tr("The application will finish queued document jobs before exiting. Reference-workflow connections will stop.") + "</b><br/>";
+#endif
     }
 
     if (RMessageBox::quit(this,quitQuestion) == RMessageBox::Yes)
     {
         this->writeSettings();
+#if RANGE_ENABLE_AGENT
         for (auto *agent : findChildren<AgentWidget *>()) agent->taskRunner()->cancel();
+#endif
         for (auto *workflow : findChildren<WorkflowWidget *>()) workflow->transport()->stop();
         if (ModelCommandHost::isBusy())
         {
@@ -912,8 +1111,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
             event->ignore();
             return;
         }
-        // Accept event -> close window.
+        // A floating dock may remain a visible top-level window after this
+        // native main window closes. The confirmed application Quit must end
+        // the event loop, just as the drained-job branch does above.
         event->accept();
+        QCoreApplication::quit();
     }
     else
     {

@@ -148,8 +148,11 @@ private slots:
         const QSet<QString> names = functionNames(requested.first().at(2).toJsonArray());
         for (const QString &forbidden : {QStringLiteral("document_propose"), QStringLiteral("workflow_propose"),
              QStringLiteral("extension_propose"), QStringLiteral("native_result_open"),
-             QStringLiteral("native_result_display"), QStringLiteral("task_plan_propose"), QStringLiteral("task_plan_query")})
+             QStringLiteral("native_result_display"), QStringLiteral("task_plan_propose"), QStringLiteral("task_plan_query"),
+             QStringLiteral("experiment_query"), QStringLiteral("experiment_wait"), QStringLiteral("experiment_cancel")})
             QVERIFY(!names.contains(forbidden));
+        QVERIFY(names.contains(QStringLiteral("trusted_problem_inspect")));
+        QVERIFY(names.contains(QStringLiteral("trusted_problem_diagnose")));
         QVERIFY(names.contains(QStringLiteral("ask_user")));
 
         const QString hash(64, QLatin1Char('a'));
@@ -193,13 +196,26 @@ private slots:
         QCOMPARE(host->query(modelId), before);
         QCOMPARE(workflowReplies.size(), 0);
 
+        const QJsonArray experimentCalls{
+            providerCall(QStringLiteral("try-experiment-query"), QStringLiteral("experiment_query"),
+                {{QStringLiteral("experimentId"), QStringLiteral("foreign-experiment")}}),
+            providerCall(QStringLiteral("try-experiment-wait"), QStringLiteral("experiment_wait"),
+                {{QStringLiteral("experimentId"), QStringLiteral("foreign-experiment")}}),
+            providerCall(QStringLiteral("try-experiment-cancel"), QStringLiteral("experiment_cancel"),
+                {{QStringLiteral("experimentId"), QStringLiteral("foreign-experiment")}})};
+        runner.receiveTurn(requested.last().at(0).toString(), providerTurn(QString(), experimentCalls));
+        QTRY_COMPARE(requested.size(), 3);
+        for (const QString &callId : {QStringLiteral("try-experiment-query"), QStringLiteral("try-experiment-wait"),
+             QStringLiteral("try-experiment-cancel")})
+            QVERIFY(toolResult(requested.last().at(1).toJsonArray(), callId).contains(QStringLiteral("READ_ONLY_TOOL_DENIED")));
+
         runner.receiveTurn(requested.last().at(0).toString(), forgedOperationToolTurn(
             QStringLiteral("try-host-approval"), QStringLiteral("host.approve"),
                 {{QStringLiteral("previewId"), QStringLiteral("forged-preview")}}));
         QCOMPARE(finished.size(), 1);
         QCOMPARE(finished.last().at(0).toString(), QStringLiteral("failed"));
         runner.startTask(QStringLiteral("Try a trusted source registration."));
-        QCOMPARE(requested.size(), 3);
+        QCOMPARE(requested.size(), 4);
         runner.receiveTurn(requested.last().at(0).toString(), forgedOperationToolTurn(
             QStringLiteral("try-source-register"), QStringLiteral("model.source.register"),
                 {{QStringLiteral("sourceId"), QStringLiteral("forged-source")}}));
@@ -263,7 +279,7 @@ private slots:
         primary.authorizePending(proposalId, true);
         QCOMPARE(primaryActions.size(), 1);
         QVERIFY(!primaryActions.first().at(1).toJsonObject().value(QStringLiteral("operationId")).toString().isEmpty());
-        QCOMPARE(session->getModel(modelId).getProblemSetup().getModalSetup().getNIterations(), 25u);
+        QTRY_COMPARE_WITH_TIMEOUT(session->getModel(modelId).getProblemSetup().getModalSetup().getNIterations(), 25u, 5000);
         session->clear();
     }
 

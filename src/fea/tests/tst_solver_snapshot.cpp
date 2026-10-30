@@ -164,6 +164,7 @@ private slots:
         QString error;
         QVERIFY2(session->acceptSolverResult(sourceStamp, result, resultFileName, &error), qPrintable(error));
         QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(session->modelCommandStamp(modelID).second, sourceStamp.second + 1);
         QCOMPARE(session->getModel(modelID).getDescription(), QStringLiteral("solver result accepted"));
         QCOMPARE(events.size(), 1);
         QCOMPARE(events.last().at(3).toBool(), true);

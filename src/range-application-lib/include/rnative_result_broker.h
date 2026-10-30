@@ -4,6 +4,10 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QVector>
+#include <memory>
+
+class RModel;
 
 //! Read-only publication and query boundary for verified native FE results.
 class RNativeResultBroker
@@ -18,6 +22,36 @@ public:
         QString manifestSha256;
         QString artifactId;
         QJsonObject manifest;
+    };
+
+    //! One actual parsed MODEL from a fully revalidated native result.
+    //! Static/modal results use originKind "terminal" because their manifest
+    //! records terminal identity directly and has no frame-origin field.
+    struct VerifiedRecord
+    {
+        int recordNo = -1;
+        double timeS = 0.0;
+        QString modelSha256;
+        QString originKind;
+        std::shared_ptr<RModel> model;
+    };
+
+    //! Typed, path-free result of reading the models behind a hash-bound
+    //! manifest. Failure results never contain partially trusted records.
+    struct VerifiedModelsResult
+    {
+        bool valid = false;
+        QString code;
+        QString message;
+        QString manifestSha256;
+        QString artifactId;
+        QString jobId;
+        QString inputSnapshotSha256;
+        QString inputPackageSha256;
+        QJsonObject sourceSnapshotRef;
+        QString sourceKind;
+        QString analysisType;
+        QVector<VerifiedRecord> records;
     };
 
     //! Validate a completed native result directory and atomically publish its
@@ -37,6 +71,13 @@ public:
                              const QString &expectedSha256,
                              const QString &operation,
                              const QJsonObject &arguments);
+
+    //! Return the actual terminal MODEL for static/modal manifests, or every
+    //! accepted persisted MODEL frame for transient manifests. All paths,
+    //! hashes, ancestry, times, and physical node identities are validated
+    //! before a success DTO is returned.
+    static VerifiedModelsResult readVerifiedModels(const QString &manifestPath,
+                                                   const QString &expectedManifestSha256);
 
     //! Query only complete journal frames supplied by the trusted job manager.
     //! No success manifest is published; every frame is revalidated per query.

@@ -173,11 +173,13 @@ void verifyCatalogAcrossClients(Session *session, const QJsonObject &snapshot)
     environment.insert(QStringLiteral("PYTHONNOUSERSITE"), QStringLiteral("1"));
     client.setProcessEnvironment(environment);
     const QString script = QStringLiteral(
-        "import json,sys\nfrom range_workflow import WorkflowClient\n"
+        "import json,sys\nsys.path.insert(0,sys.argv.pop(1))\nfrom range_workflow import WorkflowClient\n"
         "with WorkflowClient(sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4],python=sys.executable) as c:\n"
         " print(json.dumps({'catalog':c.project_catalog(sys.argv[5]),'snapshot':c.project_snapshot(sys.argv[5])}))\n");
     client.start(QStringLiteral(RANGE_WORKFLOW_DEFAULT_PYTHON),
-                 {QStringLiteral("-c"), script, session->projectWorkspace(),
+                 {QStringLiteral("-I"), QStringLiteral("-B"), QStringLiteral("-c"), script,
+                  QStringLiteral(RANGE_WORKFLOW_SOURCE_ROOT "/range-workflow/python"),
+                  session->projectWorkspace(),
                   QStringLiteral(RANGE_PROJECT_TEST_SOLVER),
                   QStringLiteral(RANGE_PROJECT_TEST_NATIVE),
                   QStringLiteral(RANGE_WORKFLOW_SOURCE_ROOT "/fea-solver/examples/stage9"), persistentId});

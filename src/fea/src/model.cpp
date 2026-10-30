@@ -39,6 +39,23 @@ const double Model::SliverElementEdgeRatio = 30.0;
 namespace
 {
 
+bool normalizeLegacyColorScalePath(QString &valueRangeName)
+{
+    const QString legacyPrefix = QStringLiteral(":/pixmaps/colorscale/");
+    if (!valueRangeName.startsWith(legacyPrefix)) return false;
+
+    QString normalizedName = valueRangeName;
+    normalizedName.replace(0, legacyPrefix.size(), QStringLiteral(":/icons/colorscale/"));
+    if (!ColorScale::validate(normalizedName))
+    {
+        normalizedName.append(QStringLiteral(".png"));
+        if (!ColorScale::validate(normalizedName)) return false;
+    }
+
+    valueRangeName = normalizedName;
+    return true;
+}
+
 static_assert(noexcept(std::declval<QStack<Model> &>().swap(std::declval<QStack<Model> &>())),
               "Atomic binding publication requires noexcept GUI history swaps.");
 
@@ -109,6 +126,7 @@ void Model::_init(const Model *pModel)
         this->actionDescription = pModel->actionDescription;
         this->staticBindingHistoryDelta = pModel->staticBindingHistoryDelta;
         this->staticBindingHistoryId = pModel->staticBindingHistoryId;
+        this->piezoExperimentHistory = pModel->piezoExperimentHistory;
     }
     else
     {
@@ -120,6 +138,21 @@ void Model::_init(const Model *pModel)
 void Model::invalidateConsolidationCache(int cacheMask)
 {
     this->validConsolidationCacheMask &= ~cacheMask;
+}
+
+void Model::swapPiezoExperimentCaches(Model &emptyCaches) noexcept
+{
+    static_assert(noexcept(edgeNodes.swap(emptyCaches.edgeNodes)));
+    static_assert(noexcept(edgeElements.swap(emptyCaches.edgeElements)));
+    static_assert(noexcept(holeElements.swap(emptyCaches.holeElements)));
+    static_assert(noexcept(sliverElements.swap(emptyCaches.sliverElements)));
+    static_assert(noexcept(intersectedElements.swap(emptyCaches.intersectedElements)));
+    edgeNodes.swap(emptyCaches.edgeNodes);
+    edgeElements.swap(emptyCaches.edgeElements);
+    holeElements.swap(emptyCaches.holeElements);
+    sliverElements.swap(emptyCaches.sliverElements);
+    intersectedElements.swap(emptyCaches.intersectedElements);
+    validConsolidationCacheMask = ConsolidateNone;
 }
 
 Model::Model()
@@ -3243,12 +3276,19 @@ void Model::update(const RModel &rModel)
         consolidateActionMask |= Model::ConsolidateSliverElements | Model::ConsolidateIntersectedElements;
     }
     this->consolidate(consolidateActionMask);
-    // Fix missing color scales in variable data.
+    // Fill missing color scales and migrate the previous embedded-resource prefix.
     for (uint i=0;i<this->getNVariables();i++)
     {
-        if (this->getVariable(i).getVariableData().getValueRangeName().isEmpty())
+        RVariableData &variableData = this->getVariable(i).getVariableData();
+        QString valueRangeName = variableData.getValueRangeName();
+        if (valueRangeName.isEmpty())
         {
-            this->getVariable(i).getVariableData().setValueRangeName(ColorScale::getDefaultColorScale());
+            variableData.setValueRangeName(ColorScale::getDefaultColorScale());
+            this->nativeReadNormalization = true;
+        }
+        else if (normalizeLegacyColorScalePath(valueRangeName))
+        {
+            variableData.setValueRangeName(valueRangeName);
             this->nativeReadNormalization = true;
         }
     }
@@ -3260,6 +3300,17 @@ void Model::update(const RModel &rModel)
 void Model::read(const QString &fileName)
 {
     RModel::read(fileName);
+    this->finishRead(fileName);
+}
+
+void Model::readFromVerifiedFile(const QString &fileName, QFile &verifiedFile)
+{
+    RModel::readFromVerifiedFile(fileName, verifiedFile);
+    this->finishRead(fileName);
+}
+
+void Model::finishRead(const QString &fileName)
+{
     this->nativeReadNormalization = false;
     const double acceptedMinEdgeLength = this->getProblemSetup().getMeshSetup().getMinEdgeLength();
     const double acceptedMaxEdgeLength = this->getProblemSetup().getMeshSetup().getMaxEdgeLength();
@@ -3286,12 +3337,19 @@ void Model::read(const QString &fileName)
         consolidateActionMask |= Model::ConsolidateSliverElements | Model::ConsolidateIntersectedElements;
     }
     this->consolidate(consolidateActionMask);
-    // Fix missing color scales in variable data.
+    // Fill missing color scales and migrate the previous embedded-resource prefix.
     for (uint i=0;i<this->getNVariables();i++)
     {
-        if (this->getVariable(i).getVariableData().getValueRangeName().isEmpty())
+        RVariableData &variableData = this->getVariable(i).getVariableData();
+        QString valueRangeName = variableData.getValueRangeName();
+        if (valueRangeName.isEmpty())
         {
-            this->getVariable(i).getVariableData().setValueRangeName(ColorScale::getDefaultColorScale());
+            variableData.setValueRangeName(ColorScale::getDefaultColorScale());
+            this->nativeReadNormalization = true;
+        }
+        else if (normalizeLegacyColorScalePath(valueRangeName))
+        {
+            variableData.setValueRangeName(valueRangeName);
             this->nativeReadNormalization = true;
         }
     }
@@ -3642,6 +3700,16 @@ void Model::undo(uint revision)
     }
     for (uint i = 0; i <= revision; ++i)
     {
+        if (this->undoStack[this->undoStack.size() - 1 - i].piezoExperimentHistory) {
+            QString error, fingerprint;
+            if (revision != 0)
+                throw RError(RError::Type::InvalidInput, R_ERROR_REF,
+                             "Piezo experiment history must be restored one operation at a time.");
+            if (!previewPiezoExperimentHistory(true, &fingerprint, &error)
+                || !applyPiezoExperimentHistory(true, piezoExperimentHistoryIdentity(true), fingerprint, &error))
+                throw RError(RError::Type::InvalidInput, R_ERROR_REF, error);
+            return;
+        }
         if (!this->undoStack[this->undoStack.size() - 1 - i].staticBindingHistoryDelta) continue;
         QString error;
         QString fingerprint;
@@ -3683,6 +3751,16 @@ void Model::redo(uint revision)
     }
     for (uint i = 0; i <= revision; ++i)
     {
+        if (this->redoStack[this->redoStack.size() - 1 - i].piezoExperimentHistory) {
+            QString error, fingerprint;
+            if (revision != 0)
+                throw RError(RError::Type::InvalidInput, R_ERROR_REF,
+                             "Piezo experiment history must be restored one operation at a time.");
+            if (!previewPiezoExperimentHistory(false, &fingerprint, &error)
+                || !applyPiezoExperimentHistory(false, piezoExperimentHistoryIdentity(false), fingerprint, &error))
+                throw RError(RError::Type::InvalidInput, R_ERROR_REF, error);
+            return;
+        }
         if (!this->redoStack[this->redoStack.size() - 1 - i].staticBindingHistoryDelta) continue;
         QString error;
         QString fingerprint;
@@ -3716,6 +3794,7 @@ void Model::storeCurentVersion(uint maxDepth, const QString &actionDescription)
     this->actionDescription = actionDescription;
     this->staticBindingHistoryDelta.reset();
     this->staticBindingHistoryId.clear();
+    this->piezoExperimentHistory.reset();
     this->redoStack.clear();
     if (maxDepth > 0)
     {
@@ -3755,6 +3834,7 @@ bool Model::commitStaticMeshBindingWithHistory(const RModel &candidate,
         {
             Model snapshot(*this);
             snapshot.actionDescription = description;
+            snapshot.piezoExperimentHistory.reset();
             snapshot.staticBindingHistoryDelta = delta;
             snapshot.staticBindingHistoryId = QUuid::createUuid().toString(QUuid::WithoutBraces);
             nextUndo.push(snapshot);
@@ -3772,6 +3852,116 @@ bool Model::commitStaticMeshBindingWithHistory(const RModel &candidate,
     catch (const RError &failure) { return fail(failure.getMessage()); }
     catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
     catch (...) { return fail(QStringLiteral("Static binding history preparation failed before publication.")); }
+}
+
+bool Model::commitPiezoExperimentWithHistory(const RModel &candidate,
+    const QString &beforeFullFingerprint, const QString &afterFullFingerprint,
+    uint maxDepth, const QString &description, QString *error,
+    const std::function<bool(const RModel &)> &validatePrepared)
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    try {
+        if (beforeFullFingerprint.isEmpty() || afterFullFingerprint.isEmpty()
+            || RModelCommandService::stateFingerprint(*this) != beforeFullFingerprint
+            || RModelCommandService::stateFingerprint(candidate) != afterFullFingerprint
+            || !(candidate.getProblemSetup().getStructuralPiezoLayeredSetup().enabled
+                 || candidate.getProblemSetup().getStructuralPiezoAxialSetup().enabled))
+            return fail(QStringLiteral("Piezo experiment no longer matches its approved complete source and candidate."));
+        QStack<Model> nextUndo = undoStack;
+        QStack<Model> nextRedo;
+        if (maxDepth) {
+            Model snapshot(*this);
+            snapshot.actionDescription = description;
+            snapshot.staticBindingHistoryDelta.reset(); snapshot.staticBindingHistoryId.clear();
+            snapshot.piezoExperimentHistory = PiezoExperimentHistory{beforeFullFingerprint, afterFullFingerprint,
+                QUuid::createUuid().toString(QUuid::WithoutBraces)};
+            nextUndo.push(snapshot);
+            while (nextUndo.size() > int(maxDepth)) nextUndo.pop_front();
+        } else nextUndo.clear();
+        Model emptyCaches;
+        if (!applyPiezoExperimentCandidate(candidate, [&](const RModel &prepared) {
+                return RModelCommandService::stateFingerprint(prepared) == afterFullFingerprint
+                    && (!validatePrepared || validatePrepared(prepared));
+            }, error)) return false;
+        undoStack.swap(nextUndo); redoStack.swap(nextRedo);
+        swapPiezoExperimentCaches(emptyCaches);
+        return true;
+    }
+    catch (const RError &failure) { return fail(failure.getMessage()); }
+    catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
+    catch (...) { return fail(QStringLiteral("Piezo experiment history preparation failed before publication.")); }
+}
+
+bool Model::hasPiezoExperimentHistory(bool undo) const
+{
+    const auto &stack = undo ? undoStack : redoStack;
+    return !stack.empty() && stack.top().piezoExperimentHistory.has_value();
+}
+
+QString Model::piezoExperimentHistoryIdentity(bool undo) const
+{
+    const auto &stack = undo ? undoStack : redoStack;
+    return hasPiezoExperimentHistory(undo) ? stack.top().piezoExperimentHistory->identity : QString();
+}
+
+bool Model::previewPiezoExperimentHistory(bool undo, QString *candidateFingerprint, QString *error) const
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    try {
+        if (!hasPiezoExperimentHistory(undo))
+            return fail(QStringLiteral("No typed piezo experiment history entry is available."));
+        const auto &target = (undo ? undoStack : redoStack).top();
+        const auto &history = *target.piezoExperimentHistory;
+        const QString expected = undo ? history.beforeFingerprint : history.afterFingerprint;
+        const QString source = undo ? history.afterFingerprint : history.beforeFingerprint;
+        if (expected.isEmpty() || source.isEmpty() || RModelCommandService::stateFingerprint(*this) != source
+            || RModelCommandService::stateFingerprint(target) != expected)
+            return fail(QStringLiteral("Piezo experiment history does not match its captured complete source and target."));
+        RModel staged(*this);
+        if (!staged.applyPiezoExperimentCandidate(target, [&](const RModel &prepared) {
+                return RModelCommandService::stateFingerprint(prepared) == expected;
+            }, error)) return false;
+        if (candidateFingerprint) *candidateFingerprint = expected;
+        return true;
+    }
+    catch (const RError &failure) { return fail(failure.getMessage()); }
+    catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
+    catch (...) { return fail(QStringLiteral("Piezo experiment history preview failed without changing the model.")); }
+}
+
+bool Model::applyPiezoExperimentHistory(bool undo, const QString &expectedIdentity,
+    const QString &expectedFingerprint, QString *error,
+    const std::function<bool(const RModel &)> &validatePrepared)
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    try {
+        if (expectedIdentity.isEmpty() || expectedFingerprint.isEmpty()
+            || piezoExperimentHistoryIdentity(undo) != expectedIdentity)
+            return fail(QStringLiteral("The approved piezo experiment history item is no longer current."));
+        QString preview;
+        if (!previewPiezoExperimentHistory(undo, &preview, error)) return false;
+        if (preview != expectedFingerprint) return fail(QStringLiteral("The approved piezo experiment history hash changed."));
+        const auto &target = (undo ? undoStack : redoStack).top();
+        QStack<Model> nextUndo = undoStack;
+        QStack<Model> nextRedo = redoStack;
+        Model snapshot(*this);
+        snapshot.actionDescription = target.actionDescription;
+        snapshot.staticBindingHistoryDelta.reset(); snapshot.staticBindingHistoryId.clear();
+        snapshot.piezoExperimentHistory = target.piezoExperimentHistory;
+        if (undo) { nextUndo.pop(); nextRedo.push(snapshot); }
+        else { nextRedo.pop(); nextUndo.push(snapshot); }
+        Model emptyCaches;
+        if (!applyPiezoExperimentCandidate(target, [&](const RModel &prepared) {
+                return RModelCommandService::stateFingerprint(prepared) == expectedFingerprint
+                    && (!validatePrepared || validatePrepared(prepared));
+            }, error)) return false;
+        undoStack.swap(nextUndo); redoStack.swap(nextRedo);
+        swapPiezoExperimentCaches(emptyCaches);
+        return true;
+    }
+    catch (const RError &failure) { return fail(failure.getMessage()); }
+    catch (const std::exception &failure) { return fail(QString::fromUtf8(failure.what())); }
+    catch (...) { return fail(QStringLiteral("Piezo experiment history preparation failed before publication.")); }
 }
 
 bool Model::hasStaticMeshBindingHistory(bool undo) const
@@ -3834,6 +4024,7 @@ bool Model::applyStaticMeshBindingHistory(bool undo, const QString &expectedIden
         QStack<Model> nextRedo = redoStack;
         Model snapshot(*this);
         snapshot.actionDescription = target.actionDescription;
+        snapshot.piezoExperimentHistory.reset();
         snapshot.staticBindingHistoryDelta = delta;
         snapshot.staticBindingHistoryId = target.staticBindingHistoryId;
         if (undo) { nextUndo.pop(); nextRedo.push(snapshot); }

@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QVector>
+#include <memory>
 
 #include <rgeometry_candidate_service.h>
 #include <rml_boundary_condition.h>
@@ -50,7 +51,14 @@ public:
             QString afterBindingSha256;
             QJsonObject report;
         };
-        enum class Kind { None, Modal, StructuralDynamics, Material, Boundary, Geometry, MeshRebind };
+        enum class Kind { None, Modal, StructuralDynamics, Material, Boundary, Geometry, MeshRebind, PiezoExperiment };
+        struct PiezoExperiment
+        {
+            std::shared_ptr<const RModel> before;
+            std::shared_ptr<const RModel> after;
+            QString beforeStateSha256, afterStateSha256;
+            QJsonObject report, units, invalidation;
+        } piezoExperiment;
         Kind kind = Kind::None;
         MeshRebind meshRebind;
         RGeometryCandidateService::GeometryDelta geometry;

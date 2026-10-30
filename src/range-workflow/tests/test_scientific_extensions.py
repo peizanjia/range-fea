@@ -10,6 +10,7 @@ from unittest import mock
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow.service import WorkflowError, WorkflowService
 from range_workflow import scientific_extensions as scientific
 from range_workflow import scientific_contract as contract

@@ -5,6 +5,9 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QSpinBox>
+#include <QFile>
+#include <QFileInfo>
+#include <QTimer>
 
 #include <rbl_job_manager.h>
 #include <rbl_progress.h>
@@ -16,9 +19,12 @@
 #include "application.h"
 #include "video_settings_dialog.h"
 #include "video_encoder.h"
+#include "gl_widget.h"
 
 ModelRecordsSelector::ModelRecordsSelector(QWidget *parent)
     : QWidget(parent)
+    , playbackGeneration(0)
+    , pendingRecordUpdates(0)
     , markNextIndicator(false)
     , recordIndicator(false)
 {
@@ -202,32 +208,120 @@ void ModelRecordsSelector::onRecordMarked(uint modelID, const QString &recordFil
     RLogger::info("Selected record: \'%s\'\n", recordFileName.toUtf8().constData());
 
     RJob *updateJob = new ModelIO(MODEL_IO_UPDATE, recordFileName, &Application::instance()->getSession()->getModel(modelID));
-    this->updateModelID = modelID;
+    const quint64 generation = this->playbackGeneration;
+    ++this->pendingRecordUpdates;
 
     QObject::connect(updateJob,
                      &RJob::finished,
                      this,
-                     &ModelRecordsSelector::onUpdateJobFinished);
+                     [this, modelID, generation]() { this->onUpdateJobFinished(modelID, generation); });
+    QObject::connect(updateJob, &RJob::failed, this, [this, generation]() {
+        if (generation == this->playbackGeneration)
+            this->stopPlayback(tr("The selected result record could not be loaded."));
+    });
 
     RJobManager::getInstance().submit(updateJob);
 }
 
 void ModelRecordsSelector::onRecordFinished()
 {
-    QTimer::singleShot(this->recordIndicator?0:1000, this, SLOT(loadNextRecord()));
+    const quint64 generation = this->playbackGeneration;
+    QTimer::singleShot(this->recordIndicator ? 0 : 1000, this, [this, generation]() {
+        if (generation == this->playbackGeneration && this->markNextIndicator)
+            this->loadNextRecord();
+    });
 }
 
-void ModelRecordsSelector::onUpdateJobFinished()
+void ModelRecordsSelector::finishRecordUpdate(quint64 generation)
 {
-    if (this->recordIndicator)
-    {
-        // Take screen-shot
-        Application::instance()->getSession()->setTakeScreenShot(this->updateModelID,Application::instance()->getSession()->getModel(this->updateModelID).buildScreenShotFileName(),false);
-    }
-    if (this->markNextIndicator)
-    {
+    if (generation != this->playbackGeneration || this->pendingRecordUpdates == 0)
+        return;
+    --this->pendingRecordUpdates;
+    if (this->pendingRecordUpdates == 0 && this->markNextIndicator)
         emit this->recordFinished();
+}
+
+void ModelRecordsSelector::stopPlayback(const QString &error)
+{
+    if (!error.isEmpty())
+        RLogger::error("Playback/recording stopped: %s\n", error.toUtf8().constData());
+    ++this->playbackGeneration;
+    this->pendingRecordUpdates = 0;
+    this->markNextIndicator = false;
+    this->recordIndicator = false;
+    this->tree->setEnabled(true);
+    this->playAction->setIcon(QIcon(":/icons/media/pixmaps/range-play_play.svg"));
+    this->playAction->setText("Play");
+    this->recordAction->setEnabled(true);
+    Application::instance()->getMainWindow()->progressAutoHideEnable();
+}
+
+void ModelRecordsSelector::onUpdateJobFinished(uint modelID, quint64 generation)
+{
+    if (generation != this->playbackGeneration)
+        return;
+    if (!this->recordIndicator)
+    {
+        this->finishRecordUpdate(generation);
+        return;
     }
+
+    auto *session = Application::instance()->getSession();
+    GLWidget *view = nullptr;
+    for (auto *candidate : Application::instance()->getMainWindow()->findChildren<GLWidget *>())
+        if (candidate->getModelID() == modelID) { view = candidate; break; }
+    if (!view)
+    {
+        this->stopPlayback(tr("No model view is available for the loaded result record."));
+        return;
+    }
+    const auto stamp = session->modelCommandStamp(modelID);
+    const QString fileName = session->getModel(modelID).buildScreenShotFileName();
+    // A stale image must never make a failed capture look successful.
+    if (QFileInfo::exists(fileName) && !QFile::remove(fileName))
+    {
+        this->stopPlayback(tr("The previous screenshot could not be replaced: %1").arg(fileName));
+        return;
+    }
+
+    auto *capture = new QObject(this);
+    auto *timeout = new QTimer(capture);
+    timeout->setObjectName(QStringLiteral("recordFrameTimeout"));
+    timeout->setSingleShot(true);
+    const auto failed = [this, capture, generation](const QString &error) {
+        capture->deleteLater();
+        if (generation == this->playbackGeneration) this->stopPlayback(error);
+    };
+    QObject::connect(timeout, &QTimer::timeout, capture, [failed]() {
+        failed(tr("Timed out waiting for the loaded result record to be rendered; no video was encoded."));
+    });
+    QObject::connect(view, &QObject::destroyed, capture, [failed]() {
+        failed(tr("The model view closed before its result frame was captured."));
+    });
+    QObject::connect(view, &QOpenGLWidget::frameSwapped, capture,
+        [this, capture, timeout, modelID, generation, stamp, fileName]() {
+            timeout->stop();
+            capture->deleteLater();
+            if (generation != this->playbackGeneration) return;
+            auto *currentSession = Application::instance()->getSession();
+            if (currentSession->findModelByCommandIdentity(stamp.first) != modelID
+                || currentSession->modelCommandStamp(modelID) != stamp)
+            {
+                this->stopPlayback(tr("The model changed before its result frame was captured."));
+                return;
+            }
+            // This GUI-thread signal returns after the image save. Only advance
+            // once a newly rendered, newly saved image can actually be read.
+            currentSession->setTakeScreenShot(modelID, fileName, false);
+            if (QImage(fileName).isNull())
+            {
+                this->stopPlayback(tr("The result screenshot could not be saved: %1").arg(fileName));
+                return;
+            }
+            this->finishRecordUpdate(generation);
+        }, Qt::SingleShotConnection);
+    timeout->start(10000);
+    view->update();
 }
 
 void ModelRecordsSelector::updateRecordRange()
@@ -258,10 +352,12 @@ void ModelRecordsSelector::updateRecordRange()
 
 void ModelRecordsSelector::playToggle(bool jumpToFirst)
 {
-    this->markNextIndicator = !this->markNextIndicator;
-
-    if (this->markNextIndicator)
+    if (!this->markNextIndicator)
     {
+        ++this->playbackGeneration;
+        this->pendingRecordUpdates = 0;
+        this->markNextIndicator = true;
+        this->tree->setEnabled(false);
         Application::instance()->getMainWindow()->progressAutoHideDisable();
         this->playAction->setIcon(QIcon(":/icons/media/pixmaps/range-play_pause.svg"));
         this->playAction->setText("Pause");
@@ -270,10 +366,7 @@ void ModelRecordsSelector::playToggle(bool jumpToFirst)
     }
     else
     {
-        this->playAction->setIcon(QIcon(":/icons/media/pixmaps/range-play_play.svg"));
-        this->playAction->setText("Play");
-        this->recordAction->setEnabled(true);
-        Application::instance()->getMainWindow()->progressAutoHideEnable();
+        this->stopPlayback();
     }
 }
 
@@ -297,12 +390,7 @@ void ModelRecordsSelector::loadNextRecord(bool jumpToFirst)
                 RProgressFinalize();
             }
         }
-        this->markNextIndicator = false;
-        this->recordIndicator = false;
-        this->playAction->setIcon(QIcon(":/icons/media/pixmaps/range-play_play.svg"));
-        this->playAction->setText("Play");
-        this->recordAction->setEnabled(true);
-        Application::instance()->getMainWindow()->progressAutoHideEnable();
+        this->stopPlayback();
     }
     else
     {
@@ -324,6 +412,7 @@ void ModelRecordsSelector::onRecordVideo()
     VideoSettingsDialog videoSettingsDialog(this->videoSettings,numberOfRecords);
     if (videoSettingsDialog.exec() == QDialog::Accepted)
     {
+        if (this->markNextIndicator) this->stopPlayback();
         this->videoSettings = videoSettingsDialog.getVideoSettings();
         this->recordIndicator = true;
         this->recordAction->setDisabled(true);

@@ -2158,8 +2158,10 @@ bool Session::acceptSolverResult(const QPair<QString, quint64> &sourceStamp,
     }
     mutex.unlock();
     QString auditError;
-    const bool recorded = commandHost->recordExternalChange(id, "external_edit", &auditError);
+    // modelChanged advances the runtime revision. Journal the published model
+    // against that exact revision instead of advancing it a second time.
     setModelChanged(id);
+    const bool recorded = commandHost->recordExternalChangeAfterNotification(id, "external_edit", &auditError);
     emit solverResultAvailable(sourceStamp.first, sourceStamp.second, artifactPath, true);
     if (!recorded && error)
         *error = tr("The solver result was attached, but its audit record failed: %1").arg(auditError);

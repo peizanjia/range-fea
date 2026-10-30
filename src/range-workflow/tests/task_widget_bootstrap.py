@@ -3,12 +3,17 @@
 This helper configures only the baseline; all task proposals and approvals in
 the acceptance story must subsequently come from visible Qt controls.
 """
+import sys
+sys.dont_write_bytecode = True
+
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
+
+_TESTS_DIR = Path(__file__).resolve().parent
+sys.path[:0] = [str(_TESTS_DIR.parent / "python"), str(_TESTS_DIR)]
 
 from test_imported_workflow import _make_catalog
 from range_workflow.client import WorkflowClient

@@ -72,7 +72,7 @@
     {
       "id": "PC-00",
       "title": "新合同与现有原生基础整合",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [],
       "requirementIds": [
         "PC-R01",
@@ -83,20 +83,43 @@
         {
           "id": "PC-00-A01",
           "description": "完整范围和实际起点/缺口冻结，不把旧测试用于新源",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/PC-00-A01-freeze-20261020.md",
+              "sha256": "493b3332a038ca21b142e892d23c06c41c8328c88fff2393a12088a60df1d965"
+            },
+            {
+              "path": "docs/acceptance/PC-00-A01-git-status-20261020.txt",
+              "sha256": "e7ab0ad2e62765ac0151ed3ba0626d56404941b6f7799cc4ed8fce91505efdbc"
+            },
+            {
+              "path": "docs/acceptance/PC-00-A01-independent-review-20261020.md",
+              "sha256": "45b00cc29629d9b51a18b334dfb652ea1fb3bbc1ff4c8747109f35de7f4a1acc"
+            }
+          ]
         },
         {
           "id": "PC-00-A02",
           "description": "格式21及当前原生PI/完整状态真实FE CLI资格",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/PC-00-A02-A03-independent-review-20261020.md",
+              "sha256": "9a976cfbce203620baee517e442f749ce44e079902ae78dddb04aa730b525ccc"
+            }
+          ]
         },
         {
           "id": "PC-00-A03",
           "description": "独立审查/旧格式兼容与失败回滚证据",
-          "status": "pending",
-          "evidence": []
+          "status": "pass",
+          "evidence": [
+            {
+              "path": "docs/acceptance/PC-00-A02-A03-independent-review-20261020.md",
+              "sha256": "9a976cfbce203620baee517e442f749ce44e079902ae78dddb04aa730b525ccc"
+            }
+          ]
         }
       ]
     },

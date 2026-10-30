@@ -5,6 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow.task_plan import PlanError, validate_plan
 from range_workflow.task_scheduler import create_state, next_intents, reduce_event, validate_state
 from test_task_plan import candidate, catalog

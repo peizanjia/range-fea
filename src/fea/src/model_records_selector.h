@@ -19,8 +19,10 @@ class ModelRecordsSelector : public QWidget
         QAction *playAction;
         //! Record action.
         QAction *recordAction;
-        //! Active model id (while updating).
-        uint updateModelID;
+        //! Ignore completions and queued advances from an earlier playback.
+        quint64 playbackGeneration;
+        //! Loads/captures in the current record batch that have not completed.
+        uint pendingRecordUpdates;
         //! Mark next record.
         bool markNextIndicator;
         //! Record screenshot indicator.
@@ -44,6 +46,15 @@ class ModelRecordsSelector : public QWidget
         //! Create animation from screenshots.
         void createAnimation(uint modelID);
 
+        //! Complete one loaded record after its fresh screenshot is saved.
+        void finishRecordUpdate(quint64 generation);
+
+        //! Restore controls and invalidate outstanding playback callbacks.
+        void stopPlayback(const QString &error = QString());
+
+        //! Wait for the loaded model's next rendered frame before capturing it.
+        void onUpdateJobFinished(uint modelID, quint64 generation);
+
     protected slots:
 
         //! Record markeded.
@@ -51,9 +62,6 @@ class ModelRecordsSelector : public QWidget
 
         //! On record has finished.
         void onRecordFinished();
-
-        //! On update job has finished.
-        void onUpdateJobFinished();
 
         //! Update the start/end record range limits from the tree.
         void updateRecordRange();

@@ -1,0 +1,1730 @@
+{
+  "schema": "range.piezo-dependency-provenance/v1",
+  "observedAt": "2026-10-12T18:58:22.303383+08:00",
+  "status": "WORKING_TREE_AUDIT_NOT_FINAL_FREEZE",
+  "root": {
+    "head": "9f226d8a42f55029dc661eda14b63042279a5df4",
+    "branch": "feature/structural-profile",
+    "remotes": {
+      "origin": "https://github.com/peizanjia/range-fea.git",
+      "upstream": "https://github.com/Range-Software/range-fea.git"
+    },
+    "dirty": true,
+    "statusEntries": [
+      " M HANDOFF.md",
+      " M scripts/ci/required-ctest-tests.json",
+      " M src/CMakeLists.txt",
+      " M src/fea-solver/CMakeLists.txt",
+      " M src/fea-solver/examples/stage9/stage9_velocity_controller.py",
+      " M src/fea-solver/src/main_task.cpp",
+      " M src/fea-solver/src/native_accepted_checkpoint.cpp",
+      " M src/fea-solver/src/native_accepted_checkpoint.h",
+      " M src/fea-solver/src/solver_input.cpp",
+      " M src/fea-solver/src/solver_input.h",
+      " M src/fea-solver/src/solver_task.cpp",
+      " M src/fea-solver/src/solver_task.h",
+      " M src/fea-solver/tests/CMakeLists.txt",
+      " M src/fea-solver/tests/tst_native_accepted_checkpoint.cpp",
+      " M src/fea-solver/tests/tst_solver_audit_cli.cpp",
+      " M src/fea/CMakeLists.txt",
+      " M src/fea/src/main.cpp",
+      " M src/fea/src/model.cpp",
+      " M src/fea/src/model.h",
+      " M src/fea/src/model_command_host.cpp",
+      " M src/fea/src/series_plot_widget.cpp",
+      " M src/fea/src/series_plot_widget.h",
+      " M src/fea/src/solver_manager.cpp",
+      " M src/fea/src/solver_task.cpp",
+      " M src/fea/src/solver_task.h",
+      " M src/fea/src/workflow_widget.cpp",
+      " M src/fea/src/workflow_widget.h",
+      " M src/fea/tests/tst_gui_model_lifecycle.cpp",
+      " M src/range-application-lib/CMakeLists.txt",
+      " M src/range-application-lib/include/rmodel_command_service.h",
+      " M src/range-application-lib/src/rmodel_command_service.cpp",
+      " M src/range-application-lib/src/rmodel_command_session.cpp",
+      " M src/range-application-lib/src/rnative_result_broker.cpp",
+      " M src/range-application-lib/tests/tst_model_command_cli.cpp",
+      " M src/range-application-lib/tests/tst_model_command_session.cpp",
+      " M src/range-application-lib/tests/tst_native_result_broker.cpp",
+      " M src/range-gui-lib",
+      " M src/range-model-lib",
+      " M src/range-solver-lib",
+      " M src/range-workflow/CMakeLists.txt",
+      " M src/range-workflow/python/range_workflow/series_analysis.py",
+      " M src/range-workflow/python/range_workflow/series_service.py",
+      " M src/range-workflow/python/range_workflow/series_sources.py",
+      " M src/range-workflow/python/range_workflow/series_workbench.py",
+      " M src/range-workflow/tests/test_native_document_client.py",
+      " M src/range-workflow/tests/test_series_analysis.py",
+      " M src/range-workflow/tests/test_series_service.py",
+      " M src/range-workflow/tests/test_series_workbench.py",
+      "?? .agents/skills/astra-orchestrator/SKILL.md",
+      "?? .codex/agents/explorer.toml",
+      "?? .codex/agents/researcher.toml",
+      "?? .codex/agents/reviewer.toml",
+      "?? .codex/agents/tester.toml",
+      "?? .codex/agents/worker.toml",
+      "?? .codex/config.toml",
+      "?? AGENTS.md",
+      "?? docs/PIEZO_DEPENDENCY_PROVENANCE.md",
+      "?? docs/evidence/piezo_delivery_performance_contract.json",
+      "?? docs/evidence/piezo_representative_cases_spec.json",
+      "?? scripts/benchmark/pc11_gui_cancel_picker.ps1",
+      "?? scripts/benchmark/pc11_gui_close.ps1",
+      "?? scripts/benchmark/pc11_gui_native.cs",
+      "?? scripts/benchmark/pc11_gui_resize.ps1",
+      "?? scripts/benchmark/pc11_gui_terminal.py",
+      "?? scripts/benchmark/pc11_gui_terminal_tests.py",
+      "?? scripts/benchmark/pc11_gui_uia.cs",
+      "?? scripts/benchmark/pc11_gui_uia.ps1",
+      "?? scripts/benchmark/pc11_gui_verify.py",
+      "?? scripts/benchmark/pc11_gui_verify_tests.py",
+      "?? scripts/benchmark/pc11_gui_windows.ps1",
+      "?? scripts/benchmark/pc11_working_set.py",
+      "?? scripts/benchmark/test_installed_profile.py",
+      "?? scripts/benchmark/test_pc11_working_set.py",
+      "?? src/fea-solver/tests/test_stage9_runtime_startup.py",
+      "?? src/fea-solver/tests/tst_native_axial_run.cpp",
+      "?? src/fea-solver/tests/tst_native_layered_run.cpp",
+      "?? src/fea-solver/tests/tst_native_piezo_accepted_trace.cpp",
+      "?? src/fea-solver/tests/tst_piezo_native_backend_bridge.cpp",
+      "?? src/fea/src/piezo_workbench_widget.cpp",
+      "?? src/fea/src/piezo_workbench_widget.h",
+      "?? src/fea/tests/tst_piezo_experiment_history.cpp",
+      "?? src/fea/tests/tst_piezo_solver_recovery.cpp",
+      "?? src/fea/tests/tst_piezo_workbench_widget.cpp",
+      "?? src/range-application-lib/include/piezo_accepted_trace.h",
+      "?? src/range-application-lib/include/piezo_axial_backend_bridge.h",
+      "?? src/range-application-lib/include/piezo_certification_batch_cache.h",
+      "?? src/range-application-lib/include/piezo_native_backend_bridge.h",
+      "?? src/range-application-lib/include/piezo_numeric_transport.h",
+      "?? src/range-application-lib/include/piezo_result_series.h",
+      "?? src/range-application-lib/include/piezo_runtime_identity.h",
+      "?? src/range-application-lib/include/piezo_spectrum.h",
+      "?? src/range-application-lib/include/rpiezo_artifact_service.h",
+      "?? src/range-application-lib/include/rpiezo_axial_experiment_service.h",
+      "?? src/range-application-lib/include/rpiezo_experiment_service.h",
+      "?? src/range-application-lib/src/piezo_accepted_trace.cpp",
+      "?? src/range-application-lib/src/piezo_axial_backend_bridge.cpp",
+      "?? src/range-application-lib/src/piezo_certification_batch_cache.cpp",
+      "?? src/range-application-lib/src/piezo_native_backend_bridge.cpp",
+      "?? src/range-application-lib/src/piezo_numeric_transport.cpp",
+      "?? src/range-application-lib/src/piezo_result_series.cpp",
+      "?? src/range-application-lib/src/piezo_runtime_identity.cpp",
+      "?? src/range-application-lib/src/piezo_spectrum.cpp",
+      "?? src/range-application-lib/src/rpiezo_artifact_service.cpp",
+      "?? src/range-application-lib/src/rpiezo_axial_experiment_service.cpp",
+      "?? src/range-application-lib/src/rpiezo_experiment_service.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_accepted_trace.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_artifact_service.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_axial_backend_bridge.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_axial_experiment_service.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_certification_batch_cache.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_delivery_examples.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_experiment_commands.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_experiment_service.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_local_directions.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_numeric_transport.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_result_series.cpp",
+      "?? src/range-application-lib/tests/tst_piezo_spectrum.cpp",
+      "?? src/range-workflow/python/range_workflow/piezo_control_design.py",
+      "?? src/range-workflow/python/range_workflow/piezo_design.py",
+      "?? src/range-workflow/python/range_workflow/piezo_excitation.py",
+      "?? src/range-workflow/python/range_workflow/piezo_external_time.py",
+      "?? src/range-workflow/python/range_workflow/piezo_native_backend.py",
+      "?? src/range-workflow/tests/test_piezo_control_design.py",
+      "?? src/range-workflow/tests/test_piezo_design.py",
+      "?? src/range-workflow/tests/test_piezo_excitation.py",
+      "?? src/range-workflow/tests/test_piezo_external_time.py",
+      "?? src/range-workflow/tests/test_piezo_native_backend.py"
+    ],
+    "declaredVersion": "1.3.0; source label, not final PC11 artifact identity",
+    "config": {
+      "path": "src/Config.cmake",
+      "sha256": "92dd3197e59a2bc3b2eaec601906e4fd2e490052561c83a13e16c33dfaec2863",
+      "scope": "observed bytes; not final freeze"
+    }
+  },
+  "submodules": [
+    {
+      "name": "range-base-lib",
+      "head": "53dee04a1ffe4b4487535ed554a371f5a68bd10d",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-base-lib",
+        "upstream": "https://github.com/Range-Software/range-base-lib.git"
+      },
+      "dirty": false,
+      "statusEntries": [],
+      "license": {
+        "path": "src/range-base-lib/LICENSE",
+        "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "scope": "observed bytes; not final freeze"
+      },
+      "finding": "local GPL Version 3 text; bundled files may differ"
+    },
+    {
+      "name": "range-model-lib",
+      "head": "30dba899a522866886f2e042e611620abda649d6",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-model-lib",
+        "upstream": "https://github.com/Range-Software/range-model-lib.git"
+      },
+      "dirty": true,
+      "statusEntries": [
+        " M CMakeLists.txt",
+        " M include/rml_acoustic_setup.h",
+        " M include/rml_file_io.h",
+        " M include/rml_mesh_setup.h",
+        " M include/rml_modal_setup.h",
+        " M include/rml_model.h",
+        " M include/rml_problem_setup.h",
+        " M include/rml_problem_task_item.h",
+        " M include/rml_radiation_setup.h",
+        " M include/rml_structural_native_control.h",
+        " M include/rml_time_solver.h",
+        " M src/rml_file_io.cpp",
+        " M src/rml_model.cpp",
+        " M src/rml_problem_setup.cpp",
+        " M src/rml_structural_native_control.cpp",
+        " M src/rml_structural_truss_dynamics_setup.cpp",
+        " M tests/CMakeLists.txt",
+        " M tests/tst_model_physical_ids.cpp",
+        " M tests/tst_problem_setup.cpp",
+        " M tests/tst_structural_cable_setup.cpp",
+        " M tests/tst_structural_piezo_setup.cpp",
+        "?? include/rml_structural_piezo_axial_setup.h",
+        "?? include/rml_structural_piezo_layered_setup.h",
+        "?? include/rml_structural_piezo_readout_setup.h",
+        "?? src/rml_structural_piezo_axial_setup.cpp",
+        "?? src/rml_structural_piezo_layered_setup.cpp",
+        "?? src/rml_structural_piezo_readout_setup.cpp",
+        "?? tests/tst_piezo_experiment_publication.cpp",
+        "?? tests/tst_structural_piezo_axial_setup.cpp",
+        "?? tests/tst_structural_piezo_layered_setup.cpp",
+        "?? tests/tst_structural_piezo_readout_setup.cpp"
+      ],
+      "license": {
+        "path": "src/range-model-lib/LICENSE",
+        "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "scope": "observed bytes; not final freeze"
+      },
+      "finding": "local GPL Version 3 text; bundled files may differ"
+    },
+    {
+      "name": "range-solver-lib",
+      "head": "60c05bb5e3d1aac08ab4231e3522db3eaabcf14a",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-solver-lib",
+        "upstream": "https://github.com/Range-Software/range-solver-lib.git"
+      },
+      "dirty": true,
+      "statusEntries": [
+        " M CMakeLists.txt",
+        " M include/rsolver.h",
+        " M include/rstructural_dynamics_integrator.h",
+        " M include/rstructural_truss_dynamics.h",
+        " M include/rstructural_truss_dynamics_model_adapter.h",
+        " M src/rsolver.cpp",
+        " M src/rsolverstress.cpp",
+        " M src/rstructural_dynamics_integrator.cpp",
+        " M src/rstructural_native_control.cpp",
+        " M src/rstructural_truss_dynamics.cpp",
+        " M src/rstructural_truss_dynamics_model_adapter.cpp",
+        " M tests/CMakeLists.txt",
+        " M tests/tst_structural_dynamics_integrator.cpp",
+        "?? include/rstructural_piezo_axial_native_run.h",
+        "?? include/rstructural_piezo_axial_operators.h",
+        "?? include/rstructural_piezo_axial_restart_codec.h",
+        "?? include/rstructural_piezo_axial_run_state.h",
+        "?? include/rstructural_piezo_electrical_system.h",
+        "?? include/rstructural_piezo_element_operators.h",
+        "?? include/rstructural_piezo_layered_dynamics.h",
+        "?? include/rstructural_piezo_layered_mesh.h",
+        "?? include/rstructural_piezo_layered_model_adapter.h",
+        "?? include/rstructural_piezo_layered_native_run.h",
+        "?? include/rstructural_piezo_layered_restart_codec.h",
+        "?? include/rstructural_piezo_layered_run_state.h",
+        "?? include/rstructural_piezo_native_readout.h",
+        "?? src/rstructural_piezo_axial_native_run.cpp",
+        "?? src/rstructural_piezo_axial_operators.cpp",
+        "?? src/rstructural_piezo_axial_restart_codec.cpp",
+        "?? src/rstructural_piezo_beam_layer_kernel.cpp",
+        "?? src/rstructural_piezo_electrical_system.cpp",
+        "?? src/rstructural_piezo_element_operators.cpp",
+        "?? src/rstructural_piezo_layered_dynamics.cpp",
+        "?? src/rstructural_piezo_layered_mesh.cpp",
+        "?? src/rstructural_piezo_layered_model_adapter.cpp",
+        "?? src/rstructural_piezo_layered_native_run.cpp",
+        "?? src/rstructural_piezo_layered_restart_codec.cpp",
+        "?? src/rstructural_piezo_native_readout.cpp",
+        "?? src/rstructural_piezo_plate_mitc4_kernel.cpp",
+        "?? tests/tst_structural_piezo_axial_native_run.cpp",
+        "?? tests/tst_structural_piezo_axial_operators.cpp",
+        "?? tests/tst_structural_piezo_beam_layer_kernel.cpp",
+        "?? tests/tst_structural_piezo_electrical_system.cpp",
+        "?? tests/tst_structural_piezo_layered_dynamics.cpp",
+        "?? tests/tst_structural_piezo_layered_mesh.cpp",
+        "?? tests/tst_structural_piezo_layered_model_adapter.cpp",
+        "?? tests/tst_structural_piezo_layered_native_run.cpp",
+        "?? tests/tst_structural_piezo_material_ops.cpp",
+        "?? tests/tst_structural_piezo_native_readout.cpp",
+        "?? tests/tst_structural_piezo_plate_mitc4_kernel.cpp",
+        "?? tests/tst_structural_truss_damped_forcing.cpp"
+      ],
+      "license": {
+        "path": "src/range-solver-lib/LICENSE",
+        "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "scope": "observed bytes; not final freeze"
+      },
+      "finding": "local GPL Version 3 text; bundled files may differ"
+    },
+    {
+      "name": "range-gui-lib",
+      "head": "a5be2bc36037265ac930438b10aa22c63f0dca8e",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-gui-lib",
+        "upstream": "https://github.com/Range-Software/range-gui-lib.git"
+      },
+      "dirty": true,
+      "statusEntries": [
+        " M src/rgl_application_settings.cpp"
+      ],
+      "license": {
+        "path": "src/range-gui-lib/LICENSE",
+        "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "scope": "observed bytes; not final freeze"
+      },
+      "finding": "local GPL Version 3 text; bundled files may differ"
+    },
+    {
+      "name": "range-cloud-lib",
+      "head": "48d34a832582a14be6e6bce042c5f64cf6189771",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-cloud-lib",
+        "upstream": "https://github.com/Range-Software/range-cloud-lib.git"
+      },
+      "dirty": false,
+      "statusEntries": [],
+      "license": {
+        "path": "src/range-cloud-lib/LICENSE",
+        "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "scope": "observed bytes; not final freeze"
+      },
+      "finding": "local GPL Version 3 text; bundled files may differ"
+    },
+    {
+      "name": "range-build-tools",
+      "head": "ec4cdb2bba0a3cd7424ac85027f8c300f18d369f",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-build-tools",
+        "upstream": "https://github.com/Range-Software/range-build-tools.git"
+      },
+      "dirty": false,
+      "statusEntries": [],
+      "license": {
+        "path": "src/range-build-tools/LICENSE",
+        "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809",
+        "scope": "observed bytes; not final freeze"
+      },
+      "finding": "local GPL Version 3 text; bundled files may differ"
+    },
+    {
+      "name": "range-ai-lib",
+      "head": "a28bfecbe094d4e15cb5ccfceeb55bb25d21be05",
+      "remotes": {
+        "origin": "https://github.com/peizanjia/range-ai-lib",
+        "upstream": "https://github.com/Range-Software/range-ai-lib.git"
+      },
+      "dirty": false,
+      "statusEntries": [],
+      "license": null,
+      "finding": "independent license declaration missing; permission scope pending"
+    }
+  ],
+  "licenseEvidence": [
+    {
+      "name": "Range",
+      "path": "LICENSE",
+      "sha256": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b",
+      "scope": "observed bytes; not final freeze",
+      "finding": "GPL Version 3 text"
+    },
+    {
+      "name": "Qt",
+      "path": "D:/ProgramData/Qt/Licenses/LICENSE",
+      "sha256": "2004ee3ef8282a85f7dbd035dfacf63cf03d569537bc08655ffeb140ea3671c5",
+      "scope": "observed bytes; not final freeze",
+      "finding": "general LGPLv3/GPLv3/commercial and third-party discussion; final component election pending"
+    },
+    {
+      "name": "CPython",
+      "path": "build/private-python-v2/LICENSE.txt",
+      "sha256": "62bec384df47b0328307db41455ff6ea2559e5546b394ac69148561b21703120",
+      "scope": "observed bytes; not final freeze",
+      "finding": "complete PSF/historical/bundled notices retained"
+    },
+    {
+      "name": "NumPy",
+      "path": "build/private-python-v2/Lib/site-packages/numpy-2.2.6.dist-info/LICENSE.txt",
+      "sha256": "14256cc3a2c9d32ac284da96b937feb44f72dd90bee2317ac3020166846ad99d",
+      "scope": "observed bytes; not final freeze",
+      "finding": "main BSD three-clause text plus full bundled notices"
+    },
+    {
+      "name": "SciPy",
+      "path": "build/private-python-v2/Lib/site-packages/scipy-1.15.3.dist-info/LICENSE.txt",
+      "sha256": "f250e7cef15fbd99e8680093d112d7aa7579535b99995268df6c89ac926eb607",
+      "scope": "observed bytes; not final freeze",
+      "finding": "main BSD three-clause text plus full bundled notices"
+    },
+    {
+      "name": "TetGen",
+      "path": "src/TetGen/LICENSE",
+      "sha256": "bb48fb2a9b22a03d5f1ca6ede21857bcfa8aad28b81dfdd67e32440e23926893",
+      "scope": "observed bytes; not final freeze",
+      "finding": "AGPL-3.0-or-later / commercial dual license"
+    },
+    {
+      "name": "Gmsh",
+      "path": "build/deps/gmsh-4.15.2-Windows64-sdk/share/doc/gmsh/LICENSE.txt",
+      "sha256": "7fefa67a6c607068a33ba27e0a18aaf8596aa051f7cf2abcca094a3a484c5870",
+      "scope": "observed bytes; not final freeze",
+      "finding": "GPL-2.0-or-later with enumerated exception"
+    }
+  ],
+  "privateRuntime": {
+    "runtimeId": "cpython-3.13.5-numpy-2.2.6-scipy-1.15.3-win-amd64",
+    "platform": "win_amd64",
+    "artifacts": [
+      {
+        "name": "cpython",
+        "version": "3.13.5",
+        "filename": "python-3.13.5-embed-amd64.zip",
+        "url": "https://www.python.org/ftp/python/3.13.5/python-3.13.5-embed-amd64.zip",
+        "sha256": "7d2650fd9d1b9d002d4a315d5f354247fd6a44f30517c7ef577b08f57a0fb6d9"
+      },
+      {
+        "name": "numpy",
+        "version": "2.2.6",
+        "filename": "numpy-2.2.6-cp313-cp313-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/cb/3b/d58c12eafcb298d4e6d0d40216866ab15f59e55d148a5658bb3132311fcf/numpy-2.2.6-cp313-cp313-win_amd64.whl",
+        "sha256": "b0544343a702fa80c95ad5d3d608ea3599dd54d4632df855e4c8d24eb6ecfa1c"
+      },
+      {
+        "name": "scipy",
+        "version": "1.15.3",
+        "filename": "scipy-1.15.3-cp313-cp313-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/87/2e/892ad2862ba54f084ffe8cc4a22667eaf9c2bcec6d2bff1d15713c6c0703/scipy-1.15.3-cp313-cp313-win_amd64.whl",
+        "sha256": "b90ab29d0c37ec9bf55424c064312930ca5f4bde15ee8619ee44e69319aab163"
+      }
+    ],
+    "lock": {
+      "path": "build/private-python-v2/runtime-lock.json",
+      "sha256": "2e71d9c57a8bb986f65fe25ef328d3011a3c6be9ef791629fe2daf424dca04e8",
+      "scope": "observed bytes; not final freeze"
+    },
+    "packagingLock": {
+      "path": "scripts/packaging/runtime-win-amd64.lock.json",
+      "sha256": "2e71d9c57a8bb986f65fe25ef328d3011a3c6be9ef791629fe2daf424dca04e8",
+      "scope": "observed bytes; not final freeze"
+    },
+    "fileManifest": {
+      "path": "build/private-python-v2/runtime-files.json",
+      "sha256": "1379dd1eaa4e749f50df684789f01e8d76f55a59f00682c14a0970a802b655be",
+      "scope": "observed bytes; not final freeze"
+    },
+    "cleanlinessAccepted": false,
+    "cleanlinessEvidence": "build/audit-20261012/piezo-delivery/scientific-runtime-bytecode-20261012-184735-diagnosis.md",
+    "futureLaunchRequirement": "explicit -B; no weakening of reject_bytecode gate",
+    "auditedBytecodeCleanup": {
+      "receipt": {
+        "path": "build/audit-20261012/piezo-delivery/runtime-bytecode-cleanup-receipt.json",
+        "sha256": "e24b0f76be711862533f18988d0b5e255b7971fa244585409a4c7d3f3301ef9b",
+        "scope": "observed bytes; not final freeze"
+      },
+      "completedAt": "2026-10-12T18:58:45.4776354+08:00",
+      "auditedManifestSha256": "d3903b5ed07eafef95f73d99c166f7c9713aa17b790a834fac31d7d4c73485fc",
+      "removedFiles": 388,
+      "removedEmptyDirectories": 49,
+      "remainingBytecodeEntries": 0,
+      "scope": "cleanup receipt at the recorded instant; no continuous cleanliness claim"
+    },
+    "lastPythonValidation": {
+      "log": {
+        "path": "build/audit-20261012/piezo-delivery/python-piezo-final-v9.log",
+        "sha256": "5372bbcd7f62fb447e80c3413b563b4b303e490a0fe065d5ad9e71b32cfd5621",
+        "scope": "observed bytes; not final freeze"
+      },
+      "tests": 150,
+      "passed": 150,
+      "durationSeconds": 112.047,
+      "status": "PASSED_SCOPED_PYTHON_SUITE",
+      "qualification": "final installed runtime/scientific matrix/full regression acceptance remains pending"
+    }
+  },
+  "qt": {
+    "version": "6.11.1",
+    "versionEvidence": {
+      "path": "D:/ProgramData/Qt/6.11.1/msvc2022_64/lib/cmake/Qt6Core/Qt6CoreConfigVersionImpl.cmake",
+      "sha256": "ddb4c3f2ee1c8d355daba786eb8ea82f01ab879caed8f5cddf1355bb46f780ae",
+      "scope": "observed bytes; not final freeze"
+    },
+    "configuredComponents": [
+      "Core",
+      "Concurrent",
+      "HttpServer",
+      "Network",
+      "Widgets",
+      "OpenGL",
+      "OpenGLWidgets",
+      "Multimedia",
+      "PrintSupport",
+      "LinguistTools",
+      "Test"
+    ],
+    "componentEvidence": {
+      "path": "src/CMakeLists.txt",
+      "sha256": "3d385ffb4d4aeb6594f131e232e9aa819deead7668a4c568c60ebc2a97ee3fd5",
+      "scope": "observed bytes; not final freeze"
+    },
+    "modulePluginNoticesAndLicenseElection": "PENDING; no commercial entitlement or blanket LGPL-only claim"
+  },
+  "numericalBackend": {
+    "nativePlant": {
+      "owner": "Range baseline and local derived C++",
+      "role": "FE assembly/plant/time integration/restart/certified history",
+      "sourcePaths": [
+        "src/range-solver-lib/src/rstructural_piezo_axial_native_run.cpp",
+        "src/range-solver-lib/src/rstructural_piezo_layered_native_run.cpp",
+        "src/range-solver-lib/src/rstructural_piezo_beam_layer_kernel.cpp",
+        "src/range-solver-lib/src/rstructural_piezo_plate_mitc4_kernel.cpp"
+      ]
+    },
+    "pythonCalls": {
+      "role": "observed source calls, not external API behavior assurance",
+      "versions": {
+        "numpy": "2.2.6",
+        "scipy": "1.15.3"
+      },
+      "operations": [
+        "generalized modes: scipy.linalg.eigh",
+        "ZOH: scipy.linalg.expm",
+        "discrete Riccati: scipy.linalg.solve_discrete_are",
+        "MPC: scipy.optimize.minimize method SLSQP; physical feasibility/KKT and nnls multiplier checks"
+      ],
+      "sourcePaths": [
+        "src/range-workflow/python/range_workflow/piezo_design.py",
+        "src/range-workflow/python/range_workflow/piezo_control_design.py",
+        "src/range-workflow/python/range_workflow/piezo_native_backend.py"
+      ]
+    },
+    "compiledLibraries": {
+      "numpyBuildDeclaredOpenBLAS": "0.3.29, 64-bit integer configuration",
+      "scipyBuildDeclaredOpenBLAS": "0.3.28, 32-bit integer configuration",
+      "configEvidence": [
+        {
+          "path": "build/private-python-v2/Lib/site-packages/numpy/__config__.py",
+          "sha256": "42e58fb0ac2538001595b66a6593efb0ca0f60a5cadf9482981c85bc9ff76caf",
+          "scope": "observed bytes; not final freeze"
+        },
+        {
+          "path": "build/private-python-v2/Lib/site-packages/scipy/__config__.py",
+          "sha256": "17e491d6915f998f8b22de66cab838f42e5254ee2eec9935e42691e8df900b75",
+          "scope": "observed bytes; not final freeze"
+        }
+      ],
+      "dllEvidence": [
+        {
+          "path": "build/private-python-v2/Lib/site-packages/numpy.libs/libscipy_openblas64_-13e2df515630b4a41f92893938845698.dll",
+          "sha256": "6547e9fb966e9773caee2755e91a8bf4d6f3a2f0eebf9646b0158f8675ea4ab5",
+          "scope": "observed bytes; not final freeze"
+        },
+        {
+          "path": "build/private-python-v2/Lib/site-packages/numpy.libs/msvcp140-263139962577ecda4cd9469ca360a746.dll",
+          "sha256": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde",
+          "scope": "observed bytes; not final freeze"
+        },
+        {
+          "path": "build/private-python-v2/Lib/site-packages/scipy.libs/libscipy_openblas-f07f5a5d207a3a47104dca54d6d0c86a.dll",
+          "sha256": "6b2103f2ae4d8547998b5d188e9801fba6cb12404ae8e4bfff319e8cc1949000",
+          "scope": "observed bytes; not final freeze"
+        }
+      ],
+      "qualification": "build declarations and actual DLL inventory, not all-operation dynamic tracing",
+      "licenseQualification": "retain complete wheel notices, including OpenBLAS/LAPACK/GCC runtime exception; sdist-only notices do not establish installed components"
+    }
+  },
+  "additionalBaseline": [
+    {
+      "name": "TetGen",
+      "version": "1.6.0",
+      "evidence": {
+        "path": "src/TetGen/tetgen.h",
+        "sha256": "179b3a11ed0d56cebc6fcb5344a15e26031fbce1a464372f5ec71d00090e85a4",
+        "scope": "observed bytes; not final freeze"
+      },
+      "licenseElection": "PENDING"
+    },
+    {
+      "name": "Gmsh",
+      "version": "4.15.2",
+      "evidence": "build/vs2026/CMakeCache.txt RANGE_GMSH_ROOT/SDK configuration",
+      "licenseElectionAndExceptionReview": "PENDING"
+    }
+  ],
+  "olderInstalledLicenseEvidence": [
+    {
+      "source": {
+        "path": "LICENSE",
+        "sha256": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b",
+        "scope": "observed bytes; not final freeze"
+      },
+      "installed": {
+        "path": "build/cw-foundation-install-20261011/doc/LICENSE.txt",
+        "sha256": "1e3858dbdef04242ae2c312a04bb12f2c7509e171df4aefe3139ee1db58f103a",
+        "scope": "observed bytes; not final freeze"
+      },
+      "bytesMatch": false,
+      "scope": "older installed foundation, not final PC11 artifact",
+      "comparisonKind": "RAW_ROOT_TEXT_VS_GENERATED_APPLICATION_HEADER; raw bytes intentionally differ",
+      "generatorTemplate": {
+        "path": "src/range-build-tools/LICENSE.txt.in",
+        "sha256": "264e79e2bd224ab2658eff1be259f923a408258867889d3979f6dfca370500d8",
+        "scope": "observed bytes; not final freeze"
+      },
+      "generatorDefinition": {
+        "path": "src/CMakeLists.txt",
+        "operation": "file(READ ../LICENSE LICENSE_TEXT); configure_file(range-build-tools/LICENSE.txt.in, @ONLY)"
+      },
+      "fullRootLicenseTextEmbedded": true
+    },
+    {
+      "source": {
+        "path": "build/private-python-v2/LICENSE.txt",
+        "sha256": "62bec384df47b0328307db41455ff6ea2559e5546b394ac69148561b21703120",
+        "scope": "observed bytes; not final freeze"
+      },
+      "installed": {
+        "path": "build/cw-foundation-install-20261011/runtime/python/LICENSE.txt",
+        "sha256": "62bec384df47b0328307db41455ff6ea2559e5546b394ac69148561b21703120",
+        "scope": "observed bytes; not final freeze"
+      },
+      "bytesMatch": true,
+      "scope": "older installed foundation, not final PC11 artifact"
+    },
+    {
+      "source": {
+        "path": "build/private-python-v2/Lib/site-packages/numpy-2.2.6.dist-info/LICENSE.txt",
+        "sha256": "14256cc3a2c9d32ac284da96b937feb44f72dd90bee2317ac3020166846ad99d",
+        "scope": "observed bytes; not final freeze"
+      },
+      "installed": {
+        "path": "build/cw-foundation-install-20261011/runtime/python/Lib/site-packages/numpy-2.2.6.dist-info/LICENSE.txt",
+        "sha256": "14256cc3a2c9d32ac284da96b937feb44f72dd90bee2317ac3020166846ad99d",
+        "scope": "observed bytes; not final freeze"
+      },
+      "bytesMatch": true,
+      "scope": "older installed foundation, not final PC11 artifact"
+    },
+    {
+      "source": {
+        "path": "build/private-python-v2/Lib/site-packages/scipy-1.15.3.dist-info/LICENSE.txt",
+        "sha256": "f250e7cef15fbd99e8680093d112d7aa7579535b99995268df6c89ac926eb607",
+        "scope": "observed bytes; not final freeze"
+      },
+      "installed": {
+        "path": "build/cw-foundation-install-20261011/runtime/python/Lib/site-packages/scipy-1.15.3.dist-info/LICENSE.txt",
+        "sha256": "f250e7cef15fbd99e8680093d112d7aa7579535b99995268df6c89ac926eb607",
+        "scope": "observed bytes; not final freeze"
+      },
+      "bytesMatch": true,
+      "scope": "older installed foundation, not final PC11 artifact"
+    }
+  ],
+  "workingTreeImplementationInventory": [
+    {
+      "path": "src/fea-solver/src/native_accepted_checkpoint.cpp",
+      "sha256": "871820964409e2e7a147f03d3c6f809a4ec7600b9f77207ac498b4f14e6310d8",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea-solver/src/native_accepted_checkpoint.h",
+      "sha256": "a5cadd53fcdd1cd62b623542e4dcd7610b279e109251221b090bfaed15dbd825",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea-solver/src/solver_task.cpp",
+      "sha256": "f49de9204388caffcc66912de3ba09916a55599e0bb196df434054523684a2cc",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea-solver/src/solver_task.h",
+      "sha256": "687603fdb8dda54fcca025e23252d7993260697b80662c69e9dd9ab5c038fbbf",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea-solver/tests/tst_native_accepted_checkpoint.cpp",
+      "sha256": "25ac1cb9c84f1cd19c09a7d31b1982b16f523bfb795a0560ed7f225c4c9257a0",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea/src/series_plot_widget.cpp",
+      "sha256": "97d5bef1283006adbf104ba860ce4c1abd1f7d2e28f931e184e8558292f7b159",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea/src/series_plot_widget.h",
+      "sha256": "f9eebc1fb05d3bc911e24b5e1830c45f2715f338e586c535b642e4c18f435cdb",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea/src/solver_manager.cpp",
+      "sha256": "5d63a1688a2c68d306f560ecc672e5e70a39bd0dbb5f3348d49099f487ff1e88",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea/src/solver_task.cpp",
+      "sha256": "d9118d9f87a090bcda69095ae603536135d8151790c3641ebcb2caebbcab93fe",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea/src/solver_task.h",
+      "sha256": "4bfc201340371502f7e3742e755272f774a3996879ecc536099e27763756ae46",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-application-lib/src/rnative_result_broker.cpp",
+      "sha256": "b9af4da5c3ad7b0c7617b41639f29bf3d280de3dbd9b424582bfc497db0736ea",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/fea-solver/tests/test_stage9_runtime_startup.py",
+      "sha256": "1efdcdb05a138faee396b872b21aabaf2a33bdcbdb18fc6b115c1b800c607b33",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea-solver/tests/tst_native_piezo_accepted_trace.cpp",
+      "sha256": "b49c9af6f55d50553399da05e414d96bcee8c722004c164f7c17741ccad00316",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea-solver/tests/tst_piezo_native_backend_bridge.cpp",
+      "sha256": "3d16601d2faeb6deb98d7ba788fc39c130e269f140f69c8ae31f66c40b0e826e",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea/src/piezo_workbench_widget.cpp",
+      "sha256": "a86ce3cf888bf24000bd2662a0732165373462a61ee0d1f3d196a99307f8f7f3",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea/src/piezo_workbench_widget.h",
+      "sha256": "af52146f40644dbab8352ddfe46c61076120fddd557c4cfed44b50ee0d5edb5c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea/tests/tst_piezo_experiment_history.cpp",
+      "sha256": "26f23cb0988483f65c7353a027788217707e19e9f33571983676497298c303a2",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea/tests/tst_piezo_solver_recovery.cpp",
+      "sha256": "3a3e7809308f61acef0046f98146c9259df1b00ac9c1e06ec218e630b7cc116f",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/fea/tests/tst_piezo_workbench_widget.cpp",
+      "sha256": "899e586db3daa57345df4c5ea62b932428dc30ae58063313b1dd08e83f487e46",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_accepted_trace.h",
+      "sha256": "c42ff1783f69f90f4694976c36d76e8238d26a823dbeaa1f97239a9bed5f0506",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_axial_backend_bridge.h",
+      "sha256": "7223522d4a1bbb038e2d78b09b111265977047010eb9df8c232a43e7631e98cc",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_certification_batch_cache.h",
+      "sha256": "756269a5abf0aec725d41ff890e72955c0d02b92e8cdaf79cf6f22617e7ac0e3",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_native_backend_bridge.h",
+      "sha256": "b348761f53cb3cdf85279b7ee87ccbe4302084a200cb1366e11719409c995c09",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_numeric_transport.h",
+      "sha256": "1c678142887af4ca31033214cd81f892780b550b94e423dd439f77ed2cd40c59",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_result_series.h",
+      "sha256": "c1ef86ec7d6a5ea3238b989ae14923ea5c1f10d9de6296ccc97c75eff0387d7b",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_runtime_identity.h",
+      "sha256": "aed0e333482ab8a707732f901abda9d20dea37e6fed075a9cb3ec63f95579450",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/piezo_spectrum.h",
+      "sha256": "26eb81a8c4a0e73da32d3b541d3d0ed4f85ece2ba51ae64f921c076aaaf74eac",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/rpiezo_artifact_service.h",
+      "sha256": "d80818ffb2500155b543d797f55b59fc43a913fadd1c3f16364d2b1f8ca97c7a",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/rpiezo_axial_experiment_service.h",
+      "sha256": "2723b9a5da97206fd22f9c13960825dab692852aeef1890614285a28d72b7b58",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/include/rpiezo_experiment_service.h",
+      "sha256": "ce9b0b9531e8de40bca66dbf6a9bb128d0084ca009211af1225cba6811f0bb86",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_accepted_trace.cpp",
+      "sha256": "e7d58b80f664684e33d6d380614b6d8887f5ed1c3b0fc869a40b5e96b4bc216c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_axial_backend_bridge.cpp",
+      "sha256": "7ae591b2b190704405a2ac0847da0819e1f051fc8075d97210a590e72c1cb6f2",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_certification_batch_cache.cpp",
+      "sha256": "6b7da357ee743a646860b8f6317a0eb30351bf7f56f0f55ccbe22e29c4d7d0c9",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_native_backend_bridge.cpp",
+      "sha256": "375f5865bb2174ad821a0687f2a7ba380e22ee1d3fedbdca7450a1c81db137a6",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_numeric_transport.cpp",
+      "sha256": "a5673c012fcd1b6f04b34e0fd7d1bebc80368e5227fc6eaaf14b1671faee4af4",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_result_series.cpp",
+      "sha256": "66bf1b41bf64ce2e3f2a872d6ecb16171b7b116d87a9c4358e314160d72de838",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_runtime_identity.cpp",
+      "sha256": "228719239785a99bcb82b90317cfcc15a0d7125d8c1e833186611681727a98fd",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_spectrum.cpp",
+      "sha256": "f557d920c9a851d70fef6b0390b0b107848856d3b5eb27a1c872d3cfeb346af7",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/rpiezo_artifact_service.cpp",
+      "sha256": "409b1c5ba01fd876e3e06e7a0623ed0e01172b70b49e350ba4fe35a08ff1d5cf",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/rpiezo_axial_experiment_service.cpp",
+      "sha256": "682793ce32f0212c07e8ce5855fd1add7c0c4c935e18a49f01e2541d28b9f8c6",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/src/rpiezo_experiment_service.cpp",
+      "sha256": "c04edfa5c4176142c69dae048fd2780056327fda9564b7f75d9ed89b39b4b108",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_accepted_trace.cpp",
+      "sha256": "834c56ab020a2c3ca5ffb4fe5ed0dc1c37174fa80b15db7ea4851c597087cbf6",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_artifact_service.cpp",
+      "sha256": "1c1f97a61594243230382245af7e1222b90f3a3ec369d8a54da4f4c37c50276b",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_axial_backend_bridge.cpp",
+      "sha256": "f3336538c63e05cc4d9ec92e6739cf2ca111580dae334599c8943fb7298db446",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_axial_experiment_service.cpp",
+      "sha256": "93e99c4950b952a0f7055a638cbe3bd43046ab5060e2ff1e9ec91e174cca0d33",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_certification_batch_cache.cpp",
+      "sha256": "62763e002ff201efd2f3d9943771c463276feeef07bb16e4eda0981f94a17e5f",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_delivery_examples.cpp",
+      "sha256": "d56b3edd2747afda3fd9fd26aa1c211e13e871d1837e999e89752d3a7836473d",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_experiment_commands.cpp",
+      "sha256": "13314ecb83d69350be626870f8971206b63a9dc2c64ee79077c8a5c2ff147d29",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_experiment_service.cpp",
+      "sha256": "5cac5bbdcc0e6c59fe31c7e34b4d9fee2d956f2c01228dc9d145ef1bbafae54a",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_local_directions.cpp",
+      "sha256": "96b187b87091c82bac6c9555a272154b0cf3ae11418a325b73790d67db8bb631",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_numeric_transport.cpp",
+      "sha256": "f926e756f1082e8d052bda75f2f3f3d5a32aff08573fccf197130de014fde98d",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_result_series.cpp",
+      "sha256": "9b1b20c94a7a358dc0c40f1048b93b0dfddb247ac171d5265be39f861025c892",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_spectrum.cpp",
+      "sha256": "1ac492d73b19100d230527672f4265d60f80f0e122a82405561d864aa4c0519a",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/python/range_workflow/piezo_control_design.py",
+      "sha256": "cc3618dfd293d307222b4e4d9e235b973ddc8aaaf1af4c4573f43e05e3073109",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/python/range_workflow/piezo_design.py",
+      "sha256": "48cea384994e20e709b213641c4edcff98f77789ca322522a42c8d4c3a813ae9",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/python/range_workflow/piezo_excitation.py",
+      "sha256": "04f72e876dcb53b16597f1cd00be88564cc7d9dcad7da4f2602f64558e6b07ac",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/python/range_workflow/piezo_external_time.py",
+      "sha256": "9b6f8fe4a212854e0e6cc8e894a3747afd72f4120200b3833aad7bf22744841c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/python/range_workflow/piezo_native_backend.py",
+      "sha256": "12c16c99079bda1963db7499e50effa06b23049beb78ca6e3e47032f96eda362",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/tests/test_piezo_control_design.py",
+      "sha256": "4d813cb9b49d2e6f6cfa4db659440d3d0711ea6ad45710e2f5171805bc9db67f",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/tests/test_piezo_design.py",
+      "sha256": "762a61b2538f5733b0b035f3f933bfbd5b6a36fcc6c92f57a6a5f487870b8b6a",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/tests/test_piezo_excitation.py",
+      "sha256": "ce701d443f77598b47b04e1275ffe00adda3420e8c7c8cf52200ada34b2479af",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/tests/test_piezo_external_time.py",
+      "sha256": "94b4b6a18f36290b29aa4f2e06dd6bf0a05b16180af457f1ce420aae5f55462c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-workflow/tests/test_piezo_native_backend.py",
+      "sha256": "919fddce6b67287a551d5c892e10ae958ca60e0e9587b5d04b9fe4e2161dd678",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_file_io.h",
+      "sha256": "998b99cf4b00726bc0c4a5c87ffb93548ed303de28aff16572e9dd6168111ec8",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_model.h",
+      "sha256": "796e82ae168869c095f40ee685e9760933ad1bcf0f4cce8bec7a0803c70b22ec",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_problem_setup.h",
+      "sha256": "da79a9c54bae73f2bffa3149e89aee42f3a5cfc4d3945f4404ee65a8de61cf2f",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_file_io.cpp",
+      "sha256": "8e1e0e443e8e2d6dc89caa1fcf480da5127a42e860d8c4691b931676bdb20215",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_model.cpp",
+      "sha256": "89e191210f9648df42791ed66427b2f75a1f89d87463c85ff666a9bdd1311d97",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_problem_setup.cpp",
+      "sha256": "5f107c2968e861bf01609167f34960ddd49bc80a41f459a6e4d3fd298893fc5c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_setup.cpp",
+      "sha256": "ea3b7faa2ccf7b701ed04a3351986304b1111b7f118f57ab237b196ea60168d3",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_piezo_axial_setup.h",
+      "sha256": "c2bcc18643433411b4a7f816b23b68748350dae72f4fc484a45a009ff8d32ac3",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_piezo_layered_setup.h",
+      "sha256": "252798a94cdcdd447e7c62060e64741c4c961994b8be926aafecf28e744c1c09",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_piezo_readout_setup.h",
+      "sha256": "2d041cc0191f409a27a57cce5c98aea200f1770f51a187c0483297c1e9a2e0ae",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_axial_setup.cpp",
+      "sha256": "55aa5c606cbe28306d5c1c01b8a66be272de916b5996a772f6d19b2bfb38cbf6",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_layered_setup.cpp",
+      "sha256": "1c445efc0c6f68ecbb19cf86cca5f41fda0243004fbbe97382c14462ce9d3bd7",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_readout_setup.cpp",
+      "sha256": "0e00c1ebc1f37eb6e1f6c9959769e826f665071589b5d4fb4f1a04601a250ed8",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_piezo_experiment_publication.cpp",
+      "sha256": "bff64a110a8e8f2ce3ba8eca7e0560cb82720d0174aaaedf1f7883016b592ceb",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_axial_setup.cpp",
+      "sha256": "4763964695cef5087b7ecac1579a2850c146347cede40d5b0fbe31b51b610b1b",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_layered_setup.cpp",
+      "sha256": "4f699e76a20d00097a765ef9d38542e86e2b3afe13a51ece76243966f4dee62d",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_readout_setup.cpp",
+      "sha256": "07b2e5f1fd23a2fea3c35a9e81f5a8e32de100e2dc4dfc9026ae28c8f10f8286",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_dynamics_integrator.h",
+      "sha256": "266b6388583032f40946e4d5496577c6aa5d24b22b577ad64db3a2d45d901d13",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_truss_dynamics.h",
+      "sha256": "48c0af3e4abfddd33eb1c9270076edfcfcc0648ba65d8b5f016a378615856215",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_truss_dynamics_model_adapter.h",
+      "sha256": "50ea8ac5173bed34fda3a51d3f9bc1572582a59009849e8ef62cd96af697e130",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_dynamics_integrator.cpp",
+      "sha256": "12eee9240014706ad8894bfe502321b287de658bef78b9f97f2a329a87f585f9",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_truss_dynamics.cpp",
+      "sha256": "92f55f0dff9f5f37ae22a1b835ce009fc921de5a5c604f1c588167106b6dc085",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_truss_dynamics_model_adapter.cpp",
+      "sha256": "14dd8f4610de7093971e690d766706198af2e7f3ee9892456122832143b93871",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": " M",
+      "classification": "modified Range-derived file"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_native_run.h",
+      "sha256": "59845413d74ee642796ef89d33e4f97cbd8778e6ad5c91e53f97248bf1be860d",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_operators.h",
+      "sha256": "40d0de68db0442554af03c040ca1c6c899434a3eb2fb9fe1ce5af82070e3b945",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_restart_codec.h",
+      "sha256": "228213669c7292dcd5b2b250c4d7dfcd869d7fab16d8fa482fa76b9dd8f16f39",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_run_state.h",
+      "sha256": "a59ba87e1c9c3ec7ff3a0c364a11e7000a785eafd8d564b208931647ffe34523",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_electrical_system.h",
+      "sha256": "9ff51c9e6f33a9b24ecaec8e09b239e88d4dbdef74c5988a50ca295edb7ace61",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_element_operators.h",
+      "sha256": "381c11bd089f46fe5df789adb9ab9b3f1a8fa864db5712f33bff764478fc89da",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_dynamics.h",
+      "sha256": "30cc608c1a728f4406281ca60e944698c1d8a1e3c69e0edd74da726e15ae3f4c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_mesh.h",
+      "sha256": "1e112f2a1909d01ff62b59ca3721e5744398e1cbbb33d971cc790eb4148c73dc",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_model_adapter.h",
+      "sha256": "3f0cc5011b302194aca4ba058e4aec2a35a1367cd4a8649fe0c55b8690beb422",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_native_run.h",
+      "sha256": "929d5d897c76577cd45b4bf7d6139dab4530d709478174d07b91dd831fd3bf9b",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_restart_codec.h",
+      "sha256": "f1c02583e61be48db2d649c3131d9ac9f7c4e967cb75b1165f64fd2570714637",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_run_state.h",
+      "sha256": "2345b7fcb6f17a6efb351327cf658a137b01d583f0f58145ef0eacfdf14cc1f7",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_native_readout.h",
+      "sha256": "8db1dd557fa7c63b68e0d6389a0ef780ec0b3ccf34882ae5ee807f778926d1f8",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_native_run.cpp",
+      "sha256": "c67f6f77b0c3ada3c2cea4c68bb33c6be4cd35151e550e4466a0a5dd74d3ae50",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_operators.cpp",
+      "sha256": "2746e100c9b1bec1e184f3b9a9f71931307f36dbf9202f79e842075faf13c9b1",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_restart_codec.cpp",
+      "sha256": "33a50f5115d4fb9aac8d6bd1a48cc0bc4eddaf6ccb92ed1c599636109e2861c9",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_beam_layer_kernel.cpp",
+      "sha256": "3920e2db49e238f500351214cf72cea4c5205d7efdb02c9c5893e8f7c3a3be00",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_electrical_system.cpp",
+      "sha256": "c1013cfd6851fa99b9d4f323a1eb189fd4785b13feb88328ae73ba414f5930fa",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_element_operators.cpp",
+      "sha256": "1bed8c24bd7140119aa01064322c3af96cc8ce679d389de727ae26b4c3da663e",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_dynamics.cpp",
+      "sha256": "058a5e0bcf99ed611cb94a30177275246adbf2f97625daca11b51f0a5017b9ce",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_mesh.cpp",
+      "sha256": "4dd98032bec6e8e3654f87517abf1d1798a4e5394c99f991429c18fe1d47fef2",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_model_adapter.cpp",
+      "sha256": "8bf1ae4ca7d9dc43f10ce0e459c51bf7c33c4281650b2beab6c1ff419dd53750",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_native_run.cpp",
+      "sha256": "2c1f8199e0fccbe7095a16e388e4d5da5c53ca9234425dfc9d460944895254c2",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_restart_codec.cpp",
+      "sha256": "184039a33a8702da07d49137b01c01a32f108e8ac91cd5ec4ff74c4671c13c0b",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_native_readout.cpp",
+      "sha256": "722ddd2cb75dfa72fe958d5b0238e64bd1353b47f36647d992dc198d235005b6",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_plate_mitc4_kernel.cpp",
+      "sha256": "ad0b3ec883e5aa0390d2a28f40dbe34916a24ec8d0723329ea521e34651ac421",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_axial_native_run.cpp",
+      "sha256": "2ae377a4985b616eb51572ed89974dbf24e93417ba486c073936d6f66617964c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_axial_operators.cpp",
+      "sha256": "e7a2ab92e1a3a50b10497bcee95d516a47a6956c0be86182ed7b0b1f5870b75a",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_beam_layer_kernel.cpp",
+      "sha256": "72b786bdbe1e811ae7b65e2d4443e21db25ca4632cba9b88bb0ec9f36b1bfbae",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_electrical_system.cpp",
+      "sha256": "68285a783db121e9848f5cd3f1d2db68ac52c3ecf61682727eb16cd909c7a261",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_dynamics.cpp",
+      "sha256": "8ff464410ffb438e3db4ac8f8fd216d5ea8180cdcdfb0813f19aff10dd082c98",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_mesh.cpp",
+      "sha256": "48fe0f6138b3b5f51fbdb58ee5c3e89ecfcbc2c012c445af6b4507bc4d3fc759",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_model_adapter.cpp",
+      "sha256": "2e15d67c8f70fd6844f54509750c775bef18b552f8bfeb65da303c3ba60e69da",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp",
+      "sha256": "962a03f2ca34ac94671a01efad82d1b91b5d80d5324cc3f10172717747b401a9",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_material_ops.cpp",
+      "sha256": "6b98a41e55adc4eb9bcbc0b95886a82e696bead557f182205b3ec9c166d97e6c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_native_readout.cpp",
+      "sha256": "c9788559be385cd5cce103c73ca262c693d1fabadda8ebdcff8cdf1d5669265f",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_plate_mitc4_kernel.cpp",
+      "sha256": "2ec2aa9d71d1f58df555ea8f954a4c0fa437f90eb90a8c7ac6b892bcc19c7b6c",
+      "scope": "observed bytes; not final freeze",
+      "gitStatus": "??",
+      "classification": "untracked candidate; not proof of authorship"
+    }
+  ],
+  "inventoryQualification": "selection of current piezo/native integration files by actual Git status; neither complete SBOM nor exclusive authorship proof",
+  "specificationEvidence": [
+    {
+      "path": "docs/PIEZO_CONTROL_DELIVERY.md",
+      "sha256": "5de3d06bca0f049cdd6231b2b71c60c126ca852657ff617eb2662653bcd4b61c",
+      "scope": "observed bytes; not final freeze"
+    },
+    {
+      "path": "docs/piezo_control_plan.json",
+      "sha256": "3a1e640adf019222aae15218a66a0a35e22ea2a6e11db0165276718cd42dd3a8",
+      "scope": "observed bytes; not final freeze"
+    },
+    {
+      "path": "docs/evidence/piezo_delivery_performance_contract.json",
+      "sha256": "8f6761959a8efd3273a4d5ede9671f4ce2e4efd25b0930c2624013998d6fe87e",
+      "scope": "observed bytes; not final freeze"
+    },
+    {
+      "path": "docs/evidence/piezo_representative_cases_spec.json",
+      "sha256": "f0e9a4084051ad0af22ef78a1d38cfd9c2395cad94ee07070bc2ec36cf3ec39a",
+      "scope": "observed bytes; not final freeze"
+    }
+  ],
+  "pc11PlanSnapshot": {
+    "id": "PC-11",
+    "title": "私有安装回归终审和软件交付",
+    "status": "planned",
+    "dependsOn": [
+      "PC-10"
+    ],
+    "requirementIds": [
+      "PC-R01",
+      "PC-R12"
+    ],
+    "acceptance": [
+      {
+        "id": "PC-11-A01",
+        "description": "源冻结完整必跑/兼容/独立审查及许可材料",
+        "status": "pending",
+        "evidence": []
+      },
+      {
+        "id": "PC-11-A02",
+        "description": "私有安装真实应用故事/点击记录/20k首图CSV内存门槛",
+        "status": "pending",
+        "evidence": []
+      },
+      {
+        "id": "PC-11-A03",
+        "description": "全部本次验收通过并提供可运行软件与操作文档，缺项不算通过",
+        "status": "pending",
+        "evidence": []
+      }
+    ]
+  },
+  "formulaAndTestEvidence": {
+    "backgroundOnly": "references already listed in PIEZO_CONTROL_DELIVERY.md: Abaqus, COMSOL, TI, MITC4 paper; external full texts not reverified in this audit; no clean-room or no-copying inference",
+    "localTests": [
+      "src/range-solver-lib/tests/tst_structural_piezo_material_ops.cpp",
+      "src/range-solver-lib/tests/tst_structural_piezo_beam_layer_kernel.cpp",
+      "src/range-solver-lib/tests/tst_structural_piezo_plate_mitc4_kernel.cpp",
+      "src/range-workflow/tests/test_piezo_design.py",
+      "src/range-workflow/tests/test_piezo_control_design.py"
+    ],
+    "qualification": "observed analytical fixtures/residual/patch/convergence checks; presence is not a passing run or independent-authorship proof"
+  },
+  "aiAssistance": {
+    "declared": true,
+    "workflow": "Codex/ChatGPT-assisted requirements, code, testing, debugging, review and documentation with orchestrated agents",
+    "sessionId": "01a12dd9-a676-75e3-a9aa-660ffe4283c1",
+    "exactModelPromptAndToolLedger": "not frozen; root must preserve available session/agent/model/prompt/tool evidence",
+    "inProductAILibrary": "range-ai-lib is a baseline dependency, distinct from deterministic FE and NumPy/SciPy numerical execution",
+    "excludedInference": "AI use does not establish clean-room, exclusive authorship, no copied code, zero infringement or product acceptance"
+  },
+  "finalFreeze": {
+    "accepted": false,
+    "rootCommit": null,
+    "submoduleCommits": null,
+    "artifactSha256": null,
+    "finalLicenseInventorySha256": null,
+    "owner": "root after source freeze, complete regression, independent review, installed acceptance and evidence commits"
+  },
+  "remainingDecisions": [
+    "verify range-ai-lib explicit permission scope",
+    "record TetGen/Qt license election and deployed module/plugin/third-party notices",
+    "retain full CPython/wheel/native dependency license texts in final install",
+    "verify final installed runtime cleanliness after audited cleanup and other pending PC11 gates without weakening checks",
+    "freeze root/submodule/artifact hashes and AI assistance ledger",
+    "complete source/distribution compatibility review; not legal advice or certification"
+  ],
+  "claimsExcluded": [
+    "entire project original",
+    "clean-room",
+    "zero infringement",
+    "complete license compliance certification",
+    "PC11 complete",
+    "final artifact freeze"
+  ],
+  "observedInstalledLicenseCoverage": {
+    "observedAtUtc": "2026-10-12T19:32:17.071797+08:00",
+    "installation": "build/audit-20261012/piezo-delivery/pc11-install-v9",
+    "accepted": false,
+    "rangeGeneratedLicense": {
+      "installed": {
+        "path": "build/audit-20261012/piezo-delivery/pc11-install-v9/doc/LICENSE.txt",
+        "sha256": "1e3858dbdef04242ae2c312a04bb12f2c7509e171df4aefe3139ee1db58f103a",
+        "scope": "observed bytes; not final freeze"
+      },
+      "generatedBuild": {
+        "path": "build/vs2026/LICENSE.txt",
+        "sha256": "1e3858dbdef04242ae2c312a04bb12f2c7509e171df4aefe3139ee1db58f103a",
+        "scope": "observed bytes; not final freeze"
+      },
+      "generatorTemplate": {
+        "path": "src/range-build-tools/LICENSE.txt.in",
+        "sha256": "264e79e2bd224ab2658eff1be259f923a408258867889d3979f6dfca370500d8",
+        "scope": "observed bytes; not final freeze"
+      },
+      "rawRootBytesMatch": false,
+      "generatedBuildBytesMatch": true,
+      "fullRootLicenseTextEmbedded": true,
+      "comparisonKind": "GENERATED_HEADER_WITH_COMPLETE_ROOT_LICENSE_TEXT"
+    },
+    "gmshLicense": {
+      "installed": {
+        "path": "build/audit-20261012/piezo-delivery/pc11-install-v9/doc/LICENSE_GMSH.txt",
+        "sha256": "7fefa67a6c607068a33ba27e0a18aaf8596aa051f7cf2abcca094a3a484c5870",
+        "scope": "observed bytes; not final freeze"
+      },
+      "matchesSdk": true
+    },
+    "runtimeLicenseNoticeFiles": [
+      {
+        "relativePath": "runtime/python/LICENSE.txt",
+        "sha256": "62bec384df47b0328307db41455ff6ea2559e5546b394ac69148561b21703120",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/numpy-2.2.6.dist-info/LICENSE.txt",
+        "sha256": "14256cc3a2c9d32ac284da96b937feb44f72dd90bee2317ac3020166846ad99d",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/numpy/_core/include/numpy/random/LICENSE.txt",
+        "sha256": "d544761558b510866c21f7e8a2d5716fca76e0b98117e3b6b86314db7244d150",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/numpy/ma/LICENSE",
+        "sha256": "d78dbb208b80d92b4d333e41a4baae50d12444f46e53199fa7726a91de6e2da7",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/numpy/random/LICENSE.md",
+        "sha256": "b4bc2f4fa1c95778f1ed3dd8f14706bece399475b978f9f34b5d3cd72521b48a",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/scipy-1.15.3.dist-info/LICENSE.txt",
+        "sha256": "f250e7cef15fbd99e8680093d112d7aa7579535b99995268df6c89ac926eb607",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/scipy/_lib/_uarray/LICENSE",
+        "sha256": "e4c4acc31e8287066d7c995d26e3ef902ca1977ee187b260b11c278366503811",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/scipy/fft/_pocketfft/LICENSE.md",
+        "sha256": "c04661685cff9d8035fe1c4c3ab357e7f7633cafc06a73e9d90c3c5fede8a86a",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/scipy/sparse/linalg/_eigen/arpack/COPYING",
+        "sha256": "fcb3c6c7de1460cf7d0863c3c5996e518eb8015a2eced36911f3da178440b3df",
+        "matchesRuntimeManifest": true
+      },
+      {
+        "relativePath": "runtime/python/Lib/site-packages/scipy/spatial/qhull_src/COPYING.txt",
+        "sha256": "962452e737df7c743a3dc2744232071028b8c0450e7674a55057c330ea1977eb",
+        "matchesRuntimeManifest": true
+      }
+    ],
+    "missingSupplierCopiesAtObservation": [
+      "doc/licenses/TetGen/LICENSE",
+      "doc/licenses/Qt-sdk/COPYING.txt",
+      "doc/licenses/Qt-sdk/Copyright.txt",
+      "doc/licenses/Qt-sdk/LICENSE",
+      "doc/licenses/Qt-sdk/LICENSE.FDL",
+      "doc/licenses/Qt-sdk/LICENSE.GPL3-EXCEPT"
+    ],
+    "qtSupplierScope": "five supplier-local files are not all runtime module licenses; Copyright.txt is Kitware/CMake and COPYING.txt is Apache 2.0",
+    "qtSdkSbom": {
+      "sourceDirectory": "D:/ProgramData/Qt/6.11.1/msvc2022_64/sbom",
+      "separateExtractedLicenseDirectoryPresent": false,
+      "extractedTexts": "hasExtractedLicensingInfos embedded in original SPDX JSON",
+      "runtimeDllPluginNoticeMapping": "PENDING"
+    },
+    "proposedInstallRulesApplied": false,
+    "qualification": "observed files/copies only; final package coverage and license review remain pending"
+  },
+  "windowsDevelopmentRuntimeReview": {
+    "checkedAt": "2026-10-12T20:22:32.9386007+08:00",
+    "scope": "private development/test installation; not public redistribution clearance",
+    "officialSources": [
+      {
+        "url": "https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution",
+        "finding": "LLVM OpenMP under debug_nonredist is in Utilities list; debug_nonredist excluded from distributable files."
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/cpp/build/reference/openmp-enable-openmp-2-0-support?view=msvc-170",
+        "finding": "Microsoft documents required /openmp:llvm DLLs as nonredistributable."
+      },
+      {
+        "url": "https://github.com/Range-Software/range-ai-lib",
+        "finding": "Current upstream repository root and README do not supply a standalone license; no license inferred from public visibility."
+      }
+    ],
+    "localEvidence": "installed-dependency-inventory-v10-delta.json",
+    "action": "Removed inaccurate redistributable description and standard-VC-redistributable installation advice from CMake. Runtime bytes and compiler settings unchanged.",
+    "publicRedistributionQualified": false
+  }
+}

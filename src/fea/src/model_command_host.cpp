@@ -5,14 +5,24 @@
 #include "model_io.h"
 #include "session.h"
 #include "solver_manager.h"
+#include "trusted_artifact_paths.h"
 #include <rmodel_command_service.h>
 #include <rmodel_command_session.h>
 #include <rproject_catalog.h>
+#include <rtrusted_experiment_service.h>
+#include <rtrusted_convergence_service.h>
+#include <rtrusted_mechanics_service.h>
+#include <rtrusted_verification_service.h>
 #include <rml_file_header.h>
 #include <rml_file_io.h>
 #include <rml_file_utils.h>
+#include <rml_condition.h>
+#include <rml_element_group.h>
+#include <rml_material.h>
+#include <rml_material_property.h>
 #include <QCryptographicHash>
 #include <QApplication>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QDir>
@@ -24,6 +34,8 @@
 #include <QSet>
 #include <QScopeGuard>
 #include <QStringList>
+#include <QTemporaryDir>
+#include <QTimer>
 #include <QThread>
 #include <QUuid>
 #include <cmath>
@@ -76,6 +88,40 @@ QJsonObject durableOperationJson(const RProjectCatalog::DurableOperation &operat
             {"observation", operation.association.observation}};
 }
 
+bool sensitiveObservationKey(const QString &key)
+{
+    QString normalized = key.toCaseFolded();
+    normalized.remove(QRegularExpression(QStringLiteral("[^a-z0-9]")));
+    return normalized.contains(QStringLiteral("token"))
+        || normalized.contains(QStringLiteral("secret"))
+        || normalized.contains(QStringLiteral("credential"))
+        || normalized.contains(QStringLiteral("password"))
+        || normalized.contains(QStringLiteral("apikey"))
+        || normalized == QStringLiteral("auth")
+        || normalized.contains(QStringLiteral("authorization"))
+        || normalized.contains(QStringLiteral("authheader"))
+        || normalized.contains(QStringLiteral("cookie"));
+}
+
+QJsonValue durableObservationValue(const QJsonValue &value)
+{
+    if (value.isArray()) {
+        QJsonArray sanitized;
+        for (const QJsonValue &entry : value.toArray())
+            sanitized.append(durableObservationValue(entry));
+        return sanitized;
+    }
+    if (value.isObject()) {
+        QJsonObject sanitized;
+        const QJsonObject object = value.toObject();
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it)
+            if (!sensitiveObservationKey(it.key()))
+                sanitized.insert(it.key(), durableObservationValue(it.value()));
+        return sanitized;
+    }
+    return value;
+}
+
 QString modelArtifact(QString path, QString *error = nullptr)
 {
     QSet<QString> visited;
@@ -105,6 +151,32 @@ QString modelArtifact(QString path, QString *error = nullptr)
     }
     if (error) *error = QStringLiteral("Cannot resolve the complete native model artifact.");
     return {};
+}
+
+bool isDirectModelArtifact(const QString &path, QString *error = nullptr)
+{
+    if (error) error->clear();
+    const QString extension = QFileInfo(path).suffix();
+    const bool ascii = extension == RModel::getDefaultFileExtension(false);
+    if (!ascii && extension != RModel::getDefaultFileExtension(true))
+    {
+        if (error) *error = QStringLiteral("The frozen candidate snapshot has an unsupported model extension.");
+        return false;
+    }
+    RFile file(path, ascii ? RFile::ASCII : RFile::BINARY);
+    if (!file.open(ascii ? QIODevice::ReadOnly | QIODevice::Text : QIODevice::ReadOnly))
+    {
+        if (error) *error = QStringLiteral("The frozen candidate snapshot could not be opened as a model artifact.");
+        return false;
+    }
+    RFileHeader header;
+    if (ascii) RFileIO::readAscii(file, header); else RFileIO::readBinary(file, header);
+    if (header.getType() != R_FILE_TYPE_MODEL)
+    {
+        if (error) *error = QStringLiteral("The frozen candidate snapshot is not a direct model artifact.");
+        return false;
+    }
+    return true;
 }
 
 QJsonObject rejected(const QString &code, const QString &message)
@@ -154,7 +226,8 @@ bool isCoreEditCommand(const QString &command)
         || command == QStringLiteral("entity.boundary.set")
         || command == QStringLiteral("geometry.node_coordinates.set")
         || command == QStringLiteral("geometry.rigid_transform")
-        || command == QStringLiteral("mesh.rebind.static");
+        || command == QStringLiteral("mesh.rebind.static")
+        || command == QStringLiteral("piezo.configure-experiment");
 }
 
 RElementGroup *mutableElementGroup(RModel &model, uint physicalId)
@@ -346,11 +419,1002 @@ private:
     Session *session;
     bool locked;
 };
+
+RTrustedExperimentService::SourceIdentity experimentSource(Session *session, const QString &epoch,
+                                                         const QString &documentId)
+{
+    TrySessionLock guard(session);
+    if (!guard.ownsLock() || ModelCommandHost::isMutationBlocked()) return {};
+    const uint id = session->findModelByCommandIdentity(documentId);
+    if (id == RConstants::eod) return {};
+    const auto stamp = session->modelCommandStamp(id);
+    RTrustedExperimentService::SourceIdentity source;
+    source.workspaceId = session->projectWorkspace();
+    source.sessionId = session->getID();
+    source.sessionEpoch = epoch;
+    source.documentId = stamp.first;
+    source.documentRevision = QString::number(stamp.second);
+    source.snapshotSha256 = RModelCommandService::stateFingerprint(session->getModel(id));
+    if (session->modelCommandStamp(id) != stamp) return {};
+    return source;
+}
+
+bool ownsExperiment(const QJsonObject &record, const QString &workspace,
+                    const QString &sessionId, const QString &epoch)
+{
+    const auto source = record.value("authorization").toObject().value("sourceBinding").toObject();
+    return source.value("workspaceId") == QJsonValue(workspace)
+        && source.value("sessionId") == QJsonValue(sessionId)
+        && source.value("sessionEpoch") == QJsonValue(epoch);
+}
+
+// Deliberately allowlist scalar status fields: durable records and job provenance
+// contain trusted filesystem references that must never enter model responses.
+QJsonObject experimentSummary(const QJsonObject &record, const QJsonArray &jobs)
+{
+    QJsonObject result;
+    for (const QString &key : {QStringLiteral("experimentId"), QStringLiteral("state"),
+                              QStringLiteral("cancelRequested"), QStringLiteral("terminalCode"),
+                              QStringLiteral("verificationPassed"), QStringLiteral("createdAtUtc")})
+        if (record.contains(key)) result.insert(key, record.value(key));
+    result.insert("counters", record.value("counters"));
+    const auto authorization = record.value("authorization").toObject();
+    result.insert("authorizationDigest", authorization.value("authorizationDigest"));
+    const QJsonObject budgets = authorization.value("experimentPolicy").toObject()
+                                    .value(QStringLiteral("budgets")).toObject();
+    quint64 solveBudget = 0, repairBudget = 0, modelTurnBudget = 0;
+    if (exactKeys(budgets, {QStringLiteral("solves"), QStringLiteral("repairs"), QStringLiteral("modelTurns")})
+        && unsignedInteger(budgets.value(QStringLiteral("solves")), &solveBudget) && solveBudget >= 1 && solveBudget <= 8
+        && unsignedInteger(budgets.value(QStringLiteral("repairs")), &repairBudget) && repairBudget <= 3
+        && unsignedInteger(budgets.value(QStringLiteral("modelTurns")), &modelTurnBudget)
+        && modelTurnBudget >= 1 && modelTurnBudget <= 12)
+        result.insert(QStringLiteral("budgets"), budgets);
+    const QJsonObject sourceBinding = authorization.value("sourceBinding").toObject();
+    const QString sourceDocumentId = sourceBinding.value(QStringLiteral("documentId")).toString();
+    const QString sourceSessionEpoch = sourceBinding.value(QStringLiteral("sessionEpoch")).toString();
+    const QString sourceRevision = sourceBinding.value(QStringLiteral("documentRevision")).toString();
+    static const QRegularExpression decimalRevision(QStringLiteral("^[0-9]{1,32}$"));
+    if (!sourceDocumentId.isEmpty() && sourceDocumentId.size() <= 128
+        && !sourceSessionEpoch.isEmpty() && sourceSessionEpoch.size() <= 128
+        && decimalRevision.match(sourceRevision).hasMatch())
+        result.insert(QStringLiteral("sourceRuntimeStamp"), QJsonObject{
+            {QStringLiteral("documentId"), sourceDocumentId},
+            {QStringLiteral("sessionEpoch"), sourceSessionEpoch},
+            {QStringLiteral("revision"), sourceRevision}});
+
+    // Keep report evidence useful while excluding manifest paths, solver logs,
+    // source snapshots, and arbitrary event payloads from model-facing reads.
+    const QJsonObject verification = record.value(QStringLiteral("verificationReport")).toObject();
+    if (!verification.isEmpty()) {
+        QJsonObject publicVerification{{QStringLiteral("schema"), verification.value(QStringLiteral("schema"))},
+            {QStringLiteral("status"), verification.value(QStringLiteral("status"))},
+            {QStringLiteral("passed"), verification.value(QStringLiteral("passed"))}};
+        const QJsonObject identity = verification.value(QStringLiteral("identity")).toObject();
+        QJsonObject publicIdentity;
+        for (const QString &key : {QStringLiteral("artifactId"), QStringLiteral("jobId")})
+            if (identity.value(key).isString() && identity.value(key).toString().size() <= 128)
+                publicIdentity.insert(key, identity.value(key));
+        static const QRegularExpression sha256Grammar(QStringLiteral("^[0-9a-f]{64}$"));
+        for (const QString &key : {QStringLiteral("manifestSha256"), QStringLiteral("physicalSummarySha256"),
+                                   QStringLiteral("normalizedProblemSpecSha256"), QStringLiteral("inputModelSha256"),
+                                   QStringLiteral("inputSnapshotSha256"), QStringLiteral("inputPackageSha256")})
+            if (identity.value(key).isString() && sha256Grammar.match(identity.value(key).toString()).hasMatch())
+                publicIdentity.insert(key, identity.value(key));
+        if (!publicIdentity.isEmpty()) publicVerification.insert(QStringLiteral("identity"), publicIdentity);
+        QJsonObject publicMetrics;
+        const QJsonObject metrics = verification.value(QStringLiteral("metrics")).toObject();
+        if (metrics.size() > 24) return {};
+        const QStringList metricNames{QStringLiteral("identity"), QStringLiteral("specification"),
+            QStringLiteral("modelSupport"), QStringLiteral("nodalFields"), QStringLiteral("supportValues"),
+            QStringLiteral("timeGrid"), QStringLiteral("displacement"), QStringLiteral("frequency"),
+            QStringLiteral("dynamicEquilibrium"), QStringLiteral("referenceConvergence"),
+            QStringLiteral("staticResidual"), QStringLiteral("reactionBalance"), QStringLiteral("strainEnergy"),
+            QStringLiteral("modalResidual"), QStringLiteral("modeShape"), QStringLiteral("energyBalance"),
+            QStringLiteral("kinematicConsistency"), QStringLiteral("sdofAnalyticDisplacement"),
+            QStringLiteral("frozenForcedOscillator"), QStringLiteral("rodHistoryReference")};
+        for (const QString &metricName : metricNames) {
+            if (!metrics.contains(metricName)) continue;
+            const QJsonObject metric = metrics.value(metricName).toObject();
+            QJsonObject summary{{QStringLiteral("status"), metric.value(QStringLiteral("status"))},
+                                {QStringLiteral("required"), metric.value(QStringLiteral("required"))}};
+            for (const QString &key : {QStringLiteral("value"), QStringLiteral("limit"),
+                                       QStringLiteral("tolerance"), QStringLiteral("referenceError")}) {
+                const QJsonValue value = metric.value(key);
+                if (value.isDouble() && std::isfinite(value.toDouble())) summary.insert(key, value);
+                else if (value.isBool()) summary.insert(key, value);
+                else if (value.isString() && value.toString().size() <= 128)
+                    summary.insert(key, value);
+            }
+            const QJsonObject evidence = metric.value(QStringLiteral("evidence")).toObject();
+            QJsonObject publicEvidence;
+            for (const QString &key : {QStringLiteral("relativeError"), QStringLiteral("maximumRelativeError"),
+                                       QStringLiteral("relativeDifference"), QStringLiteral("maximumAbsoluteErrorM"),
+                                       QStringLiteral("fixedAbsoluteLimitM"), QStringLiteral("fixedLimit"),
+                                       QStringLiteral("scaledMaximumAbsoluteError"), QStringLiteral("residualNorm"),
+                                       QStringLiteral("normalizedResidual"), QStringLiteral("maximumRelativeResidual"),
+                                       QStringLiteral("maximumNormalizedResidual"), QStringLiteral("relativeResidual"),
+                                       QStringLiteral("relativeBalanceError"), QStringLiteral("relativeEnergyError"),
+                                       QStringLiteral("maximumNormalizedImbalance"), QStringLiteral("effectiveRelativeLimit"),
+                                       QStringLiteral("recordCount"), QStringLiteral("records"),
+                                       QStringLiteral("expectedRecordCount"), QStringLiteral("expectedSteps"),
+                                       QStringLiteral("timeStepS"), QStringLiteral("durationS"),
+                                       QStringLiteral("actualHz"), QStringLiteral("referenceHz"),
+                                       QStringLiteral("strainEnergyJ"), QStringLiteral("externalWorkJ"),
+                                       QStringLiteral("estimatedScalarWork"), QStringLiteral("scalarWorkBudget"),
+                                       QStringLiteral("massKg"), QStringLiteral("stiffnessNPerM"),
+                                       QStringLiteral("omegaRadPerS")})
+                if (evidence.value(key).isDouble() && std::isfinite(evidence.value(key).toDouble()))
+                    publicEvidence.insert(key, evidence.value(key));
+            if (evidence.value(QStringLiteral("reference")).isString()
+                && evidence.value(QStringLiteral("reference")).toString().size() <= 128)
+                publicEvidence.insert(QStringLiteral("reference"), evidence.value(QStringLiteral("reference")));
+            if (evidence.value(QStringLiteral("referenceKind")).isString()
+                && evidence.value(QStringLiteral("referenceKind")).toString().size() <= 128)
+                publicEvidence.insert(QStringLiteral("referenceKind"), evidence.value(QStringLiteral("referenceKind")));
+            if (!publicEvidence.isEmpty()) summary.insert(QStringLiteral("evidence"), publicEvidence);
+            publicMetrics.insert(metricName, summary);
+        }
+        publicVerification.insert(QStringLiteral("metrics"), publicMetrics);
+        const QJsonObject thresholds = verification.value(QStringLiteral("thresholds")).toObject();
+        QJsonObject publicThresholds;
+        for (const QString &key : {QStringLiteral("displacementRelative"), QStringLiteral("frequencyRelative"),
+                                   QStringLiteral("effectiveDisplacementRelative"),
+                                   QStringLiteral("effectiveFrequencyRelative"),
+                                   QStringLiteral("sdofScaledAbsoluteDisplacement"),
+                                   QStringLiteral("rodHistoryReferenceAbsoluteM")})
+            if (thresholds.value(key).isDouble() && std::isfinite(thresholds.value(key).toDouble()))
+                publicThresholds.insert(key, thresholds.value(key));
+        if (!publicThresholds.isEmpty()) publicVerification.insert(QStringLiteral("thresholds"), publicThresholds);
+        result.insert(QStringLiteral("verification"), publicVerification);
+    }
+
+    QJsonArray repairs;
+    for (const QJsonValue &entryValue : record.value(QStringLiteral("history")).toArray()) {
+        if (repairs.size() >= 2 * RTrustedExperimentService::HardRepairLimit) break;
+        const QJsonObject entry = entryValue.toObject();
+        const QString event = entry.value(QStringLiteral("event")).toString();
+        if (event != QLatin1String("repair-started") && event != QLatin1String("repair-verified")
+            && event != QLatin1String("repair-rejected")) continue;
+        QJsonObject summary{{QStringLiteral("event"), event}};
+        const QString at = entry.value(QStringLiteral("atUtc")).toString();
+        if (at.size() <= 40) summary.insert(QStringLiteral("atUtc"), at);
+        const QJsonObject details = entry.value(QStringLiteral("details")).toObject();
+        for (const QString &key : {QStringLiteral("repair"), QStringLiteral("numericalConfigDigest"),
+                                   QStringLiteral("observedPhysicalSummaryDigest")})
+            if (details.contains(key)) summary.insert(key, details.value(key));
+        const QJsonArray changedPaths = details.value(QStringLiteral("changedPaths")).toArray();
+        if (!changedPaths.isEmpty()) {
+            if (changedPaths.size() > 32) return {};
+            bool validFields = true;
+            for (const QJsonValue &field : changedPaths)
+                validFields = validFields && field.isString() && field.toString().size() <= 128
+                    && !field.toString().contains(QLatin1Char(':'));
+            if (!validFields) return {};
+            summary.insert(QStringLiteral("changedProblemFields"), changedPaths);
+        }
+        repairs.append(summary);
+    }
+    result.insert(QStringLiteral("repairs"), repairs);
+
+    const QJsonObject convergence = record.value(QStringLiteral("convergence")).toObject();
+    if (!convergence.isEmpty()) {
+        QJsonObject publicConvergence;
+        for (const QString &key : {QStringLiteral("kind"), QStringLiteral("status"),
+                                   QStringLiteral("toleranceRelative"),
+                                   QStringLiteral("requiredConsecutiveChanges"),
+                                   QStringLiteral("maximumLevels"), QStringLiteral("levelsCompleted"),
+                                   QStringLiteral("stopReason"), QStringLiteral("physicalSummaryDigest"),
+                                   QStringLiteral("adjacentChanges"), QStringLiteral("cost")})
+            if (convergence.contains(key)) publicConvergence.insert(key, convergence.value(key));
+        QJsonArray levels;
+        for (const QJsonValue &value : record.value(QStringLiteral("convergenceLevels")).toArray()) {
+            const QJsonObject level = value.toObject();
+            QJsonObject summary;
+            for (const QString &key : {QStringLiteral("level"), QStringLiteral("numericalConfiguration"),
+                                       QStringLiteral("physicalSummaryDigest"),
+                                       QStringLiteral("verificationPassed"), QStringLiteral("artifactId"),
+                                       QStringLiteral("jobId"), QStringLiteral("manifestSha256"),
+                                       QStringLiteral("measurementSha256"), QStringLiteral("changeFromPrevious"),
+                                       QStringLiteral("comparisonError"), QStringLiteral("cost")})
+                if (level.contains(key)) summary.insert(key, level.value(key));
+            const QJsonObject measurements = level.value(QStringLiteral("measurementSummary")).toObject();
+            for (const QString &key : {QStringLiteral("analysisKind"), QStringLiteral("frequencyHz"),
+                                       QStringLiteral("mode"), QStringLiteral("strainEnergyJ")})
+                if (measurements.contains(key)) summary.insert(key, measurements.value(key));
+            const QJsonObject cost = level.value(QStringLiteral("cost")).toObject();
+            if (cost.contains(QStringLiteral("timeStepS"))) {
+                const double timeStepS = cost.value(QStringLiteral("timeStepS")).toDouble();
+                const double steps = cost.value(QStringLiteral("steps")).toDouble();
+                summary.insert(QStringLiteral("timeStepS"), timeStepS);
+                if (std::isfinite(timeStepS) && timeStepS > 0.0 && std::isfinite(steps) && steps > 0.0)
+                    summary.insert(QStringLiteral("totalDurationS"), timeStepS * steps);
+            }
+            QJsonArray qois;
+            for (const QJsonValue &observableValue : measurements.value(QStringLiteral("displacements")).toArray()) {
+                const QJsonObject observable = observableValue.toObject();
+                const double peak = observable.value(QStringLiteral("maximumAbsoluteValue")).toDouble();
+                QJsonObject qoi{{QStringLiteral("quantity"), QStringLiteral("displacement")},
+                    {QStringLiteral("selector"), observable.value(QStringLiteral("selector"))},
+                    {QStringLiteral("component"), observable.value(QStringLiteral("component"))},
+                    {QStringLiteral("coordinateM"), observable.value(QStringLiteral("coordinateM"))},
+                    {QStringLiteral("sampleCount"), observable.value(QStringLiteral("sampleCount"))},
+                    {QStringLiteral("peakAbsoluteM"), peak},
+                    {QStringLiteral("rmsM"), observable.value(QStringLiteral("rmsValue"))},
+                    {QStringLiteral("firstValueM"), observable.value(QStringLiteral("firstValue"))},
+                    {QStringLiteral("lastValueM"), observable.value(QStringLiteral("lastValue"))}};
+                if (observable.contains(QStringLiteral("startTimeS")))
+                    qoi.insert(QStringLiteral("firstTimeS"), observable.value(QStringLiteral("startTimeS")));
+                if (observable.contains(QStringLiteral("endTimeS")))
+                    qoi.insert(QStringLiteral("lastTimeS"), observable.value(QStringLiteral("endTimeS")));
+                qois.append(qoi);
+            }
+            summary.insert(QStringLiteral("quantities"), qois);
+            const QJsonObject verifierMetrics = level.value(QStringLiteral("verificationReport")).toObject()
+                .value(QStringLiteral("metrics")).toObject();
+            QJsonObject referenceErrors;
+            static const QSet<QString> referenceValues{
+                QStringLiteral("relativeError"), QStringLiteral("maximumRelativeError"),
+                QStringLiteral("relativeDifference"), QStringLiteral("maximumAbsoluteErrorM"),
+                QStringLiteral("scaledMaximumAbsoluteError")};
+            for (auto metric = verifierMetrics.constBegin(); metric != verifierMetrics.constEnd(); ++metric) {
+                const QJsonObject metricObject = metric.value().toObject();
+                const QJsonObject evidence = metricObject.value(QStringLiteral("evidence")).toObject();
+                QJsonObject safeEvidence;
+                for (const QString &key : referenceValues)
+                    if (evidence.contains(key) && evidence.value(key).isDouble())
+                        safeEvidence.insert(key, evidence.value(key));
+                if (!safeEvidence.isEmpty())
+                    referenceErrors.insert(metric.key(), QJsonObject{
+                        {QStringLiteral("status"), metricObject.value(QStringLiteral("status"))},
+                        {QStringLiteral("evidence"), safeEvidence}});
+            }
+            if (!referenceErrors.isEmpty()) summary.insert(QStringLiteral("referenceErrors"), referenceErrors);
+            levels.append(summary);
+        }
+        publicConvergence.insert(QStringLiteral("levels"), levels);
+        result.insert(QStringLiteral("convergence"), publicConvergence);
+    }
+    QJsonArray children;
+    for (const auto &value : jobs)
+    {
+        const auto job = value.toObject();
+        QJsonObject child;
+        for (const QString &key : {QStringLiteral("jobId"), QStringLiteral("state"),
+                                  QStringLiteral("trustedExperimentAttemptId"), QStringLiteral("resultArtifactId"),
+                                  QStringLiteral("resultManifestVerified"), QStringLiteral("processExitCode")})
+            if (job.contains(key)) child.insert(key, job.value(key));
+        children.append(child);
+    }
+    result.insert("childJobs", children);
+    result.insert("childJobsTruncated", jobs.size() >= RTrustedExperimentService::HardSolveLimit);
+    return result;
+}
+
+constexpr qsizetype trustedHostReadbackLimit = 64 * 1024;
+constexpr qsizetype maxTrustedFailurePackageBytes = 24 * 1024 * 1024;
+constexpr uint trustedInspectionEntityLimit = 25000;
+constexpr quint64 trustedInspectionNestedRecordLimit = 4096;
+constexpr quint64 trustedInspectionMetadataByteLimit = 256 * 1024;
+
+bool trustedInspectionWithinEntityLimit(const RModel &model)
+{
+    const quint64 count = quint64(model.getNNodes()) + quint64(model.getNElements())
+        + quint64(model.getNLines()) + quint64(model.getNPoints())
+        + quint64(model.getNSurfaces()) + quint64(model.getNVolumes());
+    return count <= trustedInspectionEntityLimit;
+}
+
+bool trustedInspectionWithinNestedDataLimits(const RModel &model)
+{
+    quint64 nestedRecords = 0;
+    quint64 metadataBytes = 0;
+    const auto addRecords = [&nestedRecords](quint64 count) {
+        if (nestedRecords > trustedInspectionNestedRecordLimit ||
+            count > trustedInspectionNestedRecordLimit - nestedRecords)
+            return false;
+        nestedRecords += count;
+        return true;
+    };
+    const auto addText = [&metadataBytes](const QString &value) {
+        // Three bytes per UTF-16 code unit conservatively bounds UTF-8 storage
+        // without first allocating a converted copy of untrusted model text.
+        const quint64 codeUnits = quint64(value.size());
+        if (metadataBytes > trustedInspectionMetadataByteLimit ||
+            codeUnits > (trustedInspectionMetadataByteLimit - metadataBytes) / 3)
+            return false;
+        metadataBytes += codeUnits * 3;
+        return true;
+    };
+    const auto &modalDampingRatios = model.getProblemSetup().getStructuralDynamicsSetup()
+                                         .getModalDampingRatios();
+    if (!addRecords(quint64(modalDampingRatios.size()))) return false;
+    const auto withinCondition = [&addRecords, &addText](const RCondition &condition) {
+        if (!addRecords(1) || !addText(condition.getName())) return false;
+        for (uint componentIndex = 0; componentIndex < condition.size(); ++componentIndex) {
+            const RConditionComponent &component = condition.getComponent(componentIndex);
+            if (!addRecords(quint64(component.size()) + 1) || !addText(component.getName()) ||
+                !addText(component.getUnits()))
+                return false;
+        }
+        return true;
+    };
+    const auto withinGroup = [&addRecords, &addText, &withinCondition](const RElementGroup &group) {
+        if (!addRecords(group.size()) || !addText(group.getName())) return false;
+        const RMaterial &material = group.getMaterial();
+        if (!addText(material.getName())) return false;
+        for (uint propertyIndex = 0; propertyIndex < material.size(); ++propertyIndex) {
+            const RMaterialProperty &property = material.get(propertyIndex);
+            if (!addRecords(quint64(property.size()) + 1) || !addText(property.getName()) ||
+                !addText(property.getKeyName()) || !addText(property.getUnits()) ||
+                !addText(property.getKeyUnits()))
+                return false;
+        }
+        for (uint conditionIndex = 0; conditionIndex < group.getNBoundaryConditions(); ++conditionIndex)
+            if (!withinCondition(group.getBoundaryCondition(conditionIndex))) return false;
+        for (uint conditionIndex = 0; conditionIndex < group.getNEnvironmentConditions(); ++conditionIndex)
+            if (!withinCondition(group.getEnvironmentCondition(conditionIndex))) return false;
+        for (uint conditionIndex = 0; conditionIndex < group.getNInitialConditions(); ++conditionIndex)
+            if (!withinCondition(group.getInitialCondition(conditionIndex))) return false;
+        return true;
+    };
+
+    if (!addText(model.getName()) || !addText(model.getDescription())) return false;
+    for (uint index = 0; index < model.getNLines(); ++index)
+        if (!withinGroup(model.getLine(index))) return false;
+    for (uint index = 0; index < model.getNPoints(); ++index)
+        if (!withinGroup(model.getPoint(index))) return false;
+    for (uint index = 0; index < model.getNSurfaces(); ++index)
+        if (!withinGroup(model.getSurface(index))) return false;
+    for (uint index = 0; index < model.getNVolumes(); ++index)
+        if (!withinGroup(model.getVolume(index))) return false;
+    return true;
+}
+
+QJsonObject trustedObservedPhysicalStateProjection(const QJsonObject &observed)
+{
+    QJsonObject safe;
+    QJsonArray nodes;
+    for (const QJsonValue &value : observed.value(QStringLiteral("nodes")).toArray())
+    {
+        const QJsonObject source = value.toObject();
+        QJsonObject node;
+        for (const QString &key : {QStringLiteral("position"), QStringLiteral("physicalId"),
+                                   QStringLiteral("xyz_m")})
+            if (source.contains(key)) node.insert(key, source.value(key));
+        nodes.append(node);
+    }
+    safe.insert(QStringLiteral("nodes"), nodes);
+
+    QJsonArray elements;
+    for (const QJsonValue &value : observed.value(QStringLiteral("elements")).toArray())
+    {
+        const QJsonObject source = value.toObject();
+        QJsonObject element;
+        for (const QString &key : {QStringLiteral("position"), QStringLiteral("physicalId"),
+                                   QStringLiteral("type"), QStringLiteral("connectivity")})
+            if (source.contains(key)) element.insert(key, source.value(key));
+        elements.append(element);
+    }
+    safe.insert(QStringLiteral("elements"), elements);
+
+    auto projectConditions = [](const QJsonValue &value) {
+        QJsonArray projected;
+        for (const QJsonValue &conditionValue : value.toArray())
+        {
+            const QJsonObject source = conditionValue.toObject();
+            QJsonObject condition;
+            for (const QString &key : {QStringLiteral("type"), QStringLiteral("typeName"),
+                                       QStringLiteral("hasLocalDirection"),
+                                       QStringLiteral("explicitLocalDirection"),
+                                       QStringLiteral("localDirection")})
+                if (source.contains(key)) condition.insert(key, source.value(key));
+            QJsonArray components;
+            for (const QJsonValue &componentValue : source.value(QStringLiteral("components")).toArray())
+            {
+                const QJsonObject sourceComponent = componentValue.toObject();
+                QJsonObject component;
+                for (const QString &key : {QStringLiteral("variable"), QStringLiteral("enabled"),
+                                           QStringLiteral("unit")})
+                    if (sourceComponent.contains(key)) component.insert(key, sourceComponent.value(key));
+                QJsonArray samples;
+                for (const QJsonValue &sampleValue : sourceComponent.value(QStringLiteral("samples")).toArray())
+                {
+                    const QJsonObject sourceSample = sampleValue.toObject();
+                    QJsonObject sample;
+                    for (const QString &key : {QStringLiteral("time_s"), QStringLiteral("timeKeyFinite"),
+                                               QStringLiteral("value"), QStringLiteral("valueFinite")})
+                        if (sourceSample.contains(key)) sample.insert(key, sourceSample.value(key));
+                    samples.append(sample);
+                }
+                component.insert(QStringLiteral("samples"), samples);
+                components.append(component);
+            }
+            condition.insert(QStringLiteral("components"), components);
+            projected.append(condition);
+        }
+        return projected;
+    };
+
+    auto projectMaterial = [](const QJsonObject &source) {
+        QJsonArray properties;
+        for (const QJsonValue &propertyValue : source.value(QStringLiteral("properties")).toArray())
+        {
+            const QJsonObject sourceProperty = propertyValue.toObject();
+            QJsonObject property;
+            for (const QString &key : {QStringLiteral("type"), QStringLiteral("keyType")})
+                if (sourceProperty.contains(key)) property.insert(key, sourceProperty.value(key));
+            QJsonArray table;
+            for (const QJsonValue &sampleValue : sourceProperty.value(QStringLiteral("table")).toArray())
+            {
+                const QJsonObject sourceSample = sampleValue.toObject();
+                QJsonObject sample;
+                for (const QString &key : {QStringLiteral("key"), QStringLiteral("value")})
+                    if (sourceSample.contains(key)) sample.insert(key, sourceSample.value(key));
+                table.append(sample);
+            }
+            property.insert(QStringLiteral("table"), table);
+            properties.append(property);
+        }
+        return QJsonObject{{QStringLiteral("properties"), properties}};
+    };
+
+    for (const QString &groupType : {QStringLiteral("lines"), QStringLiteral("points"),
+                                     QStringLiteral("surfaces"), QStringLiteral("volumes")})
+    {
+        QJsonArray groups;
+        for (const QJsonValue &groupValue : observed.value(groupType).toArray())
+        {
+            const QJsonObject source = groupValue.toObject();
+            QJsonObject group;
+            for (const QString &key : {QStringLiteral("physicalId"), QStringLiteral("elements"),
+                                       QStringLiteral("volume_m3"), QStringLiteral("thickness_m"),
+                                       QStringLiteral("structuralFormulation"),
+                                       QStringLiteral("structuralFormulationId")})
+                if (source.contains(key)) group.insert(key, source.value(key));
+            if (source.contains(QStringLiteral("section")))
+            {
+                const QJsonObject sourceSection = source.value(QStringLiteral("section")).toObject();
+                QJsonObject section;
+                for (auto it = sourceSection.constBegin(); it != sourceSection.constEnd(); ++it)
+                    if (it.key() != QStringLiteral("name")) section.insert(it.key(), it.value());
+                group.insert(QStringLiteral("section"), section);
+            }
+            if (source.contains(QStringLiteral("material")))
+                group.insert(QStringLiteral("material"), projectMaterial(source.value(QStringLiteral("material")).toObject()));
+            for (const QString &key : {QStringLiteral("boundaryConditions"),
+                                       QStringLiteral("environmentConditions"),
+                                       QStringLiteral("initialConditions")})
+                if (source.contains(key)) group.insert(key, projectConditions(source.value(key)));
+            groups.append(group);
+        }
+        safe.insert(groupType, groups);
+    }
+
+    const QJsonObject sourceAnalysis = observed.value(QStringLiteral("analysis")).toObject();
+    QJsonObject analysis;
+    if (sourceAnalysis.contains(QStringLiteral("problemType")))
+        analysis.insert(QStringLiteral("problemType"), sourceAnalysis.value(QStringLiteral("problemType")));
+    for (const QString &groupKey : {QStringLiteral("modal"), QStringLiteral("structuralDynamics")})
+    {
+        const QJsonObject sourceGroup = sourceAnalysis.value(groupKey).toObject();
+        if (sourceGroup.isEmpty()) continue;
+        QJsonObject group;
+        for (const QString &key : {QStringLiteral("enabled"), QStringLiteral("method"),
+                                   QStringLiteral("modes"), QStringLiteral("timeStep_s"),
+                                   QStringLiteral("rayleighAlpha_1_s"), QStringLiteral("rayleighBeta_s"),
+                                   QStringLiteral("rhoInfinity"), QStringLiteral("newmarkGamma"),
+                                   QStringLiteral("newmarkBeta"), QStringLiteral("modalDampingRatios"),
+                                   QStringLiteral("nIterations"), QStringLiteral("convergenceValue"),
+                                   QStringLiteral("steps"), QStringLiteral("outputFrequency")})
+            if (sourceGroup.contains(key)) group.insert(key, sourceGroup.value(key));
+        analysis.insert(groupKey, group);
+    }
+    safe.insert(QStringLiteral("analysis"), analysis);
+    return safe;
+}
+
+QJsonObject trustedInspectionProjection(const QJsonObject &inspection, const QString &basis,
+                                        const QJsonObject &runtimeStamp,
+                                        const QString &modelFingerprint)
+{
+    const QJsonObject source = inspection.value(QStringLiteral("source")).toObject();
+    const QJsonObject mesh = inspection.value(QStringLiteral("mesh")).toObject();
+    QJsonObject result{{QStringLiteral("operation"), QStringLiteral("analysis.inspect")},
+        {QStringLiteral("schemaVersion"), RTrustedMechanicsService::SchemaVersion},
+        {QStringLiteral("basis"), basis}, {QStringLiteral("sourceRuntimeStamp"), runtimeStamp},
+        {QStringLiteral("source"), QJsonObject{{QStringLiteral("documentId"), source.value(QStringLiteral("sourceId"))},
+            {QStringLiteral("documentRevision"), source.value(QStringLiteral("modelRevision"))},
+            {QStringLiteral("modelFingerprint"), source.value(QStringLiteral("modelFingerprint"))}}},
+        {QStringLiteral("mesh"), mesh},
+        {QStringLiteral("model"), QJsonObject{{QStringLiteral("fingerprint"), modelFingerprint},
+                                              {QStringLiteral("topology"), mesh}}}};
+    const QJsonObject physical = inspection.value(QStringLiteral("physicalSummary")).toObject();
+    if (!physical.isEmpty()) {
+        QJsonObject safePhysical{{QStringLiteral("schemaVersion"), physical.value(QStringLiteral("schemaVersion"))},
+                                 {QStringLiteral("modelType"), physical.value(QStringLiteral("modelType"))}};
+        const QJsonObject geometry = physical.value(QStringLiteral("geometry")).toObject();
+        const QJsonObject length = geometry.value(QStringLiteral("length")).toObject();
+        if (length.value(QStringLiteral("value")).isDouble())
+            safePhysical.insert(QStringLiteral("geometry"), QJsonObject{{QStringLiteral("lengthM"), length.value(QStringLiteral("value"))}});
+        else if (geometry.value(QStringLiteral("length")).isDouble())
+            safePhysical.insert(QStringLiteral("geometry"), QJsonObject{{QStringLiteral("lengthM"), geometry.value(QStringLiteral("length"))}});
+        QJsonObject material;
+        const QJsonObject sourceMaterial = physical.value(QStringLiteral("material")).toObject();
+        for (const QString &key : {QStringLiteral("youngModulus"), QStringLiteral("poissonRatio"), QStringLiteral("density")})
+            if (sourceMaterial.value(key).isDouble()) material.insert(key, sourceMaterial.value(key));
+        safePhysical.insert(QStringLiteral("material"), material);
+        QJsonObject section;
+        const QJsonObject sourceSection = physical.value(QStringLiteral("section")).toObject();
+        for (auto it = sourceSection.constBegin(); it != sourceSection.constEnd(); ++it) {
+            if (it.value().isDouble()) section.insert(it.key(), it.value());
+            else if (it.key() == QLatin1String("localY") && it.value().isArray()) section.insert(it.key(), it.value());
+        }
+        safePhysical.insert(QStringLiteral("section"), section);
+        const QJsonObject analysis = physical.value(QStringLiteral("analysis")).toObject();
+        QJsonObject safeAnalysis{{QStringLiteral("kind"), analysis.value(QStringLiteral("kind"))}};
+        for (const QString &key : {QStringLiteral("duration"), QStringLiteral("rayleighAlpha"), QStringLiteral("rayleighBeta")})
+            if (analysis.value(key).isDouble()) safeAnalysis.insert(key, analysis.value(key));
+        safePhysical.insert(QStringLiteral("analysis"), safeAnalysis);
+        auto safeSelectors = [](const QJsonValue &value) {
+            QJsonArray output;
+            for (const QJsonValue &entry : value.toArray()) {
+                const QJsonObject object = entry.toObject();
+                const QJsonObject selector = object.value(QStringLiteral("selector")).toObject();
+                QJsonObject safeSelector{{QStringLiteral("kind"), selector.value(QStringLiteral("kind"))}};
+                for (const QString &key : {QStringLiteral("x"), QStringLiteral("tolerance")})
+                    if (selector.value(key).isDouble()) safeSelector.insert(key, selector.value(key));
+                QJsonObject safe{{QStringLiteral("selector"), safeSelector}};
+                if (object.value(QStringLiteral("dofs")).isArray()) safe.insert(QStringLiteral("dofs"), object.value(QStringLiteral("dofs")));
+                for (const QString &key : {QStringLiteral("kind"), QStringLiteral("quantity"), QStringLiteral("component"),
+                                           QStringLiteral("type")})
+                    if (object.value(key).isString()) safe.insert(key, object.value(key));
+                if (object.value(QStringLiteral("components")).isArray()) safe.insert(QStringLiteral("components"), object.value(QStringLiteral("components")));
+                if (object.value(QStringLiteral("history")).isArray()) {
+                    QJsonArray history;
+                    for (const QJsonValue &sampleValue : object.value(QStringLiteral("history")).toArray()) {
+                        const QJsonObject sample = sampleValue.toObject();
+                        if (sample.value(QStringLiteral("time")).isDouble()
+                            && sample.value(QStringLiteral("components")).isArray())
+                            history.append(QJsonObject{{QStringLiteral("timeS"), sample.value(QStringLiteral("time"))},
+                                                       {QStringLiteral("componentsN"), sample.value(QStringLiteral("components"))}});
+                    }
+                    safe.insert(QStringLiteral("history"), history);
+                }
+                output.append(safe);
+            }
+            return output;
+        };
+        safePhysical.insert(QStringLiteral("supports"), safeSelectors(physical.value(QStringLiteral("supports"))));
+        safePhysical.insert(QStringLiteral("loads"), safeSelectors(physical.value(QStringLiteral("loads"))));
+        safePhysical.insert(QStringLiteral("initialConditions"), safeSelectors(physical.value(QStringLiteral("initialConditions"))));
+        safePhysical.insert(QStringLiteral("observables"), safeSelectors(physical.value(QStringLiteral("observables"))));
+        result.insert(QStringLiteral("physicalSummary"), safePhysical);
+    }
+    for (const QString &key : {QStringLiteral("physicalSummaryDigest"), QStringLiteral("physicalSummaryBasis"),
+                               QStringLiteral("numericalSummaryDigest")})
+        if (inspection.contains(key)) result.insert(key, inspection.value(key));
+    const QJsonObject numerical = inspection.value(QStringLiteral("numericalSummary")).toObject();
+    if (!numerical.isEmpty()) result.insert(QStringLiteral("numericalSummary"), numerical);
+    const QJsonObject observedPhysicalState = inspection.value(QStringLiteral("observedPhysicalState")).toObject();
+    if (!observedPhysicalState.isEmpty())
+    {
+        const QJsonObject projectedObserved = trustedObservedPhysicalStateProjection(observedPhysicalState);
+        result.insert(QStringLiteral("observedPhysicalState"), projectedObserved);
+        result.insert(QStringLiteral("observedPhysicalStateDigest"),
+                      RTrustedMechanicsService::summaryDigest(projectedObserved));
+        result.insert(QStringLiteral("observedPhysicalStateDigestBasis"),
+                      QStringLiteral("host-projected-observed-physical-state/v1"));
+    }
+
+    QJsonArray bindings;
+    for (const QJsonValue &bindingValue : inspection.value(QStringLiteral("selectorBindings")).toArray()) {
+        const QJsonObject binding = bindingValue.toObject();
+        QJsonObject safe;
+        for (const QString &key : {QStringLiteral("field"), QStringLiteral("index"), QStringLiteral("valid"),
+                                   QStringLiteral("code"), QStringLiteral("modelRevision"),
+                                   QStringLiteral("physicalIds"), QStringLiteral("nodePositions"),
+                                   QStringLiteral("errorCode")})
+            if (binding.contains(key)) safe.insert(key, binding.value(key));
+        const QJsonObject selector = binding.value(QStringLiteral("selector")).toObject();
+        if (!selector.isEmpty()) {
+            QJsonObject safeSelector{{QStringLiteral("kind"), selector.value(QStringLiteral("kind"))}};
+            for (const QString &key : {QStringLiteral("x"), QStringLiteral("tolerance")})
+                if (selector.value(key).isDouble()) safeSelector.insert(key, selector.value(key));
+            safe.insert(QStringLiteral("selector"), safeSelector);
+        }
+        bindings.append(safe);
+    }
+    if (!bindings.isEmpty()) result.insert(QStringLiteral("selectorBindings"), bindings);
+    return result;
+}
+
+QJsonObject trustedInspectionJobIdentity(const QString &jobId, const QJsonObject &runtimeStamp,
+                                         const QString &inspectedFingerprint)
+{
+    if (jobId.isEmpty())
+        return {{QStringLiteral("status"), QStringLiteral("no_job")},
+                {QStringLiteral("state"), QStringLiteral("no_job")},
+                {QStringLiteral("resultSourceStatus"), QStringLiteral("no_job")}};
+
+    QJsonObject result{{QStringLiteral("jobId"), jobId}};
+    const QJsonObject job = SolverManager::getInstance().jobQuery(jobId);
+    if (!job.value(QStringLiteral("found")).toBool())
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("not_found"));
+        result.insert(QStringLiteral("state"), QStringLiteral("not_found"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("not_found"));
+        return result;
+    }
+    if (job.value(QStringLiteral("jobId")).toString() != jobId)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("state"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+
+    const QString jobState = job.value(QStringLiteral("state")).toString();
+    if (!jobState.isEmpty()) result.insert(QStringLiteral("state"), jobState);
+    if (job.value(QStringLiteral("processStarted")).isBool())
+        result.insert(QStringLiteral("processStarted"), job.value(QStringLiteral("processStarted")));
+    if (job.value(QStringLiteral("processExitCode")).isDouble())
+        result.insert(QStringLiteral("processExitCode"), job.value(QStringLiteral("processExitCode")));
+
+    const QJsonObject jobStamp = job.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+    const QJsonObject provenance = job.value(QStringLiteral("nativeResultProvenance")).toObject();
+    const QJsonObject provenanceStamp = provenance.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+    const auto validStamp = [](const QJsonObject &stamp)
+    {
+        static const QRegularExpression revisionGrammar(QStringLiteral("^[0-9]{1,32}$"));
+        const QString revision = stamp.value(QStringLiteral("revision")).toString();
+        return validToken(stamp.value(QStringLiteral("documentId"))) &&
+                validToken(stamp.value(QStringLiteral("sessionEpoch"))) &&
+                revisionGrammar.match(revision).hasMatch();
+    };
+    if (!validStamp(jobStamp))
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    const QJsonObject safeJobStamp{{QStringLiteral("documentId"), jobStamp.value(QStringLiteral("documentId"))},
+                                   {QStringLiteral("revision"), jobStamp.value(QStringLiteral("revision"))},
+                                   {QStringLiteral("sessionEpoch"), jobStamp.value(QStringLiteral("sessionEpoch"))}};
+    result.insert(QStringLiteral("sourceRuntimeStamp"), safeJobStamp);
+    if (jobStamp != runtimeStamp)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("stale"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("stale"));
+        return result;
+    }
+
+    const QJsonObject sourceSnapshot = provenance.value(QStringLiteral("sourceSnapshotRef")).toObject();
+    QJsonObject snapshotStamp = sourceSnapshot.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+    if (snapshotStamp.isEmpty())
+    {
+        const QJsonObject instance = sourceSnapshot.value(QStringLiteral("instanceRef")).toObject();
+        if (!instance.isEmpty())
+            snapshotStamp = {{QStringLiteral("documentId"), instance.value(QStringLiteral("documentId"))},
+                             {QStringLiteral("revision"), instance.value(QStringLiteral("documentRevision"))},
+                             {QStringLiteral("sessionEpoch"), instance.value(QStringLiteral("sessionEpoch"))}};
+    }
+    const QString inputSnapshotSha = job.value(QStringLiteral("inputSnapshotSha256")).toString();
+    const QString provenanceInputSha = provenance.value(QStringLiteral("inputSnapshotSha256")).toString();
+    static const QRegularExpression sha256Grammar(QStringLiteral("^[0-9a-f]{64}$"));
+    const bool frozenIdentityMatches = provenance.value(QStringLiteral("jobId")).toString() == jobId &&
+            provenanceStamp == jobStamp && validStamp(snapshotStamp) && snapshotStamp == jobStamp &&
+            sha256Grammar.match(inputSnapshotSha).hasMatch() && provenanceInputSha == inputSnapshotSha;
+    if (!frozenIdentityMatches)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+
+    // A model file SHA is not the host's state fingerprint. Re-read the exact
+    // hash-bound solver input and compute the same in-memory fingerprint used
+    // for the inspected model before reporting a match.
+    const QString inputPath = job.value(QStringLiteral("inputSnapshotRef")).toString();
+    const QString inputPackagePath = job.value(QStringLiteral("inputPackageRef")).toString();
+    const QFileInfo inputInfo(inputPath);
+    const QFileInfo inputPackageInfo(inputPackagePath);
+    constexpr qint64 maxInspectionJobInputBytes = 32 * 1024 * 1024;
+    const QString canonicalInputPath = inputInfo.canonicalFilePath();
+    const QString absoluteInputPath = QDir::cleanPath(inputInfo.absoluteFilePath());
+#ifdef Q_OS_WIN
+    const bool canonicalPathMatches = canonicalInputPath.compare(absoluteInputPath, Qt::CaseInsensitive) == 0;
+#else
+    const bool canonicalPathMatches = canonicalInputPath == absoluteInputPath;
+#endif
+    if (inputPath.isEmpty() || inputPackagePath.isEmpty() || !inputInfo.isAbsolute() ||
+        !inputInfo.isFile() || inputInfo.isSymLink() || inputInfo.size() <= 0 ||
+        inputInfo.size() > maxInspectionJobInputBytes || !inputPackageInfo.isAbsolute() ||
+        !inputPackageInfo.isDir() || inputPackageInfo.isSymLink() ||
+        canonicalInputPath.isEmpty() || !canonicalPathMatches)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    QString openedInputPath;
+    QString inputOpenError;
+    std::unique_ptr<QFile> verifiedInputFile = TrustedArtifactPaths::openFileUnderRoot(
+        inputInfo.absoluteFilePath(), inputPackageInfo.absoluteFilePath(),
+        &openedInputPath, &inputOpenError, true);
+    if (!verifiedInputFile || openedInputPath.isEmpty())
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+
+    QString inputSnapshotError;
+    QByteArray inputSnapshotBytes = TrustedArtifactPaths::readOpenedFileSnapshot(
+        *verifiedInputFile, qsizetype(maxInspectionJobInputBytes), &inputSnapshotError);
+    const QByteArray inputSnapshotHash = inputSnapshotBytes.isEmpty()
+        ? QByteArray{} : QCryptographicHash::hash(inputSnapshotBytes, QCryptographicHash::Sha256);
+    if (inputSnapshotHash.isEmpty() || QString::fromLatin1(inputSnapshotHash.toHex()) != inputSnapshotSha)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    verifiedInputFile.reset();
+
+    const QString inputExtension = inputInfo.suffix();
+    if (inputExtension != RModel::getDefaultFileExtension(false) &&
+        inputExtension != RModel::getDefaultFileExtension(true))
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    QTemporaryDir privateSnapshotDirectory;
+    const QFileDevice::Permissions privateDirectoryPermissions = QFileDevice::ReadOwner |
+        QFileDevice::WriteOwner | QFileDevice::ExeOwner;
+    const QFileDevice::Permissions privateFilePermissions = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+    const QString privateSnapshotPath = QDir(privateSnapshotDirectory.path()).filePath(
+        QStringLiteral("verified-input.%1").arg(inputExtension));
+    QFile privateSnapshotWriter(privateSnapshotPath);
+    if (!privateSnapshotDirectory.isValid() ||
+        !QFile::setPermissions(privateSnapshotDirectory.path(), privateDirectoryPermissions) ||
+        !privateSnapshotWriter.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+        privateSnapshotWriter.write(inputSnapshotBytes) != inputSnapshotBytes.size() ||
+        !privateSnapshotWriter.flush() || privateSnapshotWriter.size() != inputSnapshotBytes.size())
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    privateSnapshotWriter.close();
+    inputSnapshotBytes.clear();
+    if (!QFile::setPermissions(privateSnapshotPath, privateFilePermissions))
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    QString openedPrivateSnapshotPath;
+    QString privateSnapshotOpenError;
+    std::unique_ptr<QFile> privateSnapshotFile = TrustedArtifactPaths::openFileUnderRoot(
+        privateSnapshotPath, privateSnapshotDirectory.path(),
+        &openedPrivateSnapshotPath, &privateSnapshotOpenError, true);
+    if (!privateSnapshotFile || openedPrivateSnapshotPath.isEmpty())
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    QByteArray privateSnapshotBytes = TrustedArtifactPaths::readOpenedFileSnapshot(
+        *privateSnapshotFile, qsizetype(maxInspectionJobInputBytes), &privateSnapshotOpenError);
+    const QByteArray privateSnapshotHash = privateSnapshotBytes.isEmpty()
+        ? QByteArray{} : QCryptographicHash::hash(privateSnapshotBytes, QCryptographicHash::Sha256);
+    if (privateSnapshotHash.isEmpty() || privateSnapshotHash != inputSnapshotHash ||
+        QString::fromLatin1(privateSnapshotHash.toHex()) != inputSnapshotSha)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    privateSnapshotBytes.clear();
+
+    QString jobFingerprint;
+    try
+    {
+        RModel jobSourceModel;
+        // Parse only the private, hash-verified copy. The solver input path is
+        // no longer consulted after its bounded byte snapshot was captured.
+        jobSourceModel.readFromVerifiedFile(privateSnapshotPath, *privateSnapshotFile);
+        const QByteArray afterParseBytes = TrustedArtifactPaths::readOpenedFileSnapshot(
+            *privateSnapshotFile, qsizetype(maxInspectionJobInputBytes), &privateSnapshotOpenError);
+        const QByteArray afterParseHash = afterParseBytes.isEmpty()
+            ? QByteArray{} : QCryptographicHash::hash(afterParseBytes, QCryptographicHash::Sha256);
+        if (afterParseHash.isEmpty() || afterParseHash != privateSnapshotHash ||
+            QString::fromLatin1(afterParseHash.toHex()) != inputSnapshotSha)
+        {
+            result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+            result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+            return result;
+        }
+        if (trustedInspectionWithinEntityLimit(jobSourceModel))
+            jobFingerprint = RModelCommandService::stateFingerprint(jobSourceModel);
+    }
+    catch (...)
+    {
+        jobFingerprint.clear();
+    }
+    if (jobFingerprint.isEmpty())
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+    result.insert(QStringLiteral("sourceFingerprint"), jobFingerprint);
+    if (jobFingerprint != inspectedFingerprint)
+    {
+        result.insert(QStringLiteral("status"), QStringLiteral("mismatch"));
+        result.insert(QStringLiteral("resultSourceStatus"), QStringLiteral("mismatch"));
+        return result;
+    }
+
+    const QString state = job.value(QStringLiteral("state")).toString();
+    const bool manifestExpected = job.value(QStringLiteral("nativeResultCatalogExpected")).toBool();
+    const bool verifiedManifest = job.value(QStringLiteral("resultManifestVerified")).toBool() &&
+            job.value(QStringLiteral("nativeResultCatalogAvailable")).toBool();
+    QString resultSourceStatus = QStringLiteral("pending");
+    if (state == QLatin1String("succeeded"))
+    {
+        if (job.value(QStringLiteral("eligibility")).toString() == QLatin1String("conflict") ||
+            !job.value(QStringLiteral("resultArtifactVerified")).toBool() ||
+            !job.value(QStringLiteral("resultSourceBindingVerified")).toBool() ||
+            (manifestExpected && !verifiedManifest))
+            resultSourceStatus = QStringLiteral("mismatch");
+        else if (verifiedManifest)
+            resultSourceStatus = QStringLiteral("matched");
+        else
+            resultSourceStatus = QStringLiteral("unverified");
+    }
+    else if (state == QLatin1String("failed") || state == QLatin1String("cancelled") ||
+             state == QLatin1String("interrupted"))
+        resultSourceStatus = QStringLiteral("unavailable");
+
+    result.insert(QStringLiteral("status"), resultSourceStatus == QLatin1String("mismatch")
+                  ? QStringLiteral("mismatch") : QStringLiteral("matched"));
+    result.insert(QStringLiteral("resultSourceStatus"), resultSourceStatus);
+    result.insert(QStringLiteral("resultSourceRuntimeStamp"), safeJobStamp);
+    result.insert(QStringLiteral("resultSourceFingerprint"), jobFingerprint);
+    static const QRegularExpression artifactIdGrammar(QStringLiteral("^artifact-[0-9a-f]{32}$"));
+    if (job.value(QStringLiteral("resultArtifactId")).isString() &&
+        artifactIdGrammar.match(job.value(QStringLiteral("resultArtifactId")).toString()).hasMatch())
+        result.insert(QStringLiteral("resultArtifactId"), job.value(QStringLiteral("resultArtifactId")));
+    if (sha256Grammar.match(job.value(QStringLiteral("resultArtifactSha256")).toString()).hasMatch())
+        result.insert(QStringLiteral("resultArtifactSha256"), job.value(QStringLiteral("resultArtifactSha256")));
+    const QString manifestSha256 = job.value(QStringLiteral("resultManifestSha256")).toString();
+    if (sha256Grammar.match(manifestSha256).hasMatch())
+        result.insert(QStringLiteral("resultManifestSha256"), manifestSha256);
+    result.insert(QStringLiteral("resultArtifactVerified"),
+                  job.value(QStringLiteral("resultArtifactVerified")).toBool());
+    result.insert(QStringLiteral("resultSourceBindingVerified"),
+                  job.value(QStringLiteral("resultSourceBindingVerified")).toBool());
+    result.insert(QStringLiteral("resultManifestVerified"), verifiedManifest);
+    return result;
+}
+
+QJsonObject trustedSolveCost(const QJsonObject &job)
+{
+    QJsonObject cost;
+    const QDateTime started = QDateTime::fromString(job.value(QStringLiteral("startedAt")).toString(), Qt::ISODateWithMs);
+    const QDateTime finished = QDateTime::fromString(job.value(QStringLiteral("finishedAt")).toString(), Qt::ISODateWithMs);
+    if (started.isValid() && finished.isValid() && finished >= started)
+        cost.insert(QStringLiteral("solveElapsedMs"), double(started.msecsTo(finished)));
+    cost.insert(QStringLiteral("processStarted"), job.value(QStringLiteral("processStarted")));
+    cost.insert(QStringLiteral("processExitCode"), job.value(QStringLiteral("processExitCode")));
+    return cost;
+}
+
+bool trustedPrecisionOnlyFailure(const QJsonObject &report, const QString &analysisKind)
+{
+    if (report.value(QStringLiteral("schema")).toString() != QLatin1String("range.verification-report/v1")
+        || report.value(QStringLiteral("passed")).toBool()) return false;
+    const QJsonObject metrics = report.value(QStringLiteral("metrics")).toObject();
+    bool foundPrecisionFailure = false;
+    for (auto it = metrics.begin(); it != metrics.end(); ++it) {
+        const QJsonObject metric = it.value().toObject();
+        if (!metric.value(QStringLiteral("required")).toBool()) continue;
+        const QString status = metric.value(QStringLiteral("status")).toString();
+        if (status == QLatin1String("pass")) continue;
+        if (status != QLatin1String("fail")) return false;
+        const QString name = it.key();
+        const bool allowed = analysisKind == QLatin1String("static")
+                ? name == QLatin1String("displacement")
+            : analysisKind == QLatin1String("modal")
+                ? name == QLatin1String("frequency")
+            : analysisKind == QLatin1String("linearTransient")
+                ? (name == QLatin1String("displacement")
+                   || name == QLatin1String("referenceConvergence")
+                   || name == QLatin1String("sdofAnalyticDisplacement")
+                   || name == QLatin1String("rodHistoryReference"))
+                : false;
+        if (!allowed) return false;
+        foundPrecisionFailure = true;
+    }
+    return foundPrecisionFailure;
+}
+
+QJsonArray experimentJobs(const QString &experimentId)
+{
+    QJsonArray result;
+    auto &manager = SolverManager::getInstance();
+    for (int offset = 0; ; offset += 200)
+    {
+        const auto page = manager.jobsQuery(offset, 200);
+        for (const auto &value : page.value("jobs").toArray())
+            if (value.toObject().value("trustedExperimentId") == QJsonValue(experimentId))
+            {
+                result.append(value);
+                if (result.size() >= RTrustedExperimentService::HardSolveLimit) return result;
+            }
+        if (!page.value("hasMore").toBool()) return result;
+    }
+}
+
+QString boundedFileTail(QFile &file, qsizetype maximumBytes, qint64 *fileSize, bool *truncated,
+                        QString *error = nullptr, bool *hasNonWhitespaceContent = nullptr)
+{
+    if (error) error->clear();
+    if (fileSize) *fileSize = 0;
+    if (truncated) *truncated = false;
+    if (hasNonWhitespaceContent) *hasNonWhitespaceContent = false;
+    if (!file.isOpen())
+    {
+        if (error) *error = QStringLiteral("The solver log handle is no longer open.");
+        return {};
+    }
+    const qint64 size = file.size();
+    if (size < 0)
+    {
+        if (error) *error = QStringLiteral("The solver log size is unavailable.");
+        return {};
+    }
+    if (fileSize) *fileSize = size;
+    const bool omittedPrefix = size > maximumBytes;
+    const qint64 offset = omittedPrefix ? size - maximumBytes : 0;
+    if (!file.seek(offset))
+    {
+        if (error) *error = QStringLiteral("The solver log tail could not be sought.");
+        return {};
+    }
+    const QByteArray bytes = file.read(maximumBytes);
+    if (file.error() != QFileDevice::NoError || bytes.size() != qMin<qint64>(maximumBytes, size - offset))
+    {
+        if (error) *error = QStringLiteral("The solver log tail could not be read completely.");
+        return {};
+    }
+    QString text = QString::fromUtf8(bytes);
+    if (hasNonWhitespaceContent) *hasNonWhitespaceContent = !text.trimmed().isEmpty();
+    if (truncated) *truncated = omittedPrefix;
+    if (omittedPrefix)
+        text.prepend(QStringLiteral("[earlier solver log bytes omitted: %1]\n").arg(offset));
+    return text;
+}
+
+bool proposeAuthorizedMeshRefinement(const QJsonObject &problemSpec,
+                                     const QJsonObject &authorization,
+                                     const QJsonObject &verificationReport,
+                                     QJsonObject *repairedProblemSpec,
+                                     QString *reason)
+{
+    return RTrustedExperimentService::proposeAuthorizedMeshRefinement(
+        problemSpec, authorization, verificationReport, repairedProblemSpec, reason);
+}
 }
 
 struct ModelCommandHost::State
 {
     MeshJobController *meshController = nullptr;
+    std::unique_ptr<RTrustedExperimentService> experiments;
+    QString experimentRoot;
+    QSet<QString> finalizingExperiments;
     struct Preview
     {
         QString id;
@@ -367,6 +1431,8 @@ struct ModelCommandHost::State
         bool hasSupportedDelta = false;
         QString staticBindingHistoryId;
         QString staticBindingHistoryHash;
+        QString piezoHistoryId;
+        QString piezoHistoryHash;
         QString inputFingerprint;
         QString readSetHash;
         QString jobId;
@@ -376,6 +1442,12 @@ struct ModelCommandHost::State
         QJsonObject validation;
         QJsonObject recoveryQualification;
         QString meshPreviewId;
+        QString experimentId;
+        QJsonObject experimentAuthorizationRequest;
+        QJsonObject experimentAuthorization;
+        QJsonObject experimentSourceBinding;
+        QJsonObject experimentProblemSpecInput;
+        QJsonObject experimentDiagnostics;
         bool approved = false;
         bool consumed = false;
     };
@@ -505,6 +1577,16 @@ struct ModelCommandHost::State
 
 ModelCommandHost::ModelCommandHost(Session *session) : QObject(session), state(std::make_unique<State>()), session(session)
 {
+    QString experimentData = Application::instance()->getApplicationSettings()->getDataDir();
+    if (experimentData.isEmpty()) experimentData = QDir::tempPath();
+    state->experimentRoot = QDir(experimentData).filePath("trusted-experiments");
+    state->experiments = std::make_unique<RTrustedExperimentService>(state->experimentRoot);
+    // Session constructs this Host before Application::initialize stores the
+    // Session pointer. Defer the singleton lookup until the first event turn.
+    QTimer::singleShot(0, this, [this] {
+        connect(&SolverManager::getInstance(), &SolverManager::nativeJobUpdated, this,
+            [this](const QString &jobId, const QJsonObject &) { finalizeExperimentJob(jobId); });
+    });
     state->meshController = new MeshJobController(session, this);
     connect(state->meshController, &MeshJobController::previewsInvalidated, this, [this] {
         for (auto &entry : state->previews)
@@ -563,6 +1645,496 @@ ModelCommandHost::~ModelCommandHost()
 }
 QString ModelCommandHost::journalPath() const { return state->journal; }
 QString ModelCommandHost::sessionEpoch() const { return state->sessionEpoch; }
+
+void ModelCommandHost::finalizeExperimentJob(const QString &jobId)
+{
+    // jobQuery may publish a reconciliation update while validating the record.
+    if (state->finalizingExperiments.contains(jobId)) return;
+    state->finalizingExperiments.insert(jobId);
+    const auto guard = qScopeGuard([&] { state->finalizingExperiments.remove(jobId); });
+    const auto job = SolverManager::getInstance().jobQuery(jobId);
+    const QString experimentId = job.value("trustedExperimentId").toString();
+    const QString attemptId = job.value("trustedExperimentAttemptId").toString();
+    const QString jobState = job.value("state").toString();
+    if (experimentId.isEmpty() || attemptId.isEmpty()
+        || (jobState != "succeeded" && jobState != "failed" && jobState != "cancelled"
+            && jobState != "interrupted")) return;
+    const auto loaded = state->experiments->query(experimentId);
+    const auto record = loaded.data.value("experiment").toObject();
+    const auto binding = record.value("authorization").toObject().value("sourceBinding").toObject();
+    if (!loaded.ok || record.value("cancelRequested").toBool()
+        || record.value("state") != QJsonValue("solving")
+        || record.value("activeAttempt").toObject().value("attemptId") != QJsonValue(attemptId)) return;
+    const auto source = experimentSource(session, state->sessionEpoch, binding.value("documentId").toString());
+    QJsonObject identity{{"artifactId", job.value("resultArtifactId")}, {"jobId", jobId},
+        {"inputSnapshotSha256", job.value("inputSnapshotSha256")},
+        {"inputPackageSha256", job.value("inputPackageSha256")},
+        {"sourceSnapshotRef", job.value("nativeResultProvenance").toObject().value("sourceSnapshotRef")}};
+    const bool completeIdentity = !identity.value("artifactId").toString().isEmpty()
+        && !identity.value("sourceSnapshotRef").toObject().isEmpty()
+        && job.value("resultManifestVerified").toBool()
+        && !job.value("resultManifestRef").toString().isEmpty()
+        && !job.value("resultManifestSha256").toString().isEmpty()
+        && job.value("eligibility") != QJsonValue("conflict");
+    const auto persistFailureDiagnosis = [&]() -> bool {
+        const QJsonObject authorization = record.value("authorization").toObject();
+        const QJsonObject sourceBinding = authorization.value("sourceBinding").toObject();
+        const QString sourceId = sourceBinding.value("documentId").toString();
+        const QString modelRevision = sourceBinding.value("documentRevision").toString();
+        const QJsonObject specInput = record.value("candidateProblemSpecInput").toObject();
+        const QJsonObject normalizedSpec = record.value("candidateProblemSpec").toObject();
+        const QJsonObject activeAttempt = record.value("activeAttempt").toObject();
+        const QString inputPath = job.value("inputSnapshotRef").toString();
+        const QString expectedInputSha = job.value("inputSnapshotSha256").toString();
+        const QString expectedPackageSha = job.value("inputPackageSha256").toString();
+        const QString trustedRunsRoot = QDir(state->experimentRoot).filePath(
+            experimentId + QStringLiteral("/.range-runs"));
+        QString inputCanonicalPath;
+        QString captureError;
+        const QJsonObject jobSourceStamp = job.value("sourceRuntimeStamp").toObject();
+        QJsonObject identityChecks{
+            {QStringLiteral("activeAttemptIdMatches"), activeAttempt.value("attemptId").toString() == attemptId},
+            {QStringLiteral("activeInputSnapshotMatches"), activeAttempt.value("inputSnapshotSha256").toString() == expectedInputSha},
+            {QStringLiteral("activeInputPackageMatches"), activeAttempt.value("inputPackageSha256").toString() == expectedPackageSha},
+            {QStringLiteral("jobExperimentMatches"), job.value("trustedExperimentId").toString() == experimentId},
+            {QStringLiteral("jobAttemptMatches"), job.value("trustedExperimentAttemptId").toString() == attemptId},
+            {QStringLiteral("sourceDocumentMatches"), jobSourceStamp.value("documentId").toString() == sourceId},
+            {QStringLiteral("sourceRevisionMatches"), jobSourceStamp.value("revision").toString() == modelRevision},
+            {QStringLiteral("inputPathUnderTrustedRunRoot"), TrustedArtifactPaths::canonicalFileUnderRoot(inputPath, trustedRunsRoot, &inputCanonicalPath)}};
+        QStringList identityFailures;
+        for (auto check = identityChecks.constBegin(); check != identityChecks.constEnd(); ++check)
+            if (!check.value().toBool()) identityFailures.append(check.key());
+        bool inputBound = identityFailures.isEmpty();
+        if (!inputBound)
+            captureError = QStringLiteral("Failed job identity binding checks: %1.").arg(identityFailures.join(QStringLiteral(", ")));
+
+        constexpr qsizetype maxTrustedFailureInputSnapshotBytes = 32 * 1024 * 1024;
+        QByteArray inputSnapshotBytes;
+        std::unique_ptr<QFile> inputArtifactFile;
+        if (inputBound)
+        {
+            inputArtifactFile = TrustedArtifactPaths::openFileUnderRoot(
+                inputPath, trustedRunsRoot, &inputCanonicalPath, &captureError);
+            if (!inputArtifactFile) inputBound = false;
+        }
+        if (inputBound)
+        {
+            inputSnapshotBytes = TrustedArtifactPaths::readOpenedFileSnapshot(
+                *inputArtifactFile, maxTrustedFailureInputSnapshotBytes, &captureError);
+            const QByteArray inputHash = inputSnapshotBytes.isEmpty()
+                ? QByteArray{} : QCryptographicHash::hash(inputSnapshotBytes, QCryptographicHash::Sha256);
+            if (inputHash.isEmpty() || QString::fromLatin1(inputHash.toHex()) != expectedInputSha)
+            {
+                inputBound = false;
+                if (captureError.isEmpty())
+                    captureError = QStringLiteral("The frozen candidate input snapshot does not match its submitted SHA-256.");
+            }
+        }
+        QString modelSnapshotPath;
+        std::unique_ptr<QTemporaryDir> modelSnapshotDirectory;
+        if (inputBound)
+        {
+            const QString extension = QFileInfo(inputCanonicalPath).suffix();
+            if (extension != RModel::getDefaultFileExtension(false) &&
+                extension != RModel::getDefaultFileExtension(true))
+            {
+                inputBound = false;
+                captureError = QStringLiteral("The frozen candidate input has an unsupported model extension.");
+            }
+            else
+            {
+                modelSnapshotDirectory = std::make_unique<QTemporaryDir>(
+                    QDir(trustedRunsRoot).filePath(QStringLiteral("diagnostic-candidate-XXXXXX")));
+                modelSnapshotPath = QDir(modelSnapshotDirectory->path()).filePath(
+                    QStringLiteral("candidate.%1").arg(extension));
+                QFile modelSnapshotWriter(modelSnapshotPath);
+                const QFileDevice::Permissions privateDirectoryPermissions =
+                    QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
+                if (!modelSnapshotDirectory->isValid() ||
+                    !QFile::setPermissions(modelSnapshotDirectory->path(), privateDirectoryPermissions) ||
+                    !modelSnapshotWriter.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+                    modelSnapshotWriter.write(inputSnapshotBytes) != inputSnapshotBytes.size() ||
+                    !modelSnapshotWriter.flush() || modelSnapshotWriter.size() != inputSnapshotBytes.size())
+                {
+                    inputBound = false;
+                    captureError = QStringLiteral("The verified candidate bytes could not be materialized in a private diagnostic directory.");
+                }
+                else
+                {
+                    modelSnapshotWriter.close();
+                }
+            }
+        }
+        const auto validation = RTrustedMechanicsService::validate(specInput);
+        if (inputBound && (!validation.valid || validation.normalizedSpec != normalizedSpec
+            || activeAttempt.value("physicalSummaryDigest").toString()
+                != RTrustedMechanicsService::summaryDigest(RTrustedMechanicsService::physicalSummary(normalizedSpec))
+            || activeAttempt.value("numericalConfigDigest").toString()
+                != RTrustedMechanicsService::summaryDigest(RTrustedMechanicsService::numericalSummary(normalizedSpec))))
+        {
+            inputBound = false;
+            captureError = QStringLiteral("The failed attempt ProblemSpec no longer matches its validated physical and numerical identity.");
+        }
+
+        const QString errorCode = !job.value("processStarted").toBool()
+            ? QStringLiteral("SOLVER_PROCESS_START_FAILED")
+            : job.value("processExited").toBool() && job.value("processExitCode").toInt(-1) != 0
+                ? QStringLiteral("SOLVER_PROCESS_EXIT_NONZERO")
+                : job.value("processExitCode").toInt(-1) == 0
+                    ? QStringLiteral("SOLVER_RESULT_EVIDENCE_INCOMPLETE")
+                    : QStringLiteral("SOLVER_FAILURE_UNCLASSIFIED");
+
+        QString solverLog;
+        QString logSource = QStringLiteral("terminal-message-fallback");
+        QString logCaptureError;
+        QString logArtifactPath;
+        qint64 logFileSize = 0;
+        bool logTruncated = false;
+        bool logTailHasContent = false;
+        const QJsonObject logRefs = job.value("logArtifactRefs").toObject();
+        const QString registeredLogPath = logRefs.value("solverLog").toString();
+        QString logCanonicalPath;
+        std::unique_ptr<QFile> solverLogFile;
+        QDir trustedAttemptRoot(QFileInfo(inputCanonicalPath).absolutePath());
+        if (inputBound && trustedAttemptRoot.cdUp() && !registeredLogPath.isEmpty())
+        {
+            solverLogFile = TrustedArtifactPaths::openFileUnderRoot(
+                registeredLogPath, trustedAttemptRoot.absolutePath(), &logCanonicalPath, &logCaptureError);
+            if (solverLogFile)
+            {
+                logArtifactPath = logCanonicalPath;
+                solverLog = boundedFileTail(*solverLogFile, 256 * 1024, &logFileSize,
+                                            &logTruncated, &logCaptureError, &logTailHasContent);
+                if (logCaptureError.isEmpty() && logTailHasContent)
+                    logSource = QStringLiteral("solver-log-tail");
+                else if (logCaptureError.isEmpty())
+                    logCaptureError = QStringLiteral("The solver log artifact is empty or contains only whitespace.");
+            }
+        }
+        else if (!registeredLogPath.isEmpty())
+        {
+            logCaptureError = QStringLiteral("The solver log could not be bound to the verified attempt input directory.");
+        }
+        if (logSource == QStringLiteral("terminal-message-fallback"))
+            solverLog = job.value("message").toString().left(2048);
+
+        Model failedCandidate;
+        bool modelSnapshotAvailable = false;
+        std::unique_ptr<QFile> verifiedModelSnapshot;
+        if (inputBound)
+        {
+            verifiedModelSnapshot = TrustedArtifactPaths::openFileUnderRoot(
+                modelSnapshotPath, trustedRunsRoot, nullptr, &captureError, true);
+            const QByteArray verifiedSnapshotBytes = verifiedModelSnapshot
+                ? TrustedArtifactPaths::readOpenedFileSnapshot(
+                    *verifiedModelSnapshot, maxTrustedFailureInputSnapshotBytes, &captureError)
+                : QByteArray{};
+            const QByteArray verifiedSnapshotHash = verifiedSnapshotBytes.isEmpty()
+                ? QByteArray{} : QCryptographicHash::hash(verifiedSnapshotBytes, QCryptographicHash::Sha256);
+            if (verifiedSnapshotHash.isEmpty() ||
+                QString::fromLatin1(verifiedSnapshotHash.toHex()) != expectedInputSha)
+            {
+                inputBound = false;
+                if (captureError.isEmpty())
+                    captureError = QStringLiteral("The private model snapshot does not match the verified candidate bytes.");
+            }
+            else if (!isDirectModelArtifact(modelSnapshotPath, &captureError))
+            {
+                inputBound = false;
+            }
+        }
+        if (inputBound)
+        {
+            try
+            {
+                failedCandidate.readFromVerifiedFile(modelSnapshotPath, *verifiedModelSnapshot);
+                const QByteArray verifiedSnapshotBytes = verifiedModelSnapshot
+                    ? TrustedArtifactPaths::readOpenedFileSnapshot(
+                        *verifiedModelSnapshot, maxTrustedFailureInputSnapshotBytes, &captureError)
+                    : QByteArray{};
+                const QByteArray verifiedSnapshotHash = verifiedSnapshotBytes.isEmpty()
+                    ? QByteArray{} : QCryptographicHash::hash(verifiedSnapshotBytes, QCryptographicHash::Sha256);
+                modelSnapshotAvailable = !verifiedSnapshotHash.isEmpty() &&
+                    QString::fromLatin1(verifiedSnapshotHash.toHex()) == expectedInputSha;
+                if (!modelSnapshotAvailable && captureError.isEmpty())
+                    captureError = QStringLiteral("The model changed while it was being reopened from the verified byte snapshot.");
+            }
+            catch (const RError &failure)
+            {
+                captureError = QStringLiteral("The frozen candidate model could not be reopened: %1")
+                    .arg(failure.getMessage().left(512));
+            }
+            catch (const std::exception &failure)
+            {
+                captureError = QStringLiteral("The frozen candidate model could not be reopened: %1")
+                    .arg(QString::fromUtf8(failure.what()).left(512));
+            }
+        }
+        verifiedModelSnapshot.reset();
+        const QJsonObject diagnosis = RTrustedMechanicsService::diagnoseFailure(
+            specInput, modelSnapshotAvailable ? static_cast<const RModel *>(&failedCandidate) : nullptr,
+            sourceId, modelRevision, jobId, errorCode, solverLog);
+        const QByteArray problemSpecBytes = QJsonDocument(specInput).toJson(QJsonDocument::Compact);
+        const QString problemSpecSha = QString::fromLatin1(QCryptographicHash::hash(
+            problemSpecBytes, QCryptographicHash::Sha256).toHex());
+        QJsonObject package{{QStringLiteral("schemaVersion"), 1},
+                            {QStringLiteral("jobId"), jobId},
+                            {QStringLiteral("experimentId"), experimentId},
+                            {QStringLiteral("attemptId"), attemptId},
+                            {QStringLiteral("sourceId"), sourceId},
+                            {QStringLiteral("modelRevision"), modelRevision},
+                            {QStringLiteral("problemSpec"), specInput},
+                            {QStringLiteral("normalizedProblemSpec"), normalizedSpec},
+                            {QStringLiteral("problemSpecSha256"), problemSpecSha},
+                            {QStringLiteral("inputSnapshotSha256"), expectedInputSha},
+                            {QStringLiteral("inputPackageSha256"), expectedPackageSha},
+                            {QStringLiteral("errorCode"), errorCode},
+                            {QStringLiteral("terminalMessage"), job.value("message").toString().left(2048)},
+                            {QStringLiteral("processEvidence"), QJsonObject{
+                                 {QStringLiteral("processStarted"), job.value("processStarted")},
+                                 {QStringLiteral("processExited"), job.value("processExited")},
+                                 {QStringLiteral("processExitCode"), job.value("processExitCode")}}},
+                            {QStringLiteral("solverLogCapture"), QJsonObject{
+                                 {QStringLiteral("source"), logSource},
+                                 {QStringLiteral("artifactRef"), logArtifactPath},
+                                 {QStringLiteral("fileSizeBytes"), double(logFileSize)},
+                                 {QStringLiteral("truncated"), logTruncated},
+                                 {QStringLiteral("captureError"), logCaptureError}}},
+                            {QStringLiteral("modelSnapshotAvailable"), modelSnapshotAvailable},
+                            {QStringLiteral("identityChecks"), identityChecks},
+                            {QStringLiteral("captureError"), captureError},
+                            {QStringLiteral("diagnosticReport"), diagnosis.value("diagnosticReport")},
+                            {QStringLiteral("failurePackage"), diagnosis}};
+        const QByteArray packageBytes = QJsonDocument(package).toJson(QJsonDocument::Compact);
+        const QString packageSha = QString::fromLatin1(QCryptographicHash::hash(
+            packageBytes, QCryptographicHash::Sha256).toHex());
+        const bool withinSizeLimit = packageBytes.size() <= maxTrustedFailurePackageBytes;
+        const bool processStarted = job.value("processStarted").toBool();
+        const bool logEvidenceAvailable = (logSource == QStringLiteral("solver-log-tail") && !solverLog.trimmed().isEmpty()) ||
+            (!processStarted && !job.value("message").toString().trimmed().isEmpty());
+        QJsonObject boundDiagnosis{{QStringLiteral("schemaVersion"), 1},
+                                   {QStringLiteral("status"), modelSnapshotAvailable && logEvidenceAvailable
+                                        ? QStringLiteral("complete") : QStringLiteral("incomplete")},
+                                   {QStringLiteral("packageSha256"), packageSha},
+                                   {QStringLiteral("packageBytes"), double(packageBytes.size())}};
+        if (withinSizeLimit) boundDiagnosis.insert(QStringLiteral("package"), package);
+
+        SolverManager &manager = SolverManager::getInstance();
+        QString persistenceError;
+        bool persisted = false;
+        if (withinSizeLimit)
+        {
+            persisted = manager.updateNativeJob(jobId,
+                {{QStringLiteral("trustedFailureDiagnosis"), boundDiagnosis},
+                 {QStringLiteral("updatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
+            if (!persisted)
+                persistenceError = manager.nativeJobDiagnostics.value(jobId)
+                    .value(QStringLiteral("message")).toString();
+        }
+        else
+        {
+            persistenceError = QStringLiteral("The diagnostic package exceeded the 24 MiB bounded job-record budget.");
+        }
+        if (!persisted)
+        {
+            boundDiagnosis.insert(QStringLiteral("status"), QStringLiteral("persistence_failed"));
+            boundDiagnosis.insert(QStringLiteral("persisted"), false);
+            if (!withinSizeLimit) boundDiagnosis.insert(QStringLiteral("packageOmitted"), true);
+            if (persistenceError.isEmpty())
+                persistenceError = QStringLiteral("The failure diagnosis could not be committed to the durable native-job registry.");
+            if (manager.nativeJobs.contains(jobId))
+                manager.nativeJobs[jobId].insert(QStringLiteral("trustedFailureDiagnosis"), boundDiagnosis);
+            manager.nativeJobDiagnostics.insert(jobId,
+                QJsonObject{{QStringLiteral("code"), QStringLiteral("TRUSTED_FAILURE_DIAGNOSIS_PERSIST_FAILED")},
+                            {QStringLiteral("message"), persistenceError.left(1024)},
+                            {QStringLiteral("packageSha256"), packageSha},
+                            {QStringLiteral("packageBytes"), double(packageBytes.size())},
+                            {QStringLiteral("recordRef"), manager.nativeJobRecordPaths.value(jobId)}});
+        }
+        return persisted;
+    };
+    const auto stopAttempt = [&](const QString &code) {
+        return state->experiments->finishSolve(experimentId, source, attemptId, false, {}, "stop", code,
+            QStringLiteral("Trusted child solve ended without a verified candidate (%1).").arg(code));
+    };
+    if (jobState != "succeeded" || !completeIdentity)
+    {
+        const bool failureDiagnosisPersisted = jobState != "failed" || persistFailureDiagnosis();
+        stopAttempt(jobState == "succeeded" ? "SOLVE_IDENTITY_MISSING"
+            : jobState == "cancelled" ? "SOLVE_CANCELLED"
+            : jobState == "interrupted" ? "SOLVE_INTERRUPTED"
+            : !failureDiagnosisPersisted ? "FAILURE_DIAGNOSIS_PERSIST_FAILED" : "SOLVE_FAILED");
+        return;
+    }
+    const auto finished = state->experiments->finishSolve(experimentId, source, attemptId, true, identity);
+    if (!finished.ok)
+    {
+        // An incomplete success identity must not leave an active transaction.
+        if (finished.code == "SOLVE_IDENTITY_INVALID") stopAttempt(finished.code);
+        return;
+    }
+    const auto verified = state->experiments->verifyCandidate(experimentId, source, identity,
+        job.value("resultManifestRef").toString(), job.value("resultManifestSha256").toString(),
+        trustedSolveCost(job));
+    if (!verified.ok)
+        state->experiments->stop(experimentId, source,
+            verified.code,
+            QStringLiteral("Trusted candidate verification could not be completed."));
+    else if (verified.data.value("state") == QJsonValue("repairing"))
+    {
+        const auto latest = state->experiments->query(experimentId);
+        const QJsonObject latestRecord = latest.data.value("experiment").toObject();
+        QJsonObject repairedSpec;
+        QString repairReason;
+        const QJsonObject policy = latestRecord.value("authorization").toObject()
+            .value("experimentPolicy").toObject();
+        const QJsonObject convergenceStudy = policy.value("convergenceStudy").toObject();
+        bool proposalValid = false;
+        if (latest.ok && !convergenceStudy.isEmpty())
+        {
+            const QJsonObject report = latestRecord.value("verificationReport").toObject();
+            const QJsonObject analysis = latestRecord.value("candidateProblemSpec").toObject()
+                .value("analysis").toObject();
+            const QString analysisKind = analysis.value("kind").toString();
+            const bool verified = latestRecord.value("verificationPassed").toBool();
+            if (verified || trustedPrecisionOnlyFailure(report, analysisKind))
+            {
+                const auto levels = latestRecord.value("convergenceLevels").toArray();
+                const auto proposal = RTrustedConvergenceService::proposeLevel(
+                    latestRecord.value("problemSpecInput").toObject(), convergenceStudy, levels.size(), &repairedSpec);
+                proposalValid = proposal.ok;
+                repairReason = proposal.message;
+            }
+            else
+            {
+                repairReason = QStringLiteral("Verification failure is not a permitted convergence refinement case.");
+            }
+        }
+        else if (latest.ok)
+        {
+            proposalValid = proposeAuthorizedMeshRefinement(
+                latestRecord.value("candidateProblemSpecInput").toObject(),
+                latestRecord.value("authorization").toObject(),
+                latestRecord.value("verificationReport").toObject(), &repairedSpec, &repairReason);
+        }
+        if (!latest.ok || !proposalValid)
+        {
+            state->experiments->markNeedsConfirmation(experimentId, source,
+                repairReason.isEmpty()
+                    ? QStringLiteral("Verification or convergence evidence does not support another numerical refinement.")
+                    : repairReason,
+                {{QStringLiteral("verificationReport"), latestRecord.value("verificationReport")},
+                 {QStringLiteral("convergence"), latestRecord.value("convergence")}});
+            return;
+        }
+        const auto repair = state->experiments->beginRepair(experimentId, source, repairedSpec);
+        if (!repair.ok)
+        {
+            const auto current = state->experiments->query(experimentId);
+            if (current.data.value("experiment").toObject().value("state") != QJsonValue("needs_confirmation"))
+                state->experiments->stop(experimentId, source, repair.code,
+                                         QStringLiteral("Authorized numerical repair could not start."));
+            return;
+        }
+        auto candidate = RTrustedMechanicsService::createCandidate(repairedSpec, source.documentId,
+                                                                    source.documentRevision);
+        if (!candidate.valid)
+        {
+            state->experiments->markNeedsConfirmation(experimentId, source,
+                QStringLiteral("The bounded numerical candidate could not be generated."),
+                {{QStringLiteral("candidateCode"), candidate.code},
+                 {QStringLiteral("candidateMessage"), candidate.message}});
+            return;
+        }
+        const auto diagnosis = RTrustedMechanicsService::diagnose(repairedSpec, &candidate.model,
+            source.documentId, source.documentRevision);
+        if (diagnosis.value("status") == QJsonValue("error"))
+        {
+            state->experiments->markNeedsConfirmation(experimentId, source,
+                QStringLiteral("The rebuilt numerical candidate did not pass physical readback diagnosis."),
+                {{QStringLiteral("diagnosis"), diagnosis}});
+            return;
+        }
+        const auto repaired = state->experiments->finishRepair(experimentId, source, repairedSpec,
+            RTrustedMechanicsService::physicalSummary(candidate.normalizedSpec));
+        if (!repaired.ok)
+        {
+            state->experiments->markNeedsConfirmation(experimentId, source,
+                QStringLiteral("Readback evidence did not confirm preservation of the authorized physical problem."),
+                {{QStringLiteral("repairCode"), repaired.code}, {QStringLiteral("diagnosis"), diagnosis}});
+            return;
+        }
+
+        Model detached;
+        static_cast<RModel&>(detached) = candidate.model;
+        std::unique_ptr<SolverTask> task;
+        try
+        {
+            auto &manager = SolverManager::getInstance();
+            task = std::make_unique<SolverTask>(Application::instance()->getApplicationSettings(), detached,
+                qMakePair(source.documentId, source.documentRevision.toULongLong()),
+                latestRecord.value("authorization").toObject(),
+                QDir(state->experimentRoot).filePath(experimentId), manager.getTaskServerName(),
+                SolverTask::TrustedExperimentCandidateTag{});
+            QString captureError;
+            if (!task->captureTrustedCandidateSnapshot(detached, &captureError))
+            {
+                state->experiments->stop(experimentId, source, QStringLiteral("CANDIDATE_CAPTURE_FAILED"),
+                    QStringLiteral("The authorized numerical candidate could not be frozen."),
+                    {{QStringLiteral("diagnostic"), captureError.left(2048)}});
+                return;
+            }
+        }
+        catch (const RError &failure)
+        {
+            state->experiments->stop(experimentId, source, QStringLiteral("CANDIDATE_CAPTURE_FAILED"),
+                                     failure.getMessage().left(2048));
+            return;
+        }
+        catch (const std::exception &failure)
+        {
+            state->experiments->stop(experimentId, source, QStringLiteral("CANDIDATE_CAPTURE_FAILED"),
+                                     QString::fromUtf8(failure.what()).left(2048));
+            return;
+        }
+        if (repairedSpec.value(QStringLiteral("analysis")).toObject()
+                .value(QStringLiteral("kind")).toString() == QStringLiteral("linearTransient"))
+        {
+            QString checkpointPreparationError;
+            if (!task->prepareNativeCheckpointInput(&checkpointPreparationError))
+            {
+                state->experiments->stop(experimentId, source,
+                    QStringLiteral("CANDIDATE_CHECKPOINT_PREPARATION_FAILED"),
+                    QStringLiteral("The authorized transient candidate could not freeze its checkpoint input."),
+                    {{QStringLiteral("checkpointPreparationDiagnostic"), checkpointPreparationError.left(2048)}});
+                return;
+            }
+        }
+        const auto attempt = state->experiments->beginSolve(experimentId, source, repairedSpec,
+            QString::fromLatin1(task->getInputSnapshotSha256().toHex()),
+            QString::fromLatin1(task->getInputPackageSha256().toHex()));
+        if (!attempt.ok)
+        {
+            state->experiments->stop(experimentId, source, attempt.code,
+                                     QStringLiteral("The verified numerical candidate could not begin its solve."));
+            return;
+        }
+        const QString nextAttemptId = attempt.data.value("attemptId").toString();
+        QString submitError;
+        QString childJobId;
+        if (task->setTrustedExperimentAttemptId(nextAttemptId))
+            childJobId = SolverManager::getInstance().submitTrustedDetached(task.release(), &submitError);
+        if (childJobId.isEmpty())
+        {
+            state->experiments->finishSolve(experimentId, source, nextAttemptId, false, {}, "stop",
+                QStringLiteral("CHILD_SUBMISSION_FAILED"), submitError.left(2048));
+            return;
+        }
+        // The child uses the same approved policy and is independently finalized
+        // by its own terminal registry update; this call handles synchronous exit.
+        finalizeExperimentJob(childJobId);
+    }
+}
 
 bool ModelCommandHost::isBusy()
 {
@@ -729,6 +2301,224 @@ QString ModelCommandHost::projectWorkspace() const
     return QThread::currentThread() == thread() && session ? session->projectWorkspace() : QString();
 }
 
+QJsonObject ModelCommandHost::evaluationEvidenceSnapshot(const QString &experimentId) const
+{
+    if (QThread::currentThread() != thread() || !session || !state->experiments
+        || !validToken(experimentId)) return {};
+
+    const auto loaded = state->experiments->query(experimentId);
+    if (!loaded.ok) return {};
+    const QJsonObject record = loaded.data.value(QStringLiteral("experiment")).toObject();
+    if (record.value(QStringLiteral("experimentId")).toString() != experimentId
+        || record.value(QStringLiteral("state")).toString() != QLatin1String("candidate_ready")
+        || record.value(QStringLiteral("cancelRequested")).toBool()
+        || !record.value(QStringLiteral("verificationPassed")).toBool()
+        || !record.value(QStringLiteral("activeAttempt")).toObject().isEmpty()) return {};
+
+    const QJsonObject authorization = record.value(QStringLiteral("authorization")).toObject();
+    const QJsonObject sourceBinding = authorization.value(QStringLiteral("sourceBinding")).toObject();
+    if (!exactKeys(sourceBinding, {QStringLiteral("workspaceId"), QStringLiteral("sessionId"),
+                                   QStringLiteral("sessionEpoch"), QStringLiteral("documentId"),
+                                   QStringLiteral("documentRevision"), QStringLiteral("snapshotSha256")})
+        || !ownsExperiment(record, projectWorkspace(), session->getID(), state->sessionEpoch)) return {};
+
+    static const QRegularExpression revisionGrammar(QStringLiteral("^[0-9]{1,32}$"));
+    static const QRegularExpression sha256Grammar(QStringLiteral("^[0-9a-f]{64}$"));
+    constexpr int maximumWorkspaceIdCodeUnits = 256;
+    const QString workspaceId = sourceBinding.value(QStringLiteral("workspaceId")).toString();
+    const QString documentId = sourceBinding.value(QStringLiteral("documentId")).toString();
+    const QString revision = sourceBinding.value(QStringLiteral("documentRevision")).toString();
+    const QString authorizationDigest = authorization.value(QStringLiteral("authorizationDigest")).toString();
+    if (!sourceBinding.value(QStringLiteral("workspaceId")).isString()
+        || workspaceId.trimmed().isEmpty() || workspaceId.size() > maximumWorkspaceIdCodeUnits
+        || !validToken(sourceBinding.value(QStringLiteral("sessionId")))
+        || !validToken(sourceBinding.value(QStringLiteral("sessionEpoch")))
+        || !validToken(sourceBinding.value(QStringLiteral("documentId")))
+        || !revisionGrammar.match(revision).hasMatch()
+        || !sha256Grammar.match(sourceBinding.value(QStringLiteral("snapshotSha256")).toString()).hasMatch()
+        || !sha256Grammar.match(authorizationDigest).hasMatch()) return {};
+    const QJsonObject sourceRuntimeStamp{{QStringLiteral("documentId"), documentId},
+        {QStringLiteral("sessionEpoch"), sourceBinding.value(QStringLiteral("sessionEpoch"))},
+        {QStringLiteral("revision"), revision}};
+
+    const QJsonObject solveIdentity = record.value(QStringLiteral("latestSolveIdentity")).toObject();
+    if (!exactKeys(solveIdentity, {QStringLiteral("artifactId"), QStringLiteral("jobId"),
+                                   QStringLiteral("inputSnapshotSha256"), QStringLiteral("inputPackageSha256"),
+                                   QStringLiteral("sourceSnapshotRef")})
+        || !validToken(solveIdentity.value(QStringLiteral("artifactId")))
+        || !validToken(solveIdentity.value(QStringLiteral("jobId")))
+        || !sha256Grammar.match(solveIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()).hasMatch()
+        || !sha256Grammar.match(solveIdentity.value(QStringLiteral("inputPackageSha256")).toString()).hasMatch())
+        return {};
+
+    const QString attemptId = record.value(QStringLiteral("latestSolveAttemptId")).toString();
+    if (!validToken(attemptId)) return {};
+    int matchingAttempts = 0;
+    QJsonObject completedAttempt;
+    for (const QJsonValue &value : record.value(QStringLiteral("attempts")).toArray()) {
+        const QJsonObject attempt = value.toObject();
+        if (attempt.value(QStringLiteral("attemptId")).toString() != attemptId) continue;
+        ++matchingAttempts;
+        completedAttempt = attempt;
+    }
+    if (matchingAttempts != 1 || completedAttempt.value(QStringLiteral("status")).toString() != QLatin1String("completed")
+        || completedAttempt.value(QStringLiteral("solveIdentity")).toObject() != solveIdentity
+        || completedAttempt.value(QStringLiteral("inputSnapshotSha256")) != solveIdentity.value(QStringLiteral("inputSnapshotSha256"))
+        || completedAttempt.value(QStringLiteral("inputPackageSha256")) != solveIdentity.value(QStringLiteral("inputPackageSha256")))
+        return {};
+
+    const QJsonObject candidateProblemSpecInput = record.value(QStringLiteral("candidateProblemSpecInput")).toObject();
+    const QJsonObject candidateProblemSpec = record.value(QStringLiteral("candidateProblemSpec")).toObject();
+    const auto candidateValidation = RTrustedMechanicsService::validate(candidateProblemSpecInput);
+    if (!candidateValidation.valid || candidateValidation.normalizedSpec != candidateProblemSpec
+        || record.value(QStringLiteral("repairInProgress")).toBool()) return {};
+    const QJsonObject originalProblemSpecInput = record.value(QStringLiteral("problemSpecInput")).toObject();
+    const auto originalValidation = RTrustedMechanicsService::validate(originalProblemSpecInput);
+    if (!originalValidation.valid
+        || RTrustedMechanicsService::summaryDigest(originalValidation.normalizedSpec)
+            != authorization.value(QStringLiteral("problemSpecDigest")).toString()) return {};
+    const QJsonObject authorizationPolicy = authorization.value(QStringLiteral("experimentPolicy")).toObject();
+    const QJsonObject counters = record.value(QStringLiteral("counters")).toObject();
+    quint64 repairCount = 0;
+    if (!unsignedInteger(counters.value(QStringLiteral("repairs")), &repairCount)) return {};
+    const QString candidatePhysicalDigest = RTrustedMechanicsService::summaryDigest(
+        RTrustedMechanicsService::physicalSummary(candidateProblemSpec));
+    const QString candidateNumericalDigest = RTrustedMechanicsService::summaryDigest(
+        RTrustedMechanicsService::numericalSummary(candidateProblemSpec));
+    if (candidatePhysicalDigest != authorization.value(QStringLiteral("physicalSummaryDigest")).toString()
+        || completedAttempt.value(QStringLiteral("physicalSummaryDigest")).toString() != candidatePhysicalDigest
+        || completedAttempt.value(QStringLiteral("numericalConfigDigest")).toString() != candidateNumericalDigest
+        || (record.contains(QStringLiteral("candidateNumericalConfigDigest"))
+            && record.value(QStringLiteral("candidateNumericalConfigDigest")).toString() != candidateNumericalDigest))
+        return {};
+    if (repairCount == 0) {
+        if (candidateProblemSpecInput != originalProblemSpecInput
+            || RTrustedMechanicsService::summaryDigest(candidateProblemSpec)
+                != authorization.value(QStringLiteral("problemSpecDigest")).toString()
+            || candidateNumericalDigest != authorization.value(QStringLiteral("numericalConfigDigest")).toString())
+            return {};
+    } else {
+        const QJsonArray allowedRanges = authorizationPolicy.value(QStringLiteral("allowedNumericalRanges")).toArray();
+        if (allowedRanges.isEmpty() || allowedRanges.size() > 4) return {};
+        const QSet<QString> allowedPaths{QStringLiteral("/geometry/segments"), QStringLiteral("/analysis/modes"),
+            QStringLiteral("/analysis/timeStep"), QStringLiteral("/analysis/steps")};
+        QSet<QString> seenPaths;
+        QJsonObject expectedCandidateSpec = originalValidation.normalizedSpec;
+        const auto integerPath = [](const QString &path) {
+            return path == QLatin1String("/geometry/segments") || path == QLatin1String("/analysis/modes")
+                || path == QLatin1String("/analysis/steps");
+        };
+        for (const QJsonValue &rangeValue : allowedRanges) {
+            const QJsonObject range = rangeValue.toObject();
+            const QString path = range.value(QStringLiteral("path")).toString();
+            if (!exactKeys(range, {QStringLiteral("path"), QStringLiteral("minimum"), QStringLiteral("maximum")})
+                || !allowedPaths.contains(path) || seenPaths.contains(path)
+                || !range.value(QStringLiteral("minimum")).isDouble()
+                || !range.value(QStringLiteral("maximum")).isDouble()) return {};
+            const double minimum = range.value(QStringLiteral("minimum")).toDouble();
+            const double maximum = range.value(QStringLiteral("maximum")).toDouble();
+            const QStringList pieces = path.mid(1).split(QLatin1Char('/'));
+            if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum
+                || pieces.size() != 2) return {};
+            const QJsonValue candidateValue = candidateProblemSpec.value(pieces.at(0)).toObject().value(pieces.at(1));
+            if (!candidateValue.isDouble() || !std::isfinite(candidateValue.toDouble())
+                || candidateValue.toDouble() < minimum || candidateValue.toDouble() > maximum
+                || (integerPath(path) && std::floor(candidateValue.toDouble()) != candidateValue.toDouble()))
+                return {};
+            QJsonObject expectedSection = expectedCandidateSpec.value(pieces.at(0)).toObject();
+            expectedSection.insert(pieces.at(1), candidateValue);
+            expectedCandidateSpec.insert(pieces.at(0), expectedSection);
+            seenPaths.insert(path);
+        }
+        quint64 verifiedRepairs = 0;
+        for (const QJsonValue &eventValue : record.value(QStringLiteral("history")).toArray())
+            if (eventValue.toObject().value(QStringLiteral("event")).toString() == QLatin1String("repair-verified"))
+                ++verifiedRepairs;
+        if (verifiedRepairs != repairCount || expectedCandidateSpec != candidateProblemSpec) return {};
+    }
+
+    const QJsonObject verificationReport = record.value(QStringLiteral("verificationReport")).toObject();
+    const QJsonObject reportIdentity = verificationReport.value(QStringLiteral("identity")).toObject();
+    if (verificationReport.value(QStringLiteral("schema")).toString() != QLatin1String("range.verification-report/v1")
+        || verificationReport.value(QStringLiteral("status")).toString() != QLatin1String("pass")
+        || !verificationReport.value(QStringLiteral("passed")).toBool()) return {};
+    for (const QString &key : {QStringLiteral("artifactId"), QStringLiteral("jobId"),
+                               QStringLiteral("inputSnapshotSha256"), QStringLiteral("inputPackageSha256"),
+                               QStringLiteral("sourceSnapshotRef")})
+        if (reportIdentity.value(key) != solveIdentity.value(key)) return {};
+
+    const QJsonObject job = SolverManager::getInstance().jobQuery(solveIdentity.value(QStringLiteral("jobId")).toString());
+    const QJsonObject provenance = job.value(QStringLiteral("nativeResultProvenance")).toObject();
+    const QJsonObject sourceSnapshotRef = provenance.value(QStringLiteral("sourceSnapshotRef")).toObject();
+    const QString manifestPath = job.value(QStringLiteral("resultManifestRef")).toString();
+    const QString manifestSha256 = job.value(QStringLiteral("resultManifestSha256")).toString();
+    if (!job.value(QStringLiteral("found")).toBool()
+        || job.value(QStringLiteral("jobId")) != solveIdentity.value(QStringLiteral("jobId"))
+        || job.value(QStringLiteral("trustedExperimentId")).toString() != experimentId
+        || job.value(QStringLiteral("trustedExperimentAttemptId")).toString() != attemptId
+        || job.value(QStringLiteral("trustedAuthorizationDigest")).toString() != authorizationDigest
+        || job.value(QStringLiteral("state")).toString() != QLatin1String("succeeded")
+        || job.value(QStringLiteral("inputSnapshotSha256")) != solveIdentity.value(QStringLiteral("inputSnapshotSha256"))
+        || job.value(QStringLiteral("inputPackageSha256")) != solveIdentity.value(QStringLiteral("inputPackageSha256"))
+        || job.value(QStringLiteral("resultArtifactId")) != solveIdentity.value(QStringLiteral("artifactId"))
+        || !job.value(QStringLiteral("resultArtifactVerified")).toBool()
+        || !job.value(QStringLiteral("resultSourceBindingVerified")).toBool()
+        || !job.value(QStringLiteral("resultManifestVerified")).toBool()
+        || !job.value(QStringLiteral("nativeResultCatalogAvailable")).toBool()
+        || job.value(QStringLiteral("eligibility")).toString() == QLatin1String("conflict")
+        || !QFileInfo(manifestPath).isAbsolute() || !sha256Grammar.match(manifestSha256).hasMatch()
+        || reportIdentity.value(QStringLiteral("manifestSha256")).toString() != manifestSha256
+        || sourceSnapshotRef.isEmpty() || sourceSnapshotRef != solveIdentity.value(QStringLiteral("sourceSnapshotRef")).toObject()
+        || sourceSnapshotRef.value(QStringLiteral("kind")).toString() != QLatin1String("trusted-experiment-input-snapshot/v1")
+        || sourceSnapshotRef.value(QStringLiteral("inputDerivedFrom")).toString() != QLatin1String("trusted_experiment_candidate")
+        || sourceSnapshotRef.value(QStringLiteral("trustedExperimentAuthorization")).toObject() != authorization
+        || sourceSnapshotRef.value(QStringLiteral("inputSnapshotSha256")).toString()
+            != solveIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()
+        || sourceSnapshotRef.value(QStringLiteral("inputPackageSha256")).toString()
+            != solveIdentity.value(QStringLiteral("inputPackageSha256")).toString()
+        || sourceSnapshotRef.value(QStringLiteral("modelSha256")).toString()
+            != solveIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()
+        || sourceSnapshotRef.value(QStringLiteral("sourceRuntimeStamp")).toObject() != sourceRuntimeStamp
+        || provenance.value(QStringLiteral("jobId")) != solveIdentity.value(QStringLiteral("jobId"))
+        || provenance.value(QStringLiteral("inputSnapshotSha256")) != solveIdentity.value(QStringLiteral("inputSnapshotSha256"))
+        || provenance.value(QStringLiteral("inputPackageSha256")) != solveIdentity.value(QStringLiteral("inputPackageSha256"))
+        || job.value(QStringLiteral("sourceRuntimeStamp")).toObject() != sourceRuntimeStamp
+        || provenance.value(QStringLiteral("sourceRuntimeStamp")).toObject() != sourceRuntimeStamp)
+        return {};
+
+    const bool includeConvergenceMeasurements = !authorizationPolicy.value(QStringLiteral("convergenceStudy")).toObject().isEmpty();
+    const QJsonObject recomputedReport = RTrustedVerificationService::verify(candidateProblemSpecInput,
+        solveIdentity, manifestPath, manifestSha256, includeConvergenceMeasurements);
+    if (recomputedReport != verificationReport
+        || recomputedReport.value(QStringLiteral("passed")).toBool() != record.value(QStringLiteral("verificationPassed")).toBool())
+        return {};
+
+    const QByteArray reportBytes = QJsonDocument(verificationReport).toJson(QJsonDocument::Compact);
+    const QString reportSha256 = QString::fromLatin1(
+        QCryptographicHash::hash(reportBytes, QCryptographicHash::Sha256).toHex());
+    const QJsonObject childJob{{QStringLiteral("jobId"), job.value(QStringLiteral("jobId"))},
+        {QStringLiteral("experimentId"), job.value(QStringLiteral("trustedExperimentId"))},
+        {QStringLiteral("attemptId"), job.value(QStringLiteral("trustedExperimentAttemptId"))},
+        {QStringLiteral("state"), job.value(QStringLiteral("state"))},
+        {QStringLiteral("inputSnapshotSha256"), job.value(QStringLiteral("inputSnapshotSha256"))},
+        {QStringLiteral("inputPackageSha256"), job.value(QStringLiteral("inputPackageSha256"))},
+        {QStringLiteral("resultArtifactId"), job.value(QStringLiteral("resultArtifactId"))},
+        {QStringLiteral("resultManifestRef"), manifestPath},
+        {QStringLiteral("resultManifestSha256"), manifestSha256},
+        {QStringLiteral("resultManifestVerified"), job.value(QStringLiteral("resultManifestVerified"))},
+        {QStringLiteral("nativeResultProvenance"), QJsonObject{
+            {QStringLiteral("sourceSnapshotRef"), sourceSnapshotRef}}}};
+    const QJsonObject snapshot{{QStringLiteral("schema"), QStringLiteral("range.trusted-experiment-evidence-snapshot/v1")},
+        {QStringLiteral("experimentId"), experimentId}, {QStringLiteral("attemptId"), attemptId},
+        {QStringLiteral("authorizationDigest"), authorizationDigest},
+        {QStringLiteral("sourceBinding"), sourceBinding}, {QStringLiteral("sourceRuntimeStamp"), sourceRuntimeStamp},
+        {QStringLiteral("latestSolveIdentity"), solveIdentity}, {QStringLiteral("childJob"), childJob},
+        {QStringLiteral("verificationReport"), verificationReport},
+        {QStringLiteral("verificationReportSha256"), reportSha256}};
+    if (QJsonDocument(snapshot).toJson(QJsonDocument::Compact).size() > 512 * 1024) return {};
+    return snapshot;
+}
+
 MeshJobController *ModelCommandHost::meshController() const { return state->meshController; }
 
 QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const QJsonArray &pinnedDocuments)
@@ -746,7 +2536,8 @@ QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const Q
         QStringLiteral("native.job.query"), QStringLiteral("native.job.recovery.query"),
         QStringLiteral("native.result.catalog.query"), QStringLiteral("native.result.channels.query"),
         QStringLiteral("native.result.series.query"), QStringLiteral("native.result.summary.query"),
-        QStringLiteral("operation.query"), QStringLiteral("operations.query"), QStringLiteral("mesh.job.query")};
+        QStringLiteral("operation.query"), QStringLiteral("operations.query"), QStringLiteral("mesh.job.query"),
+        QStringLiteral("experiment.query"), QStringLiteral("analysis.inspect"), QStringLiteral("analysis.diagnose")};
     const QString operation = request.value(QStringLiteral("operation")).toString();
     if (!reads.contains(operation))
         return denied(QStringLiteral("READ_ONLY_DENIED"), tr("This question cannot prepare, approve or execute an action."));
@@ -789,6 +2580,14 @@ QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const Q
     const QString targetId = parameters.value(QStringLiteral("target")).toObject().value(QStringLiteral("documentId")).toString();
     if (!pinnedIds.isEmpty() && !targetId.isEmpty() && !pinnedIds.contains(targetId))
         return denied(QStringLiteral("READ_ONLY_SCOPE_DENIED"), tr("The requested document is outside this question's source snapshot."));
+    if (operation == "experiment.query" && !pinnedIds.isEmpty())
+    {
+        const auto loaded = state->experiments->query(parameters.value("experimentId").toString());
+        const auto binding = loaded.data.value("experiment").toObject().value("authorization")
+            .toObject().value("sourceBinding").toObject();
+        if (!loaded.ok || !pinnedIds.contains(binding.value("documentId").toString()))
+            return denied("READ_ONLY_SCOPE_DENIED", tr("The experiment is outside this question's source snapshot."));
+    }
     QJsonObject response;
     if (operation == QStringLiteral("context.query") && parameters.isEmpty() && !pinnedDocuments.isEmpty())
     {
@@ -817,6 +2616,10 @@ QJsonObject ModelCommandHost::handleReadOnly(const QJsonObject &request, const Q
     if (!sourceIsCurrent())
         return denied(QStringLiteral("STALE_SOURCE_SNAPSHOT"), tr("The question source changed while it was being read."));
     response.insert(QStringLiteral("accessPolicy"), QStringLiteral("read-only"));
+    if ((operation == QStringLiteral("analysis.inspect") || operation == QStringLiteral("analysis.diagnose")
+         || operation == QStringLiteral("experiment.query"))
+        && QJsonDocument(response).toJson(QJsonDocument::Compact).size() > trustedHostReadbackLimit)
+        return denied(QStringLiteral("READBACK_LIMIT_EXCEEDED"), tr("Trusted analysis evidence exceeds the host readback limit."));
     return response;
 }
 
@@ -1066,6 +2869,12 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
     };
 
     const QJsonArray hostCommands{
+        QJsonObject{{"id", "experiment.run"}, {"version", 1}, {"requiresPreview", true},
+            {"requiresHostApproval", true}, {"history", "none"},
+            {"arguments", QJsonObject{{"problemSpec", "trusted mechanics ProblemSpec"},
+                {"allowedNumericalRanges", "optional array"}, {"budgets", "required object: solves [1,8], repairs [0,3], modelTurns [1,12]"},
+                {"stopConditions", "optional object"},
+                {"convergenceStudy", "optional bounded mesh or timeStep study"}}}, {"sourceDocumentModified", false}},
         QJsonObject{{"id", "mesh.generate"}, {"version", 1}, {"requiresPreview", true},
             {"requiresHostApproval", true}, {"requiresManualApproval", true}, {"history", "none"},
             {"arguments", QJsonObject{{"unit", "m"}, {"volumeUnit", "m^3"}, {"maxVolume", "number [1e-15,1e18]"},
@@ -1662,10 +3471,194 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
         return ok(session->documentProjectContext(modelID));
     }
 
+    if (operation == "experiment.query" || operation == "experiment.cancel")
+    {
+        if (!exactKeys(parameters, {"experimentId"}) || !validToken(parameters.value("experimentId")))
+            return invalid("INVALID_PARAMETERS", tr("An experiment operation requires only experimentId."));
+        const QString experimentId = parameters.value("experimentId").toString();
+        auto loaded = state->experiments->query(experimentId);
+        if (!loaded.ok) return invalid(loaded.code, tr("The experiment record is unavailable."));
+        auto record = loaded.data.value("experiment").toObject();
+        if (!ownsExperiment(record, projectWorkspace(), session->getID(), state->sessionEpoch))
+            return invalid("EXPERIMENT_SCOPE_DENIED", tr("The experiment belongs to another workspace or session."));
+        bool cancelAccepted = false;
+        bool childCancelFailed = false;
+        if (operation == "experiment.cancel")
+        {
+            const auto cancelled = state->experiments->cancel(experimentId);
+            if (!cancelled.ok) return invalid(cancelled.code, tr("The experiment cannot be cancelled in its current state."));
+            cancelAccepted = true;
+            // The transaction cancellation is durable before worker intent changes.
+            for (const auto &value : experimentJobs(experimentId))
+            {
+                const auto job = value.toObject();
+                const QString childState = job.value("state").toString();
+                if (childState != "queued" && childState != "running" && childState != "cancelling") continue;
+                QString error;
+                if (!SolverManager::getInstance().cancelJob(job.value("jobId").toString(), &error))
+                    childCancelFailed = true;
+            }
+            loaded = state->experiments->query(experimentId);
+            if (!loaded.ok) return invalid(loaded.code, tr("Cancellation was persisted, but the record could not be reread."));
+            record = loaded.data.value("experiment").toObject();
+        }
+        auto result = experimentSummary(record, experimentJobs(experimentId));
+        if (result.isEmpty())
+            return invalid("READBACK_LIMIT_EXCEEDED", tr("Trusted experiment evidence exceeds the host readback limit."));
+        if (cancelAccepted)
+        {
+            result.insert("cancellationPersisted", true);
+            result.insert("childCancellationRequestFailed", childCancelFailed);
+        }
+        const auto response = ok(result);
+        if (QJsonDocument(response).toJson(QJsonDocument::Compact).size() > trustedHostReadbackLimit)
+            return invalid("READBACK_LIMIT_EXCEEDED", tr("Trusted experiment evidence exceeds the host readback limit."));
+        return response;
+    }
+
+    if (operation == QStringLiteral("analysis.inspect") || operation == QStringLiteral("analysis.diagnose"))
+    {
+        const QSet<QString> requiredKeys{QStringLiteral("target"), QStringLiteral("expectedDocumentRevision"),
+                                         QStringLiteral("basis")};
+        QSet<QString> allowedKeys = requiredKeys;
+        if (parameters.contains(QStringLiteral("problemSpec")))
+            allowedKeys.insert(QStringLiteral("problemSpec"));
+        if (operation == QStringLiteral("analysis.inspect") && parameters.contains(QStringLiteral("jobId")))
+            allowedKeys.insert(QStringLiteral("jobId"));
+        if (!exactKeys(parameters, allowedKeys)
+            || !parameters.contains(QStringLiteral("target"))
+            || !parameters.contains(QStringLiteral("expectedDocumentRevision"))
+            || !parameters.value(QStringLiteral("basis")).isString()
+            || (parameters.contains(QStringLiteral("problemSpec"))
+                && !parameters.value(QStringLiteral("problemSpec")).isObject())
+            || (parameters.contains(QStringLiteral("jobId"))
+                && !validToken(parameters.value(QStringLiteral("jobId")))))
+            return invalid("INVALID_PARAMETERS", tr("Analysis reads require an exact target, revision, basis and optional ProblemSpec object."));
+
+        QString documentId, epoch;
+        quint64 expectedRevision = 0;
+        const QString basis = parameters.value(QStringLiteral("basis")).toString();
+        if (!targetFieldsValid(&documentId, &epoch)
+            || !unsignedInteger(parameters.value(QStringLiteral("expectedDocumentRevision")), &expectedRevision)
+            || (basis != QLatin1String("document") && basis != QLatin1String("detached")))
+            return invalid("INVALID_PARAMETERS", tr("Analysis source identity or basis is malformed."));
+        if (epoch != state->sessionEpoch)
+            return invalid("STALE_SESSION", tr("The analysis source belongs to another host session."));
+        if (activeModalInteraction() || isMutationBlocked())
+            return invalid("MODEL_BUSY", tr("Finish active document interaction or model tasks before trusted analysis readback."));
+        TrySessionLock guard(session);
+        if (!guard.ownsLock()) return invalid("MODEL_BUSY", tr("The source document is currently being changed."));
+        const uint modelId = session->findModelByCommandIdentity(documentId);
+        if (modelId == RConstants::eod)
+            return invalid("DOCUMENT_CLOSED", tr("The exact analysis source document is no longer open."));
+        const auto sourceStamp = session->modelCommandStamp(modelId);
+        if (sourceStamp.first != documentId || sourceStamp.second != expectedRevision)
+            return invalid("STALE_REVISION", tr("The analysis source revision changed; query the current document identity."));
+
+        const QJsonObject spec = parameters.value(QStringLiteral("problemSpec")).toObject();
+        const bool specProvided = parameters.contains(QStringLiteral("problemSpec"));
+        const auto validation = RTrustedMechanicsService::validate(spec);
+        const bool specValid = specProvided && validation.valid;
+        RModel detachedCandidate;
+        const RModel *observedModel = nullptr;
+        if (basis == QLatin1String("document")) {
+            observedModel = &session->getModel(modelId);
+            if (!trustedInspectionWithinEntityLimit(*observedModel))
+                return invalid("READBACK_LIMIT_EXCEEDED", tr("The source model exceeds the trusted inspection entity limit."));
+        }
+        else if (specValid) {
+            // createCandidate owns ProblemSpec validation and normalizes its raw input. Passing the
+            // already-normalized form here would strip the explicit SI unit objects and make the
+            // same valid specification fail with SPEC_MISSING_QUANTITY.
+            const auto candidate = RTrustedMechanicsService::createCandidate(spec,
+                documentId, QString::number(expectedRevision));
+            if (!candidate.valid)
+                return invalid(candidate.code.isEmpty() ? QStringLiteral("CANDIDATE_CREATION_FAILED") : candidate.code,
+                               tr("The detached candidate could not be built from the validated specification."));
+            detachedCandidate = candidate.model;
+            observedModel = &detachedCandidate;
+            if (!trustedInspectionWithinEntityLimit(*observedModel))
+                return invalid("READBACK_LIMIT_EXCEEDED", tr("The detached candidate exceeds the trusted inspection entity limit."));
+        }
+
+        if (observedModel && !trustedInspectionWithinNestedDataLimits(*observedModel))
+            return invalid("READBACK_LIMIT_EXCEEDED",
+                           tr("The model's nested physical histories or metadata exceed the trusted readback budget."));
+
+        const QString revision = QString::number(expectedRevision);
+        const QJsonObject runtimeStamp = sourceStampJson(sourceStamp, state->sessionEpoch);
+        const QJsonObject diagnosis = RTrustedMechanicsService::diagnose(
+            spec, observedModel, documentId, revision);
+        QJsonObject result;
+        if (operation == QStringLiteral("analysis.diagnose")) {
+            result = QJsonObject{{QStringLiteral("operation"), QStringLiteral("analysis.diagnose")},
+                {QStringLiteral("schemaVersion"), RTrustedMechanicsService::SchemaVersion},
+                {QStringLiteral("basis"), basis}, {QStringLiteral("sourceRuntimeStamp"), runtimeStamp},
+                {QStringLiteral("problemSpecStatus"), specValid ? QStringLiteral("valid") : QStringLiteral("invalid")},
+                {QStringLiteral("diagnosis"), diagnosis}};
+        }
+        else if (!specValid && (basis == QLatin1String("detached") || specProvided)) {
+            result = QJsonObject{{QStringLiteral("operation"), QStringLiteral("analysis.inspect")},
+                {QStringLiteral("schemaVersion"), RTrustedMechanicsService::SchemaVersion},
+                {QStringLiteral("basis"), basis}, {QStringLiteral("status"), QStringLiteral("invalid_spec")},
+                {QStringLiteral("sourceRuntimeStamp"), runtimeStamp},
+                {QStringLiteral("diagnostics"), diagnosis.value(QStringLiteral("issues"))}};
+        }
+        else {
+            QJsonObject inspection = RTrustedMechanicsService::inspect(*observedModel, documentId, revision,
+                specValid ? validation.normalizedSpec : QJsonObject{});
+            const QString modelFingerprint = RModelCommandService::stateFingerprint(*observedModel);
+            result = trustedInspectionProjection(inspection, basis, runtimeStamp, modelFingerprint);
+            if (specValid)
+                result.insert(QStringLiteral("diagnosis"), diagnosis);
+        }
+
+        if (operation == QStringLiteral("analysis.inspect") && observedModel)
+        {
+            const QJsonObject job = trustedInspectionJobIdentity(
+                parameters.value(QStringLiteral("jobId")).toString(), runtimeStamp,
+                RModelCommandService::stateFingerprint(*observedModel));
+            result.insert(QStringLiteral("job"), job);
+            QJsonObject resultSource{{QStringLiteral("status"), job.value(QStringLiteral("resultSourceStatus"))}};
+            const QJsonValue resultStamp = job.value(QStringLiteral("resultSourceRuntimeStamp"));
+            const QJsonValue jobStamp = job.value(QStringLiteral("sourceRuntimeStamp"));
+            if (resultStamp.isObject()) resultSource.insert(QStringLiteral("sourceRuntimeStamp"), resultStamp);
+            else if (jobStamp.isObject()) resultSource.insert(QStringLiteral("sourceRuntimeStamp"), jobStamp);
+            const QJsonValue resultFingerprint = job.value(QStringLiteral("resultSourceFingerprint"));
+            const QJsonValue jobFingerprint = job.value(QStringLiteral("sourceFingerprint"));
+            if (resultFingerprint.isString()) resultSource.insert(QStringLiteral("sourceFingerprint"), resultFingerprint);
+            else if (jobFingerprint.isString()) resultSource.insert(QStringLiteral("sourceFingerprint"), jobFingerprint);
+            for (const auto &mapping : {
+                     qMakePair(QStringLiteral("resultArtifactId"), QStringLiteral("artifactId")),
+                     qMakePair(QStringLiteral("resultArtifactSha256"), QStringLiteral("artifactSha256")),
+                     qMakePair(QStringLiteral("resultManifestSha256"), QStringLiteral("manifestSha256")),
+                     qMakePair(QStringLiteral("resultArtifactVerified"), QStringLiteral("artifactVerified")),
+                     qMakePair(QStringLiteral("resultSourceBindingVerified"), QStringLiteral("sourceBindingVerified")),
+                     qMakePair(QStringLiteral("resultManifestVerified"), QStringLiteral("manifestVerified"))})
+                if (job.contains(mapping.first)) resultSource.insert(mapping.second, job.value(mapping.first));
+            result.insert(QStringLiteral("resultSource"), resultSource);
+        }
+
+        if (session->modelCommandStamp(modelId) != sourceStamp)
+            return invalid("STALE_REVISION", tr("The source document changed during trusted analysis readback."));
+        const auto response = ok(result);
+        if (QJsonDocument(response).toJson(QJsonDocument::Compact).size() > trustedHostReadbackLimit)
+            return invalid("READBACK_LIMIT_EXCEEDED", tr("Trusted analysis evidence exceeds the host readback limit."));
+        return response;
+    }
+
     if (operation == QStringLiteral("capabilities.query"))
     {
         if (!parameters.isEmpty()) return invalid(QStringLiteral("INVALID_PARAMETERS"), tr("capabilities.query takes an empty parameters object."));
         QJsonArray operations{
+            QJsonObject{{"id", "experiment.run"}, {"version", 1}, {"requiresPreview", true}, {"requiresHostApproval", true}},
+            QJsonObject{{"id", "experiment.query"}, {"version", 1}, {"readOnly", true}},
+            QJsonObject{{"id", "analysis.inspect"}, {"version", 1}, {"readOnly", true},
+                {"identity", "exact-source-revision-and-detached-candidate"},
+                {"optionalEvidence", "exact-job-id-no-latest-lookup"}},
+            QJsonObject{{"id", "analysis.diagnose"}, {"version", 1}, {"readOnly", true},
+                {"identity", "exact-source-revision-and-detached-candidate"}},
+            QJsonObject{{"id", "experiment.cancel"}, {"version", 1}, {"readOnly", false}, {"sideEffect", "cancel_owned_experiment"}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("project.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("document.project.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("context.query")}, {QStringLiteral("version"), 1}, {QStringLiteral("readOnly"), true}},
@@ -1906,6 +3899,62 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             QStringLiteral("command"), QStringLiteral("commandVersion"), QStringLiteral("arguments")};
         const QSet<QString> detachedCancelKeys{QStringLiteral("command"), QStringLiteral("commandVersion"),
             QStringLiteral("arguments")};
+        if (command == "experiment.run")
+        {
+            QString documentId, epoch;
+            quint64 revision = 0;
+            if (!exactKeys(parameters, standardKeys) || !targetFieldsValid(&documentId, &epoch)
+                || epoch != state->sessionEpoch
+                || !unsignedInteger(parameters.value("expectedDocumentRevision"), &revision)
+                || !arguments.value("problemSpec").isObject())
+                return invalid("INVALID_PARAMETERS", tr("Experiment preview requires an exact source target, revision and ProblemSpec."));
+            const QSet<QString> allowed{"problemSpec", "allowedNumericalRanges", "budgets", "stopConditions",
+                                        "convergenceStudy"};
+            for (auto it = arguments.begin(); it != arguments.end(); ++it)
+                if (!allowed.contains(it.key()))
+                    return invalid("INVALID_PARAMETERS", tr("Unknown experiment argument."));
+            if (activeModalInteraction() || isMutationBlocked())
+                return invalid("INTERACTION_BLOCKED", tr("Finish the current document interaction before experiment preview."));
+            const auto source = experimentSource(session, epoch, documentId);
+            if (!source.isValid() || source.documentRevision != QString::number(revision))
+                return invalid("SOURCE_STALE", tr("The experiment source changed or cannot be read safely."));
+            QJsonObject spec = arguments;
+            spec.insert("schemaVersion", RTrustedExperimentService::SchemaVersion);
+            spec.insert("sourceBinding", source.toJson());
+            const auto authorizationPreview = state->experiments->previewAuthorization(spec, source);
+            if (!authorizationPreview.ok)
+                return invalid(authorizationPreview.code, tr("The experiment specification could not be previewed."));
+            const auto authorization = authorizationPreview.data.value("authorization").toObject();
+            State::Preview preview;
+            preview.id = uuid(); preview.documentId = documentId; preview.sessionEpoch = epoch;
+            preview.command = command; preview.stampGeneration = revision;
+            preview.experimentId = authorizationPreview.data.value("experimentId").toString();
+            preview.experimentAuthorizationRequest = spec;
+            preview.experimentAuthorization = authorization;
+            preview.experimentSourceBinding = source.toJson();
+            // Mechanics APIs accept quantities with units; their normalized SI
+            // output is a receipt, not another valid ProblemSpec input.
+            preview.experimentProblemSpecInput = authorizationPreview.data.value("problemSpecInput").toObject();
+            preview.arguments.insert("problemSpec", authorizationPreview.data.value("problemSpec"));
+            const auto policy = preview.experimentAuthorization.value("experimentPolicy").toObject();
+            for (auto it = policy.begin(); it != policy.end(); ++it) preview.arguments.insert(it.key(), it.value());
+            preview.experimentDiagnostics = RTrustedMechanicsService::diagnose(
+                preview.experimentProblemSpecInput, nullptr, documentId, source.documentRevision);
+            preview.digest = RTrustedMechanicsService::summaryDigest(QJsonObject{
+                {"authorization", preview.experimentAuthorization}, {"arguments", preview.arguments}});
+            QJsonObject result{{"command", command}, {"commandVersion", 1}, {"previewId", preview.id},
+                {"experimentId", preview.experimentId}, {"digest", preview.digest},
+                {"target", parameters.value("target")}, {"expectedDocumentRevision", double(revision)},
+                {"sourceBinding", preview.experimentSourceBinding},
+                {"arguments", preview.arguments}, {"diagnostics", preview.experimentDiagnostics},
+                {"authorizationDigest", preview.experimentAuthorization.value("authorizationDigest")},
+                {"requiresHostApproval", true}, {"history", "none"},
+                {"after", QJsonObject{{"sourceDocumentModified", false}, {"maximumAttemptsThisRun", 1}}}};
+            if (state->previewOrder.size() >= 128) state->previews.erase(state->previewOrder.takeFirst());
+            state->previewOrder.append(preview.id);
+            state->previews.emplace(preview.id, preview);
+            return ok(result, "preview");
+        }
         if (command == "mesh.generate" || command == "mesh.accept" || command == "mesh.cancel")
         {
             QString documentId, epoch; quint64 revision = 0;
@@ -2236,7 +4285,8 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                     {QStringLiteral("changedPaths"), changedPaths},
                     {QStringLiteral("candidateFingerprint"), core.fingerprint},
                     {QStringLiteral("diagnostics"), core.diagnostics}};
-                if (core.delta.kind == RModelCommandService::Delta::Kind::MeshRebind)
+                if (core.delta.kind == RModelCommandService::Delta::Kind::MeshRebind
+                    || core.delta.kind == RModelCommandService::Delta::Kind::PiezoExperiment)
                 {
                     nativePreview.insert("report", core.report);
                     nativePreview.insert("bindingReadSet", core.readSet);
@@ -2293,6 +4343,19 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                     readSet.append(QStringLiteral("/geometry"));
                     readSet.append(QStringLiteral("/entityGroups"));
                     readSet.append(QStringLiteral("/results"));
+                }
+                else if (model.hasPiezoExperimentHistory(undo))
+                {
+                    QString historyError;
+                    if (!model.previewPiezoExperimentHistory(undo,&preview.piezoHistoryHash,&historyError))
+                        return invalid(QStringLiteral("UNSUPPORTED_HISTORY"),historyError);
+                    preview.piezoHistoryId=model.piezoExperimentHistoryIdentity(undo);
+                    candidateFingerprint=preview.piezoHistoryHash;
+                    nativePreview.insert(QStringLiteral("historyItemId"),preview.piezoHistoryId);
+                    before.insert(QStringLiteral("historyItemId"),preview.piezoHistoryId);
+                    after={{QStringLiteral("supportedStateFingerprint"),candidateFingerprint}};
+                    readSet.append(QStringLiteral("/geometry"));readSet.append(QStringLiteral("/entityGroups"));
+                    readSet.append(QStringLiteral("/problemSetup"));readSet.append(QStringLiteral("/results"));
                 }
             }
             preview.id = uuid();
@@ -2521,7 +4584,12 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             }
             QJsonObject response = hostResponse(requestId, status, code, observedResult);
             if (!message.isEmpty()) response.insert(QStringLiteral("message"), message);
-            association.observation = {{"status", status}, {"code", code}, {"result", observedResult}};
+            // The response may contain a trusted-authorization digest or other
+            // fields which the project operation ledger deliberately refuses
+            // to persist. Keep the caller response intact, but store only a
+            // recursively redacted observation for restart/idempotency replay.
+            const QJsonObject durableResult = durableObservationValue(QJsonValue(observedResult)).toObject();
+            association.observation = {{"status", status}, {"code", code}, {"result", durableResult}};
             if (!message.isEmpty()) association.observation.insert("message", message);
             association.diagnosticCode = status == "accepted" ? QString() : code.toLower();
             const bool acceptedRecorded = status != "accepted" || catalog->advanceOperation(
@@ -2539,7 +4607,11 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 state->operations.erase(expired);
             }
             state->operationOrder.append(operationId);
-            state->operations.emplace(operationId, observedResult);
+            // Keep process-local operation.query consistent with the durable
+            // observation. The direct command response above remains complete,
+            // while later query/replay paths never re-expose catalog-redacted
+            // authorization fields.
+            state->operations.emplace(operationId, durableResult);
             if (state->idempotencyOrder.size() >= 256)
             {
                 const QString expired = state->idempotencyOrder.takeFirst();
@@ -2558,6 +4630,101 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
             return finishCompleted(operationResult, QStringLiteral("error"),
                                    QStringLiteral("OBSERVED_MODIFIED_UNLOGGED"), message);
         };
+
+        if (preview.command == "experiment.run")
+        {
+            if (activeModalInteraction() || isMutationBlocked())
+                return invalid("INTERACTION_BLOCKED", tr("Finish the current document interaction before experiment execution."));
+            const auto source = experimentSource(session, state->sessionEpoch, preview.documentId);
+            preview.consumed = true;
+            durableSideEffect = true;
+            const auto run = state->experiments->run(preview.experimentId, source);
+            auto resultFor = [&](const QString &childJobId = QString()) {
+                const auto loaded = state->experiments->query(preview.experimentId);
+                QJsonObject result{{"operationId", operationId}, {"command", preview.command},
+                    {"experimentId", preview.experimentId}, {"jobId", childJobId},
+                    {"state", loaded.data.value("experiment").toObject().value("state")},
+                    {"sourceDocumentModified", false}, {"history", "none"}};
+                return result;
+            };
+            if (!run.ok)
+                return finishCompleted(resultFor(), "rejected", run.code,
+                    tr("The trusted experiment could not enter its run state."));
+            if (run.data.value("idempotent").toBool())
+            {
+                const auto jobs = experimentJobs(preview.experimentId);
+                return finishAccepted(resultFor(jobs.isEmpty() ? QString() : jobs.last().toObject().value("jobId").toString()));
+            }
+            const auto stop = [&](const QString &code, const QJsonObject &evidence) {
+                const auto stopped = state->experiments->stop(preview.experimentId, source, code,
+                    QStringLiteral("Trusted experiment stopped before child submission."), evidence);
+                return finishCompleted(resultFor(), "rejected", stopped.ok ? code : stopped.code,
+                    tr("The trusted experiment stopped before a child solve was submitted."));
+            };
+            const auto spec = preview.experimentProblemSpecInput;
+            auto diagnosis = RTrustedMechanicsService::diagnose(spec, nullptr, source.documentId, source.documentRevision);
+            if (diagnosis.value("status") == QJsonValue("error"))
+                return stop("EXPERIMENT_DIAGNOSIS_FAILED", {{"diagnosis", diagnosis}});
+            auto candidate = RTrustedMechanicsService::createCandidate(spec, source.documentId, source.documentRevision);
+            if (!candidate.valid)
+                return stop(candidate.code.isEmpty() ? QStringLiteral("CANDIDATE_BUILD_FAILED") : candidate.code,
+                    {{"diagnosis", diagnosis}, {"candidateCode", candidate.code}, {"candidateMessage", candidate.message}});
+            diagnosis = RTrustedMechanicsService::diagnose(spec, &candidate.model, source.documentId, source.documentRevision);
+            if (diagnosis.value("status") == QJsonValue("error"))
+                return stop("EXPERIMENT_DIAGNOSIS_FAILED", {{"diagnosis", diagnosis}});
+            std::unique_ptr<SolverTask> task;
+            try
+            {
+                Model detached;
+                static_cast<RModel&>(detached) = candidate.model;
+                auto &manager = SolverManager::getInstance();
+                task = std::make_unique<SolverTask>(Application::instance()->getApplicationSettings(), detached,
+                    qMakePair(source.documentId, source.documentRevision.toULongLong()), preview.experimentAuthorization,
+                    QDir(state->experimentRoot).filePath(preview.experimentId), manager.getTaskServerName(),
+                    SolverTask::TrustedExperimentCandidateTag{});
+                QString error;
+                if (!task->captureTrustedCandidateSnapshot(detached, &error))
+                    return stop("CANDIDATE_CAPTURE_FAILED", {{"diagnosis", diagnosis}, {"captureDiagnostic", error.left(2048)}});
+            }
+            catch (const RError &)
+            {
+                return stop("CANDIDATE_CAPTURE_FAILED", {{"diagnosis", diagnosis}});
+            }
+            catch (const std::exception &)
+            {
+                return stop("CANDIDATE_CAPTURE_FAILED", {{"diagnosis", diagnosis}});
+            }
+            if (spec.value(QStringLiteral("analysis")).toObject()
+                    .value(QStringLiteral("kind")).toString() == QStringLiteral("linearTransient"))
+            {
+                QString checkpointPreparationError;
+                if (!task->prepareNativeCheckpointInput(&checkpointPreparationError))
+                    return stop("CANDIDATE_CHECKPOINT_PREPARATION_FAILED",
+                        {{"diagnosis", diagnosis},
+                         {"checkpointPreparationDiagnostic", checkpointPreparationError.left(2048)}});
+            }
+            const auto attempt = state->experiments->beginSolve(preview.experimentId, source, spec,
+                QString::fromLatin1(task->getInputSnapshotSha256().toHex()),
+                QString::fromLatin1(task->getInputPackageSha256().toHex()));
+            if (!attempt.ok) return stop(attempt.code, {{"diagnosis", diagnosis}});
+            const QString attemptId = attempt.data.value("attemptId").toString();
+            QString error;
+            QString childJobId;
+            if (task->setTrustedExperimentAttemptId(attemptId))
+                childJobId = SolverManager::getInstance().submitTrustedDetached(task.release(), &error);
+            if (childJobId.isEmpty())
+            {
+                const auto finished = state->experiments->finishSolve(preview.experimentId,
+                    experimentSource(session, state->sessionEpoch, preview.documentId), attemptId, false, {},
+                    "stop", "CHILD_SUBMISSION_FAILED", error.isEmpty()
+                        ? QStringLiteral("The detached child solver submission was rejected.") : error.left(2048));
+                return finishCompleted(resultFor(), "rejected", finished.ok ? QStringLiteral("CHILD_SUBMISSION_FAILED") : finished.code,
+                    tr("The trusted experiment child solve could not be submitted."));
+            }
+            // Submission may have synchronously emitted a terminal registry update.
+            finalizeExperimentJob(childJobId);
+            return finishAccepted(resultFor(childJobId));
+        }
 
         if (preview.command == "mesh.generate" || preview.command == "mesh.accept" || preview.command == "mesh.cancel")
         {
@@ -2597,7 +4764,9 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 return invalid("RECOVERY_CHANGED", tr("Checkpoint qualification changed after preview; a new approval is required."));
             QString error;
             const QString attempt = SolverManager::getInstance().submitNativeRecovery(preview.jobId,
-                preview.arguments.value("checkpointSha256").toString(), uint(preview.arguments.value("remainingSteps").toInt()), &error);
+                preview.arguments.value("checkpointSha256").toString(), uint(preview.arguments.value("remainingSteps").toInt()), &error,
+                preview.recoveryQualification.value("checkpoint").toObject()
+                    .value("pendingRecoveryPlanSha256").toString());
             if (attempt.isEmpty()) return invalid("RECOVERY_REJECTED", error);
             durableSideEffect = true;
             return finishAccepted({{"operationId", operationId}, {"command", preview.command},
@@ -2863,15 +5032,21 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 else if (preview.command == QStringLiteral("entity.material.set")) undoMessage = tr("Set material properties");
                 else if (preview.delta.kind == RModelCommandService::Delta::Kind::Geometry) undoMessage = tr("Edit node geometry");
                 else if (preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind) undoMessage = tr("Bind static mesh analysis");
+                else if (preview.delta.kind == RModelCommandService::Delta::Kind::PiezoExperiment) undoMessage = tr("Configure piezo experiment");
                 else undoMessage = tr("Set boundary condition");
                 if (preview.delta.physicalId
                     && !model.findElementGroupByPhysicalId(preview.delta.physicalId, &changedGroupType, &changedGroupIndex))
                     return invalid(QStringLiteral("STALE_TARGET"), tr("The physical target no longer exists."));
                 const bool meshBinding = preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind;
-                if (!meshBinding) session->storeCurentModelVersion(modelID, undoMessage);
+                const bool piezoExperiment = preview.delta.kind == RModelCommandService::Delta::Kind::PiezoExperiment;
+                if (!meshBinding && !piezoExperiment) session->storeCurentModelVersion(modelID, undoMessage);
                 const bool applied = meshBinding
                     ? model.commitStaticMeshBindingWithHistory(currentCandidate.candidate, preview.delta,
                         Application::instance()->getApplicationSettings()->getNHistoryRecords(), undoMessage, &applyError)
+                    : piezoExperiment
+                    ? model.commitPiezoExperimentWithHistory(currentCandidate.candidate,
+                        preview.delta.piezoExperiment.beforeStateSha256,preview.delta.piezoExperiment.afterStateSha256,
+                        Application::instance()->getApplicationSettings()->getNHistoryRecords(),undoMessage,&applyError)
                     : commitSupportedDelta(model, preview.delta, &applyError);
                 if (!applied)
                 {
@@ -2912,9 +5087,20 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                         return invalid(QStringLiteral("UNSUPPORTED_HISTORY"), historyError);
                     if (undo) session->getPickList().removeItems(modelID, R_ENTITY_GROUP_POINT);
                 }
+                else if (!preview.piezoHistoryId.isEmpty())
+                {
+                    if (preStateHash!=preview.inputFingerprint
+                        || model.piezoExperimentHistoryIdentity(undo)!=preview.piezoHistoryId)
+                        return invalid(QStringLiteral("STALE_PREVIEW"),tr("The approved piezo experiment history source or item changed."));
+                    const uint nodesBefore=model.getNNodes(),elementsBefore=model.getNElements();
+                    QString historyError;
+                    if (!model.applyPiezoExperimentHistory(undo,preview.piezoHistoryId,preview.piezoHistoryHash,&historyError))
+                        return invalid(QStringLiteral("UNSUPPORTED_HISTORY"),historyError);
+                    if (nodesBefore!=model.getNNodes() || elementsBefore!=model.getNElements())session->getPickList().removeItems(modelID);
+                }
                 else
                 {
-                    if (model.hasStaticMeshBindingHistory(undo))
+                    if (model.hasStaticMeshBindingHistory(undo) || model.hasPiezoExperimentHistory(undo))
                         return invalid(QStringLiteral("STALE_PREVIEW"), tr("The selected GUI history item changed."));
                     session->getPickList().removeItems(modelID);
                     if (undo) model.undo(0); else model.redo(0);
@@ -2935,7 +5121,8 @@ QJsonObject ModelCommandHost::handle(const QJsonObject &request)
                 session->setBoundaryConditionChanged(modelID, changedGroupType, changedGroupIndex);
         }
         else if (coreEdit && (preview.delta.kind == RModelCommandService::Delta::Kind::Geometry
-                             || preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind))
+                             || preview.delta.kind == RModelCommandService::Delta::Kind::MeshRebind
+                             || preview.delta.kind == RModelCommandService::Delta::Kind::PiezoExperiment))
         {
             session->setModelChanged(modelID);
         }
@@ -3027,6 +5214,19 @@ bool ModelCommandHost::approvePreview(const QString &previewId)
     auto found = state->previews.find(previewId);
     if (found == state->previews.end() || found->second.approved || found->second.consumed
         || found->second.sessionEpoch != state->sessionEpoch) return false;
+    if (found->second.command == "experiment.run")
+    {
+        auto &preview = found->second;
+        const auto source = experimentSource(session, state->sessionEpoch, preview.documentId);
+        if (!source.isValid() || source.toJson() != preview.experimentSourceBinding) return false;
+        const auto committed = state->experiments->authorizePreview(
+            preview.experimentAuthorizationRequest, source, preview.experimentId, preview.experimentAuthorization);
+        if (!committed.ok
+            || committed.data.value("authorization").toObject() != preview.experimentAuthorization
+            || committed.data.value("state") != QJsonValue("prepared")) return false;
+        preview.approved = true;
+        return true;
+    }
     if (found->second.command == "mesh.generate" || found->second.command == "mesh.accept" || found->second.command == "mesh.cancel")
     {
         if (isMutationBlocked()) return false;

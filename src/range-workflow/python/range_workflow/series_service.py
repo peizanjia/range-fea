@@ -103,11 +103,16 @@ def _model_hash(snapshot_ref: Any) -> str:
                 type(snapshot_ref.get("sourceRuntimeStamp")) is not dict):
             _source_changed()
         return value
+    if snapshot_ref.get("kind") == "project-native-input-snapshot/v1":
+        if (set(snapshot_ref) != {"kind", "projectId", "persistentDocumentId", "sourceRevision", "modelSha256", "instanceRef"}
+                or type(snapshot_ref.get("instanceRef")) is not dict
+                or set(snapshot_ref["instanceRef"]) != {"documentId", "sessionEpoch", "documentRevision"}):
+            _source_changed()
     # Linked project sources are identified by the catalog's original model
     # hash.  Never substitute a restart/checkpoint or package hash here.
     value = snapshot_ref.get("modelSha256")
     if (type(value) is not str or not _SHA256.fullmatch(value) or
-            snapshot_ref.get("kind") not in (None, "") or
+            snapshot_ref.get("kind") not in (None, "", "project-native-input-snapshot/v1") or
             snapshot_ref.get("inputSnapshotSha256") is not None or
             snapshot_ref.get("inputDerivedFrom") is not None):
         _source_changed()

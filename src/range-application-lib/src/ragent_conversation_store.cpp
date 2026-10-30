@@ -38,7 +38,7 @@ constexpr int MaxTitleBytes = 512;
 constexpr int MaxEntriesPerAppend = RAgentConversationStore::MaxPageSize;
 constexpr int MaxSourceRefsPerEntry = 16;
 constexpr int MaxArtifactRefsPerEntry = 16;
-constexpr int MaxFactFields = 11;
+constexpr int MaxFactFields = 24;
 constexpr int MaxRecordBytes = 20 * 1024 * 1024;
 constexpr qint64 MaxConversationBytes = 20LL * 1024 * 1024;
 constexpr qint64 MaxProjectBytes = 128LL * 1024 * 1024;
@@ -207,7 +207,7 @@ bool validSha256(const QString &text)
 
 bool validToken(const QString &text, int maxBytes = 128)
 {
-    static const QRegularExpression pattern(QStringLiteral("^[A-Za-z0-9][A-Za-z0-9._:/-]*$"));
+    static const QRegularExpression pattern(QStringLiteral("^[A-Za-z0-9][A-Za-z0-9._:/_,-]*$"));
     return !text.isEmpty() && text.toUtf8().size() <= maxBytes && pattern.match(text).hasMatch();
 }
 
@@ -462,7 +462,17 @@ bool validateFacts(const QJsonValue &value, QJsonObject *normalized)
         QStringLiteral("operationId"), QStringLiteral("jobId"),
         QStringLiteral("sourceDocumentId"), QStringLiteral("sourceRevision"),
         QStringLiteral("acceptedModelSha256"), QStringLiteral("idempotencyKey"),
-        QStringLiteral("requestSha256"), QStringLiteral("workflowProjectId")};
+        QStringLiteral("requestSha256"), QStringLiteral("workflowProjectId"),
+        QStringLiteral("experimentId"), QStringLiteral("previewId"),
+        QStringLiteral("sourceSessionEpoch"), QStringLiteral("authorizationDigest"), QStringLiteral("authorizationMode"),
+        QStringLiteral("trustedAuthorizationPreviewId"), QStringLiteral("trustedAuthorizationExperimentId"),
+        QStringLiteral("trustedAuthorizationDigest"),
+        QStringLiteral("schema"), QStringLiteral("trigger"), QStringLiteral("beforeState"),
+        QStringLiteral("afterState"), QStringLiteral("cancellationPersisted"),
+        QStringLiteral("childCancellationRequestFailed"), QStringLiteral("childJobsTerminal"),
+        QStringLiteral("childJobSetMatches"),
+        QStringLiteral("childJobCount"), QStringLiteral("terminalChildJobCount"),
+        QStringLiteral("childJobStates"), QStringLiteral("childJobsTruncated")};
     // Lookup identities and hashes remain historical evidence only; no fact
     // field is interpreted as permission to retry or resume an old action.
     if (item.isEmpty() || item.size() > MaxFactFields || !hasOnlyKeys(item, allowed)) return false;
@@ -474,13 +484,17 @@ bool validateFacts(const QJsonValue &value, QJsonObject *normalized)
         const QString text = it.value().toString();
         if (it.key() == QStringLiteral("operationId") || it.key() == QStringLiteral("sourceDocumentId")
             || it.key() == QStringLiteral("idempotencyKey")
-            || it.key() == QStringLiteral("workflowProjectId"))
+            || it.key() == QStringLiteral("workflowProjectId")
+            || it.key() == QStringLiteral("experimentId") || it.key() == QStringLiteral("previewId")
+            || it.key() == QStringLiteral("sourceSessionEpoch") || it.key() == QStringLiteral("trustedAuthorizationPreviewId")
+            || it.key() == QStringLiteral("trustedAuthorizationExperimentId"))
         {
             const QString id = canonicalUuid(text);
             if (id.isEmpty()) return false;
             result.insert(it.key(), id);
         }
         else if (it.key() == QStringLiteral("acceptedModelSha256")
+                 || it.key() == QStringLiteral("authorizationDigest") || it.key() == QStringLiteral("trustedAuthorizationDigest")
                  || it.key() == QStringLiteral("requestSha256"))
         {
             if (!validSha256(text)) return false;

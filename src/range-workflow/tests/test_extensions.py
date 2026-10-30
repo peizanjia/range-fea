@@ -25,14 +25,18 @@ def request(service, operation, parameters=None):
                           "operation": operation, "parameters": parameters or {}})
 
 
-def wait(service, job_id, timeout=10):
+def wait(service, job_id, timeout=45):
+    # The child may use its full 15s budget in addition to packaged-runtime
+    # verification before and after execution.
     deadline = time.monotonic() + timeout
+    job = None
     while time.monotonic() < deadline:
         job = request(service, "jobs.query", {"jobId": job_id})["job"]
         if job["state"] in {"succeeded", "failed", "cancelled", "interrupted"}:
             return job
         time.sleep(0.01)
-    raise AssertionError("extension job did not finish")
+    state = job["state"] if job is not None else "unqueried"
+    raise AssertionError(f"extension job did not finish within {timeout}s (last state: {state})")
 
 
 def run_command(service, command, parameters):
@@ -305,12 +309,111 @@ class ExtensionTest(unittest.TestCase):
                 "approvalToken": approval["approvalToken"]})
         self.assertEqual(caught.exception.code, "STALE_REVISION")
 
+    def _assert_extension_writer_released_after_terminal_query(self, terminal_state):
+        extension_id = f"series.writer.{terminal_state}"
+        first_entered = threading.Event()
+        first_release = threading.Event()
+        first_writer_released = threading.Event()
+        second_entered = threading.Event()
+        second_release = threading.Event()
+        second_writer_released = threading.Event()
+        first_job_id = [None]
+        second_job_id = [None]
+        calls = 0
+        calls_lock = threading.Lock()
+
+        def controlled_execute(_service, job, _directory, _cancel):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+                call_number = calls
+            if call_number == 1:
+                first_job_id[0] = job["jobId"]
+                first_entered.set()
+                if not first_release.wait(10):
+                    raise AssertionError("first extension fixture was not released")
+                if terminal_state == "failed":
+                    raise WorkflowError("FIXTURE_FAILURE", "controlled extension stage failure")
+            elif call_number == 2:
+                second_entered.set()
+                if not second_release.wait(10):
+                    raise AssertionError("second extension fixture was not released")
+            else:
+                raise AssertionError("unexpected extension stage execution")
+            return {}
+
+        def release_stage(version):
+            return run_command(self.service, "extension.stage", {
+                "manifest": manifest(extension_id, version=version),
+                "source": _stats_source() + f"\n# {version}\n",
+                "tests": tests()})
+
+        stage_entry = self.service._commands["extension.stage"]
+        original_execute = stage_entry["execute"]
+        original_release = self.service._release_extension_writer_locked
+
+        def observe_writer_release(job_id):
+            original_release(job_id)
+            if job_id == first_job_id[0]:
+                first_writer_released.set()
+            if job_id == second_job_id[0]:
+                second_writer_released.set()
+
+        stage_entry["execute"] = controlled_execute
+        try:
+            with mock.patch.object(self.service, "_release_extension_writer_locked",
+                                   side_effect=observe_writer_release):
+                try:
+                    first = release_stage("1.0.0")
+                    first_job_id[0] = first["jobId"]
+                    self.assertTrue(first_entered.wait(10))
+                    running = request(self.service, "jobs.query", {"jobId": first_job_id[0]})["job"]
+                    self.assertEqual(running["state"], "running")
+
+                    with self.assertRaises(WorkflowError) as caught:
+                        release_stage("1.0.1")
+                    self.assertEqual(caught.exception.code, "EXTENSION_BUSY")
+
+                    first_release.set()
+                    self.assertTrue(first_writer_released.wait(10))
+                    terminal = request(self.service, "jobs.query", {"jobId": first_job_id[0]})["job"]
+                    self.assertEqual(terminal["state"], terminal_state)
+                    if terminal_state == "failed":
+                        self.assertEqual(terminal["error"]["code"], "FIXTURE_FAILURE")
+
+                    # Querying the terminal job and immediately accepting another
+                    # write for the same extension proves the writer lock is gone.
+                    second = release_stage("1.0.1")
+                    second_job_id[0] = second["jobId"]
+                    self.assertTrue(second_entered.wait(10))
+                    second_release.set()
+                    self.assertTrue(second_writer_released.wait(10))
+                    second_terminal = request(self.service, "jobs.query",
+                                              {"jobId": second_job_id[0]})["job"]
+                    self.assertEqual(second_terminal["state"], "succeeded",
+                                     second_terminal.get("error"))
+                finally:
+                    first_release.set()
+                    second_release.set()
+                    if first_job_id[0] is not None:
+                        first_writer_released.wait(10)
+                    if second_job_id[0] is not None:
+                        second_writer_released.wait(10)
+        finally:
+            stage_entry["execute"] = original_execute
+
+    def test_extension_writer_stays_busy_until_success_terminal_query(self):
+        self._assert_extension_writer_released_after_terminal_query("succeeded")
+
+    def test_extension_writer_stays_busy_until_failure_terminal_query(self):
+        self._assert_extension_writer_released_after_terminal_query("failed")
+
     def test_timeout_and_invalid_child_output_fail_without_activation(self):
         self.service.extension_timeout_seconds = 0.25
         slow = self.stage(source=_stats_source(2.0))
         launched = run_command(self.service, "extension.validate", {
             "candidateId": slow["candidateId"], "bundleHash": slow["bundleHash"]})
-        job = wait(self.service, launched["jobId"], timeout=5)
+        job = wait(self.service, launched["jobId"])
         self.assertEqual(job["state"], "failed")
         self.assertEqual(job["error"]["code"], "TIMEOUT")
         self.assertFalse(request(self.service, "extension.list")["extensions"][0].get("activeBundleHash"))
@@ -426,35 +529,37 @@ class ExtensionTest(unittest.TestCase):
         project_release = threading.Event()
         def fixture_project_run(*_args):
             project_entered.set()
-            if not project_release.wait(5):
+            if not project_release.wait(150):
                 raise AssertionError("project fixture was not released")
             return {"testFixtureOnly": True}
 
         with mock.patch("range_workflow.jobs.run_native_workflow", side_effect=fixture_project_run):
             project_job = run_command(self.service, "workflow.run",
                 {"mode": "active", "independentReference": True})
-            self.assertTrue(project_entered.wait(2))
+            try:
+                self.assertTrue(project_entered.wait(2))
 
-            pinned_series = {"times": [0, 1], "values": [3, 4], "timeUnit": "s", "valueUnit": "m"}
-            old_run = run_command(self.service, "extension.run", {"extensionId": "series.stats",
-                "bundleHash": first["bundleHash"], "series": pinned_series})
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                state = request(self.service, "jobs.query", {"jobId": old_run["jobId"]})["job"]["state"]
-                if state == "running":
-                    break
-                time.sleep(0.01)
-            self.assertEqual(state, "running")
+                pinned_series = {"times": [0, 1], "values": [3, 4], "timeUnit": "s", "valueUnit": "m"}
+                old_run = run_command(self.service, "extension.run", {"extensionId": "series.stats",
+                    "bundleHash": first["bundleHash"], "series": pinned_series})
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    state = request(self.service, "jobs.query", {"jobId": old_run["jobId"]})["job"]["state"]
+                    if state == "running":
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(state, "running")
 
-            second = self.stage(extension_manifest=manifest(version="1.1.0"),
-                source=_stats_source() + "\n# new active version\n", base_hash=first["bundleHash"])
-            second_validated = self.validate(second)
-            second_active = self.activate(second_validated)
-            self.assertNotEqual(second_active["bundleHash"], first["bundleHash"])
-            project_release.set()
+                second = self.stage(extension_manifest=manifest(version="1.1.0"),
+                    source=_stats_source() + "\n# new active version\n", base_hash=first["bundleHash"])
+                second_validated = self.validate(second)
+                second_active = self.activate(second_validated)
+                self.assertNotEqual(second_active["bundleHash"], first["bundleHash"])
+            finally:
+                project_release.set()
 
         self.assertEqual(wait(self.service, project_job["jobId"])["state"], "succeeded")
-        old_result = wait(self.service, old_run["jobId"], timeout=5)
+        old_result = wait(self.service, old_run["jobId"])
         self.assertEqual(old_result["state"], "succeeded", old_result.get("error"))
         self.assertEqual(old_result["result"]["bundleHash"], first["bundleHash"])
         self.assertEqual(old_result["result"]["version"], "1.0.0")

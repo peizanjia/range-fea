@@ -1,8 +1,10 @@
 #include "agent_widget.h"
 
 #include <QCheckBox>
+#include <QCryptographicHash>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -20,6 +22,7 @@
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QScrollArea>
@@ -38,6 +41,8 @@
 #include <QNetworkRequest>
 #include <QTextBlockFormat>
 #include <QTextCharFormat>
+
+#include <cmath>
 
 #include "application.h"
 #include "application_settings_dialog.h"
@@ -68,6 +73,345 @@ const QString automaticChangesKey = QStringLiteral("aiAgent/automaticChanges");
 const QString streamingResponsesKey = QStringLiteral("aiAgent/streamingResponses");
 constexpr qsizetype MaxProviderResponseBytes = 1024 * 1024;
 constexpr int MaxActivityCards = 64;
+constexpr qsizetype MaxTrustedExperimentReviewBytes = 48 * 1024;
+constexpr qsizetype MaxProviderTelemetryEventBytes = 4096;
+
+bool boundedTelemetryValue(const QString &value, qsizetype maxBytes)
+{
+    if (value.isEmpty() || value.toUtf8().size() > maxBytes) return false;
+    for (const QChar character : value)
+    {
+        const ushort codePoint = character.unicode();
+        if (codePoint < 0x20 || codePoint == 0x7f) return false;
+    }
+    return true;
+}
+
+QString sha256Hex(const QString &value)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(value.toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+
+bool requestContainsExactUserPrompt(const QJsonArray &messages, const QString &prompt)
+{
+    int exactMatches = 0;
+    for (const QJsonValue &value : messages)
+    {
+        if (!value.isObject()) continue;
+        const QJsonObject message = value.toObject();
+        if (message.value(QStringLiteral("role")).toString() == QStringLiteral("user")
+            && message.value(QStringLiteral("content")).isString()
+            && message.value(QStringLiteral("content")).toString() == prompt)
+            ++exactMatches;
+    }
+    return exactMatches == 1;
+}
+
+QString boundedProviderIdentifier(const QJsonValue &value, qsizetype maxBytes)
+{
+    if (!value.isString()) return {};
+    const QString text = value.toString();
+    if (text.isEmpty() || text.toUtf8().size() > maxBytes) return {};
+    for (const QChar character : text)
+    {
+        const ushort codePoint = character.unicode();
+        const bool asciiAlphaNumeric = (codePoint >= 'a' && codePoint <= 'z')
+            || (codePoint >= 'A' && codePoint <= 'Z')
+            || (codePoint >= '0' && codePoint <= '9');
+        if (!asciiAlphaNumeric && codePoint != '.' && codePoint != '_' && codePoint != ':'
+            && codePoint != '/' && codePoint != '+' && codePoint != '-')
+            return {};
+    }
+    return text;
+}
+
+QJsonObject boundedProviderUsage(const QJsonValue &value)
+{
+    QJsonObject usage;
+    if (!value.isObject()) return usage;
+
+    constexpr double MaxExactJsonInteger = 9007199254740991.0;
+    const QJsonObject raw = value.toObject();
+    const QStringList allowedFields{QStringLiteral("prompt_tokens"),
+        QStringLiteral("completion_tokens"), QStringLiteral("total_tokens"),
+        QStringLiteral("prompt_cache_hit_tokens"), QStringLiteral("prompt_cache_miss_tokens")};
+    for (const QString &field : allowedFields)
+    {
+        const QJsonValue metric = raw.value(field);
+        if (!metric.isDouble()) continue;
+        const double count = metric.toDouble();
+        if (!std::isfinite(count) || count < 0.0 || count > MaxExactJsonInteger
+            || std::floor(count) != count)
+            continue;
+        usage.insert(field, count);
+    }
+    return usage;
+}
+
+QString trustedExperimentReviewText(const QJsonObject &preview, const QString &taskId, bool *complete)
+{
+    if (complete) *complete = false;
+    if (preview.value(QStringLiteral("command")) != QJsonValue(QStringLiteral("experiment.run")))
+        return {};
+
+    const QJsonObject arguments = preview.value(QStringLiteral("arguments")).toObject();
+    const QJsonObject problem = arguments.value(QStringLiteral("problemSpec")).toObject();
+    const QString previewId = preview.value(QStringLiteral("previewId")).toString();
+    const QString experimentId = preview.value(QStringLiteral("experimentId")).toString();
+    const QString authorizationDigest = preview.value(QStringLiteral("authorizationDigest")).toString();
+    const QJsonObject sourceBinding = preview.value(QStringLiteral("sourceBinding")).toObject();
+    const QJsonObject target = preview.value(QStringLiteral("target")).toObject();
+    const QString sourceDocumentId = target.value(QStringLiteral("documentId")).toString();
+    const QString sourceRevision = preview.value(QStringLiteral("expectedDocumentRevision")).toVariant().toString();
+    const QString bindingDocumentId = sourceBinding.value(QStringLiteral("documentId")).toString();
+    const QString bindingRevision = sourceBinding.value(QStringLiteral("documentRevision")).toString();
+    const QString sourceSessionId = sourceBinding.value(QStringLiteral("sessionId")).toString();
+    const QString sourceSessionEpoch = sourceBinding.value(QStringLiteral("sessionEpoch")).toString();
+    const QString sourceSnapshotSha256 = sourceBinding.value(QStringLiteral("snapshotSha256")).toString();
+    static const QRegularExpression sha256Grammar(QStringLiteral("^[0-9a-f]{64}$"));
+    const QString normalizedTaskId = QUuid(taskId).toString(QUuid::WithoutBraces);
+    if (!preview.value(QStringLiteral("requiresHostApproval")).toBool() || problem.isEmpty()
+        || previewId.isEmpty() || experimentId.isEmpty() || authorizationDigest.isEmpty()
+        || sourceBinding.isEmpty() || sourceDocumentId.isEmpty() || sourceRevision.isEmpty()
+        || bindingDocumentId != sourceDocumentId || bindingRevision != sourceRevision
+        || normalizedTaskId.compare(taskId, Qt::CaseInsensitive) != 0
+        || sourceSessionId.isEmpty() || sourceSessionEpoch.isEmpty() || sourceSessionId == sourceSessionEpoch
+        || !sha256Grammar.match(sourceSnapshotSha256).hasMatch())
+        return QObject::tr("Trusted experiment preview is incomplete. Host approval details are unavailable; Apply is disabled.");
+
+    QStringList sections;
+    sections << QObject::tr("Trusted mechanics experiment — Host preview")
+             << QObject::tr("Agent task ID: %1").arg(taskId)
+             << QObject::tr("Preview ID: %1 · proposed experiment ID: %2")
+                    .arg(previewId, experimentId)
+             << QObject::tr("Source document: %1 · revision %2 · source remains unchanged")
+                    .arg(sourceDocumentId, sourceRevision)
+             << QObject::tr("Source session: %1 · epoch %2").arg(sourceSessionId, sourceSessionEpoch)
+             << QObject::tr("Source snapshot SHA-256: %1").arg(sourceSnapshotSha256)
+             << QObject::tr("ProblemSpec (normalized SI):\n%1")
+                    .arg(QString::fromUtf8(QJsonDocument(problem).toJson(QJsonDocument::Indented)));
+
+    for (const auto &section : {
+             qMakePair(QStringLiteral("allowedNumericalRanges"), QObject::tr("Authorized numerical ranges")),
+             qMakePair(QStringLiteral("budgets"), QObject::tr("Solve / repair / model-turn budgets")),
+             qMakePair(QStringLiteral("stopConditions"), QObject::tr("Stop conditions")),
+             qMakePair(QStringLiteral("convergenceStudy"), QObject::tr("Convergence study"))})
+    {
+        const QJsonValue value = arguments.value(section.first);
+        if (value.isUndefined() || value.isNull()) continue;
+        const QJsonDocument document = value.isObject() ? QJsonDocument(value.toObject())
+            : value.isArray() ? QJsonDocument(value.toArray()) : QJsonDocument();
+        sections << section.second + QStringLiteral(":\n")
+            + (document.isNull() ? value.toVariant().toString()
+                                 : QString::fromUtf8(document.toJson(QJsonDocument::Indented)));
+    }
+
+    const QJsonObject diagnostics = preview.value(QStringLiteral("diagnostics")).toObject();
+    if (!diagnostics.isEmpty())
+        sections << QObject::tr("Host diagnostics:\n%1")
+            .arg(QString::fromUtf8(QJsonDocument(diagnostics).toJson(QJsonDocument::Indented)));
+    sections << QObject::tr("Authorization digest: %1").arg(authorizationDigest);
+
+    const QString text = sections.join(QStringLiteral("\n\n"));
+    if (text.toUtf8().size() > MaxTrustedExperimentReviewBytes)
+        return QObject::tr("Trusted experiment preview exceeds the review display limit. Apply is disabled; reduce the ProblemSpec or requested evidence and preview again.");
+    if (complete) *complete = true;
+    return text;
+}
+
+QString trustedExperimentEvidenceText(const QString &experimentId, const QJsonObject &summary)
+{
+    QStringList lines{QObject::tr("Trusted Host evidence · experiment %1")
+                          .arg(experimentId),
+                      QObject::tr("Host state: %1")
+                          .arg(summary.value(QStringLiteral("state")).toString(
+                              QObject::tr("not reported")))};
+    const QJsonObject verification = summary.value(QStringLiteral("verification")).toObject();
+    if (verification.isEmpty())
+    {
+        const QJsonValue passed = summary.value(QStringLiteral("verificationPassed"));
+        lines << QObject::tr("Host verificationPassed: %1 · metric report unavailable; individual metrics cannot be claimed.")
+            .arg(passed.isBool() ? (passed.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
+                                 : QObject::tr("not reported"));
+    }
+    else
+    {
+        lines << QObject::tr("Verification: %1 · passed=%2 · schema=%3")
+            .arg(verification.value(QStringLiteral("status")).toString(QObject::tr("not reported")),
+                 verification.value(QStringLiteral("passed")).isBool()
+                     ? (verification.value(QStringLiteral("passed")).toBool() ? QStringLiteral("true")
+                                                                              : QStringLiteral("false"))
+                     : QObject::tr("not reported"),
+                 verification.value(QStringLiteral("schema")).toString(QObject::tr("not reported")));
+        const QJsonObject identity = verification.value(QStringLiteral("identity")).toObject();
+        for (const QString &field : {QStringLiteral("artifactId"), QStringLiteral("jobId"),
+                                     QStringLiteral("inputModelSha256"), QStringLiteral("inputSnapshotSha256"),
+                                     QStringLiteral("inputPackageSha256"),
+                                     QStringLiteral("manifestSha256"), QStringLiteral("physicalSummarySha256"),
+                                     QStringLiteral("normalizedProblemSpecSha256")})
+        {
+            const QString value = identity.value(field).toString();
+            if (!value.isEmpty() && value.size() <= 128)
+                lines << QObject::tr("%1: %2").arg(field, value);
+        }
+        const QJsonObject metrics = verification.value(QStringLiteral("metrics")).toObject();
+        QStringList names = metrics.keys();
+        names.sort();
+        for (const QString &name : names.mid(0, 24))
+        {
+            const QJsonObject metric = metrics.value(name).toObject();
+            QString line = QObject::tr("Metric %1: %2 · required=%3")
+                .arg(name, metric.value(QStringLiteral("status")).toString(QObject::tr("not reported")),
+                     metric.value(QStringLiteral("required")).isBool()
+                         ? (metric.value(QStringLiteral("required")).toBool() ? QStringLiteral("true")
+                                                                              : QStringLiteral("false"))
+                         : QObject::tr("not reported"));
+            for (const QString &field : {QStringLiteral("value"), QStringLiteral("limit"),
+                                         QStringLiteral("tolerance"), QStringLiteral("referenceError")})
+                if (metric.value(field).isDouble() && std::isfinite(metric.value(field).toDouble()))
+                    line += QObject::tr(" · %1=%2").arg(field, metric.value(field).toVariant().toString());
+            const QJsonObject evidence = metric.value(QStringLiteral("evidence")).toObject();
+            for (const QString &field : {QStringLiteral("relativeError"), QStringLiteral("maximumRelativeError"),
+                                         QStringLiteral("relativeDifference"), QStringLiteral("maximumAbsoluteErrorM"),
+                                         QStringLiteral("fixedAbsoluteLimitM"), QStringLiteral("fixedLimit"),
+                                         QStringLiteral("scaledMaximumAbsoluteError"), QStringLiteral("normalizedResidual"),
+                                         QStringLiteral("relativeBalanceError"), QStringLiteral("relativeEnergyError"),
+                                         QStringLiteral("actualHz"), QStringLiteral("referenceHz"),
+                                         QStringLiteral("strainEnergyJ"), QStringLiteral("externalWorkJ")})
+                if (evidence.value(field).isDouble() && std::isfinite(evidence.value(field).toDouble()))
+                    line += QObject::tr(" · %1=%2").arg(field, evidence.value(field).toVariant().toString());
+            lines << line.left(1000);
+        }
+        const QJsonObject thresholds = verification.value(QStringLiteral("thresholds")).toObject();
+        if (!thresholds.isEmpty())
+            lines << QObject::tr("Verifier thresholds: %1")
+                .arg(QString::fromUtf8(QJsonDocument(thresholds).toJson(QJsonDocument::Compact)).left(1000));
+    }
+
+    const QJsonObject convergence = summary.value(QStringLiteral("convergence")).toObject();
+    if (!convergence.isEmpty())
+    {
+        const auto number = [](const QJsonValue &value) {
+            return value.isDouble() && std::isfinite(value.toDouble())
+                ? QString::number(value.toDouble(), 'g', 15) : QObject::tr("not reported");
+        };
+        const auto text = [](const QJsonValue &value) {
+            return value.isString() && !value.toString().isEmpty()
+                ? value.toString().left(256) : QObject::tr("not reported");
+        };
+        const auto fields = [&number, &text](const QJsonObject &object, const QStringList &names) {
+            QStringList values;
+            for (const QString &name : names)
+            {
+                const QJsonValue value = object.value(name);
+                const bool textField = name == QLatin1String("status") || name == QLatin1String("key")
+                    || name == QLatin1String("quantity") || name == QLatin1String("component")
+                    || name == QLatin1String("code") || name == QLatin1String("message");
+                const QString display = name == QLatin1String("belowTolerance")
+                    ? (value.isBool() ? (value.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
+                                      : QObject::tr("not reported"))
+                    : textField ? text(value) : number(value);
+                values << name + QLatin1Char('=') + display;
+            }
+            return values.join(QStringLiteral(" · "));
+        };
+        lines << QObject::tr("Convergence: %1 · stop reason: %2 · levels: %3")
+            .arg(convergence.value(QStringLiteral("status")).toString(QObject::tr("not reported")),
+                 convergence.value(QStringLiteral("stopReason")).toString(QObject::tr("not reported")),
+                 number(convergence.value(QStringLiteral("levelsCompleted"))));
+        const QJsonArray levels = convergence.value(QStringLiteral("levels")).toArray();
+        for (qsizetype index = 0; index < qMin(qsizetype(4), levels.size()); ++index)
+        {
+            const QJsonObject level = levels.at(index).toObject();
+            const QJsonValue verificationPassed = level.value(QStringLiteral("verificationPassed"));
+            const QString verificationState = verificationPassed.isBool()
+                ? (verificationPassed.toBool() ? QStringLiteral("true") : QStringLiteral("false"))
+                : QObject::tr("not reported");
+            lines << QObject::tr("Level %1 · verified=%2 · cost=%3")
+                .arg(number(level.value(QStringLiteral("level"))),
+                     verificationState,
+                     QString::fromUtf8(QJsonDocument(level.value(QStringLiteral("cost")).toObject())
+                                           .toJson(QJsonDocument::Compact)).left(256));
+            const QJsonObject change = level.value(QStringLiteral("changeFromPrevious")).toObject();
+            lines << QObject::tr("Change from previous: %1").arg(fields(change,
+                {QStringLiteral("status"), QStringLiteral("aggregateRelativeChange"),
+                 QStringLiteral("fixedToleranceRelative"), QStringLiteral("belowTolerance")}));
+            const QJsonArray changes = change.value(QStringLiteral("qoiChanges")).toArray();
+            for (qsizetype i = 0; i < qMin(qsizetype(8), changes.size()); ++i)
+                lines << QObject::tr("QOI change: %1").arg(fields(changes.at(i).toObject(),
+                    {QStringLiteral("key"), QStringLiteral("quantity"), QStringLiteral("status"),
+                     QStringLiteral("relativeChange"), QStringLiteral("absoluteChange"),
+                     QStringLiteral("fineScale"), QStringLiteral("belowTolerance")}));
+            lines << QObject::tr("Comparison error: %1").arg(fields(
+                level.value(QStringLiteral("comparisonError")).toObject(),
+                {QStringLiteral("code"), QStringLiteral("message")}));
+            lines << QObject::tr("Level measurements: %1").arg(fields(level,
+                {QStringLiteral("frequencyHz"), QStringLiteral("mode"), QStringLiteral("strainEnergyJ"),
+                 QStringLiteral("timeStepS"), QStringLiteral("totalDurationS")}));
+            const QJsonArray quantities = level.value(QStringLiteral("quantities")).toArray();
+            if (quantities.isEmpty()) lines << QObject::tr("QOI: not reported");
+            for (qsizetype i = 0; i < qMin(qsizetype(8), quantities.size()); ++i)
+            {
+                const QJsonObject qoi = quantities.at(i).toObject();
+                const QJsonObject selector = qoi.value(QStringLiteral("selector")).toObject();
+                QStringList coordinate;
+                const QJsonArray components = qoi.value(QStringLiteral("coordinateM")).toArray();
+                for (qsizetype axis = 0; axis < qMin(qsizetype(3), components.size()); ++axis)
+                    coordinate << number(components.at(axis));
+                lines << QObject::tr("QOI: selector=%1 · coordinateM=%2 · %3")
+                    .arg(selector.isEmpty() ? QObject::tr("not reported") : QString::fromUtf8(
+                             QJsonDocument(selector).toJson(QJsonDocument::Compact)).left(256),
+                         coordinate.isEmpty() ? QObject::tr("not reported") : coordinate.join(QLatin1Char(',')),
+                         fields(qoi, {QStringLiteral("quantity"), QStringLiteral("component"),
+                             QStringLiteral("sampleCount"), QStringLiteral("peakAbsoluteM"), QStringLiteral("rmsM"),
+                             QStringLiteral("firstValueM"), QStringLiteral("lastValueM"),
+                             QStringLiteral("firstTimeS"), QStringLiteral("lastTimeS")}));
+            }
+            const QJsonObject errors = level.value(QStringLiteral("referenceErrors")).toObject();
+            if (errors.isEmpty()) lines << QObject::tr("Reference errors: not reported");
+            const QStringList metricNames = errors.keys();
+            for (const QString &name : metricNames.mid(0, 8))
+            {
+                const QJsonObject metric = errors.value(name).toObject();
+                lines << QObject::tr("Reference error %1: %2 · %3")
+                    .arg(name.left(256), text(metric.value(QStringLiteral("status"))),
+                         fields(metric.value(QStringLiteral("evidence")).toObject(),
+                             {QStringLiteral("relativeError"), QStringLiteral("maximumRelativeError"),
+                              QStringLiteral("relativeDifference"), QStringLiteral("maximumAbsoluteErrorM"),
+                              QStringLiteral("scaledMaximumAbsoluteError")}));
+            }
+        }
+    }
+    const QJsonArray repairs = summary.value(QStringLiteral("repairs")).toArray();
+    for (qsizetype index = 0; index < qMin(qsizetype(6), repairs.size()); ++index)
+    {
+        const QJsonObject repair = repairs.at(index).toObject();
+        lines << QObject::tr("Repair event: %1 · repair=%2 · fields=%3")
+            .arg(repair.value(QStringLiteral("event")).toString(),
+                 repair.value(QStringLiteral("repair")).toVariant().toString(),
+                 QString::fromUtf8(QJsonDocument(repair.value(QStringLiteral("changedProblemFields")).toArray())
+                                       .toJson(QJsonDocument::Compact)).left(256));
+    }
+    const QString terminalCode = summary.value(QStringLiteral("terminalCode")).toString();
+    if (!terminalCode.isEmpty()) lines << QObject::tr("Host stop code: %1").arg(terminalCode.left(128));
+
+    constexpr qsizetype maxEvidenceBytes = 24 * 1024;
+    const QString capMarker = QObject::tr("[Host evidence display capped at 24 KiB; some bounded fields are omitted from this view.]");
+    const qsizetype contentLimit = maxEvidenceBytes - capMarker.toUtf8().size() - 1;
+    QStringList boundedLines;
+    qsizetype usedBytes = 0;
+    bool truncated = false;
+    for (const QString &line : lines)
+    {
+        const qsizetype lineBytes = line.toUtf8().size() + 1;
+        if (usedBytes + lineBytes > contentLimit) { truncated = true; break; }
+        boundedLines.append(line);
+        usedBytes += lineBytes;
+    }
+    if (truncated)
+        boundedLines.append(capMarker);
+    return boundedLines.join(QLatin1Char('\n'));
+}
 
 AgentWidget *activeAgentWidget()
 {
@@ -123,12 +467,220 @@ QString optionValue(const QJsonValue &option)
     }
     return optionLabel(option);
 }
+
+QJsonObject executionReferenceFacts(const QJsonObject &reference)
+{
+    static const QStringList scalarFields{
+        QStringLiteral("command"), QStringLiteral("operationId"), QStringLiteral("jobId"),
+        QStringLiteral("sourceDocumentId"), QStringLiteral("sourceRevision"),
+        QStringLiteral("acceptedModelSha256"), QStringLiteral("idempotencyKey"),
+        QStringLiteral("requestSha256"), QStringLiteral("workflowProjectId"),
+        QStringLiteral("experimentId"), QStringLiteral("previewId"),
+        QStringLiteral("sourceSessionEpoch"), QStringLiteral("authorizationDigest"), QStringLiteral("authorizationMode"),
+        QStringLiteral("trustedAuthorizationPreviewId"), QStringLiteral("trustedAuthorizationExperimentId"),
+        QStringLiteral("trustedAuthorizationDigest")};
+    QJsonObject facts;
+    for (const QString &field : scalarFields)
+        if (reference.value(field).isString()) facts.insert(field, reference.value(field));
+
+    const QJsonObject source = reference.value(QStringLiteral("sourceBinding")).toObject();
+    if (source.value(QStringLiteral("documentId")).isString())
+        facts.insert(QStringLiteral("sourceDocumentId"), source.value(QStringLiteral("documentId")));
+    if (source.value(QStringLiteral("sessionEpoch")).isString())
+        facts.insert(QStringLiteral("sourceSessionEpoch"), source.value(QStringLiteral("sessionEpoch")));
+    if (source.value(QStringLiteral("authorizationDigest")).isString())
+        facts.insert(QStringLiteral("authorizationDigest"), source.value(QStringLiteral("authorizationDigest")));
+    if (source.value(QStringLiteral("previewId")).isString())
+        facts.insert(QStringLiteral("previewId"), source.value(QStringLiteral("previewId")));
+    const QJsonValue revision = source.value(QStringLiteral("documentRevision"));
+    if (revision.isString())
+        facts.insert(QStringLiteral("sourceRevision"), revision);
+    else if (revision.isDouble() && std::isfinite(revision.toDouble())
+             && revision.toDouble() >= 0.0 && std::floor(revision.toDouble()) == revision.toDouble()
+             && revision.toDouble() <= 9007199254740991.0)
+        facts.insert(QStringLiteral("sourceRevision"), QString::number(quint64(revision.toDouble())));
+    return facts;
+}
+}
+
+QJsonObject AgentWidget::trustedExperimentAuthorizationReview(const QJsonObject &candidate,
+                                                               bool *warningAcknowledgementRequired,
+                                                               QString *error)
+{
+    if (warningAcknowledgementRequired) *warningAcknowledgementRequired = false;
+    if (error) error->clear();
+    const QJsonObject diagnostics = candidate.value(QStringLiteral("diagnostics")).toObject();
+    const QString diagnosticStatus = diagnostics.value(QStringLiteral("status")).toString();
+    const QJsonObject target = candidate.value(QStringLiteral("target")).toObject();
+    const QJsonObject sourceBinding = candidate.value(QStringLiteral("sourceBinding")).toObject();
+    const QString targetDocumentId = target.value(QStringLiteral("documentId")).toString();
+    const QString sourceDocumentId = sourceBinding.value(QStringLiteral("documentId")).toString();
+    const QString expectedRevision = candidate.value(QStringLiteral("expectedDocumentRevision")).toVariant().toString();
+    const QString sourceRevision = sourceBinding.value(QStringLiteral("documentRevision")).toString();
+    const QString diagnosticSourceId = diagnostics.value(QStringLiteral("sourceId")).toString();
+    const QString diagnosticRevision = diagnostics.value(QStringLiteral("modelRevision")).toString();
+    const auto boundedDiagnosticText = [](const QJsonValue &value, qsizetype maxBytes) {
+        if (!value.isString()) return false;
+        const QString text = value.toString();
+        return !text.trimmed().isEmpty() && boundedTelemetryValue(text, maxBytes);
+    };
+    if (diagnostics.isEmpty()
+        || diagnostics.value(QStringLiteral("operation")) != QJsonValue(QStringLiteral("analysis.diagnose"))
+        || !diagnostics.value(QStringLiteral("schemaVersion")).isDouble()
+        || diagnostics.value(QStringLiteral("schemaVersion")).toInt(-1) != 1
+        || !diagnostics.value(QStringLiteral("issues")).isArray()
+        || (diagnosticStatus != QStringLiteral("ready")
+            && diagnosticStatus != QStringLiteral("warning")
+            && diagnosticStatus != QStringLiteral("error")))
+    {
+        if (error) *error = QObject::tr("Host diagnostics are missing or malformed.");
+        return {};
+    }
+    if (!boundedDiagnosticText(target.value(QStringLiteral("documentId")), 256)
+        || !boundedDiagnosticText(sourceBinding.value(QStringLiteral("documentId")), 256)
+        || !boundedDiagnosticText(sourceBinding.value(QStringLiteral("documentRevision")), 64)
+        || !boundedDiagnosticText(QJsonValue(expectedRevision), 64)
+        || targetDocumentId != sourceDocumentId || expectedRevision != sourceRevision
+        || !boundedDiagnosticText(diagnostics.value(QStringLiteral("sourceId")), 256)
+        || !boundedDiagnosticText(diagnostics.value(QStringLiteral("modelRevision")), 64)
+        || diagnosticSourceId != sourceDocumentId || diagnosticRevision != sourceRevision)
+    {
+        if (error) *error = QObject::tr("Host diagnostics do not match the reviewed source document and revision.");
+        return {};
+    }
+    if (diagnostics.value(QStringLiteral("issues")).toArray().size() > 128)
+    {
+        if (error) *error = QObject::tr("Host diagnostics contain too many issues to review safely.");
+        return {};
+    }
+    bool hasWarning = false;
+    bool hasErrorIssue = false;
+    QStringList blockingIssues;
+    for (const QJsonValue &issueValue : diagnostics.value(QStringLiteral("issues")).toArray())
+    {
+        if (!issueValue.isObject())
+        {
+            if (error) *error = QObject::tr("Host diagnostics contain a malformed issue.");
+            return {};
+        }
+        const QJsonObject issue = issueValue.toObject();
+        const QString severity = issue.value(QStringLiteral("severity")).toString();
+        if (!boundedDiagnosticText(issue.value(QStringLiteral("code")), 128)
+            || !boundedDiagnosticText(issue.value(QStringLiteral("message")), 4096)
+            || !issue.value(QStringLiteral("evidence")).isObject())
+        {
+            if (error) *error = QObject::tr("Host diagnostics contain an issue without a code, explanation, or evidence object.");
+            return {};
+        }
+        if (severity == QStringLiteral("error"))
+        {
+            hasErrorIssue = true;
+            blockingIssues.append(issue.value(QStringLiteral("code")).toString()
+                + QStringLiteral(": ") + issue.value(QStringLiteral("message")).toString());
+        }
+        else if (severity == QStringLiteral("warning"))
+            hasWarning = true;
+        else
+        {
+            if (error) *error = QObject::tr("Host diagnostics contain an unknown issue severity.");
+            return {};
+        }
+    }
+    if (diagnosticStatus == QStringLiteral("ready") && (hasWarning || hasErrorIssue))
+    {
+        if (error) *error = QObject::tr("Host diagnostic status and issue severities are inconsistent.");
+        return {};
+    }
+    if (diagnosticStatus == QStringLiteral("warning") && (!hasWarning || hasErrorIssue))
+    {
+        if (error) *error = QObject::tr("Host diagnostic status and issue severities are inconsistent.");
+        return {};
+    }
+    if (diagnosticStatus == QStringLiteral("error") || hasErrorIssue)
+    {
+        if (error) *error = blockingIssues.isEmpty()
+            ? QObject::tr("Host diagnostics report an error; this experiment cannot be authorized.")
+            : QObject::tr("Host diagnostics block authorization: %1").arg(blockingIssues.join(QStringLiteral("; ")));
+        return {};
+    }
+    if (hasWarning && warningAcknowledgementRequired)
+        *warningAcknowledgementRequired = true;
+    return QJsonObject{
+        {QStringLiteral("previewId"), candidate.value(QStringLiteral("previewId"))},
+        {QStringLiteral("experimentId"), candidate.value(QStringLiteral("experimentId"))},
+        {QStringLiteral("authorizationDigest"), candidate.value(QStringLiteral("authorizationDigest"))},
+        {QStringLiteral("target"), candidate.value(QStringLiteral("target"))},
+        {QStringLiteral("expectedDocumentRevision"), candidate.value(QStringLiteral("expectedDocumentRevision"))},
+        {QStringLiteral("sourceBinding"), candidate.value(QStringLiteral("sourceBinding"))},
+        {QStringLiteral("arguments"), candidate.value(QStringLiteral("arguments"))},
+        {QStringLiteral("diagnostics"), diagnostics}};
+}
+
+bool AgentWidget::confirmTrustedExperimentAuthorization(QWidget *parent, const QJsonObject &candidate,
+                                                         QString *error)
+{
+    if (error) error->clear();
+    bool warningAcknowledgementRequired = false;
+    QString reviewError;
+    const QJsonObject review = trustedExperimentAuthorizationReview(candidate,
+        &warningAcknowledgementRequired, &reviewError);
+    if (review.isEmpty())
+    {
+        if (error) *error = reviewError;
+        return false;
+    }
+    const QByteArray reviewText = QJsonDocument(review).toJson(QJsonDocument::Indented);
+    if (reviewText.size() > MaxTrustedExperimentReviewBytes)
+    {
+        if (error) *error = QObject::tr("Experiment authorization is too large to review.");
+        return false;
+    }
+
+    QDialog reviewDialog(parent);
+    reviewDialog.setObjectName(QStringLiteral("agentBoundedExperimentReview"));
+    reviewDialog.setWindowTitle(QObject::tr("Authorize one bounded experiment"));
+    auto *layout = new QVBoxLayout(&reviewDialog);
+    layout->addWidget(new QLabel(QObject::tr("Review the exact Host-normalized problem and policy for the next task."), &reviewDialog));
+    auto *details = new QPlainTextEdit(&reviewDialog);
+    details->setObjectName(QStringLiteral("agentBoundedExperimentReviewDetails"));
+    details->setReadOnly(true);
+    details->setPlainText(QString::fromUtf8(reviewText));
+    layout->addWidget(details);
+    QCheckBox *warningAcknowledgement = nullptr;
+    if (warningAcknowledgementRequired)
+    {
+        warningAcknowledgement = new QCheckBox(
+            QObject::tr("I reviewed and accept the Host warning for this experiment."), &reviewDialog);
+        warningAcknowledgement->setObjectName(QStringLiteral("agentBoundedExperimentWarningAcknowledgement"));
+        layout->addWidget(warningAcknowledgement);
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &reviewDialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &reviewDialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &reviewDialog, &QDialog::reject);
+    if (warningAcknowledgement)
+    {
+        QPushButton *accept = buttons->button(QDialogButtonBox::Ok);
+        accept->setEnabled(false);
+        QObject::connect(warningAcknowledgement, &QCheckBox::toggled, accept, &QPushButton::setEnabled);
+    }
+    layout->addWidget(buttons);
+    reviewDialog.resize(760, 560);
+    if (reviewDialog.exec() != QDialog::Accepted)
+    {
+        if (error) *error = QObject::tr("Experiment authorization cancelled.");
+        return false;
+    }
+    return true;
 }
 
 AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWidget *parent,
                          QNetworkAccessManager *networkAccessManager,
-                         AgentTaskRunner::AccessPolicy policy, bool restoreLastConversation)
-    : QWidget(parent), accessPolicy(policy), runner(host, workflow, this, policy), defaultNetwork(this),
+                         AgentTaskRunner::AccessPolicy policy, bool restoreLastConversation,
+                         AgentTaskRunner::EvaluationArm evaluationArm,
+                         AgentEvaluationSlotBinding evaluationSlotBinding)
+    : QWidget(parent), accessPolicy(policy), evaluationArm(evaluationArm),
+      evaluationSlotBinding(std::move(evaluationSlotBinding)),
+      runner(host, workflow, this, policy, evaluationArm), defaultNetwork(this),
       network(networkAccessManager ? networkAccessManager : &defaultNetwork), commandHost(host),
       connectedWorkflow(workflow),
       providerSettings(RAgentSettings::Type::DeepSeek)
@@ -155,9 +707,23 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     if (providerSettings.getType() != RAgentSettings::Type::DeepSeek)
         selectedEffort = QStringLiteral("default");
 
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 8, 8);
+    auto *rootLayout = new QVBoxLayout(this);
+    rootLayout->setContentsMargins(8, 8, 8, 8);
+    rootLayout->setSpacing(6);
+    // Keep the transcript scrollable while approval and question controls stay
+    // in the fixed outer layout. At high DPI, a long transcript can otherwise
+    // cover the visible controls inside this scroll area's content widget.
+    auto *historyScroll = new QScrollArea(this);
+    historyScroll->setObjectName(QStringLiteral("agentHistoryScroll"));
+    historyScroll->setWidgetResizable(true);
+    historyScroll->setFrameShape(QFrame::NoFrame);
+    auto *historyBody = new QWidget(historyScroll);
+    historyBody->setObjectName(QStringLiteral("agentHistoryContent"));
+    auto *layout = new QVBoxLayout(historyBody);
+    layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
+    historyScroll->setWidget(historyBody);
+    rootLayout->addWidget(historyScroll, 1);
 
     auto *header = new QHBoxLayout;
     auto *title = new QLabel(policy == AgentTaskRunner::AccessPolicy::ReadOnly ? tr("Read-only question") : tr("Assistant"));
@@ -337,7 +903,7 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     approvalButtons->addWidget(decline);
     approvalLayout->addLayout(approvalButtons);
     approvalCard->hide();
-    layout->addWidget(approvalCard);
+    rootLayout->addWidget(approvalCard);
 
     questionCard = new QFrame;
     questionCard->setObjectName(QStringLiteral("agentQuestionCard"));
@@ -364,9 +930,15 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     questionOptionsLayout->setVerticalSpacing(4);
     questionLayout->addWidget(questionOptions);
     questionCard->hide();
-    layout->addWidget(questionCard);
+    rootLayout->addWidget(questionCard);
 
-    auto *modelRow = new QHBoxLayout;
+    // A single toolbar adds every control's minimum width together, even when
+    // this page is inactive in the dock stack. Keep the fields in a wrapping
+    // form and the options on their own row so the dock can stay narrow.
+    auto *modelForm = new QFormLayout;
+    modelForm->setContentsMargins(0, 0, 0, 0);
+    modelForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    modelForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     auto *modelLabel = new QLabel(tr("Model"));
     model = new QComboBox;
     model->setObjectName(QStringLiteral("agentModel"));
@@ -376,32 +948,70 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     model->lineEdit()->setObjectName(QStringLiteral("agentModelInput"));
     model->lineEdit()->setClearButtonEnabled(false);
     model->setMinimumWidth(80);
-    model->setMaximumWidth(180);
+    model->setMinimumContentsLength(12);
+    model->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     model->setEditText(providerSettings.getModel());
-    modelRow->addWidget(modelLabel);
-    modelRow->addWidget(model, 2);
+    model->setToolTip(model->currentText());
+    connect(model, &QComboBox::currentTextChanged, model, &QWidget::setToolTip);
+    modelLabel->setBuddy(model);
+    modelForm->addRow(modelLabel, model);
     auto *effortLabel = new QLabel(tr("Thinking"));
     effort = new QComboBox;
     effort->setObjectName(QStringLiteral("agentThinkingEffort"));
     effort->setAccessibleName(tr("DeepSeek thinking effort"));
-    effort->setMaximumWidth(100);
     updateEffortChoices();
-    modelRow->addWidget(effortLabel);
-    modelRow->addWidget(effort, 1);
+    effortLabel->setBuddy(effort);
+    modelForm->addRow(effortLabel, effort);
+    auto *modelOptions = new QGridLayout;
+    modelOptions->setContentsMargins(0, 0, 0, 0);
     streamResponses = new QCheckBox(tr("Stream"));
     streamResponses->setObjectName(QStringLiteral("agentStreamResponses"));
     streamResponses->setAccessibleName(tr("Show provider text as it arrives"));
     streamResponses->setToolTip(tr("When enabled, supported Chat Completions providers stream text. Complete JSON responses remain available when streaming is off."));
     if (QSettings *preferences = agentPreferences())
         streamResponses->setChecked(preferences->value(streamingResponsesKey, false).toBool());
-    modelRow->addWidget(streamResponses);
+    modelOptions->addWidget(streamResponses, 0, 0);
     authorize = new QCheckBox(tr("Auto"));
     authorize->setObjectName(QStringLiteral("agentAutomaticChanges"));
     authorize->setAccessibleName(tr("Allow supported changes to run automatically"));
     authorize->setToolTip(tr("Limits automatic changes to documents selected when the task starts and the connected reference workspace. Extension proposals still require review."));
     if (QSettings *preferences = agentPreferences())
         authorize->setChecked(preferences->value(automaticChangesKey, false).toBool());
-    modelRow->addWidget(authorize);
+    modelOptions->addWidget(authorize, 0, 1);
+    auto *authorizeExperiment = new QToolButton(this);
+    authorizeExperiment->setObjectName(QStringLiteral("agentAuthorizeBoundedExperiment"));
+    authorizeExperiment->setText(tr("Authorize experiment…"));
+    authorizeExperiment->setToolTip(tr("Load and review one structured experiment authorization for the next task."));
+    authorizeExperiment->setVisible(policy == AgentTaskRunner::AccessPolicy::ReadWrite);
+    modelOptions->addWidget(authorizeExperiment, 1, 0, 1, 2, Qt::AlignLeft);
+    connect(authorizeExperiment, &QToolButton::clicked, this, [this] {
+        if (runner.isActive()) return;
+        runner.clearBoundedExperimentAuthorization();
+        const QString path = QFileDialog::getOpenFileName(this, tr("Load experiment authorization"), {}, tr("JSON files (*.json)"));
+        if (path.isEmpty()) return;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024)
+        { state->setText(tr("Could not read the bounded experiment authorization.")); return; }
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        { state->setText(tr("The experiment authorization is not a JSON object.")); return; }
+        const QJsonObject response = runner.prepareBoundedExperimentAuthorization(document.object());
+        if (response.value(QStringLiteral("status")) != QJsonValue(QStringLiteral("preview")))
+        { state->setText(tr("Host rejected the experiment authorization: %1").arg(response.value(QStringLiteral("code")).toString())); return; }
+        const QJsonObject candidate = response.value(QStringLiteral("result")).toObject();
+        QString reviewError;
+        if (!confirmTrustedExperimentAuthorization(this, candidate, &reviewError))
+        {
+            runner.clearBoundedExperimentAuthorization();
+            state->setText(reviewError);
+            return;
+        }
+        if (!runner.armBoundedExperimentAuthorization(candidate.value(QStringLiteral("previewId")).toString()))
+        { state->setText(tr("Experiment authorization could not be armed.")); return; }
+        state->setText(tr("One bounded experiment is authorized for the next task."));
+    });
+    modelOptions->setColumnStretch(2, 1);
     if (policy == AgentTaskRunner::AccessPolicy::ReadOnly)
     {
         authorize->setChecked(false);
@@ -417,7 +1027,8 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     goal->setPlaceholderText(tr("Message the assistant…"));
     goal->setMinimumHeight(64);
     goal->setMaximumHeight(92);
-    layout->addWidget(goal);
+    goal->setTabChangesFocus(true);
+    rootLayout->addWidget(goal);
 
     // Preserve the historic widget lookup while keeping the credential out of
     // the conversation sidebar and all QSettings values.
@@ -442,8 +1053,20 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     readOnlyQuestion->setAccessibleName(tr("Ask independently without taking over the current task"));
     readOnlyQuestion->setVisible(policy == AgentTaskRunner::AccessPolicy::ReadWrite);
     composerButtons->addWidget(readOnlyQuestion);
-    layout->addLayout(composerButtons);
-    layout->addLayout(modelRow);
+    rootLayout->addLayout(composerButtons);
+    rootLayout->addLayout(modelForm);
+    rootLayout->addLayout(modelOptions);
+
+    // Keep keyboard traversal aligned with the visible composer layout. The
+    // model controls are constructed before the editor, but appear below the
+    // editor and send actions on screen.
+    QWidget::setTabOrder(goal, send);
+    QWidget::setTabOrder(send, stop);
+    QWidget::setTabOrder(stop, readOnlyQuestion);
+    QWidget::setTabOrder(readOnlyQuestion, model);
+    QWidget::setTabOrder(model, effort);
+    QWidget::setTabOrder(effort, streamResponses);
+    QWidget::setTabOrder(streamResponses, authorize);
 
     connect(newChat, &QToolButton::clicked, this, [this] {
         if (runner.isActive()) return;
@@ -507,6 +1130,10 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
 
     connect(&runner, &AgentTaskRunner::turnRequested, this, &AgentWidget::requestTurn);
     connect(&runner, &AgentTaskRunner::taskStarted, this, [this](const QString &taskId, const QString &text, bool) {
+        lastProviderCaptureContext = {};
+        providerCaptureToolIds.clear();
+        providerCaptureToolCallNames.clear();
+        providerCaptureToolNames.clear();
         recordMessage(QStringLiteral("user"), text, taskId);
         pruneConversationTaskRoutes();
         if (lastMessagePersisted && taskConversationRoutes.size() < 128)
@@ -516,13 +1143,24 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
             conversationTaskOrder.append(taskId);
         }
     });
+    connect(&runner, &AgentTaskRunner::pendingMessagesCancelled, this, [this](const QStringList &messages) {
+        for (const QString &message : messages)
+        {
+            recordMessage(QStringLiteral("user"), message);
+            const QString explanation = tr("This queued message was cancelled before its Agent task started. No analysis or action was performed.");
+            recordMessage(QStringLiteral("fact"), explanation, {},
+                {{QStringLiteral("status"), QStringLiteral("cancelled_before_start")},
+                 {QStringLiteral("code"), QStringLiteral("INPUT_CANCELLED_BEFORE_TASK_START")}});
+            appendText(tr("Message not processed"), explanation);
+        }
+    });
     runner.setExecutionRecorder([this](const QString &taskId, const QString &origin, const QJsonObject &reference) {
         return recordExecutionIntent(taskId, origin, reference);
     });
     connect(&runner, &AgentTaskRunner::executionObserved, this, &AgentWidget::recordExecutionObservation);
     connect(&runner, &AgentTaskRunner::executionObservationUnknown, this,
         [this](const QString &taskId, const QString &, const QJsonObject &reference, const QString &code) {
-            auto facts = reference;
+            auto facts = executionReferenceFacts(reference);
             const bool notSubmitted = code == QStringLiteral("NOT_SUBMITTED");
             const bool rejected = notSubmitted || code.startsWith(QStringLiteral("REJECTED:"));
             facts.insert(QStringLiteral("status"), rejected ? QStringLiteral("rejected") : QStringLiteral("unknown"));
@@ -555,6 +1193,263 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         retireProviderRequest(id);
     });
     connect(&runner, &AgentTaskRunner::toolActivity, this, &AgentWidget::onToolActivity);
+    connect(&runner, &AgentTaskRunner::toolResultObserved, this, [this](const QJsonObject &facts) {
+        if (!providerCaptureRecorder) return;
+        QJsonObject event = lastProviderCaptureContext;
+        if (event.isEmpty() || event.value("taskId") != facts.value("taskId"))
+        { providerCaptureFailed = true; runner.cancel(); return; }
+        for (auto it = facts.begin(); it != facts.end(); ++it) event.insert(it.key(), it.value());
+        const QString localId = providerCaptureToolIds.value(facts.value("toolCallId").toString());
+        if (localId.isEmpty()) { providerCaptureFailed = true; runner.cancel(); return; }
+        event.insert("toolCallId", localId);
+        if (!providerCaptureToolNames.contains(facts.value("toolName").toString()))
+            event.insert("toolName", "unregistered");
+        if (!recordProviderCapture(event)) runner.cancel();
+    });
+    connect(&runner, &AgentTaskRunner::experimentObserved, this,
+            [this](const QString &taskId, const QString &experimentId, const QJsonObject &hostSummary) {
+        if (experimentId.isEmpty()
+            || hostSummary.value(QStringLiteral("experimentId")).toString() != experimentId) return;
+        const QString evidence = trustedExperimentEvidenceText(experimentId, hostSummary);
+        const QJsonObject verification = hostSummary.value(QStringLiteral("verification")).toObject();
+        const QJsonObject facts{{QStringLiteral("experimentId"), experimentId},
+            {QStringLiteral("state"), hostSummary.value(QStringLiteral("state"))},
+            {QStringLiteral("verificationPassed"), verification.value(QStringLiteral("passed"))},
+            {QStringLiteral("verificationStatus"), verification.value(QStringLiteral("status"))},
+            {QStringLiteral("convergenceStatus"), hostSummary.value(QStringLiteral("convergence")).toObject()
+                .value(QStringLiteral("status"))}};
+        recordMessage(QStringLiteral("fact"), evidence, taskId, facts);
+        appendText(tr("Trusted Host evidence · %1").arg(experimentId), evidence);
+    });
+    connect(&runner, &AgentTaskRunner::experimentEvidenceObserved, this,
+            [this](const QString &taskId, const QString &toolCallId, const QString &experimentId,
+                   const QJsonObject &hostSummary) {
+        if (!providerCaptureRecorder) return;
+        const auto failCapture = [this] {
+            providerCaptureFailed = true;
+            runner.cancel();
+        };
+        const QString localToolCallId = providerCaptureToolIds.value(toolCallId);
+        const QString toolName = providerCaptureToolCallNames.value(toolCallId);
+        const QString stateName = hostSummary.value(QStringLiteral("state")).toString();
+        if (taskId.isEmpty() || taskId != runner.taskId() || experimentId.isEmpty()
+            || hostSummary.value(QStringLiteral("experimentId")).toString() != experimentId
+            || !AgentTaskRunner::isKnownExperimentLifecycleState(stateName)
+            || (toolName != QStringLiteral("experiment_query")
+                && toolName != QStringLiteral("experiment_wait")
+                && toolName != QStringLiteral("experiment_cancel"))
+            || localToolCallId.isEmpty() || lastProviderCaptureContext.isEmpty()
+            || lastProviderCaptureContext.value(QStringLiteral("taskId")).toString() != taskId
+            || lastProviderCaptureContext.value(QStringLiteral("conversationId")).toString().isEmpty())
+        {
+            failCapture();
+            return;
+        }
+
+        QJsonObject observation = lastProviderCaptureContext;
+        observation.insert(QStringLiteral("kind"), QStringLiteral("host_observation"));
+        observation.insert(QStringLiteral("toolCallId"), localToolCallId);
+        observation.insert(QStringLiteral("toolName"), toolName);
+        observation.insert(QStringLiteral("experimentId"), experimentId);
+        observation.insert(QStringLiteral("state"), stateName);
+        const QJsonValue verificationPassed = hostSummary.value(QStringLiteral("verificationPassed"));
+        if (!verificationPassed.isUndefined())
+        {
+            if (!verificationPassed.isBool()) { failCapture(); return; }
+            observation.insert(QStringLiteral("verificationPassed"), verificationPassed);
+        }
+        if (!recordProviderCapture(observation)) { runner.cancel(); return; }
+
+        // A completed, verified candidate is joined to the Host's read-only
+        // native evidence snapshot. Never infer a result from Agent prose.
+        if (stateName != QStringLiteral("candidate_ready") || !verificationPassed.toBool()) return;
+        const QJsonObject snapshot = commandHost
+            ? commandHost->evaluationEvidenceSnapshot(experimentId) : QJsonObject{};
+        const QJsonObject sourceBinding = snapshot.value(QStringLiteral("sourceBinding")).toObject();
+        const QJsonObject sourceRuntimeStamp = snapshot.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+        const QJsonObject childJob = snapshot.value(QStringLiteral("childJob")).toObject();
+        const QJsonObject solveIdentity = snapshot.value(QStringLiteral("latestSolveIdentity")).toObject();
+        const QJsonObject report = snapshot.value(QStringLiteral("verificationReport")).toObject();
+        const QJsonObject reportIdentity = report.value(QStringLiteral("identity")).toObject();
+        const QJsonObject reportMetrics = report.value(QStringLiteral("metrics")).toObject();
+        const QJsonObject sourceSnapshotRef = solveIdentity.value(QStringLiteral("sourceSnapshotRef")).toObject();
+        const auto boundedText = [](const QJsonValue &value, int maximum = 256) {
+            return value.isString() && !value.toString().trimmed().isEmpty()
+                && value.toString().size() <= maximum;
+        };
+        const auto sha256 = [](const QString &value) {
+            static const QRegularExpression grammar(QStringLiteral("^[0-9a-f]{64}$"));
+            return grammar.match(value).hasMatch();
+        };
+        const auto objectHash = [](const QJsonObject &value) {
+            return QString::fromLatin1(QCryptographicHash::hash(
+                QJsonDocument(value).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+        };
+        const QString sourceSnapshotRefSha256 = objectHash(sourceSnapshotRef);
+        const QByteArray metricsJson = QJsonDocument(reportMetrics).toJson(QJsonDocument::Compact);
+        const QString metricsSha256 = QString::fromLatin1(QCryptographicHash::hash(
+            metricsJson, QCryptographicHash::Sha256).toHex());
+        const QString reportSha256 = snapshot.value(QStringLiteral("verificationReportSha256")).toString();
+        const QJsonValue bindingRevision = sourceBinding.value(QStringLiteral("documentRevision"));
+        const QString documentRevision = bindingRevision.isString() ? bindingRevision.toString() : QString();
+        const bool sourceIdentityValid = boundedText(sourceBinding.value(QStringLiteral("documentId")))
+                && boundedText(sourceBinding.value(QStringLiteral("documentRevision")))
+                && boundedText(sourceBinding.value(QStringLiteral("sessionId")))
+                && boundedText(sourceBinding.value(QStringLiteral("sessionEpoch")))
+                && sha256(sourceBinding.value(QStringLiteral("snapshotSha256")).toString())
+                && sourceBinding.value(QStringLiteral("documentId")) == sourceRuntimeStamp.value(QStringLiteral("documentId"))
+                && documentRevision == sourceRuntimeStamp.value(QStringLiteral("revision")).toString()
+                && sourceBinding.value(QStringLiteral("sessionEpoch")) == sourceRuntimeStamp.value(QStringLiteral("sessionEpoch"))
+                && sourceBinding.value(QStringLiteral("sessionId")) != sourceBinding.value(QStringLiteral("sessionEpoch"));
+        const bool solveIdentityValid = boundedText(solveIdentity.value(QStringLiteral("artifactId")))
+                && boundedText(solveIdentity.value(QStringLiteral("jobId")))
+                && sha256(solveIdentity.value(QStringLiteral("inputSnapshotSha256")).toString())
+                && sha256(solveIdentity.value(QStringLiteral("inputPackageSha256")).toString())
+                && !sourceSnapshotRef.isEmpty()
+                && childJob.value(QStringLiteral("state")) == QJsonValue(QStringLiteral("succeeded"))
+                && childJob.value(QStringLiteral("jobId")) == solveIdentity.value(QStringLiteral("jobId"))
+                && childJob.value(QStringLiteral("resultArtifactId")) == solveIdentity.value(QStringLiteral("artifactId"))
+                && childJob.value(QStringLiteral("resultManifestVerified")).toBool()
+                && sha256(childJob.value(QStringLiteral("resultManifestSha256")).toString())
+                && report.value(QStringLiteral("status")) == QJsonValue(QStringLiteral("pass"))
+                && report.value(QStringLiteral("passed")).toBool()
+                && !reportMetrics.isEmpty()
+                && reportIdentity.value(QStringLiteral("artifactId")) == solveIdentity.value(QStringLiteral("artifactId"))
+                && reportIdentity.value(QStringLiteral("jobId")) == solveIdentity.value(QStringLiteral("jobId"))
+                && reportIdentity.value(QStringLiteral("inputSnapshotSha256")) == solveIdentity.value(QStringLiteral("inputSnapshotSha256"))
+                && reportIdentity.value(QStringLiteral("inputPackageSha256")) == solveIdentity.value(QStringLiteral("inputPackageSha256"))
+                && reportIdentity.value(QStringLiteral("sourceSnapshotRef")) == solveIdentity.value(QStringLiteral("sourceSnapshotRef"))
+                && reportIdentity.value(QStringLiteral("manifestSha256")) == childJob.value(QStringLiteral("resultManifestSha256"))
+                && sha256(reportSha256) && sha256(metricsSha256)
+                && reportSha256 == objectHash(report)
+                && sha256(snapshot.value(QStringLiteral("authorizationDigest")).toString())
+                && boundedText(snapshot.value(QStringLiteral("attemptId")));
+        if (snapshot.value(QStringLiteral("schema"))
+                != QJsonValue(QStringLiteral("range.trusted-experiment-evidence-snapshot/v1"))
+            || snapshot.value(QStringLiteral("experimentId")).toString() != experimentId
+            || !sourceIdentityValid || !solveIdentityValid)
+        {
+            failCapture();
+            return;
+        }
+
+        QJsonObject projectedSourceBinding{{QStringLiteral("documentId"), sourceBinding.value(QStringLiteral("documentId"))},
+            {QStringLiteral("documentRevision"), sourceBinding.value(QStringLiteral("documentRevision"))},
+            {QStringLiteral("sessionId"), sourceBinding.value(QStringLiteral("sessionId"))},
+            {QStringLiteral("sessionEpoch"), sourceBinding.value(QStringLiteral("sessionEpoch"))},
+            {QStringLiteral("snapshotSha256"), sourceBinding.value(QStringLiteral("snapshotSha256"))}};
+        QJsonObject projectedSolveIdentity{{QStringLiteral("artifactId"), solveIdentity.value(QStringLiteral("artifactId"))},
+            {QStringLiteral("jobId"), solveIdentity.value(QStringLiteral("jobId"))},
+            {QStringLiteral("inputSnapshotSha256"), solveIdentity.value(QStringLiteral("inputSnapshotSha256"))},
+            {QStringLiteral("inputPackageSha256"), solveIdentity.value(QStringLiteral("inputPackageSha256"))},
+            {QStringLiteral("sourceSnapshotRefSha256"), sourceSnapshotRefSha256}};
+        QJsonObject projectedChildJob{{QStringLiteral("state"), childJob.value(QStringLiteral("state"))},
+            {QStringLiteral("jobId"), childJob.value(QStringLiteral("jobId"))},
+            {QStringLiteral("attemptId"), childJob.value(QStringLiteral("attemptId"))},
+            {QStringLiteral("resultArtifactId"), childJob.value(QStringLiteral("resultArtifactId"))},
+            {QStringLiteral("resultManifestSha256"), childJob.value(QStringLiteral("resultManifestSha256"))}};
+        QJsonObject projectedReportIdentity{{QStringLiteral("artifactId"), reportIdentity.value(QStringLiteral("artifactId"))},
+            {QStringLiteral("jobId"), reportIdentity.value(QStringLiteral("jobId"))},
+            {QStringLiteral("inputSnapshotSha256"), reportIdentity.value(QStringLiteral("inputSnapshotSha256"))},
+            {QStringLiteral("inputPackageSha256"), reportIdentity.value(QStringLiteral("inputPackageSha256"))},
+            {QStringLiteral("manifestSha256"), reportIdentity.value(QStringLiteral("manifestSha256"))},
+            {QStringLiteral("normalizedProblemSpecSha256"), reportIdentity.value(QStringLiteral("normalizedProblemSpecSha256"))},
+            {QStringLiteral("physicalSummarySha256"), reportIdentity.value(QStringLiteral("physicalSummarySha256"))},
+            {QStringLiteral("sourceSnapshotRefSha256"), sourceSnapshotRefSha256}};
+        constexpr qsizetype maximumCapturedMetricsBytes = 32 * 1024;
+        const bool metricsPayloadCaptured = !metricsJson.isEmpty()
+            && metricsJson.size() <= maximumCapturedMetricsBytes;
+        QJsonObject projectedReport{{QStringLiteral("sha256"), reportSha256},
+            {QStringLiteral("status"), report.value(QStringLiteral("status"))},
+            {QStringLiteral("passed"), report.value(QStringLiteral("passed"))},
+            {QStringLiteral("identity"), projectedReportIdentity},
+            {QStringLiteral("metricsSha256"), metricsSha256},
+            {QStringLiteral("metricsCaptureStatus"), metricsPayloadCaptured
+                ? QStringLiteral("complete") : QStringLiteral("oversized_or_unavailable")}};
+        if (metricsPayloadCaptured)
+            projectedReport.insert(QStringLiteral("metricsJson"), QString::fromUtf8(metricsJson));
+        QJsonObject evidence = lastProviderCaptureContext;
+        // Host evidence uses the closed evaluator schema; Provider identity is
+        // already captured on the adjacent Provider response event.
+        evidence.remove(QStringLiteral("provider"));
+        evidence.insert(QStringLiteral("kind"), QStringLiteral("host_evidence"));
+        evidence.insert(QStringLiteral("evidenceSchema"),
+            QStringLiteral("range.trusted-agent-stage7-physical-evidence/v1"));
+        evidence.insert(QStringLiteral("toolCallId"), localToolCallId);
+        evidence.insert(QStringLiteral("toolName"), toolName);
+        evidence.insert(QStringLiteral("experimentId"), experimentId);
+        evidence.insert(QStringLiteral("sourceRuntimeStamp"), sourceRuntimeStamp);
+        evidence.insert(QStringLiteral("sourceBinding"), projectedSourceBinding);
+        evidence.insert(QStringLiteral("authorizationDigest"), snapshot.value(QStringLiteral("authorizationDigest")));
+        evidence.insert(QStringLiteral("attemptId"), snapshot.value(QStringLiteral("attemptId")));
+        evidence.insert(QStringLiteral("childJob"), projectedChildJob);
+        evidence.insert(QStringLiteral("solveIdentity"), projectedSolveIdentity);
+        evidence.insert(QStringLiteral("verificationReport"), projectedReport);
+        if (!recordProviderCapture(evidence)) runner.cancel();
+    });
+    connect(&runner, &AgentTaskRunner::experimentCancellationObserved, this,
+            [this](const QString &taskId, const QString &experimentId,
+                   const QJsonObject &sourceBinding, const QJsonObject &cancellationFact) {
+        if (experimentId.isEmpty()
+            || cancellationFact.value(QStringLiteral("schema"))
+                != QJsonValue(QStringLiteral("range.agent-experiment-cancellation/v1"))) return;
+        QJsonObject safeFact{{QStringLiteral("schema"), cancellationFact.value(QStringLiteral("schema"))},
+            {QStringLiteral("experimentId"), experimentId}};
+        if (sourceBinding.value(QStringLiteral("documentId")).isString())
+            safeFact.insert(QStringLiteral("sourceDocumentId"), sourceBinding.value(QStringLiteral("documentId")));
+        if (sourceBinding.value(QStringLiteral("sessionEpoch")).isString())
+            safeFact.insert(QStringLiteral("sourceSessionEpoch"), sourceBinding.value(QStringLiteral("sessionEpoch")));
+        if (sourceBinding.value(QStringLiteral("authorizationDigest")).isString())
+            safeFact.insert(QStringLiteral("authorizationDigest"), sourceBinding.value(QStringLiteral("authorizationDigest")));
+        const QJsonValue sourceRevision = sourceBinding.value(QStringLiteral("documentRevision"));
+        if (sourceRevision.isString()) safeFact.insert(QStringLiteral("sourceRevision"), sourceRevision);
+        else if (sourceRevision.isDouble() && std::isfinite(sourceRevision.toDouble())
+                 && sourceRevision.toDouble() >= 0.0 && std::floor(sourceRevision.toDouble()) == sourceRevision.toDouble()
+                 && sourceRevision.toDouble() <= 9007199254740991.0)
+            safeFact.insert(QStringLiteral("sourceRevision"), QString::number(quint64(sourceRevision.toDouble())));
+        for (const QString &key : {QStringLiteral("trigger"), QStringLiteral("status"),
+                                   QStringLiteral("code"), QStringLiteral("beforeState"),
+                                   QStringLiteral("afterState"), QStringLiteral("childJobStates")})
+            if (cancellationFact.value(key).isString()) safeFact.insert(key, cancellationFact.value(key));
+        for (const QString &key : {QStringLiteral("cancellationPersisted"),
+                                   QStringLiteral("childCancellationRequestFailed"),
+                                   QStringLiteral("childJobsTerminal"), QStringLiteral("childJobSetMatches"),
+                                   QStringLiteral("childJobsTruncated")})
+            if (cancellationFact.value(key).isBool())
+                safeFact.insert(key, cancellationFact.value(key).toBool() ? QStringLiteral("true") : QStringLiteral("false"));
+        for (const QString &key : {QStringLiteral("childJobCount"), QStringLiteral("terminalChildJobCount")})
+            if (cancellationFact.value(key).isDouble() && std::isfinite(cancellationFact.value(key).toDouble())
+                && cancellationFact.value(key).toDouble() >= 0.0
+                && std::floor(cancellationFact.value(key).toDouble()) == cancellationFact.value(key).toDouble())
+                safeFact.insert(key, QString::number(qint64(cancellationFact.value(key).toDouble())));
+        const auto boolEvidence = [this, &cancellationFact](const QString &key) {
+            const QJsonValue value = cancellationFact.value(key);
+            return value.isBool() ? (value.toBool() ? tr("true") : tr("false")) : tr("unknown");
+        };
+        const auto countEvidence = [this, &cancellationFact](const QString &key) {
+            const QJsonValue value = cancellationFact.value(key);
+            if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < 0.0
+                || std::floor(value.toDouble()) != value.toDouble()) return tr("unknown");
+            return QString::number(qint64(value.toDouble()));
+        };
+        const QString childStates = cancellationFact.value(QStringLiteral("childJobStates")).isString()
+            ? cancellationFact.value(QStringLiteral("childJobStates")).toString().left(128) : tr("unknown");
+        const QString evidence = tr("The Host checked the experiment authorization bound to document %1 at revision %2.\n"
+                                    "Cancellation status: %3 (%4). Persisted=%5; child job set matches=%6; child jobs terminal=%7 (%8/%9), states=%10; child cancel request failed=%11.")
+            .arg(safeFact.value(QStringLiteral("sourceDocumentId")).toString().left(128),
+                 safeFact.value(QStringLiteral("sourceRevision")).toString().left(32),
+                 cancellationFact.value(QStringLiteral("status")).toString().left(32),
+                 cancellationFact.value(QStringLiteral("code")).toString().left(64),
+                 boolEvidence(QStringLiteral("cancellationPersisted")),
+                 boolEvidence(QStringLiteral("childJobSetMatches")),
+                 boolEvidence(QStringLiteral("childJobsTerminal")),
+                 countEvidence(QStringLiteral("terminalChildJobCount")),
+                 countEvidence(QStringLiteral("childJobCount")),
+                 childStates,
+                 boolEvidence(QStringLiteral("childCancellationRequestFailed")));
+        recordMessage(QStringLiteral("fact"), evidence, taskId, safeFact);
+        appendText(tr("Trusted Host cancellation · %1").arg(experimentId), evidence);
+    });
     connect(&runner, &AgentTaskRunner::stateChanged, this, [this](const QString &status, const QString &message) {
         const QMap<QString, QString> labels{{QStringLiteral("analyzing"), tr("Thinking")},
             {QStringLiteral("awaiting_input"), tr("Waiting for your answer")},
@@ -623,8 +1518,23 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
     connect(&runner, &AgentTaskRunner::proposalReady, this,
             [this](const QString &origin, const QString &id, const QJsonObject &value) {
         presentedProposalId = id;
+        trustedExperimentReviewComplete = true;
         const auto normalized = value.value("normalized").toObject();
-        const auto command = origin == "document" ? value.value("command").toString() : normalized.value("command").toString();
+        const bool hostCommandProposal = origin == QStringLiteral("document")
+            || origin == QStringLiteral("experiment");
+        const auto command = hostCommandProposal ? value.value("command").toString()
+                                                  : normalized.value("command").toString();
+        if ((origin == QStringLiteral("document") || origin == QStringLiteral("experiment"))
+            && command == QStringLiteral("experiment.run"))
+        {
+            preview->setMinimumHeight(180);
+            preview->setMaximumHeight(360);
+            preview->setPlainText(trustedExperimentReviewText(value, runner.taskId(), &trustedExperimentReviewComplete));
+            updateAvailability();
+            return;
+        }
+        preview->setMinimumHeight(0);
+        preview->setMaximumHeight(110);
         QStringList lines;
         const QMap<QString, QString> labels{{"analysis.modal.configure", tr("Change modal settings")},
             {"document.undo", tr("Undo last document change")}, {"document.redo", tr("Redo document change")},
@@ -660,26 +1570,54 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
         updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::actionCompleted, this, [this](const QString &origin, const QJsonObject &value) {
+        const bool trustedExperiment = (origin == QStringLiteral("document")
+            || origin == QStringLiteral("experiment"))
+            && value.value(QStringLiteral("command")) == QJsonValue(QStringLiteral("experiment.run"));
         const bool nativeTask = origin == "document" && value.value("command").toString().startsWith("analysis.")
             && (value.value("command") == QJsonValue("analysis.run") || value.value("command") == QJsonValue("analysis.recover")
                 || value.value("command") == QJsonValue("analysis.cancel"));
-        appendText(nativeTask ? tr("Native task action accepted") : origin == "document" ? tr("Document updated") : tr("Task submitted"),
-                   nativeTask ? tr("The host accepted the task action. Query its actual progress and terminal result in Document FE output.")
+        appendText(trustedExperiment ? tr("Trusted experiment submitted")
+                     : nativeTask ? tr("Native task action accepted")
+                     : origin == "document" ? tr("Document updated") : tr("Task submitted"),
+                   trustedExperiment
+                     ? tr("Experiment %1 was submitted as an isolated candidate. The source document remains unchanged; submission does not mean verification passed.")
+                           .arg(value.value(QStringLiteral("experimentId")).toString())
+                     : nativeTask ? tr("The host accepted the task action. Query its actual progress and terminal result in Document FE output.")
                      : origin == "document" ? tr("The host accepted the change. The document views now reflect its current state.")
                                         : tr("Calculation task: %1. Progress and results are available in the workflow panel.").arg(value.value("jobId").toString()));
         presentedProposalId.clear();
+        trustedExperimentReviewComplete = true;
+        preview->setMinimumHeight(0);
+        preview->setMaximumHeight(110);
         preview->clear();
         updateAvailability();
     });
     connect(&runner, &AgentTaskRunner::finished, this, [this](const QString &status, const QString &message) {
+        providerCaptureTaskFinalizing = true;
+        if (providerCaptureRecorder && !lastProviderCaptureContext.isEmpty())
+        {
+            QJsonObject event = lastProviderCaptureContext;
+            event.insert("kind", "task_terminal"); event.insert("status", status);
+            recordProviderCapture(event);
+        }
+        providerCaptureTaskFinalizing = false;
         recordMessage(QStringLiteral("fact"), tr("Assistant task ended: %1. This does not determine a solver job's result.").arg(status),
                       runner.taskId(), QJsonObject{{QStringLiteral("status"), status}});
         if (status != QStringLiteral("completed") && !message.isEmpty()) appendText(status, message);
-        if (status == QStringLiteral("completed")) state->setText(tr("Completed"));
+        if (providerCaptureRecorder && providerCaptureFailed)
+            state->setText(tr("Evaluation capture incomplete; this task has no complete evidence record."));
+        else if (status == QStringLiteral("completed")) state->setText(tr("Completed"));
         presentedProposalId.clear();
+        trustedExperimentReviewComplete = true;
         presentedQuestionId.clear();
+        preview->setMinimumHeight(0);
+        preview->setMaximumHeight(110);
         preview->clear();
         updateAvailability();
+        // AgentTaskRunner emits finished before clearing its retirement guard.
+        // Refresh again on the next event-loop turn so a terminal task does not
+        // leave New chat and Send disabled indefinitely.
+        QTimer::singleShot(0, this, [this] { updateAvailability(); });
     });
 
     eventPollTimer.setInterval(750);
@@ -696,6 +1634,32 @@ AgentWidget::AgentWidget(ModelCommandHost *host, WorkflowProcess *workflow, QWid
 AgentWidget::~AgentWidget()
 {
     retireProviderRequest();
+}
+
+bool AgentWidget::setProviderCaptureRecorder(ProviderCaptureRecorder recorder)
+{
+    if (runner.isActive() || reply || providerCaptureCallbackDepth > 0 || providerCaptureTaskFinalizing) return false;
+    providerCaptureRecorder = std::move(recorder);
+    providerCaptureFailed = false;
+    activeProviderCaptureContext = {}; lastProviderCaptureContext = {};
+    return true;
+}
+
+bool AgentWidget::recordProviderCapture(const QJsonObject &event)
+{
+    const ProviderCaptureRecorder recorder = providerCaptureRecorder;
+    if (!recorder) return true;
+    if (providerCaptureFailed) return false;
+    if (QJsonDocument(event).toJson(QJsonDocument::Compact).size() > 128 * 1024)
+    { providerCaptureFailed = true; return false; }
+    bool accepted = false;
+    ++providerCaptureCallbackDepth;
+    try { accepted = recorder(event); }
+    catch (...) { /* Sink errors cannot authorize dispatch or leak exception text. */ }
+    --providerCaptureCallbackDepth;
+    if (accepted) return true;
+    providerCaptureFailed = true;
+    return false;
 }
 
 QString AgentWidget::lastConversationPreferenceKey() const
@@ -725,6 +1689,8 @@ void AgentWidget::pruneConversationTaskRoutes()
 void AgentWidget::clearConversationView()
 {
     runner.clearConversation();
+    state->setText(tr("Ready"));
+    historyStatus->clear();
     transcript->clear();
     preview->clear();
     presentedProposalId.clear(); presentedQuestionId.clear();
@@ -825,6 +1791,8 @@ void AgentWidget::createConversation()
     if (QSettings *preferences = agentPreferences()) preferences->setValue(lastConversationPreferenceKey(), currentConversationId);
     historyOffset = 0;
     branchMessageChoice->clear();
+    historyStatus->setText(tr("Saved conversation · %1 messages. Historical text grants no approval.")
+        .arg(conversationMessageCount));
     refreshConversationList();
     updateAvailability();
 }
@@ -910,7 +1878,7 @@ bool AgentWidget::appendExecutionFact(const QJsonObject &route, const QString &t
 
 bool AgentWidget::recordExecutionIntent(const QString &taskId, const QString &, const QJsonObject &reference)
 {
-    auto facts = reference;
+    auto facts = executionReferenceFacts(reference);
     facts.insert(QStringLiteral("status"), QStringLiteral("pending"));
     facts.insert(QStringLiteral("code"), QStringLiteral("OUTCOME_NOT_OBSERVED"));
     const bool recorded = appendExecutionFact(taskConversationRoutes.value(taskId), taskId,
@@ -935,7 +1903,7 @@ void AgentWidget::recordReceiptObservation(const QJsonObject &route, const QStri
         + taskId + QStringLiteral(":") + reference.value(QStringLiteral("idempotencyKey"))
         .toString(reference.value(QStringLiteral("requestSha256")).toString());
     if (observedExecutionReferences.contains(key)) return;
-    QJsonObject facts = reference;
+    QJsonObject facts = executionReferenceFacts(reference);
     facts.insert(QStringLiteral("status"), QStringLiteral("accepted"));
     facts.insert(QStringLiteral("code"), QStringLiteral("OK"));
     for (const auto &field : {QStringLiteral("command"), QStringLiteral("operationId"), QStringLiteral("jobId"),
@@ -1244,13 +2212,16 @@ void AgentWidget::startTask(const QString &text, bool authorized)
         state->setText(message.isEmpty() ? tr("Enter a message first.") : tr("Add an API key in assistant settings."));
         return;
     }
+    initialEvaluationPrompt = message;
+    evaluationSlotBindingRecorded = false;
     requestSettingsSnapshot = getProviderSettings();
     bindConversationStore();
     requestEffortSnapshot = selectedEffort;
     requestStreamingSnapshot = accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && streamResponses->isChecked()
         && providerSupportsStreaming(requestSettingsSnapshot.getType());
     appendText(tr("You"), text);
-    runner.startTask(text, accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && authorized);
+    runner.startTask(evaluationSlotBinding.enabled ? message : text,
+                     accessPolicy == AgentTaskRunner::AccessPolicy::ReadWrite && authorized);
 }
 
 void AgentWidget::submitDraft()
@@ -1268,6 +2239,8 @@ void AgentWidget::submitDraft()
         openSettings();
         return;
     }
+    initialEvaluationPrompt = message;
+    evaluationSlotBindingRecorded = false;
     requestSettingsSnapshot = getProviderSettings();
     bindConversationStore();
     requestEffortSnapshot = selectedEffort;
@@ -1523,6 +2496,14 @@ void AgentWidget::retireProviderRequest(const QString &requestId)
     activeProviderRequestId.clear();
     reply.clear();
     ++providerRequestGeneration;
+    if (!activeProviderCaptureContext.isEmpty())
+    {
+        QJsonObject event = activeProviderCaptureContext;
+        activeProviderCaptureContext = {};
+        event.insert("kind", "provider_interruption");
+        event.insert("code", "REQUEST_RETIRED");
+        recordProviderCapture(event);
+    }
     if (!retiringId.isEmpty() && liveStreamRequestId == retiringId)
         finishStreamText(retiringId, liveStreamText, false);
     if (previousReply) previousReply->abort();
@@ -1740,11 +2721,16 @@ void AgentWidget::updateAvailability()
 
     const bool pendingProposal = busy && !runner.pendingProposal().isEmpty() && !presentedProposalId.isEmpty();
     approvalCard->setVisible(pendingProposal);
-    apply->setEnabled(pendingProposal);
+    apply->setEnabled(pendingProposal && trustedExperimentReviewComplete);
+    apply->setToolTip(trustedExperimentReviewComplete ? QString()
+        : tr("The trusted experiment preview is too large or incomplete for safe review."));
     decline->setEnabled(pendingProposal);
     if (!pendingProposal)
     {
         presentedProposalId.clear();
+        trustedExperimentReviewComplete = true;
+        preview->setMinimumHeight(0);
+        preview->setMaximumHeight(110);
         preview->clear();
     }
     const bool pendingQuestion = busy && runner.isAwaitingInput() && !runner.pendingQuestionId().isEmpty();
@@ -1959,13 +2945,25 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
     const quint64 generation = ++providerRequestGeneration;
     activeProviderRequestId = requestId;
     const RAgentSettings settings(requestSettingsSnapshot);
+    const QString conversationId = currentConversationId;
+    const QString configuredProvider = RAgentSettings::typeToString(settings.getType());
+    const QString configuredModel = settings.getModel().trimmed();
     const QString providerKeyValue = settings.getApiKey().trimmed();
     const QString endpointValue = settings.getApiUrl().trimmed();
     const QUrl url(endpointValue);
+    if (providerCaptureRecorder && evaluationSlotBinding.enabled)
+    {
+        activeProviderCaptureContext = {{"requestId", requestId}, {"taskId", runner.taskId()},
+            {"conversationId", conversationId}, {"provider", configuredProvider},
+            {"evaluationArm", AgentTaskRunner::evaluationArmId(evaluationArm)}};
+        lastProviderCaptureContext = activeProviderCaptureContext;
+    }
     const auto failBeforeRequest = [this, &requestId](const QString &message) {
         retireProviderRequest(requestId);
         runner.providerFailed(requestId, message);
     };
+    if (evaluationSlotBinding.enabled && !providerCaptureRecorder)
+    { failBeforeRequest(tr("The v4 evaluation slot has no active capture recorder.")); return; }
     if (!isValidAgentEndpoint(endpointValue))
     { failBeforeRequest(invalidEndpointMessage()); return; }
     if (providerKeyValue.isEmpty())
@@ -1974,6 +2972,8 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
     { failBeforeRequest(tr("Assistant networking is unavailable.")); return; }
     const bool deepSeek = settings.getType() == RAgentSettings::Type::DeepSeek;
     const bool streamEnabled = requestStreamingSnapshot && providerSupportsStreaming(settings.getType());
+    if (providerCaptureRecorder && streamEnabled)
+    { failBeforeRequest(tr("Evaluation capture requires the preregistered non-streaming request mode.")); return; }
     const bool thinkingDisabled = deepSeek && requestEffortSnapshot == QStringLiteral("off");
     const QString deepSeekEffort = deepSeek && !thinkingDisabled ? requestEffortSnapshot : QString();
     const int maxTokens = deepSeek && !thinkingDisabled
@@ -1982,6 +2982,68 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
     if (!RAgent::buildToolRequest(settings.getModel().trimmed(), maxTokens, 1.0, messages, tools,
                                  thinkingDisabled, &body, &error, deepSeekEffort, streamEnabled))
     { failBeforeRequest(error); return; }
+    if (providerCaptureRecorder)
+    {
+        const QJsonObject payload = QJsonDocument::fromJson(body).object();
+        providerCaptureToolNames.clear();
+        for (const QJsonValue &tool : tools)
+            providerCaptureToolNames.insert(tool.toObject().value("function").toObject().value("name").toString());
+        providerCaptureToolNames.remove(QString());
+        QJsonObject sentSettings;
+        for (const QString &field : {QStringLiteral("model"), QStringLiteral("reasoning_effort"),
+             QStringLiteral("temperature"), QStringLiteral("max_tokens"), QStringLiteral("stream"),
+             QStringLiteral("thinking")})
+            if (payload.contains(field)) sentSettings.insert(field, payload.value(field));
+        activeProviderCaptureContext = {{"requestId", requestId}, {"taskId", runner.taskId()},
+            {"conversationId", conversationId}, {"provider", configuredProvider},
+            {"evaluationArm", AgentTaskRunner::evaluationArmId(evaluationArm)}};
+        lastProviderCaptureContext = activeProviderCaptureContext;
+        if (evaluationSlotBinding.enabled && !evaluationSlotBindingRecorded)
+        {
+            const QString submittedPromptSha256 = sha256Hex(initialEvaluationPrompt);
+            const bool promptDigestMatches = !initialEvaluationPrompt.isEmpty()
+                && submittedPromptSha256 == evaluationSlotBinding.promptSha256;
+            const QJsonArray outgoingMessages = payload.value(QStringLiteral("messages")).toArray();
+            const bool exactPromptIsInRequest = requestContainsExactUserPrompt(outgoingMessages,
+                                                                               initialEvaluationPrompt);
+            QJsonObject bindingEvent = activeProviderCaptureContext;
+            bindingEvent.insert(QStringLiteral("runId"), evaluationSlotBinding.runId);
+            bindingEvent.insert(QStringLiteral("holdoutId"), evaluationSlotBinding.holdoutId);
+            bindingEvent.insert(QStringLiteral("slotId"), evaluationSlotBinding.slotId);
+            bindingEvent.insert(QStringLiteral("caseId"), evaluationSlotBinding.caseId);
+            bindingEvent.insert(QStringLiteral("repeat"), evaluationSlotBinding.repeat);
+            bindingEvent.insert(QStringLiteral("manifestCommitmentSha256"),
+                                evaluationSlotBinding.manifestCommitmentSha256);
+            bindingEvent.insert(QStringLiteral("promptSha256"), evaluationSlotBinding.promptSha256);
+            bindingEvent.insert(QStringLiteral("requestId"), requestId);
+            if (!promptDigestMatches || !exactPromptIsInRequest)
+            {
+                bindingEvent.insert(QStringLiteral("kind"), QStringLiteral("slot_binding_rejected"));
+                bindingEvent.insert(QStringLiteral("reasonCode"),
+                    !promptDigestMatches ? QStringLiteral("INITIAL_PROMPT_DIGEST_MISMATCH")
+                                         : QStringLiteral("INITIAL_PROMPT_NOT_IN_OUTGOING_REQUEST"));
+                if (!recordProviderCapture(bindingEvent))
+                { failBeforeRequest(tr("The v4 prompt binding failure could not be captured.")); return; }
+                failBeforeRequest(tr("The v4 case prompt does not match the prepared slot; no Provider request was sent."));
+                return;
+            }
+            bindingEvent.insert(QStringLiteral("kind"), QStringLiteral("slot_binding"));
+            if (!recordProviderCapture(bindingEvent))
+            { failBeforeRequest(tr("The v4 slot binding could not be durably recorded.")); return; }
+            evaluationSlotBindingRecorded = true;
+        }
+        QJsonObject intent = activeProviderCaptureContext;
+        intent.insert("kind", "dispatch_intent"); intent.insert("settings", sentSettings);
+        intent.insert("requestSha256", QString::fromLatin1(QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex()));
+        intent.insert("destinationScheme", url.scheme().toLower());
+        intent.insert("destinationHost", url.host().toLower());
+        intent.insert("destinationPort", url.port(url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0 ? 443 : 80));
+        intent.insert("endpointPathSha256", QString::fromLatin1(QCryptographicHash::hash(
+            url.path(QUrl::FullyEncoded).toUtf8(), QCryptographicHash::Sha256).toHex()));
+        if (!recordProviderCapture(intent))
+        { failBeforeRequest(tr("Evaluation capture could not durably record the request intent.")); return; }
+        if (requestId != activeProviderRequestId || generation != providerRequestGeneration || !runner.isActive()) return;
+    }
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Accept", streamEnabled ? "text/event-stream" : "application/json");
@@ -2031,7 +3093,8 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
     });
     connect(pending, &QNetworkReply::finished, this,
             [this, pending, requestId, generation, streamEnabled, consumeAvailable,
-             responseBytes, streamParser, tooLarge, streamFailure] {
+             responseBytes, streamParser, tooLarge, streamFailure, conversationId,
+             configuredProvider, configuredModel] {
         consumeAvailable();
         const bool wasCurrent = isCurrentProviderRequest(requestId, generation, pending);
         const auto statusCode = pending->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -2043,9 +3106,17 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
         // Invalidate this request before delivering a turn; runner signals may start a new one inline.
         activeProviderRequestId.clear();
         ++providerRequestGeneration;
+        const QJsonObject captureContext = activeProviderCaptureContext;
+        activeProviderCaptureContext = {};
         if (networkError != QNetworkReply::NoError || statusCode != 200 || *tooLarge
             || !streamFailure->isEmpty())
         {
+            if (providerCaptureRecorder)
+            {
+                QJsonObject event = captureContext; event.insert("kind", "provider_interruption");
+                event.insert("code", "TRANSPORT_FAILED"); event.insert("httpStatus", statusCode);
+                event.insert("networkCode", int(networkError)); recordProviderCapture(event);
+            }
             // Provider error bodies may echo request data; never put them in logs or the transcript.
             if (streamEnabled && !streamFailure->isEmpty())
                 state->setToolTip(*streamFailure);
@@ -2061,6 +3132,7 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
         }
 
         QJsonObject turn;
+        QString providerModel;
         QString parseError;
         if (streamEnabled)
         {
@@ -2074,15 +3146,79 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
                     : streamParser->errorMessage());
                 return;
             }
+            providerModel = streamParser->reportedModelId();
         }
-        else if (!RAgent::parseToolResponse(*responseBytes, &turn, &parseError))
-        { runner.providerFailed(requestId, parseError); return; }
+        else if (!RAgent::parseToolResponse(*responseBytes, &turn, &parseError, &providerModel))
+        {
+            if (providerCaptureRecorder)
+            {
+                QJsonObject event = captureContext; event.insert("kind", "provider_interruption");
+                event.insert("code", "PROVIDER_RESPONSE_INVALID");
+                event.insert("responseSha256", QString::fromLatin1(QCryptographicHash::hash(*responseBytes, QCryptographicHash::Sha256).toHex()));
+                recordProviderCapture(event);
+            }
+            runner.providerFailed(requestId, parseError); return;
+        }
+
+        if (providerCaptureRecorder)
+        {
+            const quint64 responseDeliveryGeneration = providerRequestGeneration;
+            const QString responseTaskId = captureContext.value("taskId").toString();
+            const QJsonObject raw = QJsonDocument::fromJson(*responseBytes).object();
+            const QJsonObject choice = raw.value("choices").toArray().first().toObject();
+            const QJsonObject assistant = turn.value("assistantMessage").toObject();
+            QJsonObject event = captureContext; event.insert("kind", "provider_response");
+            event.insert("responseSha256", QString::fromLatin1(QCryptographicHash::hash(*responseBytes, QCryptographicHash::Sha256).toHex()));
+            const QString providerResponseId = boundedProviderIdentifier(raw.value("id"), 128);
+            const QString returnedModel = boundedProviderIdentifier(raw.value("model"), 128);
+            const QString finishReason = boundedProviderIdentifier(choice.value("finish_reason"), 64);
+            event.insert("providerResponseIdStatus", raw.value("id").isUndefined() ? "missing"
+                : providerResponseId.isEmpty() ? "invalid" : "present");
+            event.insert("returnedModelStatus", raw.value("model").isUndefined() ? "missing"
+                : returnedModel.isEmpty() ? "invalid" : returnedModel == configuredModel ? "matches_configured" : "different");
+            if (!returnedModel.isEmpty())
+                event.insert("returnedModelSha256", QString::fromLatin1(QCryptographicHash::hash(
+                    returnedModel.toUtf8(), QCryptographicHash::Sha256).toHex()));
+            if (raw.contains("usage")) event.insert("usage", boundedProviderUsage(raw.value("usage")));
+            const QSet<QString> finishReasons{"stop", "tool_calls", "length", "content_filter", "function_call"};
+            event.insert("finishReason", finishReasons.contains(finishReason) ? finishReason : QStringLiteral("unknown"));
+            QJsonArray capturedCalls;
+            providerCaptureToolIds.clear();
+            providerCaptureToolCallNames.clear();
+            for (const QJsonValue &value : assistant.value("tool_calls").toArray())
+            {
+                const auto call = value.toObject(); const auto function = call.value("function").toObject();
+                const QString arguments = function.value("arguments").toString();
+                QJsonObject capturedCall;
+                const QString toolCallId = call.value("id").toString();
+                const QString localId = QStringLiteral("tool-%1").arg(capturedCalls.size() + 1);
+                providerCaptureToolIds.insert(toolCallId, localId);
+                capturedCall.insert("toolCallId", localId);
+                const QString toolName = function.value("name").toString();
+                const QString capturedToolName = providerCaptureToolNames.contains(toolName)
+                    ? toolName : QStringLiteral("unregistered");
+                providerCaptureToolCallNames.insert(toolCallId, capturedToolName);
+                capturedCall.insert("name", capturedToolName);
+                capturedCall.insert("argumentsSha256", QString::fromLatin1(QCryptographicHash::hash(
+                    arguments.toUtf8(), QCryptographicHash::Sha256).toHex()));
+                capturedCalls.append(capturedCall);
+            }
+            event.insert("toolCalls", capturedCalls);
+            event.insert("contentSha256", QString::fromLatin1(QCryptographicHash::hash(
+                turn.value("text").toString().toUtf8(), QCryptographicHash::Sha256).toHex()));
+            if (!recordProviderCapture(event))
+            { runner.providerFailed(requestId, tr("Evaluation capture failed before delivering the Provider response.")); return; }
+            if (!runner.isActive() || runner.taskId() != responseTaskId
+                || providerRequestGeneration != responseDeliveryGeneration) return;
+        }
 
         if (streamEnabled && liveStreamRequestId == requestId)
         {
             finalizingStreamMessage = true;
             finalizingStreamText = turn.value(QStringLiteral("text")).toString();
         }
+        const QString taskId = runner.taskId();
+        const bool taskWasActive = runner.isActive() && boundedTelemetryValue(taskId, 128);
         runner.receiveTurn(requestId, turn);
         if (finalizingStreamMessage && liveStreamRequestId == requestId)
         {
@@ -2091,5 +3227,25 @@ void AgentWidget::requestTurn(const QString &requestId, const QJsonArray &messag
             clearStreamText(requestId);
         }
         emit providerUsage(turn.value("usage").toObject());
+        if (taskWasActive)
+        {
+            QJsonObject event{{QStringLiteral("schema"), QStringLiteral("range.provider-turn-telemetry/v2")},
+                {QStringLiteral("requestId"), requestId}, {QStringLiteral("taskId"), taskId},
+                {QStringLiteral("conversationId"), conversationId},
+                {QStringLiteral("provider"), configuredProvider},
+                {QStringLiteral("configuredModelSha256"), QString::fromLatin1(
+                    QCryptographicHash::hash(configuredModel.toUtf8(), QCryptographicHash::Sha256).toHex())},
+                {QStringLiteral("providerModelStatus"), providerModel.isEmpty()
+                    ? QStringLiteral("unknown") : QStringLiteral("reported")},
+                {QStringLiteral("usage"), turn.value(QStringLiteral("usage")).toObject()}};
+            if (!providerModel.isEmpty())
+                event.insert(QStringLiteral("providerModelSha256"), QString::fromLatin1(
+                    QCryptographicHash::hash(providerModel.toUtf8(), QCryptographicHash::Sha256).toHex()));
+            if (boundedTelemetryValue(requestId, 128) && boundedTelemetryValue(conversationId, 128)
+                && boundedTelemetryValue(configuredProvider, 64) && boundedTelemetryValue(configuredModel, 256)
+                && (providerModel.isEmpty() || boundedTelemetryValue(providerModel, 128))
+                && QJsonDocument(event).toJson(QJsonDocument::Compact).size() <= MaxProviderTelemetryEventBytes)
+                emit providerTurnTelemetry(event);
+        }
     });
 }

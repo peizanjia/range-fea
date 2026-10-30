@@ -1,5 +1,7 @@
 # Range FEA 结构动力学、控制耦合与 Agent 项目规划
 
+> **文档定位（2026-10-27）：**本文件是长期产品架构与历史阶段路线，不是当前课程项目的验收台账。当前 Trusted Computation Agent 只含 [Stage 0–8](docs/TRUSTED_COMPUTATION_AGENT_PLAN.md)；PC、WF、CW 和下文旧产品 Stage 编号互相独立。先从[文档索引](docs/README.md)及[续作入口](docs/CONTINUATION.md)读取当前目标、状态与证据。
+
 更新时间：2026-10-08。阶段入口与研究范围见 [开发与验收计划](docs/DEVELOPMENT_PLAN.md)；后续全工作流设计/验收见 [WF 交付方案](docs/WORKFLOW_DELIVERY_PLAN.md)，状态/依赖以 [机器清单](docs/workflow_delivery_plan.json) 为准。本文件保留总体架构和历史阶段目标；历史执行数字不是当前待办。
 
 当前实现基线为 `15297a9`：已形成 GUI 模态/Undo/Redo、模板杆/梁控制与实时曲线、受信统计扩展和私有 Python 的受控 v1。当前文档通用控制、完整结果接线、项目恢复、连续任务、几何/网格迁移及通用科学扩展仍按 WF-01–14 交付。数值 Stage 1–9 保持各自支持矩阵；历史 105/107 项、真实模型和安装证据分别见验收文档与 HANDOFF.md，不代表规划功能已实现。

@@ -280,5 +280,17 @@ class SeriesServiceTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SOURCE_CHANGED")
 
 
+class ProjectProjectionTest(unittest.TestCase):
+    def test_pathfree_project_projection_retains_exact_authority(self):
+        ref = {"kind": "project-native-input-snapshot/v1", "projectId": "00000000-0000-4000-8000-000000000001",
+               "persistentDocumentId": "00000000-0000-4000-8000-000000000002", "sourceRevision": "r7", "modelSha256": "a" * 64,
+               "instanceRef": {"documentId": "00000000-0000-4000-8000-000000000003", "sessionEpoch": "00000000-0000-4000-8000-000000000004", "documentRevision": 3}}
+        self.assertEqual(series_service._model_hash(ref), "a" * 64)
+        for field, value in (("projectId", "bad-uuid"), ("sourceRevision", "r07"), ("modelSha256", "bad"), ("relativePath", "secret.rbm")):
+            with self.subTest(field=field), self.assertRaises(WorkflowError):
+                series_service._model_hash({**ref, field: value})
+        with self.assertRaises(WorkflowError):
+            series_service._model_hash({**ref, "instanceRef": {**ref["instanceRef"], "privatePath": "secret"}})
+
 if __name__ == "__main__":
     unittest.main()

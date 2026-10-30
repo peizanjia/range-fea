@@ -44,6 +44,7 @@
 #include <utility>
 
 #include <ragent_conversation_store.h>
+#include <ragent_evaluation_capture_store.h>
 #include <rml_model.h>
 #include <rml_time_solver.h>
 #include <rbl_job_manager.h>
@@ -109,6 +110,80 @@ Model modalConversationFixture()
     modal.setNIterations(12);
     modal.setNModesToExtract(2);
     return model;
+}
+
+QJsonObject trustedRodProblemSpec()
+{
+    const auto quantity = [](double value, const char *unit) {
+        return QJsonObject{{QStringLiteral("value"), value},
+                           {QStringLiteral("unit"), QString::fromLatin1(unit)}};
+    };
+    return {{QStringLiteral("schemaVersion"), 1},
+            {QStringLiteral("modelType"), QStringLiteral("axialRod")},
+            {QStringLiteral("name"), QStringLiteral("Agent UI review rod")},
+            {QStringLiteral("geometry"), QJsonObject{
+                 {QStringLiteral("length"), quantity(1.0, "m")},
+                 {QStringLiteral("segments"), 2}}},
+            {QStringLiteral("material"), QJsonObject{
+                 {QStringLiteral("name"), QStringLiteral("Steel")},
+                 {QStringLiteral("source"), QStringLiteral("test fixture")},
+                 {QStringLiteral("youngModulus"), quantity(210e9, "Pa")},
+                 {QStringLiteral("poissonRatio"), 0.3},
+                 {QStringLiteral("density"), quantity(7850.0, "kg/m3")}}},
+            {QStringLiteral("section"), QJsonObject{
+                 {QStringLiteral("area"), quantity(1e-4, "m2")}}},
+            {QStringLiteral("analysis"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("static")}}},
+            {QStringLiteral("supports"), QJsonArray{
+                 QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("fixedEnd")}}},
+                             {QStringLiteral("dofs"), QJsonArray{QStringLiteral("ux"), QStringLiteral("uy"), QStringLiteral("uz")}}},
+                 QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("allNodes")}}},
+                             {QStringLiteral("dofs"), QJsonArray{QStringLiteral("uy"), QStringLiteral("uz")}}}}},
+            {QStringLiteral("loads"), QJsonArray{
+                 QJsonObject{{QStringLiteral("kind"), QStringLiteral("pointForce")},
+                             {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+                             {QStringLiteral("components"), QJsonArray{quantity(1000.0, "N"),
+                                 quantity(0.0, "N"), quantity(0.0, "N")}}}}},
+            {QStringLiteral("initialConditions"), QJsonArray{}},
+            {QStringLiteral("observables"), QJsonArray{
+                 QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+                             {QStringLiteral("quantity"), QStringLiteral("displacement")},
+                             {QStringLiteral("component"), QStringLiteral("ux")}}}},
+            {QStringLiteral("precision"), QJsonObject{{QStringLiteral("displacementRelative"), 0.01}}}};
+}
+
+QJsonObject trustedCantileverBeamProblemSpec()
+{
+    const auto quantity = [](double value, const char *unit) {
+        return QJsonObject{{QStringLiteral("value"), value},
+                           {QStringLiteral("unit"), QString::fromLatin1(unit)}};
+    };
+    QJsonObject spec = trustedRodProblemSpec();
+    spec.insert(QStringLiteral("modelType"), QStringLiteral("cantileverBeam"));
+    spec.insert(QStringLiteral("name"), QStringLiteral("Agent UI review cantilever"));
+    spec.insert(QStringLiteral("geometry"), QJsonObject{
+        {QStringLiteral("length"), quantity(1.0, "m")}, {QStringLiteral("segments"), 1}});
+    spec.insert(QStringLiteral("section"), QJsonObject{
+        {QStringLiteral("area"), quantity(1.0e-4, "m2")},
+        {QStringLiteral("iy"), quantity(8.333333333333333e-10, "m4")},
+        {QStringLiteral("iz"), quantity(8.333333333333333e-10, "m4")},
+        {QStringLiteral("torsionalConstant"), quantity(1.666666666666667e-9, "m4")},
+        {QStringLiteral("wy"), quantity(1.666666666666667e-7, "m3")},
+        {QStringLiteral("wz"), quantity(1.666666666666667e-7, "m3")},
+        {QStringLiteral("wt"), quantity(1.666666666666667e-7, "m3")},
+        {QStringLiteral("localY"), QJsonArray{0.0, 1.0, 0.0}}});
+    spec.insert(QStringLiteral("supports"), QJsonArray{QJsonObject{
+        {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("fixedEnd")}}},
+        {QStringLiteral("dofs"), QJsonArray{QStringLiteral("ux"), QStringLiteral("uy"), QStringLiteral("uz"),
+                                             QStringLiteral("rx"), QStringLiteral("ry"), QStringLiteral("rz")}}}});
+    spec.insert(QStringLiteral("loads"), QJsonArray{QJsonObject{
+        {QStringLiteral("kind"), QStringLiteral("pointForce")},
+        {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+        {QStringLiteral("components"), QJsonArray{quantity(0.0, "N"), quantity(0.0, "N"), quantity(-1.0, "N")}}}});
+    spec.insert(QStringLiteral("observables"), QJsonArray{QJsonObject{
+        {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+        {QStringLiteral("quantity"), QStringLiteral("displacement")},
+        {QStringLiteral("component"), QStringLiteral("uz")}}});
+    return spec;
 }
 
 QJsonObject hostRequest(const QString &operation, const QJsonObject &parameters = {})
@@ -249,40 +324,56 @@ private:
 
 NetworkScript completionScript(const QString &text, int delayMs = 1,
                                bool deliverAfterAbort = false,
-                               const QString &privateReasoning = {})
+                               const QString &privateReasoning = {},
+                               const QString &providerModel = {})
 {
     QJsonObject message{{QStringLiteral("role"), QStringLiteral("assistant")},
                         {QStringLiteral("content"), text}};
     if (!privateReasoning.isEmpty())
         message.insert(QStringLiteral("reasoning_content"), privateReasoning);
-    const QJsonObject response{{QStringLiteral("choices"), QJsonArray{QJsonObject{
+    QJsonObject response{{QStringLiteral("choices"), QJsonArray{QJsonObject{
         {QStringLiteral("finish_reason"), QStringLiteral("stop")},
         {QStringLiteral("message"), message}}}},
         {QStringLiteral("usage"), QJsonObject{{QStringLiteral("prompt_tokens"), 987654321},
             {QStringLiteral("completion_tokens"), 123456789},
             {QStringLiteral("total_tokens"), 1111111110}}}};
+    if (!providerModel.isEmpty()) response.insert(QStringLiteral("model"), providerModel);
     return {QJsonDocument(response).toJson(QJsonDocument::Compact), 200, delayMs, deliverAfterAbort};
 }
 
 NetworkScript toolCallScript(const QString &callId, const QString &name,
                              const QJsonObject &arguments, const QString &text,
-                             const QString &privateReasoning = {})
+                             const QString &privateReasoning = {},
+                             const QString &providerModel = {})
 {
+    QString effectiveName = name;
+    QJsonObject effectiveArguments = arguments;
+    if (name == QStringLiteral("document_propose")
+        && arguments.value(QStringLiteral("command")) == QJsonValue(QStringLiteral("experiment.run")))
+    {
+        effectiveName = QStringLiteral("experiment_run");
+        effectiveArguments = {{QStringLiteral("documentId"), arguments.value(QStringLiteral("documentId"))},
+            {QStringLiteral("documentRevision"), arguments.value(QStringLiteral("documentRevision"))}};
+        const QJsonObject commandArguments = arguments.value(QStringLiteral("arguments")).toObject();
+        for (auto it = commandArguments.constBegin(); it != commandArguments.constEnd(); ++it)
+            effectiveArguments.insert(it.key(), it.value());
+    }
     const QJsonObject providerCall{{QStringLiteral("id"), callId},
         {QStringLiteral("type"), QStringLiteral("function")},
-        {QStringLiteral("function"), QJsonObject{{QStringLiteral("name"), name},
+        {QStringLiteral("function"), QJsonObject{{QStringLiteral("name"), effectiveName},
             {QStringLiteral("arguments"), QString::fromUtf8(
-                 QJsonDocument(arguments).toJson(QJsonDocument::Compact))}}}};
+                 QJsonDocument(effectiveArguments).toJson(QJsonDocument::Compact))}}}};
     QJsonObject message{{QStringLiteral("role"), QStringLiteral("assistant")},
         {QStringLiteral("content"), text}, {QStringLiteral("tool_calls"), QJsonArray{providerCall}}};
     if (!privateReasoning.isEmpty())
         message.insert(QStringLiteral("reasoning_content"), privateReasoning);
-    const QJsonObject response{{QStringLiteral("choices"), QJsonArray{QJsonObject{
+    QJsonObject response{{QStringLiteral("choices"), QJsonArray{QJsonObject{
         {QStringLiteral("finish_reason"), QStringLiteral("tool_calls")},
         {QStringLiteral("message"), message}}}},
         {QStringLiteral("usage"), QJsonObject{{QStringLiteral("prompt_tokens"), 987654321},
             {QStringLiteral("completion_tokens"), 123456789},
             {QStringLiteral("total_tokens"), 1111111110}}}};
+    if (!providerModel.isEmpty()) response.insert(QStringLiteral("model"), providerModel);
     return {QJsonDocument(response).toJson(QJsonDocument::Compact), 200, 1, false};
 }
 
@@ -614,6 +705,713 @@ private slots:
     {
         Application *application = Application::instance();
         if (application && application->getSession()) application->getSession()->clear();
+    }
+
+    void trustedExperimentPreviewShowsPhysicsAndRequiresApprovalInAutoMode()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        AgentSettingsSnapshot restoreSettings(applicationSettings);
+        applicationSettings->setValue(QStringLiteral("aiAgent/automaticChanges"), true);
+        applicationSettings->setValue(QStringLiteral("aiAgent/streamingResponses"), false);
+
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = application->getSession();
+        uint modelId = 0;
+        QString error;
+        QVERIFY2(openProjectWithModal(session, workspace.path(), &modelId, &error), qPrintable(error));
+        ModelCommandHost *host = session->getModelCommandHost();
+        QVERIFY(host);
+        const auto stamp = session->modelCommandStamp(modelId);
+        const QJsonObject arguments{{QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+            {QStringLiteral("allowedNumericalRanges"), QJsonArray{QJsonObject{
+                {QStringLiteral("path"), QStringLiteral("/geometry/segments")},
+                {QStringLiteral("minimum"), 2}, {QStringLiteral("maximum"), 4}}}},
+            {QStringLiteral("budgets"), QJsonObject{{QStringLiteral("solves"), 2},
+                {QStringLiteral("repairs"), 1}, {QStringLiteral("modelTurns"), 3}}}};
+        const QJsonObject proposal{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), arguments}};
+
+        HistoryFixtureNetwork network;
+        network.enqueue(toolCallScript(QStringLiteral("trusted-experiment-review"),
+            QStringLiteral("document_propose"), proposal,
+            QStringLiteral("I prepared a trusted rod experiment.")));
+        network.enqueue(completionScript(QStringLiteral("I stopped after your review decision.")));
+        WorkflowProcess workflow;
+        AgentWidget widget(host, &workflow, nullptr, &network,
+                           AgentTaskRunner::AccessPolicy::ReadWrite, false);
+        widget.setProviderSettings(testProviderSettings(QStringLiteral("agent-ui-review-test-key")));
+        widget.resize(900, 980);
+        widget.show();
+
+        auto *approval = widget.findChild<QFrame *>(QStringLiteral("agentApprovalCard"));
+        auto *preview = widget.findChild<QTextBrowser *>(QStringLiteral("agentPreview"));
+        auto *approve = widget.findChild<QPushButton *>(QStringLiteral("agentApproveProposal"));
+        auto *reject = widget.findChild<QPushButton *>(QStringLiteral("agentRejectProposal"));
+        auto *newChat = widget.findChild<QToolButton *>(QStringLiteral("agentNewChat"));
+        auto *automatic = widget.findChild<QCheckBox *>(QStringLiteral("agentAutomaticChanges"));
+        QVERIFY(approval);
+        QVERIFY(approval->parentWidget() == &widget);
+        QVERIFY(preview);
+        QVERIFY(approve);
+        QVERIFY(reject);
+        QVERIFY(newChat);
+        QVERIFY(automatic);
+        QVERIFY(automatic->isChecked());
+
+        QSignalSpy proposals(widget.taskRunner(), &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+        widget.startTask(QStringLiteral("Review the trusted rod experiment."), true);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(approval->isVisible(), 3000);
+        QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+        QVERIFY(widget.taskRunner()->isActive());
+        QVERIFY(approve->isEnabled());
+        QTRY_COMPARE_WITH_TIMEOUT(widget.childAt(approve->mapTo(&widget, approve->rect().center())),
+                                  static_cast<QWidget *>(approve), 2000);
+        const QString review = preview->toPlainText();
+        const QString agentTaskId = widget.taskRunner()->taskId();
+        QVERIFY(!agentTaskId.isEmpty());
+        QVERIFY(review.contains(QStringLiteral("Agent task ID: %1").arg(agentTaskId)));
+        QVERIFY(review.contains(QStringLiteral("Trusted mechanics experiment")));
+        QVERIFY(review.contains(QStringLiteral("normalized SI")));
+        QVERIFY(review.contains(QStringLiteral("Agent UI review rod")));
+        QVERIFY(review.contains(QStringLiteral("youngModulus")));
+        QVERIFY(review.contains(QStringLiteral("210000000000")));
+        QVERIFY(review.contains(QStringLiteral("Authorized numerical ranges")));
+        QVERIFY(review.contains(QStringLiteral("/geometry/segments")));
+        QVERIFY(review.contains(QStringLiteral("Solve / repair / model-turn budgets")));
+        QVERIFY(review.contains(QStringLiteral("source remains unchanged")));
+
+        const QJsonObject pendingProposal = widget.taskRunner()->pendingProposal();
+        const QString previewId = pendingProposal.value(QStringLiteral("previewId")).toString();
+        const QString experimentId = pendingProposal.value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!previewId.isEmpty());
+        QVERIFY(!experimentId.isEmpty());
+        QVERIFY(review.contains(QStringLiteral("Preview ID: %1").arg(previewId)));
+        QVERIFY(review.contains(QStringLiteral("proposed experiment ID: %1").arg(experimentId)));
+        const QString authorizationDigest = pendingProposal.value(QStringLiteral("authorizationDigest")).toString();
+        QVERIFY(!authorizationDigest.isEmpty());
+        QVERIFY(review.contains(QStringLiteral("Authorization digest: %1").arg(authorizationDigest)));
+        const QJsonObject sourceBinding = pendingProposal.value(QStringLiteral("sourceBinding")).toObject();
+        const QString snapshotSha256 = sourceBinding.value(QStringLiteral("snapshotSha256")).toString();
+        QCOMPARE(snapshotSha256.size(), 64);
+        QVERIFY(review.contains(QStringLiteral("Source snapshot SHA-256: %1").arg(snapshotSha256)));
+        const QString sourceSessionId = sourceBinding.value(QStringLiteral("sessionId")).toString();
+        const QString sourceSessionEpoch = sourceBinding.value(QStringLiteral("sessionEpoch")).toString();
+        QVERIFY(!sourceSessionId.isEmpty());
+        QVERIFY(!sourceSessionEpoch.isEmpty());
+        QVERIFY(sourceSessionId != sourceSessionEpoch);
+        QVERIFY(review.contains(QStringLiteral("Source session: %1 · epoch %2")
+            .arg(sourceSessionId, sourceSessionEpoch)));
+
+        QJsonObject malformedPreview = pendingProposal;
+        QJsonObject malformedBinding = sourceBinding;
+        malformedBinding.insert(QStringLiteral("snapshotSha256"), QString(64, QLatin1Char('z')));
+        malformedPreview.insert(QStringLiteral("sourceBinding"), malformedBinding);
+        const QString proposalId = proposals.first().at(1).toString();
+        QVERIFY(!proposalId.isEmpty());
+        Q_EMIT widget.taskRunner()->proposalReady(QStringLiteral("experiment"), proposalId, malformedPreview);
+        QTRY_VERIFY_WITH_TIMEOUT(!approve->isEnabled(), 2000);
+        QVERIFY(preview->toPlainText().contains(QStringLiteral("Host approval details are unavailable")));
+        Q_EMIT widget.taskRunner()->proposalReady(QStringLiteral("experiment"), proposalId, pendingProposal);
+        QTRY_VERIFY_WITH_TIMEOUT(approve->isEnabled(), 2000);
+
+        reject->click();
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(newChat->isEnabled(), 2000);
+        const QString finishedConversationId = widget.conversationId();
+        newChat->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!widget.conversationId().isEmpty(), 2000);
+        QVERIFY(widget.conversationId() != finishedConversationId);
+        auto *conversationState = widget.findChild<QLabel *>(QStringLiteral("agentConversationStatus"));
+        auto *historyStatus = widget.findChild<QLabel *>(QStringLiteral("agentHistoryStatus"));
+        QVERIFY(conversationState);
+        QVERIFY(historyStatus);
+        QCOMPARE(conversationState->text(), QStringLiteral("Ready"));
+        QVERIFY(historyStatus->text().contains(QStringLiteral("0 messages")));
+        QCOMPARE(session->modelCommandStamp(modelId), stamp);
+        const QJsonObject rejectedExperiment = host->handle(hostRequest(QStringLiteral("experiment.query"),
+            {{QStringLiteral("experimentId"), experimentId}}));
+        QCOMPARE(rejectedExperiment.value(QStringLiteral("status")).toString(), QStringLiteral("rejected"));
+        QCOMPARE(rejectedExperiment.value(QStringLiteral("code")).toString(), QStringLiteral("EXPERIMENT_NOT_FOUND"));
+    }
+
+    void trustedRodExperimentRunsThroughApprovalWaitAndHostEvidence()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        AgentSettingsSnapshot restoreSettings(applicationSettings);
+        applicationSettings->setValue(QStringLiteral("aiAgent/automaticChanges"), true);
+        applicationSettings->setValue(QStringLiteral("aiAgent/streamingResponses"), false);
+
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = application->getSession();
+        uint modelId = 0;
+        QString error;
+        QVERIFY2(openProjectWithModal(session, workspace.path(), &modelId, &error), qPrintable(error));
+        ModelCommandHost *host = session->getModelCommandHost();
+        QVERIFY(host);
+        RAgentConversationStore conversationStoreProbe;
+        QVERIFY2(configureConversationStore(&conversationStoreProbe, host, nullptr, &error), qPrintable(error));
+        const auto sourceStamp = session->modelCommandStamp(modelId);
+        const QJsonObject sourceBefore = host->query(modelId);
+        QVERIFY(!sourceStamp.first.isEmpty());
+
+        const QJsonObject proposalArguments{{QStringLiteral("documentId"), sourceStamp.first},
+            {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{
+                {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+                {QStringLiteral("budgets"), QJsonObject{{QStringLiteral("solves"), 1},
+                    {QStringLiteral("repairs"), 0}, {QStringLiteral("modelTurns"), 3}}}}}};
+
+        HistoryFixtureNetwork network;
+        network.enqueue(toolCallScript(QStringLiteral("trusted-rod-submit"),
+            QStringLiteral("document_propose"), proposalArguments,
+            QStringLiteral("I prepared the rod analysis for approval."), {},
+            QStringLiteral("history-widget-fixture")));
+        QTemporaryDir captureDirectory;
+        QVERIFY(captureDirectory.isValid());
+        RAgentEvaluationCaptureStore captureStore;
+        QString captureError;
+        QVERIFY2(captureStore.configure(captureDirectory.filePath(QStringLiteral("agent-host-capture.jsonl")),
+                                        &captureError), qPrintable(captureError));
+        QList<QJsonObject> captureEvents;
+        WorkflowProcess workflow;
+        AgentWidget widget(host, &workflow, nullptr, &network,
+                           AgentTaskRunner::AccessPolicy::ReadWrite, false);
+        widget.setProviderSettings(testProviderSettings(QStringLiteral("agent-rod-e2e-test-key")));
+        QVERIFY(widget.setProviderCaptureRecorder([&](const QJsonObject &event) {
+            captureEvents.append(event);
+            return captureStore.append(event, &captureError);
+        }));
+        widget.resize(900, 980);
+        widget.show();
+
+        auto *approval = widget.findChild<QFrame *>(QStringLiteral("agentApprovalCard"));
+        auto *approve = widget.findChild<QPushButton *>(QStringLiteral("agentApproveProposal"));
+        QVERIFY(approval);
+        QVERIFY(approve);
+        QSignalSpy proposals(widget.taskRunner(), &AgentTaskRunner::proposalReady);
+        QSignalSpy observed(widget.taskRunner(), &AgentTaskRunner::experimentObserved);
+        QSignalSpy accepted(widget.taskRunner(), &AgentTaskRunner::executionObserved);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+
+        widget.startTask(QStringLiteral("Run and verify this trusted rod problem."), true);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(approval->isVisible(), 3000);
+        QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+        const QString experimentId = widget.taskRunner()->pendingProposal()
+            .value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!experimentId.isEmpty());
+
+        network.enqueue(toolCallScript(QStringLiteral("trusted-rod-wait"),
+            QStringLiteral("experiment_wait"),
+            QJsonObject{{QStringLiteral("experimentId"), experimentId}},
+            QStringLiteral("I will wait for the Host result."), {},
+            QStringLiteral("history-widget-fixture")));
+        network.enqueue(completionScript(QStringLiteral("The Host reports the rod candidate passed verification."),
+            1, false, {}, QStringLiteral("history-widget-fixture")));
+        approve->click();
+
+        QTRY_COMPARE_WITH_TIMEOUT(accepted.size(), 1, 10000);
+        QCOMPARE(accepted.first().at(1).toString(), QStringLiteral("experiment"));
+        QCOMPARE(accepted.first().at(2).toJsonObject().value(QStringLiteral("experimentId")).toString(), experimentId);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(observed.size(), 1, 90000);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 3, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+
+        const QJsonObject hostSummary = observed.first().at(2).toJsonObject();
+        QCOMPARE(observed.first().at(1).toString(), experimentId);
+        QCOMPARE(hostSummary.value(QStringLiteral("state")).toString(), QStringLiteral("candidate_ready"));
+        QVERIFY(hostSummary.value(QStringLiteral("verificationPassed")).toBool());
+        QVERIFY(hostSummary.value(QStringLiteral("verification")).toObject()
+                    .value(QStringLiteral("metrics")).isObject());
+        QVERIFY(!QJsonDocument(hostSummary).toJson(QJsonDocument::Compact).contains(workspace.path().toUtf8()));
+        QCOMPARE(session->modelCommandStamp(modelId), sourceStamp);
+        QCOMPARE(host->query(modelId), sourceBefore);
+
+        const QString waitFacts = toolResultForCall(network.requestBodies.at(2), QStringLiteral("trusted-rod-wait"));
+        QVERIFY2(waitFacts.contains(QStringLiteral("candidate_ready")), qPrintable(waitFacts));
+        QVERIFY(waitFacts.contains(QStringLiteral("verificationPassed")));
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(transcript);
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Trusted Host evidence")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("passed=true")));
+
+        QList<QJsonObject> hostObservations;
+        QList<QJsonObject> hostEvidence;
+        QList<QJsonObject> providerResponses;
+        QList<QJsonObject> dispatchIntents;
+        for (const QJsonObject &event : captureEvents)
+        {
+            if (event.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("provider_response")))
+                providerResponses.append(event);
+            if (event.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("dispatch_intent")))
+                dispatchIntents.append(event);
+            if (event.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("host_observation")))
+                hostObservations.append(event);
+            if (event.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("host_evidence")))
+                hostEvidence.append(event);
+        }
+        QCOMPARE(providerResponses.size(), 3);
+        QCOMPARE(dispatchIntents.size(), 3);
+        const QString configuredModelSha256 = QString::fromLatin1(QCryptographicHash::hash(
+            QByteArrayLiteral("history-widget-fixture"), QCryptographicHash::Sha256).toHex());
+        for (const QJsonObject &response : providerResponses)
+        {
+            bool matchedDispatch = false;
+            for (const QJsonObject &dispatch : dispatchIntents)
+                if (dispatch.value(QStringLiteral("requestId")) == response.value(QStringLiteral("requestId")))
+                {
+                    QCOMPARE(dispatch.value(QStringLiteral("provider")).toString(), QStringLiteral("DeepSeek"));
+                    QCOMPARE(dispatch.value(QStringLiteral("settings")).toObject()
+                                 .value(QStringLiteral("model")).toString(),
+                             QStringLiteral("history-widget-fixture"));
+                    matchedDispatch = true;
+                    break;
+                }
+            QVERIFY(matchedDispatch);
+            QCOMPARE(response.value(QStringLiteral("returnedModelStatus")).toString(),
+                     QStringLiteral("matches_configured"));
+            QCOMPARE(response.value(QStringLiteral("returnedModelSha256")).toString(), configuredModelSha256);
+        }
+        QVERIFY(!hostObservations.isEmpty());
+        QCOMPARE(hostEvidence.size(), 1);
+        const QJsonObject evidence = hostEvidence.first();
+        QVERIFY(!evidence.contains(QStringLiteral("provider")));
+        QCOMPARE(evidence.value(QStringLiteral("toolName")).toString(), QStringLiteral("experiment_wait"));
+        QCOMPARE(evidence.value(QStringLiteral("experimentId")).toString(), experimentId);
+        QCOMPARE(evidence.value(QStringLiteral("sourceBinding")).toObject()
+                     .value(QStringLiteral("documentId")).toString(), sourceStamp.first);
+        QCOMPARE(evidence.value(QStringLiteral("sourceBinding")).toObject()
+                     .value(QStringLiteral("documentRevision")).toString(), QString::number(sourceStamp.second));
+        QVERIFY(evidence.value(QStringLiteral("authorizationDigest")).toString().size() == 64);
+        QCOMPARE(evidence.value(QStringLiteral("childJob")).toObject()
+                     .value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
+        QCOMPARE(evidence.value(QStringLiteral("verificationReport")).toObject()
+                     .value(QStringLiteral("status")).toString(), QStringLiteral("pass"));
+        QVERIFY(evidence.value(QStringLiteral("verificationReport")).toObject()
+                    .value(QStringLiteral("passed")).toBool());
+        QCOMPARE(evidence.value(QStringLiteral("evidenceSchema")).toString(),
+                 QStringLiteral("range.trusted-agent-stage7-physical-evidence/v1"));
+        const QJsonObject capturedVerification = evidence.value(QStringLiteral("verificationReport")).toObject();
+        QCOMPARE(capturedVerification.value(QStringLiteral("metricsCaptureStatus")).toString(),
+                 QStringLiteral("complete"));
+        const QByteArray capturedMetricsJson = capturedVerification.value(QStringLiteral("metricsJson")).toString().toUtf8();
+        QVERIFY(!capturedMetricsJson.isEmpty());
+        const QJsonObject capturedMetrics = QJsonDocument::fromJson(capturedMetricsJson).object();
+        QVERIFY(!capturedMetrics.isEmpty());
+        QCOMPARE(QString::fromLatin1(QCryptographicHash::hash(capturedMetricsJson,
+                     QCryptographicHash::Sha256).toHex()),
+                 capturedVerification.value(QStringLiteral("metricsSha256")).toString());
+        QVERIFY(capturedMetrics.contains(QStringLiteral("identity")));
+        QCOMPARE(evidence.value(QStringLiteral("solveIdentity")).toObject()
+                     .value(QStringLiteral("jobId")),
+                 evidence.value(QStringLiteral("childJob")).toObject().value(QStringLiteral("jobId")));
+        QCOMPARE(evidence.value(QStringLiteral("verificationReport")).toObject()
+                     .value(QStringLiteral("identity")).toObject().value(QStringLiteral("manifestSha256")),
+                 evidence.value(QStringLiteral("childJob")).toObject().value(QStringLiteral("resultManifestSha256")));
+
+        QFile persistedCapture(captureDirectory.filePath(QStringLiteral("agent-host-capture.jsonl")));
+        QVERIFY(persistedCapture.open(QIODevice::ReadOnly));
+        const QByteArray captureBytes = persistedCapture.readAll();
+        QVERIFY(!captureBytes.isEmpty());
+        QVERIFY(!captureBytes.contains(workspace.path().toUtf8()));
+        const QString captureExportPath = qEnvironmentVariable("RANGE_TEST_CAPTURE_EXPORT");
+        if (!captureExportPath.isEmpty())
+        {
+            QFile exportedCapture(captureExportPath);
+            QVERIFY2(exportedCapture.open(QIODevice::WriteOnly | QIODevice::NewOnly),
+                     qPrintable(exportedCapture.errorString()));
+            QCOMPARE(exportedCapture.write(captureBytes), qint64(captureBytes.size()));
+            QVERIFY(exportedCapture.flush());
+        }
+    }
+
+    void trustedBeamConvergenceRunsThroughAgentApprovalWaitAndEvidence()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        AgentSettingsSnapshot restoreSettings(applicationSettings);
+        applicationSettings->setValue(QStringLiteral("aiAgent/automaticChanges"), true);
+        applicationSettings->setValue(QStringLiteral("aiAgent/streamingResponses"), false);
+
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = application->getSession();
+        uint modelId = 0;
+        QString error;
+        QVERIFY2(openProjectWithModal(session, workspace.path(), &modelId, &error), qPrintable(error));
+        ModelCommandHost *host = session->getModelCommandHost();
+        QVERIFY(host);
+        const auto sourceStamp = session->modelCommandStamp(modelId);
+        const QJsonObject sourceBefore = host->query(modelId);
+        const QJsonObject problem = trustedCantileverBeamProblemSpec();
+        const QJsonObject proposalArguments{{QStringLiteral("documentId"), sourceStamp.first},
+            {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{
+                {QStringLiteral("problemSpec"), problem},
+                {QStringLiteral("allowedNumericalRanges"), QJsonArray{QJsonObject{
+                    {QStringLiteral("path"), QStringLiteral("/geometry/segments")},
+                    {QStringLiteral("minimum"), 1}, {QStringLiteral("maximum"), 4}}}},
+                {QStringLiteral("budgets"), QJsonObject{{QStringLiteral("solves"), 3},
+                    {QStringLiteral("repairs"), 2}, {QStringLiteral("modelTurns"), 4}}},
+                {QStringLiteral("convergenceStudy"), QJsonObject{
+                    {QStringLiteral("kind"), QStringLiteral("mesh")},
+                    {QStringLiteral("maximumLevels"), 3}}}}}};
+
+        HistoryFixtureNetwork network;
+        network.enqueue(toolCallScript(QStringLiteral("trusted-beam-submit"),
+            QStringLiteral("document_propose"), proposalArguments,
+            QStringLiteral("I prepared the cantilever beam mesh study for review.")));
+        WorkflowProcess workflow;
+        AgentWidget widget(host, &workflow, nullptr, &network,
+                           AgentTaskRunner::AccessPolicy::ReadWrite, false);
+        widget.setProviderSettings(testProviderSettings(QStringLiteral("agent-beam-e2e-test-key")));
+        widget.resize(900, 980);
+        widget.show();
+
+        auto *approval = widget.findChild<QFrame *>(QStringLiteral("agentApprovalCard"));
+        auto *preview = widget.findChild<QTextBrowser *>(QStringLiteral("agentPreview"));
+        auto *approve = widget.findChild<QPushButton *>(QStringLiteral("agentApproveProposal"));
+        QVERIFY(approval && preview && approve);
+        QSignalSpy proposals(widget.taskRunner(), &AgentTaskRunner::proposalReady);
+        QSignalSpy observed(widget.taskRunner(), &AgentTaskRunner::experimentObserved);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+
+        widget.startTask(QStringLiteral("Run and verify a cantilever beam mesh study."), true);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(approval->isVisible(), 3000);
+        QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+        const QString review = preview->toPlainText();
+        QVERIFY(review.contains(QStringLiteral("cantileverBeam")));
+        QVERIFY(review.contains(QStringLiteral("Authorized numerical ranges")));
+        QVERIFY(review.contains(QStringLiteral("maximumLevels")));
+
+        const QString experimentId = widget.taskRunner()->pendingProposal()
+            .value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!experimentId.isEmpty());
+        network.enqueue(toolCallScript(QStringLiteral("trusted-beam-wait"),
+            QStringLiteral("experiment_wait"),
+            QJsonObject{{QStringLiteral("experimentId"), experimentId}},
+            QStringLiteral("I will wait for the Host-verified beam convergence result.")));
+        network.enqueue(completionScript(QStringLiteral("The Host reports verified beam convergence.")));
+        approve->click();
+
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(observed.size(), 1, 120000);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 3, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+
+        const QJsonObject summary = observed.first().at(2).toJsonObject();
+        QCOMPARE(summary.value(QStringLiteral("experimentId")).toString(), experimentId);
+        QCOMPARE(summary.value(QStringLiteral("state")).toString(), QStringLiteral("candidate_ready"));
+        QVERIFY(summary.value(QStringLiteral("verificationPassed")).toBool());
+        const QJsonObject convergence = summary.value(QStringLiteral("convergence")).toObject();
+        QCOMPARE(convergence.value(QStringLiteral("status")).toString(), QStringLiteral("converged"));
+        QCOMPARE(convergence.value(QStringLiteral("levelsCompleted")).toInt(), 3);
+        QCOMPARE(convergence.value(QStringLiteral("adjacentChanges")).toArray().size(), 2);
+        for (const QJsonValue &change : convergence.value(QStringLiteral("adjacentChanges")).toArray())
+            QVERIFY(change.toObject().value(QStringLiteral("belowTolerance")).toBool());
+        QVERIFY(!QJsonDocument(summary).toJson(QJsonDocument::Compact).contains(workspace.path().toUtf8()));
+        QCOMPARE(session->modelCommandStamp(modelId), sourceStamp);
+        QCOMPARE(host->query(modelId), sourceBefore);
+
+        const QString waitFacts = toolResultForCall(network.requestBodies.at(2), QStringLiteral("trusted-beam-wait"));
+        QVERIFY(waitFacts.contains(QStringLiteral("converged")));
+        QVERIFY(waitFacts.contains(QStringLiteral("verificationPassed")));
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(transcript);
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Trusted Host evidence")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("converged")));
+    }
+
+    void trustedMechanicsClarificationResumesOnlyAfterUserSuppliesMaterial()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        auto *applicationSettings = application->getApplicationSettings();
+        QVERIFY(applicationSettings);
+        AgentSettingsSnapshot restoreSettings(applicationSettings);
+        applicationSettings->setValue(QStringLiteral("aiAgent/automaticChanges"), true);
+        applicationSettings->setValue(QStringLiteral("aiAgent/streamingResponses"), false);
+
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = application->getSession();
+        uint modelId = 0;
+        QString error;
+        QVERIFY2(openProjectWithModal(session, workspace.path(), &modelId, &error), qPrintable(error));
+        ModelCommandHost *host = session->getModelCommandHost();
+        QVERIFY(host);
+        const auto sourceStamp = session->modelCommandStamp(modelId);
+        const QJsonObject sourceBefore = host->query(modelId);
+        QJsonObject incompleteProblem = trustedRodProblemSpec();
+        incompleteProblem.remove(QStringLiteral("material"));
+        const QJsonObject diagnoseArguments{{QStringLiteral("documentId"), sourceStamp.first},
+            {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+            {QStringLiteral("scope"), QStringLiteral("candidate")},
+            {QStringLiteral("problemSpec"), incompleteProblem}};
+        QJsonObject completeProblem = trustedRodProblemSpec();
+        QJsonObject completedMaterial = completeProblem.value(QStringLiteral("material")).toObject();
+        completedMaterial.insert(QStringLiteral("source"), QStringLiteral("user-provided clarification"));
+        completeProblem.insert(QStringLiteral("material"), completedMaterial);
+        const QJsonObject proposalArguments{{QStringLiteral("documentId"), sourceStamp.first},
+            {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{
+                {QStringLiteral("problemSpec"), completeProblem},
+                {QStringLiteral("budgets"), QJsonObject{{QStringLiteral("solves"), 1},
+                    {QStringLiteral("repairs"), 0}, {QStringLiteral("modelTurns"), 5}}}}}};
+
+        HistoryFixtureNetwork network;
+        network.enqueue(toolCallScript(QStringLiteral("trusted-missing-diagnosis"),
+            QStringLiteral("trusted_problem_diagnose"), diagnoseArguments,
+            QStringLiteral("I will inspect the incomplete candidate before deciding whether to proceed.")));
+        network.enqueue(toolCallScript(QStringLiteral("trusted-material-question"),
+            QStringLiteral("ask_user"), QJsonObject{
+                {QStringLiteral("question"), QStringLiteral("Which material properties should I use? The candidate has no material data; I will not infer them.")},
+                {QStringLiteral("options"), QJsonArray{QStringLiteral("Steel: E=210 GPa, nu=0.3, density=7850 kg/m3"),
+                    QStringLiteral("I will provide different properties")}}},
+            QStringLiteral("The deterministic diagnosis reports missing material inputs.")));
+        network.enqueue(toolCallScript(QStringLiteral("trusted-material-completed-proposal"),
+            QStringLiteral("document_propose"), proposalArguments,
+            QStringLiteral("Using the material values you provided, I prepared a candidate.")));
+        WorkflowProcess workflow;
+        AgentWidget widget(host, &workflow, nullptr, &network,
+                           AgentTaskRunner::AccessPolicy::ReadWrite, false);
+        widget.setProviderSettings(testProviderSettings(QStringLiteral("agent-clarification-e2e-test-key")));
+        widget.resize(900, 980);
+        widget.show();
+
+        QSignalSpy questions(widget.taskRunner(), &AgentTaskRunner::userInputRequested);
+        QSignalSpy proposals(widget.taskRunner(), &AgentTaskRunner::proposalReady);
+        QSignalSpy observed(widget.taskRunner(), &AgentTaskRunner::experimentObserved);
+        QSignalSpy finished(widget.taskRunner(), &AgentTaskRunner::finished);
+        widget.startTask(QStringLiteral("Analyze this rod. Ask before filling missing physical parameters."), true);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 2, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(questions.size(), 1, 5000);
+        QCOMPARE(proposals.size(), 0);
+        QVERIFY(widget.taskRunner()->isAwaitingInput());
+        QVERIFY(widget.taskRunner()->pendingProposal().isEmpty());
+        const auto diagnosisToolResult = toolResultForCall(network.requestBodies.at(1),
+            QStringLiteral("trusted-missing-diagnosis"));
+        QVERIFY2(diagnosisToolResult.contains(QStringLiteral("SPEC_MISSING")), qPrintable(diagnosisToolResult));
+        auto *questionCard = widget.findChild<QFrame *>(QStringLiteral("agentQuestionCard"));
+        QVERIFY(questionCard);
+        QTRY_VERIFY_WITH_TIMEOUT(questionCard->isVisible(), 3000);
+        const auto questionText = widget.findChild<QLabel *>(QStringLiteral("agentQuestionText"));
+        QVERIFY(questionText);
+        QVERIFY(questionText->text().contains(QStringLiteral("no material data")));
+        const QList<QPushButton *> answers = questionCard->findChildren<QPushButton *>();
+        QCOMPARE(answers.size(), 2);
+        const QString suppliedMaterial = QStringLiteral("Steel: E=210 GPa, nu=0.3, density=7850 kg/m3");
+        answers.first()->click();
+
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 3, 10000);
+        QVERIFY(network.requestBodies.at(2).contains(suppliedMaterial.toUtf8()));
+        QTRY_COMPARE_WITH_TIMEOUT(proposals.size(), 1, 10000);
+        const QString experimentId = widget.taskRunner()->pendingProposal()
+            .value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!experimentId.isEmpty());
+        auto *preview = widget.findChild<QTextBrowser *>(QStringLiteral("agentPreview"));
+        auto *approve = widget.findChild<QPushButton *>(QStringLiteral("agentApproveProposal"));
+        QVERIFY(preview && approve);
+        QVERIFY(preview->toPlainText().contains(QStringLiteral("210000000000")));
+        network.enqueue(toolCallScript(QStringLiteral("trusted-material-wait"),
+            QStringLiteral("experiment_wait"),
+            QJsonObject{{QStringLiteral("experimentId"), experimentId}},
+            QStringLiteral("I will verify the Host result.")));
+        network.enqueue(completionScript(QStringLiteral("The Host reports the completed rod result.")));
+        approve->click();
+
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 4, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(observed.size(), 1, 90000);
+        QTRY_COMPARE_WITH_TIMEOUT(network.requests.size(), 5, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 15000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+        const QJsonObject summary = observed.first().at(2).toJsonObject();
+        QCOMPARE(summary.value(QStringLiteral("state")).toString(), QStringLiteral("candidate_ready"));
+        QVERIFY(summary.value(QStringLiteral("verificationPassed")).toBool());
+        QCOMPARE(session->modelCommandStamp(modelId), sourceStamp);
+        QCOMPARE(host->query(modelId), sourceBefore);
+        const QString waitFacts = toolResultForCall(network.requestBodies.at(4), QStringLiteral("trusted-material-wait"));
+        QVERIFY(waitFacts.contains(QStringLiteral("verificationPassed")));
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(transcript && transcript->toPlainText().contains(QStringLiteral("Trusted Host evidence")));
+    }
+
+    void hostCancellationFactIsShownIndependentlyFromAssistantText()
+    {
+        Application *application = Application::instance();
+        QVERIFY(application);
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = application->getSession();
+        uint modelId = 0;
+        QString error;
+        QVERIFY2(openProjectWithModal(session, workspace.path(), &modelId, &error), qPrintable(error));
+        Q_UNUSED(modelId);
+        WorkflowProcess workflow;
+        HistoryFixtureNetwork network;
+        AgentWidget widget(session->getModelCommandHost(), &workflow, nullptr, &network,
+                           AgentTaskRunner::AccessPolicy::ReadWrite, false);
+        widget.resize(820, 900);
+        widget.show();
+        const QString experimentId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QString documentId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+        const QJsonObject sourceBinding{{QStringLiteral("documentId"), documentId},
+            {QStringLiteral("sessionEpoch"), session->getModelCommandHost()->sessionEpoch()},
+            {QStringLiteral("documentRevision"), 17},
+            {QStringLiteral("authorizationDigest"), QString(64, QLatin1Char('a'))}};
+        const QJsonObject fact{{QStringLiteral("schema"), QStringLiteral("range.agent-experiment-cancellation/v1")},
+            {QStringLiteral("trigger"), QStringLiteral("user_stop")},
+            {QStringLiteral("status"), QStringLiteral("cancelled")},
+            {QStringLiteral("code"), QStringLiteral("CANCELLED")},
+            {QStringLiteral("beforeState"), QStringLiteral("prepared")},
+            {QStringLiteral("afterState"), QStringLiteral("cancelled")},
+            {QStringLiteral("cancellationPersisted"), true},
+            {QStringLiteral("childCancellationRequestFailed"), false},
+            {QStringLiteral("childJobsTerminal"), true},
+            {QStringLiteral("childJobSetMatches"), true},
+            {QStringLiteral("childJobCount"), 0}, {QStringLiteral("terminalChildJobCount"), 0},
+            {QStringLiteral("childJobStates"), QStringLiteral("none")}};
+
+        const QString taskId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+        widget.taskRunner()->experimentCancellationObserved(taskId, experimentId,
+                                                              sourceBinding, fact);
+        auto *transcript = widget.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(transcript);
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Trusted Host cancellation")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Cancellation status: cancelled (CANCELLED)")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("child job set matches=true; child jobs terminal=true (0/0), states=none")));
+        QVERIFY(transcript->toPlainText().contains(documentId));
+
+        const QString failedExperimentId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+        const QJsonObject unavailableFact{{QStringLiteral("schema"), QStringLiteral("range.agent-experiment-cancellation/v1")},
+            {QStringLiteral("status"), QStringLiteral("unknown")},
+            {QStringLiteral("code"), QStringLiteral("HOST_QUERY_FAILED")}};
+        widget.taskRunner()->experimentCancellationObserved(taskId, failedExperimentId, {}, unavailableFact);
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral(
+            "Cancellation status: unknown (HOST_QUERY_FAILED). Persisted=unknown; child job set matches=unknown; child jobs terminal=unknown (unknown/unknown), states=unknown; child cancel request failed=unknown.")));
+        const QString verifierFailureExperimentId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QJsonObject failedMetric{{QStringLiteral("status"), QStringLiteral("failed")},
+            {QStringLiteral("required"), true}, {QStringLiteral("value"), 0.08},
+            {QStringLiteral("tolerance"), 0.02}};
+        const QJsonObject failedVerification{{QStringLiteral("schema"), QStringLiteral("range.verification/v1")},
+            {QStringLiteral("status"), QStringLiteral("failed")}, {QStringLiteral("passed"), false},
+            {QStringLiteral("metrics"), QJsonObject{{QStringLiteral("frequencyRelativeError"), failedMetric}}}};
+        const QJsonObject verifierFailure{{QStringLiteral("experimentId"), verifierFailureExperimentId},
+            {QStringLiteral("state"), QStringLiteral("budget_exhausted")},
+            {QStringLiteral("verificationPassed"), false},
+            {QStringLiteral("verification"), failedVerification},
+            {QStringLiteral("convergence"), QJsonObject{{QStringLiteral("status"), QStringLiteral("not_converged")},
+                {QStringLiteral("stopReason"), QStringLiteral("solve_budget_exhausted")},
+                {QStringLiteral("levels"), QJsonArray{
+                    QJsonObject{{QStringLiteral("level"), 1}, {QStringLiteral("verificationPassed"), true}},
+                    QJsonObject{{QStringLiteral("level"), 2}, {QStringLiteral("verificationPassed"), false}},
+                    QJsonObject{{QStringLiteral("level"), 3}},
+                    QJsonObject{{QStringLiteral("level"), 4}, {QStringLiteral("verificationPassed"), QStringLiteral("false")}}}}}}};
+        widget.taskRunner()->experimentObserved(taskId, verifierFailureExperimentId, verifierFailure);
+        const QString modelClaim = QStringLiteral("The result passed verification and is ready.");
+        widget.taskRunner()->assistantMessage(modelClaim);
+        QVERIFY(transcript->toPlainText().contains(modelClaim));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Verification: failed · passed=false")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Host state: budget_exhausted")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Level 1 · verified=true")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Level 2 · verified=false")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Level 3 · verified=not reported")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Level 4 · verified=not reported")));
+        const QString cancelledInput = QStringLiteral("Discard this queued message when Stop is pressed.");
+        widget.taskRunner()->pendingMessagesCancelled({cancelledInput});
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral("Message not processed")));
+        QVERIFY(transcript->toPlainText().contains(QStringLiteral(
+            "This queued message was cancelled before its Agent task started. No analysis or action was performed.")));
+
+        const QJsonObject project = session->getModelCommandHost()->handle(hostRequest(QStringLiteral("project.query")))
+            .value(QStringLiteral("result")).toObject();
+        QVERIFY(!project.value(QStringLiteral("projectId")).toString().isEmpty());
+        RAgentConversationStore savedConversation;
+        QString storeError;
+        QVERIFY2(savedConversation.configure(session->getModelCommandHost()->projectWorkspace(),
+                                              project.value(QStringLiteral("projectId")).toString(),
+                                              &storeError), qPrintable(storeError));
+        auto *choice = widget.findChild<QComboBox *>(QStringLiteral("agentConversationChoice"));
+        QVERIFY(choice);
+        const QString conversationId = choice->currentData().toString();
+        QVERIFY(!conversationId.isEmpty());
+        const QJsonObject saved = savedConversation.page(conversationId, 0, 20, &storeError);
+        QVERIFY2(!saved.isEmpty(), qPrintable(storeError));
+        bool cancellationFactPersisted = false;
+        bool unavailableFactPersisted = false;
+        bool cancelledInputPersisted = false;
+        bool cancelledInputFactPersisted = false;
+        for (const QJsonValue &entryValue : saved.value(QStringLiteral("messages")).toArray())
+        {
+            const QJsonObject entry = entryValue.toObject();
+            const QJsonObject savedFacts = entry.value(QStringLiteral("facts")).toObject();
+            if (entry.value(QStringLiteral("role")).toString() == QStringLiteral("user")
+                && entry.value(QStringLiteral("text")).toString() == cancelledInput)
+                cancelledInputPersisted = true;
+            if (entry.value(QStringLiteral("role")).toString() == QStringLiteral("fact")
+                && savedFacts.value(QStringLiteral("experimentId")).toString() == experimentId)
+            {
+                cancellationFactPersisted = true;
+                QCOMPARE(savedFacts.value(QStringLiteral("childJobStates")).toString(), QStringLiteral("none"));
+                QCOMPARE(savedFacts.value(QStringLiteral("childJobCount")).toString(), QStringLiteral("0"));
+                QCOMPARE(savedFacts.value(QStringLiteral("childJobSetMatches")).toString(), QStringLiteral("true"));
+            }
+            if (entry.value(QStringLiteral("role")).toString() == QStringLiteral("fact")
+                && savedFacts.value(QStringLiteral("experimentId")).toString() == failedExperimentId)
+            {
+                unavailableFactPersisted = true;
+                QVERIFY(!savedFacts.contains(QStringLiteral("cancellationPersisted")));
+                QVERIFY(!savedFacts.contains(QStringLiteral("childJobCount")));
+                QVERIFY(!savedFacts.contains(QStringLiteral("childJobSetMatches")));
+            }
+            if (entry.value(QStringLiteral("role")).toString() == QStringLiteral("fact")
+                && savedFacts.value(QStringLiteral("code")).toString()
+                    == QStringLiteral("INPUT_CANCELLED_BEFORE_TASK_START"))
+            {
+                cancelledInputFactPersisted = true;
+                QCOMPARE(savedFacts.value(QStringLiteral("status")).toString(),
+                         QStringLiteral("cancelled_before_start"));
+            }
+        }
+        QVERIFY(cancellationFactPersisted);
+        QVERIFY(unavailableFactPersisted);
+        QVERIFY(cancelledInputPersisted);
+        QVERIFY(cancelledInputFactPersisted);
+
+        AgentWidget reloaded(session->getModelCommandHost(), &workflow, nullptr, &network,
+                             AgentTaskRunner::AccessPolicy::ReadWrite, true);
+        reloaded.show();
+        auto *reloadedTranscript = reloaded.findChild<QTextBrowser *>(QStringLiteral("agentTranscript"));
+        QVERIFY(reloadedTranscript);
+        QTRY_VERIFY_WITH_TIMEOUT(reloadedTranscript->toPlainText().contains(cancelledInput), 3000);
+        QVERIFY(reloadedTranscript->toPlainText().contains(QStringLiteral(
+            "This queued message was cancelled before its Agent task started. No analysis or action was performed.")));
     }
 
     void pendingPrimaryWriteSurvivesReadOnlyCancelAndDeniedAutoProposal()

@@ -1,11 +1,14 @@
 #include <QtTest>
 #include <QElapsedTimer>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonDocument>
+#include <QSaveFile>
+#include <QSet>
 #include <QStringList>
 #include <QSignalBlocker>
 #include <QTemporaryDir>
@@ -17,6 +20,7 @@
 #include <rml_model.h>
 #include <rml_time_solver.h>
 #include <rmodel_command_service.h>
+#include <rtrusted_experiment_service.h>
 
 #include "agent_task_runner.h"
 #include "application.h"
@@ -121,11 +125,43 @@ QJsonObject hostRequest(const QString &operation, const QJsonObject &parameters 
             {QStringLiteral("parameters"), parameters}};
 }
 
-QJsonObject providerCall(const QString &id, const QString &name, const QJsonObject &arguments)
+QJsonObject trustedExperimentBudgets(int solves = 1, int repairs = 0, int modelTurns = 12)
+{
+    return {{QStringLiteral("solves"), solves}, {QStringLiteral("repairs"), repairs},
+            {QStringLiteral("modelTurns"), modelTurns}};
+}
+
+QJsonObject rawProviderCall(const QString &id, const QString &name, const QJsonObject &arguments)
 {
     return {{QStringLiteral("id"), id}, {QStringLiteral("type"), QStringLiteral("function")},
             {QStringLiteral("function"), QJsonObject{{QStringLiteral("name"), name},
                 {QStringLiteral("arguments"), QString::fromUtf8(QJsonDocument(arguments).toJson(QJsonDocument::Compact))}}}};
+}
+
+QJsonObject providerCall(const QString &id, const QString &name, const QJsonObject &arguments)
+{
+    QString toolName = name;
+    QJsonObject toolArguments = arguments;
+    if (name == QStringLiteral("document_propose")
+        && arguments.value(QStringLiteral("command")) == QJsonValue(QStringLiteral("experiment.run")))
+    {
+        toolName = QStringLiteral("experiment_run");
+        toolArguments = {{QStringLiteral("documentId"), arguments.value(QStringLiteral("documentId"))},
+            {QStringLiteral("documentRevision"), arguments.value(QStringLiteral("documentRevision"))}};
+        const QJsonObject commandArguments = arguments.value(QStringLiteral("arguments")).toObject();
+        for (auto it = commandArguments.constBegin(); it != commandArguments.constEnd(); ++it)
+            toolArguments.insert(it.key(), it.value());
+    }
+    return rawProviderCall(id, toolName, toolArguments);
+}
+
+QSet<QString> functionNames(const QJsonArray &definitions)
+{
+    QSet<QString> names;
+    for (const QJsonValue &value : definitions)
+        names.insert(value.toObject().value(QStringLiteral("function")).toObject()
+            .value(QStringLiteral("name")).toString());
+    return names;
 }
 
 QByteArray providerBody(const QString &text, const QJsonArray &calls = {})
@@ -179,6 +215,71 @@ QJsonObject documentProposal(const QString &documentId, quint64 revision)
             {QStringLiteral("documentRevision"), double(revision)},
             {QStringLiteral("command"), QStringLiteral("analysis.modal.configure")},
             {QStringLiteral("arguments"), modalProposalArguments()}};
+}
+
+QJsonObject trustedRodProblemSpec(int segments = 4)
+{
+    const auto q = [](double value, const char *unit) {
+        return QJsonObject{{QStringLiteral("value"), value}, {QStringLiteral("unit"), QString::fromLatin1(unit)}};
+    };
+    const QJsonArray load{q(1000.0, "N"), q(0.0, "N"), q(0.0, "N")};
+    return {{QStringLiteral("schemaVersion"), 1}, {QStringLiteral("modelType"), QStringLiteral("axialRod")},
+        {QStringLiteral("name"), QStringLiteral("Agent Stage 6 rod")},
+        {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("length"), q(1.0, "m")},
+            {QStringLiteral("segments"), segments}}},
+        {QStringLiteral("material"), QJsonObject{{QStringLiteral("name"), QStringLiteral("Steel")},
+            {QStringLiteral("source"), QStringLiteral("fixture")},
+            {QStringLiteral("youngModulus"), q(210e9, "Pa")},
+            {QStringLiteral("poissonRatio"), 0.3}, {QStringLiteral("density"), q(7850.0, "kg/m3")}}},
+        {QStringLiteral("section"), QJsonObject{{QStringLiteral("area"), q(1e-4, "m2")}}},
+        {QStringLiteral("analysis"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("static")}}},
+        {QStringLiteral("supports"), QJsonArray{
+            QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("fixedEnd")}}},
+                {QStringLiteral("dofs"), QJsonArray{QStringLiteral("ux"), QStringLiteral("uy"), QStringLiteral("uz")}}},
+            QJsonObject{{QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("allNodes")}}},
+                {QStringLiteral("dofs"), QJsonArray{QStringLiteral("uy"), QStringLiteral("uz")}}}}},
+        {QStringLiteral("loads"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("pointForce")},
+            {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+            {QStringLiteral("components"), load}}}},
+        {QStringLiteral("initialConditions"), QJsonArray{}},
+        {QStringLiteral("observables"), QJsonArray{QJsonObject{
+            {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+            {QStringLiteral("quantity"), QStringLiteral("displacement")},
+            {QStringLiteral("component"), QStringLiteral("ux")}}}},
+        {QStringLiteral("precision"), QJsonObject{{QStringLiteral("displacementRelative"), 0.01}}}};
+}
+
+QJsonObject trustedBeamProblemSpec(int segments = 4)
+{
+    QJsonObject spec = trustedRodProblemSpec(segments);
+    spec.insert(QStringLiteral("name"), QStringLiteral("Agent Stage 6 cantilever beam"));
+    spec.insert(QStringLiteral("modelType"), QStringLiteral("cantileverBeam"));
+    spec.insert(QStringLiteral("section"), QJsonObject{
+        {QStringLiteral("area"), QJsonObject{{QStringLiteral("value"), 1.0e-4}, {QStringLiteral("unit"), QStringLiteral("m2")}}},
+        {QStringLiteral("iy"), QJsonObject{{QStringLiteral("value"), 8.333333333333333e-10}, {QStringLiteral("unit"), QStringLiteral("m4")}}},
+        {QStringLiteral("iz"), QJsonObject{{QStringLiteral("value"), 8.333333333333333e-10}, {QStringLiteral("unit"), QStringLiteral("m4")}}},
+        {QStringLiteral("torsionalConstant"), QJsonObject{{QStringLiteral("value"), 1.666666666666667e-9}, {QStringLiteral("unit"), QStringLiteral("m4")}}},
+        {QStringLiteral("wy"), QJsonObject{{QStringLiteral("value"), 1.666666666666667e-7}, {QStringLiteral("unit"), QStringLiteral("m3")}}},
+        {QStringLiteral("wz"), QJsonObject{{QStringLiteral("value"), 1.666666666666667e-7}, {QStringLiteral("unit"), QStringLiteral("m3")}}},
+        {QStringLiteral("wt"), QJsonObject{{QStringLiteral("value"), 1.666666666666667e-7}, {QStringLiteral("unit"), QStringLiteral("m3")}}},
+        {QStringLiteral("localY"), QJsonArray{0.0, 1.0, 0.0}}});
+    spec.insert(QStringLiteral("supports"), QJsonArray{QJsonObject{
+        {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("fixedEnd")}}},
+        {QStringLiteral("dofs"), QJsonArray{QStringLiteral("ux"), QStringLiteral("uy"), QStringLiteral("uz"),
+                                             QStringLiteral("rx"), QStringLiteral("ry"), QStringLiteral("rz")}}}});
+    spec.insert(QStringLiteral("loads"), QJsonArray{QJsonObject{
+        {QStringLiteral("kind"), QStringLiteral("pointForce")},
+        {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+        {QStringLiteral("components"), QJsonArray{
+            QJsonObject{{QStringLiteral("value"), 0.0}, {QStringLiteral("unit"), QStringLiteral("N")}},
+            QJsonObject{{QStringLiteral("value"), 0.0}, {QStringLiteral("unit"), QStringLiteral("N")}},
+            QJsonObject{{QStringLiteral("value"), -1.0}, {QStringLiteral("unit"), QStringLiteral("N")}}}}}});
+    spec.insert(QStringLiteral("observables"), QJsonArray{QJsonObject{
+        {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+        {QStringLiteral("quantity"), QStringLiteral("displacement")},
+        {QStringLiteral("component"), QStringLiteral("uz")}}});
+    spec.insert(QStringLiteral("precision"), QJsonObject{{QStringLiteral("displacementRelative"), 0.01}});
+    return spec;
 }
 
 QJsonObject extensionManifest(const QString &extensionId)
@@ -348,6 +449,1639 @@ class TestAgentTaskRunner : public QObject
 {
     Q_OBJECT
 private slots:
+    void evaluationCaptureEnvironmentConfigurationIsExplicitAndExact()
+    {
+        Application::EvaluationCaptureConfiguration configuration;
+        QString error;
+        QVERIFY2(Application::parseEvaluationCaptureConfiguration(false, QString(), false, QString(),
+                                                                  &configuration, &error), qPrintable(error));
+        QVERIFY(!configuration.enabled);
+        QCOMPARE(configuration.arm, AgentTaskRunner::EvaluationArm::Standard);
+
+        QVERIFY(!Application::parseEvaluationCaptureConfiguration(true, QStringLiteral("direct_nl"),
+                                                                   false, QString(), &configuration, &error));
+        QVERIFY(error.contains(QStringLiteral("both")));
+        QVERIFY(!Application::parseEvaluationCaptureConfiguration(false, QString(), true,
+                                                                   QStringLiteral("capture.jsonl"),
+                                                                   &configuration, &error));
+        QVERIFY(error.contains(QStringLiteral("both")));
+
+        const QList<QPair<QString, AgentTaskRunner::EvaluationArm>> acceptedArms{
+            {QStringLiteral("direct_nl"), AgentTaskRunner::EvaluationArm::DirectNl},
+            {QStringLiteral("tools_feedback"), AgentTaskRunner::EvaluationArm::ToolsFeedback},
+            {QStringLiteral("full_trusted"), AgentTaskRunner::EvaluationArm::FullTrusted}};
+        for (const auto &entry : acceptedArms)
+        {
+            QVERIFY2(Application::parseEvaluationCaptureConfiguration(true, entry.first, true,
+                QStringLiteral("capture.jsonl"), &configuration, &error), qPrintable(error));
+            QVERIFY(configuration.enabled);
+            QCOMPARE(configuration.arm, entry.second);
+            QCOMPARE(configuration.capturePath, QStringLiteral("capture.jsonl"));
+        }
+
+        for (const QString &invalidArm : {QStringLiteral("Direct_Nl"), QStringLiteral("direct_nl "),
+                                          QStringLiteral("standard"), QStringLiteral("")})
+            QVERIFY(!Application::parseEvaluationCaptureConfiguration(true, invalidArm, true,
+                QStringLiteral("capture.jsonl"), &configuration, &error));
+        QVERIFY(!Application::parseEvaluationCaptureConfiguration(true, QStringLiteral("direct_nl"), true,
+                                                                   QStringLiteral("  "), &configuration, &error));
+        QVERIFY(error.contains(QStringLiteral("new JSONL")));
+    }
+
+    void trustedExperimentLifecycleStateAllowlistMatchesHostContract()
+    {
+        for (const QString &state : RTrustedExperimentService::lifecycleStates())
+            QVERIFY2(AgentTaskRunner::isKnownExperimentLifecycleState(state), qPrintable(state));
+        QVERIFY(!AgentTaskRunner::isKnownExperimentLifecycleState(QStringLiteral("running")));
+        QVERIFY(!AgentTaskRunner::isKnownExperimentLifecycleState(QStringLiteral("unknown")));
+        QVERIFY(!AgentTaskRunner::isKnownExperimentLifecycleState(QString()));
+    }
+
+    void toolResultObservationMatchesDeliveredFallback()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        runner.active = true;
+        runner.activityTaskId = QStringLiteral("task-oversized-result");
+        runner.currentCall = {{QStringLiteral("id"), QStringLiteral("call-oversized")},
+                              {QStringLiteral("name"), QStringLiteral("native_job")}};
+        QSignalSpy observed(&runner, &AgentTaskRunner::toolResultObserved);
+
+        runner.finishTool({{QStringLiteral("status"), QStringLiteral("ok")},
+                           {QStringLiteral("payload"), QString(600 * 1024, QLatin1Char('x'))}});
+
+        QCOMPARE(observed.size(), 1);
+        const QJsonObject event = observed.first().first().toJsonObject();
+        const QByteArray delivered = "{\"status\":\"error\",\"code\":\"RESULT_TOO_LARGE\",\"message\":\"Read a smaller result scope.\"}";
+        QCOMPARE(event.value(QStringLiteral("status")).toString(), QStringLiteral("error"));
+        QCOMPARE(event.value(QStringLiteral("code")).toString(), QStringLiteral("RESULT_TOO_LARGE"));
+        QCOMPARE(event.value(QStringLiteral("contentBytes")).toInt(), delivered.size());
+        QCOMPARE(event.value(QStringLiteral("contentSha256")).toString(),
+                 QString::fromLatin1(QCryptographicHash::hash(delivered, QCryptographicHash::Sha256).toHex()));
+        QCOMPARE(runner.history.last().toObject().value(QStringLiteral("content")).toString(), QString::fromUtf8(delivered));
+        runner.cancel();
+    }
+
+    void toolResultObservationKeepsEmptyCodeForSuccess()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        runner.active = true;
+        runner.activityTaskId = QStringLiteral("task-result-without-code");
+        runner.currentCall = {{QStringLiteral("id"), QStringLiteral("call-no-code")},
+                              {QStringLiteral("name"), QStringLiteral("native_job")}};
+        QSignalSpy observed(&runner, &AgentTaskRunner::toolResultObserved);
+
+        runner.finishTool({{QStringLiteral("status"), QStringLiteral("ok")},
+                           {QStringLiteral("message"), QStringLiteral("completed")}});
+
+        QCOMPARE(observed.size(), 1);
+        const QJsonObject event = observed.first().first().toJsonObject();
+        QCOMPARE(event.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QVERIFY(event.value(QStringLiteral("code")).isString());
+        QVERIFY(event.value(QStringLiteral("code")).toString().isEmpty());
+        runner.cancel();
+    }
+
+    void humanQuestionWaitPreservesRemainingExecutionBudget()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Ask before continuing."));
+        QVERIFY(runner.budgetTimer.isActive());
+        QCOMPARE(runner.remainingExecutionBudgetMs, 300000);
+        for (int cycle = 0; cycle < 2; ++cycle)
+        {
+            // Simulate execution having consumed time without a wall-clock sleep.
+            const int remaining = 4000 - cycle * 1000;
+            runner.budgetTimer.start(remaining);
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                {providerCall(QStringLiteral("question-%1").arg(cycle), QStringLiteral("ask_user"),
+                    {{QStringLiteral("question"), QStringLiteral("Which model?")},
+                     {QStringLiteral("options"), QJsonArray{QStringLiteral("rod"), QStringLiteral("beam")}}})})));
+            QVERIFY(runner.isAwaitingInput());
+            QVERIFY(runner.executionBudgetPaused);
+            QVERIFY(!runner.budgetTimer.isActive());
+            const int saved = runner.remainingExecutionBudgetMs;
+            QVERIFY(saved > 0 && saved <= remaining);
+            // A timeout delivered after the timer was stopped must not retire the wait.
+            QVERIFY(QMetaObject::invokeMethod(&runner.budgetTimer, "timeout", Qt::DirectConnection));
+            QCOMPARE(finished.size(), 0);
+            runner.answerQuestion(QStringLiteral("stale"), QStringLiteral("rod"));
+            runner.answerQuestion(runner.pendingQuestionId(), QString(4097, QLatin1Char('x')));
+            QCOMPARE(runner.remainingExecutionBudgetMs, saved);
+            QVERIFY(runner.executionBudgetPaused);
+            QVERIFY(runner.pauseExecutionBudget());
+            QCOMPARE(runner.remainingExecutionBudgetMs, saved);
+            runner.answerQuestion(runner.pendingQuestionId(), QStringLiteral("rod"));
+            QVERIFY(!runner.executionBudgetPaused);
+            QVERIFY(runner.budgetTimer.isActive());
+            QVERIFY(runner.budgetTimer.remainingTime() <= saved);
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), cycle + 2, 1000);
+        }
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(QStringLiteral("Done."))));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+        QVERIFY(!runner.budgetTimer.isActive());
+        QVERIFY(!runner.executionBudgetPaused);
+        QCOMPARE(runner.remainingExecutionBudgetMs, 0);
+    }
+
+    void manualApprovalWaitResumesBudget_data()
+    {
+        QTest::addColumn<bool>("accepted");
+        QTest::newRow("approve") << true;
+        QTest::newRow("decline") << false;
+    }
+
+    void manualApprovalWaitResumesBudget()
+    {
+        QFETCH(bool, accepted);
+        auto *session = Application::instance()->getSession();
+        session->addModel(modalFixture());
+        const uint modelId = session->getNModels() - 1;
+        session->setModelSelected(modelId, true);
+        const auto stamp = session->modelCommandStamp(modelId);
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy ready(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        runner.startTask(QStringLiteral("Prepare an edit for manual approval."));
+        runner.budgetTimer.start(4000);
+        bool pausedWhenPublished = false;
+        connect(&runner, &AgentTaskRunner::proposalReady, &runner, [&] {
+            pausedWhenPublished = runner.executionBudgetPaused && !runner.budgetTimer.isActive();
+        });
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            {providerCall(QStringLiteral("manual-budget"), QStringLiteral("document_propose"),
+                          documentProposal(stamp.first, stamp.second))})));
+        QCOMPARE(ready.size(), 1);
+        QVERIFY(pausedWhenPublished);
+        const int saved = runner.remainingExecutionBudgetMs;
+        QVERIFY(saved > 0 && saved <= 4000);
+        runner.authorizePending(QStringLiteral("stale"), accepted);
+        QVERIFY(runner.executionBudgetPaused);
+        QCOMPARE(runner.remainingExecutionBudgetMs, saved);
+        runner.authorizePending(ready.first().at(1).toString(), accepted);
+        QVERIFY(!runner.executionBudgetPaused);
+        QVERIFY(runner.budgetTimer.isActive());
+        QVERIFY(runner.budgetTimer.remainingTime() <= saved);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        QCOMPARE(actions.size(), accepted ? 1 : 0);
+        runner.cancel();
+        QVERIFY(!runner.budgetTimer.isActive());
+        QVERIFY(!runner.executionBudgetPaused);
+        QCOMPARE(runner.remainingExecutionBudgetMs, 0);
+        session->clear();
+    }
+
+    void synchronousHumanAnswerResumesBudgetBeforeNextTurn()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        bool pausedWhenPublished = false;
+        connect(&runner, &AgentTaskRunner::userInputRequested, &runner,
+            [&](const QString &id, const QString &, const QJsonArray &) {
+                pausedWhenPublished = runner.executionBudgetPaused && !runner.budgetTimer.isActive();
+                runner.answerQuestion(id, QStringLiteral("yes"));
+            });
+        runner.startTask(QStringLiteral("Ask one question."));
+        runner.budgetTimer.start(4000);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            {providerCall(QStringLiteral("sync-answer"), QStringLiteral("ask_user"),
+                {{QStringLiteral("question"), QStringLiteral("Continue?")},
+                 {QStringLiteral("options"), QJsonArray{QStringLiteral("yes"), QStringLiteral("no")}}})})));
+        QVERIFY(pausedWhenPublished);
+        QVERIFY(!runner.isAwaitingInput());
+        QVERIFY(!runner.executionBudgetPaused);
+        QVERIFY(runner.budgetTimer.isActive());
+        QVERIFY(runner.budgetTimer.remainingTime() <= 4000);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        runner.cancel();
+    }
+
+    void automaticProposalKeepsExecutionBudgetRunning()
+    {
+        auto *session = Application::instance()->getSession();
+        session->addModel(modalFixture());
+        const uint modelId = session->getNModels() - 1;
+        session->setModelSelected(modelId, true);
+        const auto stamp = session->modelCommandStamp(modelId);
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        bool runningWhenPublished = false;
+        connect(&runner, &AgentTaskRunner::proposalReady, &runner, [&] {
+            runningWhenPublished = runner.budgetTimer.isActive() && !runner.executionBudgetPaused;
+        });
+        runner.startTask(QStringLiteral("Apply the selected document edit."), true);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            {providerCall(QStringLiteral("auto-budget"), QStringLiteral("document_propose"),
+                          documentProposal(stamp.first, stamp.second))})));
+        QVERIFY(runningWhenPublished);
+        QTRY_COMPARE_WITH_TIMEOUT(actions.size(), 1, 1000);
+        QVERIFY(!runner.executionBudgetPaused);
+        runner.cancel();
+        session->clear();
+    }
+
+    void experimentModelTurnBudgetCapsProviderTurnsAtFour()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy cancellations(&runner, &AgentTaskRunner::experimentCancellationObserved);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Submit an experiment with a four-turn model budget."), true);
+        QCOMPARE(requested.size(), 1);
+
+        const QJsonObject arguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+            {QStringLiteral("budgets"), trustedExperimentBudgets(1, 0, 4)}};
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("four-turn-experiment"),
+                QStringLiteral("experiment_run"), arguments)})));
+        QCOMPARE(proposals.size(), 1);
+        QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+        const QString experimentId = proposals.first().at(2).toJsonObject()
+            .value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!experimentId.isEmpty());
+
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QCOMPARE(actions.size(), 1);
+        const QJsonObject expectedSourceBinding = runner.taskExperimentSourceBindings.value(experimentId);
+        QVERIFY(!expectedSourceBinding.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("four-turn-experiment-wait"),
+                QStringLiteral("experiment_wait"), {{QStringLiteral("experimentId"), experimentId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 30000);
+        const QJsonObject waitResponse = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("four-turn-experiment-wait")).toUtf8()).object();
+        QCOMPARE(waitResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QCOMPARE(waitResponse.value(QStringLiteral("result")).toObject().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("candidate_ready"));
+        for (int providerTurn = 3; providerTurn <= 4; ++providerTurn)
+        {
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("capability-%1").arg(providerTurn),
+                    QStringLiteral("host_capabilities"), {})})));
+            if (providerTurn < 4)
+                QTRY_COMPARE_WITH_TIMEOUT(requested.size(), providerTurn + 1, 1000);
+            else
+                QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 1000);
+        }
+        QCOMPARE(requested.size(), 4);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("budget_exhausted"));
+        const QString finishedMessage = finished.first().at(1).toString();
+        QVERIFY(finishedMessage.contains(QStringLiteral("Agent-authored completion report is unavailable")));
+        QVERIFY(finishedMessage.contains(experimentId));
+        QVERIFY(finishedMessage.contains(QStringLiteral("\"state\":\"candidate_ready\"")));
+        QVERIFY(finishedMessage.contains(QStringLiteral("\"verificationPassed\":true")));
+        QVERIFY(finishedMessage.contains(QStringLiteral("\"providerTurnRequestsIssued\":4")));
+        QVERIFY(finishedMessage.contains(QStringLiteral("\"providerTurnLimit\":4")));
+        const QString evidenceMarker = QStringLiteral("it is not model-generated prose: ");
+        const qsizetype evidenceStart = finishedMessage.indexOf(evidenceMarker);
+        QVERIFY(evidenceStart >= 0);
+        const QJsonDocument evidenceDocument = QJsonDocument::fromJson(
+            finishedMessage.mid(evidenceStart + evidenceMarker.size()).toUtf8());
+        QVERIFY(evidenceDocument.isObject());
+        const QJsonArray experiments = evidenceDocument.object().value(QStringLiteral("experiments")).toArray();
+        QCOMPARE(experiments.size(), 1);
+        const QJsonObject hostFacts = experiments.first().toObject();
+        const QJsonObject sourceStamp = hostFacts.value(QStringLiteral("sourceRuntimeStamp")).toObject();
+        QCOMPARE(sourceStamp.value(QStringLiteral("documentId")).toString(),
+                 expectedSourceBinding.value(QStringLiteral("documentId")).toString());
+        QCOMPARE(sourceStamp.value(QStringLiteral("revision")).toString(),
+                 QString::number(expectedSourceBinding.value(QStringLiteral("documentRevision")).toDouble()));
+        QCOMPARE(sourceStamp.value(QStringLiteral("sessionEpoch")).toString(),
+                 expectedSourceBinding.value(QStringLiteral("sessionEpoch")).toString());
+        QCOMPARE(cancellations.size(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            const QJsonObject query = host->handle(hostRequest(QStringLiteral("experiment.query"),
+                {{QStringLiteral("experimentId"), experimentId}}));
+            return query.value(QStringLiteral("status")) == QJsonValue(QStringLiteral("ok"))
+                && query.value(QStringLiteral("result")).toObject().value(QStringLiteral("state"))
+                    == QJsonValue(QStringLiteral("candidate_ready"));
+        }(), 30000);
+        session->clear();
+    }
+
+    void budgetExhaustionEvidenceRejectsMismatchedBindings()
+    {
+        const QString experimentId = QStringLiteral("experiment-identity-fixture");
+        const QString documentId = QStringLiteral("document-identity-fixture");
+        const QString sessionEpoch = QStringLiteral("session-identity-fixture");
+        const QString digest(64, QLatin1Char('a'));
+        const QJsonObject sourceBinding{{QStringLiteral("documentId"), documentId},
+            {QStringLiteral("documentRevision"), 7},
+            {QStringLiteral("sessionEpoch"), sessionEpoch},
+            {QStringLiteral("authorizationDigest"), digest}};
+        const QJsonObject trustedSummary{{QStringLiteral("experimentId"), experimentId},
+            {QStringLiteral("authorizationDigest"), digest},
+            {QStringLiteral("sourceRuntimeStamp"), QJsonObject{
+                {QStringLiteral("documentId"), documentId},
+                {QStringLiteral("revision"), QStringLiteral("7")},
+                {QStringLiteral("sessionEpoch"), sessionEpoch}}},
+            {QStringLiteral("state"), QStringLiteral("candidate_ready")},
+            {QStringLiteral("verificationPassed"), true}};
+        const QJsonObject successfulResponse{{QStringLiteral("status"), QStringLiteral("ok")},
+            {QStringLiteral("result"), trustedSummary}};
+        const QJsonObject accepted = AgentTaskRunner::budgetExhaustionExperimentEvidence(
+            experimentId, sourceBinding, successfulResponse);
+        QCOMPARE(accepted.value(QStringLiteral("state")).toString(), QStringLiteral("candidate_ready"));
+        QCOMPARE(accepted.value(QStringLiteral("verificationPassed")).toBool(), true);
+        QVERIFY(!accepted.contains(QStringLiteral("evidenceStatus")));
+
+        QJsonObject wrongDigest = trustedSummary;
+        wrongDigest.insert(QStringLiteral("authorizationDigest"), QString(64, QLatin1Char('b')));
+        const QJsonObject rejectedDigest = AgentTaskRunner::budgetExhaustionExperimentEvidence(
+            experimentId, sourceBinding,
+            {{QStringLiteral("status"), QStringLiteral("ok")}, {QStringLiteral("result"), wrongDigest}});
+        QCOMPARE(rejectedDigest.value(QStringLiteral("evidenceStatus")).toString(), QStringLiteral("unavailable"));
+        QCOMPARE(rejectedDigest.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("HOST_FACT_IDENTITY_MISMATCH"));
+        QVERIFY(!rejectedDigest.contains(QStringLiteral("state")));
+        QVERIFY(!rejectedDigest.contains(QStringLiteral("verificationPassed")));
+
+        QJsonObject wrongSource = trustedSummary;
+        wrongSource.insert(QStringLiteral("sourceRuntimeStamp"), QJsonObject{
+            {QStringLiteral("documentId"), QStringLiteral("other-document")},
+            {QStringLiteral("revision"), QStringLiteral("7")},
+            {QStringLiteral("sessionEpoch"), sessionEpoch}});
+        const QJsonObject rejectedSource = AgentTaskRunner::budgetExhaustionExperimentEvidence(
+            experimentId, sourceBinding,
+            {{QStringLiteral("status"), QStringLiteral("ok")}, {QStringLiteral("result"), wrongSource}});
+        QCOMPARE(rejectedSource.value(QStringLiteral("evidenceStatus")).toString(), QStringLiteral("unavailable"));
+        QCOMPARE(rejectedSource.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("HOST_FACT_IDENTITY_MISMATCH"));
+        QVERIFY(!rejectedSource.contains(QStringLiteral("state")));
+        QVERIFY(!rejectedSource.contains(QStringLiteral("verificationPassed")));
+
+        QJsonObject missingIdentityBinding = sourceBinding;
+        missingIdentityBinding.insert(QStringLiteral("documentId"), QString());
+        missingIdentityBinding.insert(QStringLiteral("sessionEpoch"), QString());
+        QJsonObject missingIdentitySummary = trustedSummary;
+        missingIdentitySummary.insert(QStringLiteral("sourceRuntimeStamp"), QJsonObject{
+            {QStringLiteral("documentId"), QString()},
+            {QStringLiteral("revision"), QStringLiteral("7")},
+            {QStringLiteral("sessionEpoch"), QString()}});
+        const QJsonObject rejectedMissingIdentity = AgentTaskRunner::budgetExhaustionExperimentEvidence(
+            experimentId, missingIdentityBinding,
+            {{QStringLiteral("status"), QStringLiteral("ok")},
+             {QStringLiteral("result"), missingIdentitySummary}});
+        QCOMPARE(rejectedMissingIdentity.value(QStringLiteral("evidenceStatus")).toString(),
+                 QStringLiteral("unavailable"));
+        QCOMPARE(rejectedMissingIdentity.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("HOST_FACT_IDENTITY_MISMATCH"));
+        QVERIFY(!rejectedMissingIdentity.contains(QStringLiteral("state")));
+        QVERIFY(!rejectedMissingIdentity.contains(QStringLiteral("verificationPassed")));
+
+        const QJsonObject failedQuery = AgentTaskRunner::budgetExhaustionExperimentEvidence(
+            experimentId, sourceBinding,
+            {{QStringLiteral("status"), QStringLiteral("rejected")},
+             {QStringLiteral("code"), QStringLiteral("EXPERIMENT_NOT_FOUND")}});
+        QCOMPARE(failedQuery.value(QStringLiteral("evidenceStatus")).toString(), QStringLiteral("unavailable"));
+        QCOMPARE(failedQuery.value(QStringLiteral("code")).toString(), QStringLiteral("EXPERIMENT_NOT_FOUND"));
+        QVERIFY(!failedQuery.contains(QStringLiteral("verificationPassed")));
+    }
+
+    void budgetExhaustionEvidenceFallsBackWithinLimitForOversizedHostFacts()
+    {
+        QJsonArray experiments;
+        experiments.append(QJsonObject{
+            {QStringLiteral("experimentId"), QStringLiteral("trusted-experiment")},
+            {QStringLiteral("state"), QStringLiteral("candidate_ready")},
+            {QStringLiteral("verificationPassed"), true},
+            {QStringLiteral("budgets"), QJsonObject{{QStringLiteral("solves"), 1},
+                {QStringLiteral("repairs"), 0}, {QStringLiteral("modelTurns"), 4}}},
+            {QStringLiteral("counters"), QJsonObject{{QStringLiteral("solves"), 1},
+                {QStringLiteral("repairs"), 0}, {QStringLiteral("modelTurns"), 0}}}});
+        const QString hugeFact(20 * 1024, QLatin1Char('x'));
+        for (int index = 0; index < 32; ++index)
+        {
+            experiments.append(QJsonObject{
+                {QStringLiteral("experimentId"), QStringLiteral("experiment-%1").arg(index)},
+                {QStringLiteral("state"), hugeFact},
+                {QStringLiteral("counters"), QJsonObject{{QStringLiteral("solves"), hugeFact}}},
+                {QStringLiteral("evidenceStatus"), QStringLiteral("unavailable")}});
+        }
+
+        const QJsonObject evidence = AgentTaskRunner::boundedBudgetExhaustionEvidence(12, 12, experiments);
+        const QByteArray encoded = QJsonDocument(evidence).toJson(QJsonDocument::Compact);
+        QVERIFY2(encoded.size() <= 16 * 1024, qPrintable(QString::number(encoded.size())));
+        const QJsonArray compactExperiments = evidence.value(QStringLiteral("experiments")).toArray();
+        QCOMPARE(compactExperiments.size(), experiments.size());
+        QCOMPARE(compactExperiments.first().toObject().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("candidate_ready"));
+        QCOMPARE(compactExperiments.first().toObject().value(QStringLiteral("counters")).toObject()
+                     .value(QStringLiteral("solves")).toInt(), 1);
+        QVERIFY(!compactExperiments.at(1).toObject().contains(QStringLiteral("state")));
+        QVERIFY(!compactExperiments.at(1).toObject().contains(QStringLiteral("counters")));
+
+        QJsonArray amplifiedExperiments;
+        for (int index = 0; index < 512; ++index)
+            amplifiedExperiments.append(QJsonObject{
+                {QStringLiteral("experimentId"), QStringLiteral("experiment-%1").arg(index)},
+                {QStringLiteral("evidenceStatus"), QStringLiteral("unavailable")}});
+        const QJsonObject fallback = AgentTaskRunner::boundedBudgetExhaustionEvidence(12, 12, amplifiedExperiments);
+        const QByteArray fallbackEncoded = QJsonDocument(fallback).toJson(QJsonDocument::Compact);
+        QVERIFY2(fallbackEncoded.size() <= 16 * 1024, qPrintable(QString::number(fallbackEncoded.size())));
+        QCOMPARE(fallback.value(QStringLiteral("evidenceStatus")).toString(), QStringLiteral("unavailable"));
+        QCOMPARE(fallback.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("HOST_FACT_SNAPSHOT_TOO_LARGE"));
+        QCOMPARE(fallback.value(QStringLiteral("experimentCount")).toInt(), amplifiedExperiments.size());
+        QVERIFY(!fallback.contains(QStringLiteral("experiments")));
+    }
+
+    void conversationByteLimitReportsOnlyDispatchedProviderTurns()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        ModelCommandHost *host = session->getModelCommandHost();
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+
+        runner.startTask(QStringLiteral("Exercise the conversation byte ceiling."));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 1, 1000);
+        const QString experimentId = QStringLiteral("missing-budget-evidence-record");
+        runner.taskExperimentIds.insert(experimentId);
+        runner.taskExperimentSourceBindings.insert(experimentId, QJsonObject{
+            {QStringLiteral("documentId"), QStringLiteral("source-fixture")},
+            {QStringLiteral("documentRevision"), 0},
+            {QStringLiteral("sessionEpoch"), QStringLiteral("session-fixture")},
+            {QStringLiteral("authorizationDigest"), QString(64, QLatin1Char('a'))}});
+        runner.history.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("assistant")},
+            {QStringLiteral("content"), QString(1024 * 1024 + 1, QLatin1Char('x'))}});
+
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("byte-limit-capability"),
+                QStringLiteral("host_capabilities"), {})})));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 3000);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("budget_exhausted"));
+        QCOMPARE(requested.size(), 1);
+        QCOMPARE(runner.turns, 1);
+        const QString finishedMessage = finished.first().at(1).toString();
+        QVERIFY(finishedMessage.contains(QStringLiteral("\"providerTurnRequestsIssued\":1")));
+        QVERIFY(!finishedMessage.contains(QStringLiteral("\"providerTurnRequestsIssued\":2")));
+        session->clear();
+    }
+
+    void experimentRunBeyondRequestedTurnBudgetIsRejectedWithoutPreview()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+        const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+            ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+        const QDir experimentDirectory(QDir(dataRoot).filePath(QStringLiteral("trusted-experiments")));
+        const auto experimentEntries = [&experimentDirectory] {
+            return experimentDirectory.entryList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+        };
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Exhaust four turns before proposing an experiment."));
+        QCOMPARE(requested.size(), 1);
+        for (int providerTurn = 1; providerTurn <= 4; ++providerTurn)
+        {
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("preflight-capability-%1").arg(providerTurn),
+                    QStringLiteral("host_capabilities"), {})})));
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), providerTurn + 1, 1000);
+        }
+        QCOMPARE(requested.size(), 5);
+        const QStringList recordsBeforePreviewAttempt = experimentEntries();
+        const QJsonObject arguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+            {QStringLiteral("budgets"), trustedExperimentBudgets(1, 0, 4)}};
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("late-experiment"),
+                QStringLiteral("experiment_run"), arguments)})));
+
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 6, 1000);
+        QCOMPARE(finished.size(), 0);
+        QVERIFY(runner.isActive());
+        QCOMPARE(proposals.size(), 0);
+        QCOMPARE(experimentEntries(), recordsBeforePreviewAttempt);
+        const QJsonObject toolError = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("late-experiment")).toUtf8()).object();
+        QCOMPARE(toolError.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("EXPERIMENT_MODEL_TURN_BUDGET_TOO_SMALL"));
+        runner.cancel();
+        session->clear();
+    }
+
+    void declinedExperimentPreviewDoesNotLowerTaskModelTurnLimit()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        const auto stamp = session->modelCommandStamp(0);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(session->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Decline a low-budget experiment preview."), true);
+        const QJsonObject arguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+            {QStringLiteral("budgets"), trustedExperimentBudgets(1, 0, 4)}};
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("declined-four-turn-experiment"),
+                QStringLiteral("experiment_run"), arguments)})));
+        QCOMPARE(proposals.size(), 1);
+        runner.authorizePending(proposals.last().at(1).toString(), false);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+
+        for (int providerTurn = 2; providerTurn <= 5; ++providerTurn)
+        {
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("after-decline-%1").arg(providerTurn),
+                    QStringLiteral("host_capabilities"), {})})));
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), providerTurn + 1, 1000);
+            QCOMPARE(finished.size(), 0);
+        }
+        runner.cancel();
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("cancelled"));
+        session->clear();
+    }
+
+    void globalModelTurnCapStillAllowsTwelveProviderRequests()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Use the default global model-turn budget."));
+        QCOMPARE(requested.size(), 1);
+        for (int providerTurn = 1; providerTurn <= 12; ++providerTurn)
+        {
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("global-capability-%1").arg(providerTurn),
+                    QStringLiteral("host_capabilities"), {})})));
+            if (providerTurn < 12)
+                QTRY_COMPARE_WITH_TIMEOUT(requested.size(), providerTurn + 1, 1000);
+            else
+                QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 1000);
+        }
+        QCOMPARE(requested.size(), 12);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("budget_exhausted"));
+    }
+
+    void humanWaitBudgetClearsOnRetirementAndDoesNotReplenishExhaustedBudget()
+    {
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(Application::instance()->getSession()->getModelCommandHost(), &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        const QJsonObject question = providerCall(QStringLiteral("retire-question"), QStringLiteral("ask_user"),
+            {{QStringLiteral("question"), QStringLiteral("Continue?")},
+             {QStringLiteral("options"), QJsonArray{QStringLiteral("yes"), QStringLiteral("no")}}});
+        for (const QString &status : {QStringLiteral("cancelled"), QStringLiteral("failed"), QStringLiteral("steering")})
+        {
+            runner.startTask(QStringLiteral("Wait for a decision."));
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({}, {question})));
+            const QString oldQuestion = runner.pendingQuestionId();
+            QVERIFY(runner.executionBudgetPaused);
+            if (status == QStringLiteral("steering")) runner.retireTaskForSteering();
+            else if (status == QStringLiteral("cancelled")) runner.cancel();
+            else runner.finishTask(status, QStringLiteral("Simulated failure."));
+            QVERIFY(!runner.isActive());
+            QVERIFY(!runner.budgetTimer.isActive());
+            QVERIFY(!runner.executionBudgetPaused);
+            QCOMPARE(runner.remainingExecutionBudgetMs, 0);
+            runner.answerQuestion(oldQuestion, QStringLiteral("yes"));
+            QVERIFY(!runner.budgetTimer.isActive());
+        }
+        runner.startTask(QStringLiteral("A new task gets its own budget."));
+        QCOMPARE(runner.remainingExecutionBudgetMs, 300000);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({}, {question})));
+        runner.remainingExecutionBudgetMs = 0;
+        runner.answerQuestion(runner.pendingQuestionId(), QStringLiteral("yes"));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("budget_exhausted"));
+        QVERIFY(!runner.isActive());
+        QCOMPARE(runner.remainingExecutionBudgetMs, 0);
+        QVERIFY(!runner.budgetTimer.isActive());
+        QVERIFY(!runner.executionBudgetPaused);
+        runner.startTask(QStringLiteral("Execution still has a hard time limit."));
+        QVERIFY(QMetaObject::invokeMethod(&runner.budgetTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("budget_exhausted"));
+        QVERIFY(!runner.isActive());
+        QCOMPARE(runner.remainingExecutionBudgetMs, 0);
+        QVERIFY(!runner.budgetTimer.isActive());
+
+    }
+
+    void trustedMechanicsToolSchemasAreExactAndInvalidSpecsReturnHostDiagnosis()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(modalFixture());
+        const uint modelId = session->getNModels() - 1;
+        session->setModelSelected(modelId, true);
+        const auto stamp = session->modelCommandStamp(modelId);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner diagnose(host, &workflow);
+        QSignalSpy requested(&diagnose, &AgentTaskRunner::turnRequested);
+        QSignalSpy finished(&diagnose, &AgentTaskRunner::finished);
+        diagnose.startTask(QStringLiteral("Diagnose this incomplete physical specification."));
+        const QJsonObject diagnosisArguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("scope"), QStringLiteral("document")},
+            {QStringLiteral("problemSpec"), QJsonObject{}}};
+        diagnose.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("invalid-physics"), QStringLiteral("trusted_problem_diagnose"), diagnosisArguments)})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 1000);
+        const QJsonObject hostResponse = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("invalid-physics")).toUtf8()).object();
+        QCOMPARE(hostResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        const QJsonObject diagnosis = hostResponse.value(QStringLiteral("result")).toObject();
+        QCOMPARE(diagnosis.value(QStringLiteral("problemSpecStatus")).toString(), QStringLiteral("invalid"));
+        const QJsonArray missingIssues = diagnosis.value(QStringLiteral("diagnosis")).toObject()
+            .value(QStringLiteral("issues")).toArray();
+        QVERIFY(!missingIssues.isEmpty());
+        bool hostIdentifiedMissingMaterial = false;
+        for (const QJsonValue &issueValue : missingIssues)
+        {
+            const QJsonObject issue = issueValue.toObject();
+            const QString code = issue.value(QStringLiteral("code")).toString();
+            const QString path = issue.value(QStringLiteral("path")).toString();
+            if (code.startsWith(QStringLiteral("MATERIAL")) || path.startsWith(QStringLiteral("material.")))
+                hostIdentifiedMissingMaterial = true;
+        }
+        QVERIFY(hostIdentifiedMissingMaterial);
+        QCOMPARE(finished.size(), 0);
+        diagnose.cancel();
+
+        AgentTaskRunner inspect(host, &workflow);
+        QSignalSpy inspectRequests(&inspect, &AgentTaskRunner::turnRequested);
+        QSignalSpy inspectFinished(&inspect, &AgentTaskRunner::finished);
+        inspect.startTask(QStringLiteral("Inspect this explicit detached rod problem."));
+        const QJsonObject validInspectArguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("scope"), QStringLiteral("candidate")},
+            {QStringLiteral("jobId"), QStringLiteral("unregistered-inspection-job")},
+            {QStringLiteral("problemSpec"), trustedRodProblemSpec()}};
+        inspect.receiveTurn(inspectRequests.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("valid-inspect"), QStringLiteral("trusted_problem_inspect"),
+                                    validInspectArguments)})));
+        QTRY_COMPARE_WITH_TIMEOUT(inspectRequests.size(), 2, 1000);
+        const QJsonObject inspectHostResponse = QJsonDocument::fromJson(toolResultContent(
+            inspectRequests.last().at(1).toJsonArray(), QStringLiteral("valid-inspect")).toUtf8()).object();
+        QCOMPARE(inspectHostResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        const QJsonObject inspectResult = inspectHostResponse.value(QStringLiteral("result")).toObject();
+        QCOMPARE(inspectResult.value(QStringLiteral("basis")).toString(), QStringLiteral("detached"));
+        QCOMPARE(inspectResult.value(QStringLiteral("sourceRuntimeStamp")).toObject()
+                     .value(QStringLiteral("documentId")).toString(), stamp.first);
+        QCOMPARE(inspectResult.value(QStringLiteral("job")).toObject()
+                     .value(QStringLiteral("jobId")).toString(), QStringLiteral("unregistered-inspection-job"));
+        QCOMPARE(inspectResult.value(QStringLiteral("job")).toObject()
+                     .value(QStringLiteral("status")).toString(), QStringLiteral("not_found"));
+        QCOMPARE(inspectResult.value(QStringLiteral("resultSource")).toObject()
+                     .value(QStringLiteral("status")).toString(), QStringLiteral("not_found"));
+        QVERIFY(inspectResult.value(QStringLiteral("mesh")).toObject().value(QStringLiteral("nodeCount")).toInt() > 0);
+        QCOMPARE(inspectResult.value(QStringLiteral("physicalSummaryDigest")).toString().size(), 64);
+        inspect.receiveTurn(inspectRequests.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The detached rod candidate was inspected through Host."))));
+        QCOMPARE(inspectFinished.size(), 1);
+        QCOMPARE(inspectFinished.first().at(0).toString(), QStringLiteral("completed"));
+
+        const QList<QPair<QString, QJsonObject>> invalidCalls{
+            {QStringLiteral("trusted_problem_inspect"), {{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)}, {QStringLiteral("scope"), QStringLiteral("document")},
+                {QStringLiteral("problemSpec"), trustedRodProblemSpec()}, {QStringLiteral("extra"), true}}},
+            {QStringLiteral("trusted_problem_inspect"), {{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)}, {QStringLiteral("scope"), QStringLiteral("document")},
+                {QStringLiteral("problemSpec"), trustedRodProblemSpec()}, {QStringLiteral("jobId"), QString()}}},
+            {QStringLiteral("trusted_problem_diagnose"), {{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)}, {QStringLiteral("scope"), QStringLiteral("guess")},
+                {QStringLiteral("problemSpec"), trustedRodProblemSpec()}}},
+            {QStringLiteral("experiment_query"), {{QStringLiteral("experimentId"), QStringLiteral("owned-later")},
+                {QStringLiteral("includeLogs"), true}}},
+            {QStringLiteral("experiment_wait"), {{QStringLiteral("experimentId"), QStringLiteral("owned-later")},
+                {QStringLiteral("timeoutMs"), 10}}},
+            {QStringLiteral("experiment_cancel"), {{QStringLiteral("experimentId"), QStringLiteral("owned-later")},
+                {QStringLiteral("force"), true}}},
+            {QStringLiteral("document_propose"), {{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)},
+                {QStringLiteral("command"), QStringLiteral("experiment.run")},
+                {QStringLiteral("arguments"), QJsonObject{
+                    {QStringLiteral("problemSpec"), trustedRodProblemSpec()}}}}},
+            {QStringLiteral("experiment_run"), {{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)},
+                {QStringLiteral("problemSpec"), trustedRodProblemSpec()}}},
+            {QStringLiteral("experiment_run"), {{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)},
+                {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+                {QStringLiteral("budgets"), trustedExperimentBudgets(9, 0, 1)}}}};
+        for (const auto &entry : invalidCalls)
+        {
+            AgentTaskRunner malformed(host, &workflow);
+            QSignalSpy malformedRequests(&malformed, &AgentTaskRunner::turnRequested);
+            QSignalSpy malformedFinished(&malformed, &AgentTaskRunner::finished);
+            malformed.startTask(QStringLiteral("Reject malformed trusted tool arguments."));
+            const auto call = entry.first == QStringLiteral("document_propose")
+                ? rawProviderCall(QStringLiteral("invalid-schema"), entry.first, entry.second)
+                : providerCall(QStringLiteral("invalid-schema"), entry.first, entry.second);
+            malformed.receiveTurn(malformedRequests.first().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{call})));
+            QCOMPARE(malformedFinished.size(), 1);
+            QCOMPARE(malformedFinished.first().at(0).toString(), QStringLiteral("failed"));
+            malformed.cancel();
+        }
+        session->clear();
+    }
+
+    void boundedExperimentAuthorizationIsExactAndSingleUse()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+        const QJsonObject target{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("sessionEpoch"), host->sessionEpoch()}};
+        const QJsonObject input{{QStringLiteral("target"), target},
+            {QStringLiteral("expectedDocumentRevision"), double(stamp.second)},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+                {QStringLiteral("budgets"), trustedExperimentBudgets()}}}};
+        WorkflowProcess workflow;
+        {
+            AgentTaskRunner stale(host, &workflow);
+            QJsonObject staleInput = input;
+            QJsonObject staleTarget = target;
+            staleTarget.insert(QStringLiteral("sessionEpoch"), QUuid::createUuid().toString(QUuid::WithoutBraces));
+            staleInput.insert(QStringLiteral("target"), staleTarget);
+            QVERIFY(stale.prepareBoundedExperimentAuthorization(staleInput).value(QStringLiteral("status"))
+                != QJsonValue(QStringLiteral("preview")));
+            QVERIFY(!stale.armBoundedExperimentAuthorization(QStringLiteral("not-authorized")));
+        }
+
+        // Changed physics and budget each require a fresh explicit proposal decision.
+        for (int mismatch = 0; mismatch < 3; ++mismatch)
+        {
+            AgentTaskRunner runner(host, &workflow);
+            const QJsonObject prepared = runner.prepareBoundedExperimentAuthorization(input);
+            QCOMPARE(prepared.value(QStringLiteral("status")).toString(), QStringLiteral("preview"));
+            QVERIFY(!runner.armBoundedExperimentAuthorization(QStringLiteral("wrong-preview")));
+            QVERIFY(runner.armBoundedExperimentAuthorization(prepared.value(QStringLiteral("result")).toObject()
+                .value(QStringLiteral("previewId")).toString()));
+            QSignalSpy requests(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+            QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+            if (mismatch == 2) session->setModelSelected(0, false);
+            runner.startTask(QStringLiteral("Run the bounded authorized experiment."), false);
+            QJsonObject changedPhysics = trustedRodProblemSpec();
+            QJsonObject material = changedPhysics.value(QStringLiteral("material")).toObject();
+            material.insert(QStringLiteral("youngModulus"), QJsonObject{{QStringLiteral("value"), 100e9},
+                {QStringLiteral("unit"), QStringLiteral("Pa")}});
+            changedPhysics.insert(QStringLiteral("material"), material);
+            QJsonObject arguments{{QStringLiteral("documentId"), stamp.first},
+                {QStringLiteral("documentRevision"), double(stamp.second)},
+                {QStringLiteral("problemSpec"), mismatch == 0 ? changedPhysics : trustedRodProblemSpec()},
+                {QStringLiteral("budgets"), mismatch == 1 ? trustedExperimentBudgets(2, 0, 12) : trustedExperimentBudgets()}};
+            runner.receiveTurn(requests.first().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("mismatch"), QStringLiteral("experiment_run"), arguments)})));
+            QCOMPARE(proposals.size(), 1);
+            QCOMPARE(actions.size(), 0);
+            runner.cancel();
+            if (mismatch == 2) session->setModelSelected(0, true);
+        }
+
+        AgentTaskRunner exact(host, &workflow);
+        QJsonObject recorded;
+        exact.setExecutionRecorder([&recorded](const QString &, const QString &, const QJsonObject &reference) {
+            recorded = reference; return true;
+        });
+        const auto prepared = exact.prepareBoundedExperimentAuthorization(input);
+        QCOMPARE(prepared.value(QStringLiteral("status")).toString(), QStringLiteral("preview"));
+        QVERIFY(exact.armBoundedExperimentAuthorization(prepared.value(QStringLiteral("result")).toObject()
+            .value(QStringLiteral("previewId")).toString()));
+        QSignalSpy requests(&exact, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&exact, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&exact, &AgentTaskRunner::actionCompleted);
+        exact.startTask(QStringLiteral("Run the bounded authorized experiment."), false);
+        const QJsonObject arguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+            {QStringLiteral("budgets"), trustedExperimentBudgets()}};
+        exact.receiveTurn(requests.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("exact"), QStringLiteral("experiment_run"), arguments)})));
+        QCOMPARE(proposals.size(), 1);
+        QCOMPARE(actions.size(), 1);
+        QCOMPARE(recorded.value(QStringLiteral("authorizationMode")).toString(), QStringLiteral("bounded_task_authorization"));
+        QCOMPARE(recorded.value(QStringLiteral("trustedAuthorizationPreviewId")),
+                 prepared.value(QStringLiteral("result")).toObject().value(QStringLiteral("previewId")));
+        QCOMPARE(recorded.value(QStringLiteral("trustedAuthorizationExperimentId")),
+                 prepared.value(QStringLiteral("result")).toObject().value(QStringLiteral("experimentId")));
+        QCOMPARE(recorded.value(QStringLiteral("trustedAuthorizationDigest")),
+                 prepared.value(QStringLiteral("result")).toObject().value(QStringLiteral("authorizationDigest")));
+        QVERIFY(exact.taskExperimentAuthorization.isEmpty());
+        exact.cancel();
+        session->clear();
+    }
+
+    void experimentRunNeedsManualApprovalAndWaitReturnsNeedsConfirmationFacts()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto sourceStamp = session->modelCommandStamp(0);
+        const QString sourceHash = RModelCommandService::stateFingerprint(session->getModel(0));
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy observed(&runner, &AgentTaskRunner::experimentObserved);
+        QSignalSpy activities(&runner, &AgentTaskRunner::toolActivity);
+        runner.startTask(QStringLiteral("Run and report a trusted rod experiment."), true);
+        const QJsonObject proposal{{QStringLiteral("documentId"), sourceStamp.first},
+            {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+                {QStringLiteral("budgets"), trustedExperimentBudgets()}}}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("experiment-preview"), QStringLiteral("document_propose"), proposal)})));
+        QCOMPARE(proposals.size(), 1);
+        QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+        QCOMPARE(actions.size(), 0); // Auto mode cannot cross the manual experiment approval fence.
+        const QJsonObject approvedPreview = proposals.first().at(2).toJsonObject();
+        const QString experimentId = approvedPreview.value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!experimentId.isEmpty());
+
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QCOMPARE(actions.size(), 1);
+        QCOMPARE(actions.first().at(0).toString(), QStringLiteral("experiment"));
+        QCOMPARE(actions.first().at(1).toJsonObject().value(QStringLiteral("experimentId")).toString(), experimentId);
+
+        const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+            ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+        RTrustedExperimentService experiments(QDir(dataRoot).filePath(QStringLiteral("trusted-experiments")));
+        RTrustedExperimentService::SourceIdentity source;
+        source.workspaceId = host->projectWorkspace();
+        source.sessionId = session->getID();
+        source.sessionEpoch = host->sessionEpoch();
+        source.documentId = sourceStamp.first;
+        source.documentRevision = QString::number(sourceStamp.second);
+        source.snapshotSha256 = sourceHash;
+        const auto confirmation = experiments.markNeedsConfirmation(experimentId, source,
+            QStringLiteral("The test requires explicit confirmation."));
+        QVERIFY2(confirmation.ok, qPrintable(confirmation.message));
+
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 3000);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("wait-confirmation"), QStringLiteral("experiment_wait"),
+                {{QStringLiteral("experimentId"), experimentId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 3000);
+        const QJsonObject waitResponse = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("wait-confirmation")).toUtf8()).object();
+        QCOMPARE(waitResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QCOMPARE(waitResponse.value(QStringLiteral("result")).toObject()
+                     .value(QStringLiteral("state")).toString(), QStringLiteral("needs_confirmation"));
+        QVERIFY(!observed.isEmpty());
+        QCOMPARE(observed.last().at(1).toString(), experimentId);
+        QCOMPARE(observed.last().at(2).toJsonObject().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("needs_confirmation"));
+        const QJsonObject waitFacts = activities.last().last().toJsonObject();
+        QVERIFY(waitFacts.contains(QStringLiteral("experimentId")));
+        QVERIFY(waitFacts.contains(QStringLiteral("state")));
+        QVERIFY(!waitFacts.contains(QStringLiteral("verificationPassed")));
+        QVERIFY(!waitFacts.contains(QStringLiteral("verification")));
+
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("cancel-owned"), QStringLiteral("experiment_cancel"),
+                {{QStringLiteral("experimentId"), experimentId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 4, 3000);
+        const QJsonObject cancelResponse = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("cancel-owned")).toUtf8()).object();
+        QCOMPARE(cancelResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QCOMPARE(cancelResponse.value(QStringLiteral("result")).toObject()
+                     .value(QStringLiteral("state")).toString(), QStringLiteral("cancelled"));
+        QCOMPARE(observed.last().at(2).toJsonObject().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("cancelled"));
+        runner.cancel();
+
+        AgentTaskRunner nextTask(host, &workflow);
+        QSignalSpy nextRequests(&nextTask, &AgentTaskRunner::turnRequested);
+        nextTask.startTask(QStringLiteral("Try to read an experiment from a prior task."));
+        nextTask.receiveTurn(nextRequests.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("foreign-experiment"), QStringLiteral("experiment_query"),
+                {{QStringLiteral("experimentId"), experimentId}})})));
+        QTRY_COMPARE_WITH_TIMEOUT(nextRequests.size(), 2, 1000);
+        QVERIFY(toolResultContent(nextRequests.last().at(1).toJsonArray(),
+                                  QStringLiteral("foreign-experiment")).contains(QStringLiteral("EXPERIMENT_NOT_TASK_OWNED")));
+        nextTask.cancel();
+        session->clear();
+    }
+
+    void physicalClarificationUsesHostDiagnosisAndCorrelatedAnswer()
+    {
+        auto *session = Application::instance()->getSession();
+        auto *host = session->getModelCommandHost();
+        session->addModel(modalFixture());
+        const uint modelId = session->getNModels() - 1;
+        session->setModelSelected(modelId, true);
+        const auto stamp = session->modelCommandStamp(modelId);
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy questions(&runner, &AgentTaskRunner::userInputRequested);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Diagnose the incomplete beam specification and ask before choosing its material."));
+
+        const QJsonObject incomplete{{QStringLiteral("schemaVersion"), 1},
+            {QStringLiteral("modelType"), QStringLiteral("cantileverBeam")},
+            {QStringLiteral("name"), QStringLiteral("Beam awaiting material choice")}};
+        const QJsonObject diagnosisArgs{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("scope"), QStringLiteral("candidate")},
+            {QStringLiteral("problemSpec"), incomplete}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("missing-material-diagnose"),
+                QStringLiteral("trusted_problem_diagnose"), diagnosisArgs)})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 3000);
+        const QJsonObject diagnosisResponse = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("missing-material-diagnose")).toUtf8()).object();
+        QCOMPARE(diagnosisResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        const QJsonObject diagnosis = diagnosisResponse.value(QStringLiteral("result")).toObject();
+        QCOMPARE(diagnosis.value(QStringLiteral("problemSpecStatus")).toString(), QStringLiteral("invalid"));
+        const QJsonArray missingIssues = diagnosis.value(QStringLiteral("diagnosis")).toObject()
+            .value(QStringLiteral("issues")).toArray();
+        QVERIFY(!missingIssues.isEmpty());
+        bool hostIdentifiedMissingMaterial = false;
+        for (const QJsonValue &issueValue : missingIssues)
+        {
+            const QJsonObject issue = issueValue.toObject();
+            if (issue.value(QStringLiteral("code")).toString().startsWith(QStringLiteral("MATERIAL"))
+                || issue.value(QStringLiteral("path")).toString().startsWith(QStringLiteral("material.")))
+                hostIdentifiedMissingMaterial = true;
+        }
+        QVERIFY(hostIdentifiedMissingMaterial);
+
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(
+            QStringLiteral("The Host reports missing physical inputs. Provide a named material record with E in Pa, Poisson ratio, density in kg/m3, and its source."),
+            QJsonArray{providerCall(QStringLiteral("material-question"), QStringLiteral("ask_user"),
+                {{QStringLiteral("question"), QStringLiteral("Which complete material record should be used for this beam?")},
+                 {QStringLiteral("options"), QJsonArray{
+                     QStringLiteral("Steel fixture: E=210000000000 Pa; nu=0.30; density=7850 kg/m3; source=test fixture"),
+                     QStringLiteral("Aluminum fixture: E=70000000000 Pa; nu=0.33; density=2700 kg/m3; source=test fixture")}}})})));
+        QCOMPARE(questions.size(), 1);
+        QVERIFY(runner.isAwaitingInput());
+        const QString questionId = runner.pendingQuestionId();
+        QVERIFY(!questionId.isEmpty());
+        runner.answerQuestion(QStringLiteral("stale-material-question"), QStringLiteral("Steel"));
+        QVERIFY(runner.isAwaitingInput());
+        const QString aluminumRecord = QStringLiteral(
+            "Aluminum fixture: E=70000000000 Pa; nu=0.33; density=2700 kg/m3; source=test fixture");
+        runner.answerQuestion(questionId, aluminumRecord);
+        QVERIFY(!runner.isAwaitingInput());
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 3000);
+        const QString answerEvidence = toolResultContent(requested.last().at(1).toJsonArray(),
+                                                         QStringLiteral("material-question"));
+        QVERIFY(answerEvidence.contains(aluminumRecord));
+        QVERIFY(answerEvidence.contains(QStringLiteral("answered")));
+
+        QJsonObject chosenMaterial = trustedBeamProblemSpec();
+        QJsonObject material = chosenMaterial.value(QStringLiteral("material")).toObject();
+        material.insert(QStringLiteral("name"), QStringLiteral("Aluminum fixture"));
+        material.insert(QStringLiteral("source"), QStringLiteral("test fixture; user-confirmed"));
+        material.insert(QStringLiteral("youngModulus"), QJsonObject{
+            {QStringLiteral("value"), 70.0e9}, {QStringLiteral("unit"), QStringLiteral("Pa")}});
+        material.insert(QStringLiteral("poissonRatio"), 0.33);
+        material.insert(QStringLiteral("density"), QJsonObject{
+            {QStringLiteral("value"), 2700.0}, {QStringLiteral("unit"), QStringLiteral("kg/m3")}});
+        chosenMaterial.insert(QStringLiteral("material"), material);
+        const QJsonObject inspectArgs{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("scope"), QStringLiteral("candidate")},
+            {QStringLiteral("problemSpec"), chosenMaterial}};
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("inspect-chosen-material"),
+                QStringLiteral("trusted_problem_inspect"), inspectArgs)})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 4, 3000);
+        const QJsonObject inspectResponse = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("inspect-chosen-material")).toUtf8()).object();
+        QCOMPARE(inspectResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        const QJsonObject actualMaterial = inspectResponse.value(QStringLiteral("result")).toObject()
+            .value(QStringLiteral("physicalSummary")).toObject()
+            .value(QStringLiteral("material")).toObject();
+        QCOMPARE(actualMaterial.value(QStringLiteral("youngModulus")).toDouble(), 70.0e9);
+        QCOMPARE(actualMaterial.value(QStringLiteral("poissonRatio")).toDouble(), 0.33);
+        QCOMPARE(actualMaterial.value(QStringLiteral("density")).toDouble(), 2700.0);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("diagnose-chosen-material"),
+                QStringLiteral("trusted_problem_diagnose"), inspectArgs)})));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 5, 3000);
+        const QJsonObject chosenDiagnosis = QJsonDocument::fromJson(toolResultContent(
+            requested.last().at(1).toJsonArray(), QStringLiteral("diagnose-chosen-material")).toUtf8()).object()
+            .value(QStringLiteral("result")).toObject().value(QStringLiteral("diagnosis")).toObject();
+        QVERIFY(chosenDiagnosis.value(QStringLiteral("issues")).isArray());
+        for (const QJsonValue &issueValue : chosenDiagnosis.value(QStringLiteral("issues")).toArray())
+        {
+            const QJsonObject issue = issueValue.toObject();
+            const QString code = issue.value(QStringLiteral("code")).toString();
+            const QString severity = issue.value(QStringLiteral("severity")).toString();
+            QVERIFY(!(code.startsWith(QStringLiteral("MATERIAL")) && severity == QStringLiteral("error")));
+        }
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The chosen material was read back from the Host candidate."))));
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+        session->clear();
+    }
+
+    void trustedRodBeamAndAuthorizedNumericalRepairRunThroughAgentHost()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        if (qEnvironmentVariableIsSet("RANGE_TEST_PRESERVE_RUNTIME"))
+            workspace.setAutoRemove(false);
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto sourceStamp = session->modelCommandStamp(0);
+        const QString sourceFingerprint = RModelCommandService::stateFingerprint(session->getModel(0));
+        WorkflowProcess workflow;
+
+        struct AgentExperimentCase
+        {
+            QString label;
+            QJsonObject problem;
+            QJsonArray allowedRanges;
+            QJsonObject budgets;
+            int minimumRepairs = 0;
+        };
+        QJsonObject repairProblem = trustedRodProblemSpec(1);
+        repairProblem.insert(QStringLiteral("analysis"), QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("modal")}, {QStringLiteral("modes"), 1}});
+        repairProblem.insert(QStringLiteral("loads"), QJsonArray{});
+        repairProblem.insert(QStringLiteral("observables"), QJsonArray{QJsonObject{
+            {QStringLiteral("selector"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("freeEnd")}}},
+            {QStringLiteral("quantity"), QStringLiteral("frequency")},
+            {QStringLiteral("component"), QStringLiteral("mode")}}});
+        repairProblem.insert(QStringLiteral("precision"), QJsonObject{
+            {QStringLiteral("frequencyRelative"), 0.02}});
+        const QJsonArray repairRanges{QJsonObject{{QStringLiteral("path"), QStringLiteral("/geometry/segments")},
+            {QStringLiteral("minimum"), 1}, {QStringLiteral("maximum"), 4}}};
+        const QJsonObject repairBudgets{{QStringLiteral("solves"), 4},
+            {QStringLiteral("repairs"), 3}, {QStringLiteral("modelTurns"), 4}};
+        const QList<AgentExperimentCase> cases{
+            {QStringLiteral("rod"), trustedRodProblemSpec(), {}, trustedExperimentBudgets(), 0},
+            {QStringLiteral("beam"), trustedBeamProblemSpec(), {}, trustedExperimentBudgets(), 0},
+            {QStringLiteral("rod-modal-authorized-repair"), repairProblem, repairRanges, repairBudgets, 1}};
+        QJsonArray evidenceRecords;
+
+        for (const AgentExperimentCase &testCase : cases)
+        {
+            const bool compactTurnBudget = testCase.budgets.value(QStringLiteral("modelTurns")).toInt() == 4;
+            AgentTaskRunner runner(host, &workflow);
+            QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+            QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+            QSignalSpy observed(&runner, &AgentTaskRunner::experimentObserved);
+            QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+            runner.startTask(QStringLiteral("Inspect, diagnose, run, verify and report the trusted %1 problem.")
+                                 .arg(testCase.label), true);
+
+            const QJsonObject inspectArgs{{QStringLiteral("documentId"), sourceStamp.first},
+                {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+                {QStringLiteral("scope"), QStringLiteral("candidate")},
+                {QStringLiteral("problemSpec"), testCase.problem}};
+            QJsonArray preflightCalls{providerCall(QStringLiteral("%1-inspect").arg(testCase.label),
+                QStringLiteral("trusted_problem_inspect"), inspectArgs)};
+            if (compactTurnBudget)
+                preflightCalls.append(providerCall(QStringLiteral("%1-diagnose").arg(testCase.label),
+                    QStringLiteral("trusted_problem_diagnose"), inspectArgs));
+            runner.receiveTurn(requested.last().at(0).toString(),
+                parseProviderBody(providerBody({}, preflightCalls)));
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 3000);
+            const QJsonObject inspectResult = QJsonDocument::fromJson(toolResultContent(
+                requested.last().at(1).toJsonArray(), QStringLiteral("%1-inspect").arg(testCase.label)).toUtf8()).object();
+            QCOMPARE(inspectResult.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+            QCOMPARE(inspectResult.value(QStringLiteral("result")).toObject()
+                         .value(QStringLiteral("basis")).toString(), QStringLiteral("detached"));
+
+            if (!compactTurnBudget)
+            {
+                runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                    QJsonArray{providerCall(QStringLiteral("%1-diagnose").arg(testCase.label),
+                        QStringLiteral("trusted_problem_diagnose"), inspectArgs)})));
+                QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 3000);
+            }
+            const QJsonObject diagnosisResult = QJsonDocument::fromJson(toolResultContent(
+                requested.last().at(1).toJsonArray(), QStringLiteral("%1-diagnose").arg(testCase.label)).toUtf8()).object();
+            QCOMPARE(diagnosisResult.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+
+            QJsonObject experimentArguments{{QStringLiteral("problemSpec"), testCase.problem}};
+            if (!testCase.allowedRanges.isEmpty())
+                experimentArguments.insert(QStringLiteral("allowedNumericalRanges"), testCase.allowedRanges);
+            if (!testCase.budgets.isEmpty()) experimentArguments.insert(QStringLiteral("budgets"), testCase.budgets);
+            const QJsonObject proposal{{QStringLiteral("documentId"), sourceStamp.first},
+                {QStringLiteral("documentRevision"), double(sourceStamp.second)},
+                {QStringLiteral("command"), QStringLiteral("experiment.run")},
+                {QStringLiteral("arguments"), experimentArguments}};
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("%1-preview").arg(testCase.label),
+                    QStringLiteral("document_propose"), proposal)})));
+            QCOMPARE(proposals.size(), 1);
+            QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+            QCOMPARE(actions.size(), 0);
+            const QString experimentId = proposals.first().at(2).toJsonObject()
+                .value(QStringLiteral("experimentId")).toString();
+            QVERIFY(!experimentId.isEmpty());
+            QCOMPARE(proposals.first().at(2).toJsonObject().value(QStringLiteral("arguments")).toObject()
+                         .value(QStringLiteral("budgets")).toObject(), testCase.budgets);
+            const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+                ? QDir::tempPath() : Application::instance()->getApplicationSettings()->getDataDir();
+            RTrustedExperimentService experiments(QDir(dataRoot).filePath(QStringLiteral("trusted-experiments")));
+            // Preview is side-effect free. The Host commits this exact authorization
+            // only when the user approves the pending preview.
+            QVERIFY(!experiments.query(experimentId).ok);
+            runner.authorizePending(proposals.first().at(1).toString(), true);
+            QCOMPARE(actions.size(), 1);
+            QCOMPARE(actions.first().at(1).toJsonObject()
+                         .value(QStringLiteral("experimentId")).toString(), experimentId);
+            const auto prepared = experiments.query(experimentId);
+            QVERIFY2(prepared.ok, qPrintable(prepared.message));
+            const QJsonObject authorization = prepared.data.value(QStringLiteral("experiment")).toObject()
+                .value(QStringLiteral("authorization")).toObject();
+            QCOMPARE(authorization.value(QStringLiteral("experimentPolicy")).toObject()
+                         .value(QStringLiteral("budgets")).toObject(), testCase.budgets);
+
+            const int waitTurnNumber = compactTurnBudget ? 3 : 4;
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), waitTurnNumber, 5000);
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("%1-wait").arg(testCase.label),
+                    QStringLiteral("experiment_wait"), {{QStringLiteral("experimentId"), experimentId}})})));
+            QTRY_VERIFY_WITH_TIMEOUT([&] {
+                for (const auto &observation : observed)
+                {
+                    if (observation.at(1).toString() != experimentId) continue;
+                    const QString state = observation.at(2).toJsonObject().value(QStringLiteral("state")).toString();
+                    if (state == QStringLiteral("candidate_ready") || state == QStringLiteral("failed")
+                        || state == QStringLiteral("budget_exhausted") || state == QStringLiteral("not_converged"))
+                        return true;
+                }
+                return false;
+            }(), 120000);
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), waitTurnNumber + 1, 5000);
+            const QJsonObject waitResponse = QJsonDocument::fromJson(toolResultContent(
+                requested.last().at(1).toJsonArray(), QStringLiteral("%1-wait").arg(testCase.label)).toUtf8()).object();
+            QCOMPARE(waitResponse.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+            QCOMPARE(waitResponse.value(QStringLiteral("result")).toObject()
+                         .value(QStringLiteral("budgets")).toObject(), testCase.budgets);
+            const QJsonObject query = host->handle(hostRequest(QStringLiteral("experiment.query"),
+                {{QStringLiteral("experimentId"), experimentId}}));
+            QCOMPARE(query.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+            const QJsonObject hostSummary = query.value(QStringLiteral("result")).toObject();
+            QCOMPARE(hostSummary.value(QStringLiteral("state")).toString(), QStringLiteral("candidate_ready"));
+            QCOMPARE(hostSummary.value(QStringLiteral("budgets")).toObject(), testCase.budgets);
+            QVERIFY(hostSummary.value(QStringLiteral("verificationPassed")).toBool());
+            QCOMPARE(hostSummary.value(QStringLiteral("verification")).toObject()
+                         .value(QStringLiteral("passed")).toBool(), true);
+            const QJsonObject evidenceSnapshot = host->evaluationEvidenceSnapshot(experimentId);
+            QCOMPARE(evidenceSnapshot.value(QStringLiteral("schema")).toString(),
+                     QStringLiteral("range.trusted-experiment-evidence-snapshot/v1"));
+            QCOMPARE(evidenceSnapshot.value(QStringLiteral("experimentId")).toString(), experimentId);
+            QCOMPARE(evidenceSnapshot.value(QStringLiteral("childJob")).toObject()
+                         .value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
+            QCOMPARE(evidenceSnapshot.value(QStringLiteral("verificationReport")).toObject()
+                         .value(QStringLiteral("status")).toString(), QStringLiteral("pass"));
+            evidenceRecords.append(QJsonObject{{QStringLiteral("case"), testCase.label},
+                                               {QStringLiteral("evidence"), evidenceSnapshot}});
+            const auto completedRecord = experiments.query(experimentId);
+            QVERIFY2(completedRecord.ok, qPrintable(completedRecord.message));
+            QCOMPARE(completedRecord.data.value(QStringLiteral("experiment")).toObject()
+                         .value(QStringLiteral("authorization")).toObject()
+                         .value(QStringLiteral("experimentPolicy")).toObject()
+                         .value(QStringLiteral("budgets")).toObject(), testCase.budgets);
+            if (testCase.minimumRepairs > 0)
+            {
+                const QJsonObject counters = hostSummary.value(QStringLiteral("counters")).toObject();
+                QVERIFY(counters.value(QStringLiteral("repairs")).toInt() >= testCase.minimumRepairs);
+                QCOMPARE(counters.value(QStringLiteral("solves")).toInt(), 3);
+                QVERIFY(hostSummary.value(QStringLiteral("repairs")).toArray().size() >= 2);
+            }
+            runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(
+                QStringLiteral("The trusted Host evidence is complete; only its verifier fields determine the result."))));
+            QCOMPARE(finished.size(), 1);
+            QCOMPARE(finished.first().at(0).toString(), QStringLiteral("completed"));
+            QCOMPARE(session->modelCommandStamp(0), sourceStamp);
+            QCOMPARE(RModelCommandService::stateFingerprint(session->getModel(0)), sourceFingerprint);
+        }
+        const QString evidencePath = qEnvironmentVariable("RANGE_TEST_EVIDENCE_EXPORT");
+        if (!evidencePath.isEmpty())
+        {
+            const QJsonObject exported{{QStringLiteral("schema"), QStringLiteral("range.stage8.trusted-flow-evidence/v1")},
+                {QStringLiteral("cases"), evidenceRecords}};
+            const QByteArray bytes = QJsonDocument(exported).toJson(QJsonDocument::Indented);
+            QSaveFile file(evidencePath);
+            QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(file.errorString()));
+            QCOMPARE(file.write(bytes), qint64(bytes.size()));
+            QVERIFY2(file.commit(), qPrintable(file.errorString()));
+            const QByteArray digest = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+            qInfo().noquote() << "Stage 8 trusted flow evidence exported:" << evidencePath
+                              << "cases=" << evidenceRecords.size()
+                              << "sha256=" << QString::fromLatin1(digest);
+        }
+        session->clear();
+    }
+
+    void steeringRetiresExperimentWaitTimerBeforeItCanAdvanceAnotherTask()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        runner.startTask(QStringLiteral("Submit a bounded rod experiment."), true);
+        const QJsonObject proposal{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+                {QStringLiteral("budgets"), trustedExperimentBudgets()}}}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("timer-preview"), QStringLiteral("document_propose"), proposal)})));
+        QCOMPARE(proposals.size(), 1);
+        const QString experimentId = proposals.first().at(2).toJsonObject()
+            .value(QStringLiteral("experimentId")).toString();
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QCOMPARE(actions.size(), 1);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 3000);
+
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("old-wait"), QStringLiteral("experiment_wait"),
+                {{QStringLiteral("experimentId"), experimentId}})})));
+        // The first Host read schedules a poll timer. Steering starts a new
+        // generation before that timer can call finishTool or request a turn.
+        runner.submitMessage(QStringLiteral("Stop waiting and answer this new request."));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 1000);
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("superseded"));
+
+        const QJsonObject cancelled = host->handle(hostRequest(QStringLiteral("experiment.cancel"),
+            {{QStringLiteral("experimentId"), experimentId}}));
+        QCOMPARE(cancelled.value(QStringLiteral("status")).toString(), QStringLiteral("ok"));
+        QTest::qWait(650);
+        QCOMPARE(requested.size(), 3); // No stale timer may advance the replacement task.
+        runner.receiveTurn(requested.last().at(0).toString(),
+            parseProviderBody(providerBody(QStringLiteral("The replacement request is complete."))));
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+        session->clear();
+    }
+
+    void stoppingTaskCancelsOnlyItsAcceptedExperimentAndReportsBoundSource()
+    {
+        static QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        QSignalSpy cancellationFacts(&runner, &AgentTaskRunner::experimentCancellationObserved);
+        QSignalSpy states(&runner, &AgentTaskRunner::stateChanged);
+        QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+        QSignalSpy taskStarted(&runner, &AgentTaskRunner::taskStarted);
+        QSignalSpy pendingMessagesCancelled(&runner, &AgentTaskRunner::pendingMessagesCancelled);
+        runner.startTask(QStringLiteral("Run one trusted rod experiment."), true);
+        const QJsonObject proposal{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("problemSpec"), trustedRodProblemSpec(10000)},
+                {QStringLiteral("budgets"), trustedExperimentBudgets()}}}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("stop-preview"), QStringLiteral("document_propose"), proposal)})));
+        QCOMPARE(proposals.size(), 1);
+        const QJsonObject preview = proposals.first().at(2).toJsonObject();
+        const QString experimentId = preview.value(QStringLiteral("experimentId")).toString();
+        QVERIFY(!experimentId.isEmpty());
+
+        runner.authorizePending(proposals.first().at(1).toString(), true);
+        QCOMPARE(actions.size(), 1);
+        QCOMPARE(actions.first().at(1).toJsonObject().value(QStringLiteral("experimentId")).toString(), experimentId);
+
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 2, 5000);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("stop-wait"), QStringLiteral("experiment_wait"),
+                {{QStringLiteral("experimentId"), experimentId}})})));
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            for (const auto &state : states)
+                if (state.at(0).toString() == QStringLiteral("waiting")
+                    && state.at(1).toString().startsWith(QStringLiteral("Trusted experiment: ")))
+                    return true;
+            return false;
+        }(), 5000);
+        const QJsonObject activeSummary = host->handle(hostRequest(QStringLiteral("experiment.query"),
+            {{QStringLiteral("experimentId"), experimentId}})).value(QStringLiteral("result")).toObject();
+        QCOMPARE(activeSummary.value(QStringLiteral("state")).toString(), QStringLiteral("solving"));
+        const QJsonArray childJobs = activeSummary.value(QStringLiteral("childJobs")).toArray();
+        QVERIFY(!childJobs.isEmpty());
+        const QString childJobId = childJobs.first().toObject().value(QStringLiteral("jobId")).toString();
+        QVERIFY(!childJobId.isEmpty());
+        SolverManager &solverManager = SolverManager::getInstance();
+        const QString childStateBeforeCancel = solverManager.jobQuery(childJobId).value(QStringLiteral("state")).toString();
+        QVERIFY(childStateBeforeCancel == QStringLiteral("queued")
+            || childStateBeforeCancel == QStringLiteral("running")
+            || childStateBeforeCancel == QStringLiteral("cancelling"));
+        const QString retiredTaskId = runner.taskId();
+        bool reenteredDuringRetirement = false;
+        QTimer::singleShot(0, &runner, [&runner, &reenteredDuringRetirement] {
+            reenteredDuringRetirement = runner.isActive();
+            runner.submitMessage(QStringLiteral("First queued follow-up after cancellation evidence."), false);
+            runner.submitMessage(QStringLiteral("Second queued follow-up must also be retained."), false);
+        });
+        runner.cancel();
+
+        QVERIFY(reenteredDuringRetirement);
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(0).toString(), QStringLiteral("cancelled"));
+        QCOMPARE(cancellationFacts.size(), 1);
+        QCOMPARE(cancellationFacts.first().at(0).toString(), retiredTaskId);
+        QCOMPARE(cancellationFacts.first().at(1).toString(), experimentId);
+        const QJsonObject sourceBinding = cancellationFacts.first().at(2).toJsonObject();
+        QCOMPARE(sourceBinding.value(QStringLiteral("documentId")).toString(), stamp.first);
+        QCOMPARE(sourceBinding.value(QStringLiteral("sessionEpoch")).toString(), host->sessionEpoch());
+        QCOMPARE(sourceBinding.value(QStringLiteral("documentRevision")).toDouble(), double(stamp.second));
+        QCOMPARE(sourceBinding.value(QStringLiteral("authorizationDigest")), preview.value(QStringLiteral("authorizationDigest")));
+        QCOMPARE(sourceBinding.value(QStringLiteral("jobId")).toString(), childJobId);
+        QVERIFY(!sourceBinding.value(QStringLiteral("operationId")).toString().isEmpty());
+        const QJsonObject fact = cancellationFacts.first().at(3).toJsonObject();
+        QCOMPARE(fact.value(QStringLiteral("schema")).toString(),
+                 QStringLiteral("range.agent-experiment-cancellation/v1"));
+        QCOMPARE(fact.value(QStringLiteral("trigger")).toString(), QStringLiteral("user_stop"));
+        const QString childDisposition = fact.value(QStringLiteral("status")).toString();
+        QVERIFY(childDisposition == QStringLiteral("cancelled")
+            || childDisposition == QStringLiteral("terminal"));
+        if (childDisposition == QStringLiteral("terminal"))
+            QCOMPARE(fact.value(QStringLiteral("code")).toString(),
+                     QStringLiteral("CHILD_TERMINAL_BEFORE_CANCEL"));
+        QCOMPARE(fact.value(QStringLiteral("afterState")).toString(), QStringLiteral("cancelled"));
+        QVERIFY(fact.value(QStringLiteral("cancellationPersisted")).toBool());
+        QVERIFY(fact.value(QStringLiteral("childJobsTerminal")).toBool());
+        QCOMPARE(fact.value(QStringLiteral("childJobCount")).toInt(), 1);
+        QCOMPARE(fact.value(QStringLiteral("terminalChildJobCount")).toInt(), 1);
+        const QString childStateEvidence = fact.value(QStringLiteral("childJobStates")).toString();
+        QVERIFY(!childStateEvidence.isEmpty());
+        if (childDisposition == QStringLiteral("cancelled"))
+            QCOMPARE(childStateEvidence, QStringLiteral("cancelled"));
+        QVERIFY(fact.value(QStringLiteral("childJobSetMatches")).toBool());
+        QCOMPARE(fact.value(QStringLiteral("childCancellationRequestFailed")).toBool(), false);
+        const QJsonObject hostSummary = host->handle(hostRequest(QStringLiteral("experiment.query"),
+            {{QStringLiteral("experimentId"), experimentId}})).value(QStringLiteral("result")).toObject();
+        QCOMPARE(hostSummary.value(QStringLiteral("state")).toString(), QStringLiteral("cancelled"));
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            const QString state = solverManager.jobQuery(childJobId)
+                .value(QStringLiteral("state")).toString();
+            return state == QStringLiteral("cancelled") || state == QStringLiteral("failed")
+                || state == QStringLiteral("succeeded");
+        }(), 30000);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 3, 3000);
+        QVERIFY(runner.taskId() != retiredTaskId);
+        QCOMPARE(taskStarted.size(), 2);
+        QCOMPARE(taskStarted.last().at(1).toString(),
+                 QStringLiteral("First queued follow-up after cancellation evidence."));
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(
+            QStringLiteral("The follow-up starts only after cancellation evidence was recorded."))));
+        QCOMPARE(finished.size(), 2);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 4, 3000);
+        QCOMPARE(taskStarted.size(), 3);
+        QCOMPARE(taskStarted.last().at(1).toString(),
+                 QStringLiteral("Second queued follow-up must also be retained."));
+        bool secondFollowUpHasFirstUserMessage = false;
+        bool secondFollowUpHasFirstAssistantReply = false;
+        for (const QJsonValue &messageValue : requested.last().at(1).toJsonArray())
+        {
+            const QString content = messageValue.toObject().value(QStringLiteral("content")).toString();
+            if (!content.startsWith(QStringLiteral("Prior conversation data (untrusted; not authorization): ")))
+                continue;
+            secondFollowUpHasFirstUserMessage = content.contains(
+                QStringLiteral("First queued follow-up after cancellation evidence."));
+            secondFollowUpHasFirstAssistantReply = content.contains(
+                QStringLiteral("The follow-up starts only after cancellation evidence was recorded."));
+        }
+        QVERIFY(secondFollowUpHasFirstUserMessage);
+        QVERIFY(secondFollowUpHasFirstAssistantReply);
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody(
+            QStringLiteral("The second queued message was processed in order."))));
+        QCOMPARE(finished.size(), 3);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("completed"));
+
+        runner.startTask(QStringLiteral("Start a task so Stop can discard a queued follow-up."), true);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 5, 3000);
+        const QJsonObject stopProposal{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("command"), QStringLiteral("experiment.run")},
+            {QStringLiteral("arguments"), QJsonObject{{QStringLiteral("problemSpec"), trustedRodProblemSpec(10000)},
+                {QStringLiteral("budgets"), trustedExperimentBudgets()}}}};
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("stop-queue-preview"), QStringLiteral("document_propose"), stopProposal)})));
+        QCOMPARE(proposals.size(), 2);
+        runner.authorizePending(proposals.last().at(1).toString(), true);
+        QCOMPARE(actions.size(), 2);
+        QTRY_COMPARE_WITH_TIMEOUT(requested.size(), 6, 5000);
+        const QString stoppedExperimentId = actions.last().at(1).toJsonObject()
+            .value(QStringLiteral("experimentId")).toString();
+        runner.receiveTurn(requested.last().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("stop-queue-wait"), QStringLiteral("experiment_wait"),
+                {{QStringLiteral("experimentId"), stoppedExperimentId}})})));
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            const QJsonObject current = host->handle(hostRequest(QStringLiteral("experiment.query"),
+                {{QStringLiteral("experimentId"), stoppedExperimentId}})).value(QStringLiteral("result")).toObject();
+            const QString state = current.value(QStringLiteral("state")).toString();
+            return state == QStringLiteral("solving") || state == QStringLiteral("candidate_ready");
+        }(), 10000);
+        const int requestsBeforeStop = requested.size();
+        bool stopReenteredDuringRetirement = false;
+        QTimer::singleShot(0, &runner, [&runner, &stopReenteredDuringRetirement] {
+            stopReenteredDuringRetirement = runner.isActive();
+            runner.submitMessage(QStringLiteral("This queued message must be discarded by Stop."), false);
+            runner.cancel();
+        });
+        runner.cancel();
+        QVERIFY(stopReenteredDuringRetirement);
+        QCOMPARE(finished.size(), 4);
+        QCOMPARE(finished.last().at(0).toString(), QStringLiteral("cancelled"));
+        QCOMPARE(pendingMessagesCancelled.size(), 1);
+        QCOMPARE(pendingMessagesCancelled.first().at(0).toStringList(),
+                 QStringList{QStringLiteral("This queued message must be discarded by Stop.")});
+        QTest::qWait(650);
+        QCOMPARE(requested.size(), requestsBeforeStop);
+        session->clear();
+    }
+
+    void childCancellationReportWaitsForTerminalStateAndNeverMasksRequestFailure()
+    {
+        const QStringList expectedChildJobIds{QStringLiteral("12345678901234567890")};
+        QJsonObject summary{{QStringLiteral("state"), QStringLiteral("cancelled")},
+            {QStringLiteral("cancellationPersisted"), true},
+            {QStringLiteral("childJobsTruncated"), false},
+            {QStringLiteral("childJobs"), QJsonArray{
+                QJsonObject{{QStringLiteral("jobId"), QStringLiteral("12345678901234567890")},
+                    {QStringLiteral("state"), QStringLiteral("cancelling")}}}}};
+        const QJsonObject delayed = AgentTaskRunner::summarizeChildCancellation(
+            summary, false, expectedChildJobIds);
+        QCOMPARE(delayed.value(QStringLiteral("status")).toString(), QStringLiteral("cancelling"));
+        QCOMPARE(delayed.value(QStringLiteral("code")).toString(), QStringLiteral("CHILD_STOP_PENDING"));
+        QCOMPARE(delayed.value(QStringLiteral("childJobsTerminal")).toBool(), false);
+        QVERIFY(delayed.value(QStringLiteral("childJobSetMatches")).toBool());
+        QCOMPARE(delayed.value(QStringLiteral("terminalChildJobCount")).toInt(), 0);
+        QCOMPARE(delayed.value(QStringLiteral("childJobStates")).toString(), QStringLiteral("cancelling"));
+
+        QJsonObject missingChild = summary;
+        missingChild.insert(QStringLiteral("childJobs"), QJsonArray{});
+        const QJsonObject omitted = AgentTaskRunner::summarizeChildCancellation(
+            missingChild, false, expectedChildJobIds);
+        QCOMPARE(omitted.value(QStringLiteral("status")).toString(), QStringLiteral("unknown"));
+        QCOMPARE(omitted.value(QStringLiteral("code")).toString(), QStringLiteral("CHILD_JOB_SET_MISMATCH"));
+        QVERIFY(!omitted.value(QStringLiteral("childJobSetMatches")).toBool());
+        QVERIFY(!omitted.value(QStringLiteral("childJobsTerminal")).toBool());
+
+        QJsonObject emptyChildSet{{QStringLiteral("state"), QStringLiteral("cancelled")},
+            {QStringLiteral("cancellationPersisted"), true},
+            {QStringLiteral("childJobsTruncated"), false},
+            {QStringLiteral("childJobs"), QJsonArray{}}};
+        const QJsonObject noChildJobs = AgentTaskRunner::summarizeChildCancellation(
+            emptyChildSet, false, {});
+        QCOMPARE(noChildJobs.value(QStringLiteral("status")).toString(), QStringLiteral("cancelled"));
+        QVERIFY(noChildJobs.value(QStringLiteral("childJobSetMatches")).toBool());
+        QVERIFY(noChildJobs.value(QStringLiteral("childJobsTerminal")).toBool());
+        QCOMPARE(noChildJobs.value(QStringLiteral("childJobCount")).toInt(), 0);
+        QCOMPARE(noChildJobs.value(QStringLiteral("childJobStates")).toString(), QStringLiteral("none"));
+
+        const QString acceptedJobId = QStringLiteral("98765432109876543210");
+        const QJsonObject acceptedChildOmitted = AgentTaskRunner::summarizeChildCancellation(
+            emptyChildSet, false, {acceptedJobId});
+        QCOMPARE(acceptedChildOmitted.value(QStringLiteral("status")).toString(), QStringLiteral("unknown"));
+        QCOMPARE(acceptedChildOmitted.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("CHILD_JOB_SET_MISMATCH"));
+        QVERIFY(!acceptedChildOmitted.value(QStringLiteral("childJobSetMatches")).toBool());
+
+        const QJsonObject missingAcceptedJob = AgentTaskRunner::summarizeChildCancellation(
+            emptyChildSet, false, {}, false);
+        QCOMPARE(missingAcceptedJob.value(QStringLiteral("status")).toString(), QStringLiteral("unknown"));
+        QCOMPARE(missingAcceptedJob.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("CHILD_JOB_SET_INCOMPLETE"));
+
+        const QString expectedDigest(64, QLatin1Char('a'));
+        QJsonObject cancellationBinding;
+        QVERIFY(!AgentTaskRunner::authorizationDigestMatches(cancellationBinding, expectedDigest));
+        cancellationBinding.insert(QStringLiteral("authorizationDigest"), expectedDigest);
+        QVERIFY(AgentTaskRunner::authorizationDigestMatches(cancellationBinding, expectedDigest));
+        cancellationBinding.insert(QStringLiteral("authorizationDigest"), QString(64, QLatin1Char('b')));
+        QVERIFY(!AgentTaskRunner::authorizationDigestMatches(cancellationBinding, expectedDigest));
+
+        emptyChildSet.insert(QStringLiteral("childJobsTruncated"), true);
+        const QJsonObject truncated = AgentTaskRunner::summarizeChildCancellation(
+            emptyChildSet, false, {});
+        QCOMPARE(truncated.value(QStringLiteral("status")).toString(), QStringLiteral("unknown"));
+        QCOMPARE(truncated.value(QStringLiteral("code")).toString(), QStringLiteral("CHILD_JOB_LIST_TRUNCATED"));
+
+        QJsonArray children = summary.value(QStringLiteral("childJobs")).toArray();
+        QJsonObject child = children.first().toObject();
+        child.insert(QStringLiteral("state"), QStringLiteral("cancelled"));
+        children[0] = child;
+        summary.insert(QStringLiteral("childJobs"), children);
+        const QJsonObject cancelled = AgentTaskRunner::summarizeChildCancellation(
+            summary, false, expectedChildJobIds);
+        QCOMPARE(cancelled.value(QStringLiteral("status")).toString(), QStringLiteral("cancelled"));
+        QCOMPARE(cancelled.value(QStringLiteral("code")).toString(), QStringLiteral("CANCELLED"));
+        QCOMPARE(cancelled.value(QStringLiteral("childJobsTerminal")).toBool(), true);
+        QVERIFY(cancelled.value(QStringLiteral("childJobSetMatches")).toBool());
+
+        const QJsonObject failedRequest = AgentTaskRunner::summarizeChildCancellation(
+            summary, true, expectedChildJobIds);
+        QCOMPARE(failedRequest.value(QStringLiteral("status")).toString(),
+                 QStringLiteral("cancellation_request_failed"));
+        QCOMPARE(failedRequest.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("CHILD_CANCELLATION_REQUEST_FAILED"));
+        QCOMPARE(failedRequest.value(QStringLiteral("childCancellationRequestFailed")).toBool(), true);
+
+        child.insert(QStringLiteral("state"), QStringLiteral("succeeded"));
+        children[0] = child;
+        summary.insert(QStringLiteral("childJobs"), children);
+        const QJsonObject racedTerminal = AgentTaskRunner::summarizeChildCancellation(
+            summary, false, expectedChildJobIds);
+        QCOMPARE(racedTerminal.value(QStringLiteral("status")).toString(), QStringLiteral("terminal"));
+        QCOMPARE(racedTerminal.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("CHILD_TERMINAL_BEFORE_CANCEL"));
+    }
+
     void meshGenerationAndAcceptanceAlwaysNeedFreshManualApprovalInAuto()
     {
         static QTemporaryDir workspace;
@@ -786,6 +2520,164 @@ private slots:
     {
         QTRY_VERIFY_WITH_TIMEOUT(!ModelCommandHost::isBusy(), 15000);
         Application::instance()->getSession()->clear();
+    }
+
+    void evaluationArmToolDefinitionsAreExactAndStandardRemainsUnchanged()
+    {
+        const auto defaultWrite = functionNames(AgentTaskRunner::toolDefinitions());
+        const auto explicitStandardWrite = functionNames(AgentTaskRunner::toolDefinitions(
+            AgentTaskRunner::AccessPolicy::ReadWrite, AgentTaskRunner::EvaluationArm::Standard));
+        QVERIFY(defaultWrite == explicitStandardWrite);
+
+        const auto defaultReadOnly = functionNames(AgentTaskRunner::toolDefinitions(
+            AgentTaskRunner::AccessPolicy::ReadOnly));
+        const auto explicitStandardReadOnly = functionNames(AgentTaskRunner::toolDefinitions(
+            AgentTaskRunner::AccessPolicy::ReadOnly, AgentTaskRunner::EvaluationArm::Standard));
+        QVERIFY(defaultReadOnly == explicitStandardReadOnly);
+        QVERIFY(defaultWrite.contains(QStringLiteral("document_propose")));
+        QVERIFY(defaultWrite.contains(QStringLiteral("workflow_propose")));
+        QVERIFY(defaultReadOnly.contains(QStringLiteral("ask_user")));
+        QVERIFY(!defaultReadOnly.contains(QStringLiteral("document_propose")));
+
+        const auto direct = functionNames(AgentTaskRunner::toolDefinitions(
+            AgentTaskRunner::AccessPolicy::ReadWrite, AgentTaskRunner::EvaluationArm::DirectNl));
+        QVERIFY(direct.isEmpty());
+
+        const QSet<QString> queryTools{
+            QStringLiteral("host_capabilities"), QStringLiteral("context_query"),
+            QStringLiteral("trusted_problem_inspect"), QStringLiteral("trusted_problem_diagnose"),
+            QStringLiteral("document_inputs"), QStringLiteral("document_targets"),
+            QStringLiteral("native_jobs"), QStringLiteral("native_job"),
+            QStringLiteral("native_job_recovery"), QStringLiteral("mesh_job"),
+            QStringLiteral("native_result_query")};
+        const auto toolsFeedback = functionNames(AgentTaskRunner::toolDefinitions(
+            AgentTaskRunner::AccessPolicy::ReadWrite, AgentTaskRunner::EvaluationArm::ToolsFeedback));
+        QVERIFY(toolsFeedback == queryTools);
+
+        QSet<QString> fullTrusted = queryTools;
+        fullTrusted.unite({QStringLiteral("experiment_run"), QStringLiteral("experiment_query"),
+                           QStringLiteral("experiment_wait"), QStringLiteral("experiment_cancel")});
+        const auto full = functionNames(AgentTaskRunner::toolDefinitions(
+            AgentTaskRunner::AccessPolicy::ReadWrite, AgentTaskRunner::EvaluationArm::FullTrusted));
+        QVERIFY(full == fullTrusted);
+        for (const QString &forbidden : {QStringLiteral("ask_user"), QStringLiteral("document_propose"),
+             QStringLiteral("workflow_propose"), QStringLiteral("extension_propose"),
+             QStringLiteral("runtime_parameters_propose"), QStringLiteral("task_plan_propose")})
+            QVERIFY(!full.contains(forbidden));
+        QCOMPARE(AgentTaskRunner::evaluationArmId(AgentTaskRunner::EvaluationArm::DirectNl),
+                 QStringLiteral("direct_nl"));
+        QCOMPARE(AgentTaskRunner::evaluationArmId(AgentTaskRunner::EvaluationArm::ToolsFeedback),
+                 QStringLiteral("tools_feedback"));
+        QCOMPARE(AgentTaskRunner::evaluationArmId(AgentTaskRunner::EvaluationArm::FullTrusted),
+                 QStringLiteral("full_trusted"));
+    }
+
+    void evaluationArmRejectsGloballyKnownCallsBeforeHostDispatch()
+    {
+        Session *session = Application::instance()->getSession();
+        session->clear();
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+        const auto before = host->query(0);
+        QSignalSpy published(host, &ModelCommandHost::eventPublished);
+
+        const QList<AgentTaskRunner::EvaluationArm> arms{
+            AgentTaskRunner::EvaluationArm::DirectNl,
+            AgentTaskRunner::EvaluationArm::ToolsFeedback,
+            AgentTaskRunner::EvaluationArm::FullTrusted};
+        for (const auto arm : arms)
+        {
+            WorkflowProcess workflow;
+            AgentTaskRunner runner(host, &workflow, nullptr, AgentTaskRunner::AccessPolicy::ReadWrite, arm);
+            QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+            QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+            QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+            QSignalSpy finished(&runner, &AgentTaskRunner::finished);
+            runner.startTask(QStringLiteral("Use only the selected evaluation arm."));
+            QCOMPARE(requested.size(), 1);
+            const int hostEventCount = published.size();
+            const QJsonObject validWrite = documentProposal(stamp.first, stamp.second);
+            runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+                QJsonArray{providerCall(QStringLiteral("forbidden-document-proposal"),
+                    QStringLiteral("document_propose"), validWrite)})));
+            QCOMPARE(finished.size(), 1);
+            QCOMPARE(finished.first().at(0).toString(), QStringLiteral("failed"));
+            QCOMPARE(requested.size(), 1);
+            QCOMPARE(proposals.size(), 0);
+            QCOMPARE(actions.size(), 0);
+            QCOMPARE(published.size(), hostEventCount);
+            QCOMPARE(host->query(0), before);
+        }
+
+        // Exercise the dispatch fence independently of response validation.
+        WorkflowProcess workflow;
+        AgentTaskRunner direct(host, &workflow, nullptr, AgentTaskRunner::AccessPolicy::ReadWrite,
+                               AgentTaskRunner::EvaluationArm::DirectNl);
+        QSignalSpy toolResults(&direct, &AgentTaskRunner::toolResultObserved);
+        direct.active = true;
+        direct.activityTaskId = QStringLiteral("dispatch-fence-fixture");
+        const QJsonObject arguments = documentProposal(stamp.first, stamp.second);
+        direct.calls = QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("bypassed-validation")},
+            {QStringLiteral("name"), QStringLiteral("document_propose")},
+            {QStringLiteral("arguments"), arguments}}};
+        const int hostEventCount = published.size();
+        direct.nextTool();
+        direct.active = false;
+        direct.budgetTimer.stop();
+        QCOMPARE(toolResults.size(), 1);
+        QCOMPARE(toolResults.first().first().toJsonObject().value(QStringLiteral("code")).toString(),
+                 QStringLiteral("EVALUATION_ARM_TOOL_DENIED"));
+        QCOMPARE(published.size(), hostEventCount);
+        QCOMPARE(host->query(0), before);
+        session->clear();
+    }
+
+    void fullTrustedExperimentRunProducesOnlyAnUnappliedPreview()
+    {
+        QTemporaryDir workspace;
+        QVERIFY(workspace.isValid());
+        Session *session = Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(), &error), qPrintable(error));
+        session->addModel(modalFixture());
+        session->setModelSelected(0, true);
+        ModelCommandHost *host = session->getModelCommandHost();
+        const auto stamp = session->modelCommandStamp(0);
+        const auto sourceBefore = host->query(0);
+
+        WorkflowProcess workflow;
+        AgentTaskRunner runner(host, &workflow, nullptr, AgentTaskRunner::AccessPolicy::ReadWrite,
+                               AgentTaskRunner::EvaluationArm::FullTrusted);
+        QSignalSpy requested(&runner, &AgentTaskRunner::turnRequested);
+        QSignalSpy proposals(&runner, &AgentTaskRunner::proposalReady);
+        QSignalSpy actions(&runner, &AgentTaskRunner::actionCompleted);
+        runner.startTask(QStringLiteral("Prepare a trusted rod experiment."));
+        QCOMPARE(requested.size(), 1);
+        const auto names = functionNames(requested.first().at(2).toJsonArray());
+        QVERIFY(names.contains(QStringLiteral("experiment_run")));
+        QVERIFY(!names.contains(QStringLiteral("document_propose")));
+        const QJsonObject runArguments{{QStringLiteral("documentId"), stamp.first},
+            {QStringLiteral("documentRevision"), double(stamp.second)},
+            {QStringLiteral("problemSpec"), trustedRodProblemSpec()},
+            {QStringLiteral("budgets"), trustedExperimentBudgets(1, 0, 1)}};
+        runner.receiveTurn(requested.first().at(0).toString(), parseProviderBody(providerBody({},
+            QJsonArray{providerCall(QStringLiteral("full-trusted-preview"),
+                QStringLiteral("experiment_run"), runArguments)})));
+
+        QCOMPARE(proposals.size(), 1);
+        QCOMPARE(proposals.first().at(0).toString(), QStringLiteral("experiment"));
+        QVERIFY(!proposals.first().at(2).toJsonObject()
+                     .value(QStringLiteral("previewId")).toString().isEmpty());
+        QCOMPARE(actions.size(), 0);
+        QVERIFY(runner.isActive());
+        QVERIFY(!runner.isAwaitingInput());
+        QCOMPARE(session->modelCommandStamp(0), stamp);
+        QCOMPARE(host->query(0), sourceBefore);
+        QVERIFY(!ModelCommandHost::isBusy());
+        runner.cancel();
+        session->clear();
     }
 
     void providerParserAndToolDefinitionsRoundTrip()
@@ -1264,6 +3156,49 @@ private slots:
             "range.extension/v1/statistics", "range.extension/v2/manifest", "range.extension/v2/multichannel-series",
             "range.extension/v2/spectral-result", "range.task-plan/v1"})
             QVERIFY(ids.contains(QJsonValue(id)));
+    }
+
+    void experimentRunToolSchemaRequiresAllBoundedBudgets()
+    {
+        QJsonObject runParameters;
+        QJsonObject documentProposeParameters;
+        QJsonArray documentCommands;
+        for (const auto &tool : AgentTaskRunner::toolDefinitions())
+        {
+            const auto function = tool.toObject().value(QStringLiteral("function")).toObject();
+            const QString name = function.value(QStringLiteral("name")).toString();
+            if (name == QStringLiteral("experiment_run"))
+                runParameters = function.value(QStringLiteral("parameters")).toObject();
+            if (name == QStringLiteral("document_propose"))
+            {
+                documentProposeParameters = function.value(QStringLiteral("parameters")).toObject();
+                documentCommands = documentProposeParameters
+                    .value(QStringLiteral("properties")).toObject()
+                    .value(QStringLiteral("command")).toObject().value(QStringLiteral("enum")).toArray();
+            }
+        }
+        QVERIFY(!runParameters.isEmpty());
+        const QJsonArray required = runParameters.value(QStringLiteral("required")).toArray();
+        for (const QString &field : {QStringLiteral("documentId"), QStringLiteral("documentRevision"),
+                                     QStringLiteral("problemSpec"), QStringLiteral("budgets")})
+            QVERIFY(required.contains(field));
+        QVERIFY(!documentCommands.contains(QJsonValue(QStringLiteral("experiment.run"))));
+        const QJsonObject genericCommandArguments = documentProposeParameters.value(QStringLiteral("properties")).toObject()
+            .value(QStringLiteral("arguments")).toObject().value(QStringLiteral("properties")).toObject();
+        QVERIFY(!genericCommandArguments.contains(QStringLiteral("budgets")));
+        QVERIFY(!genericCommandArguments.contains(QStringLiteral("problemSpec")));
+        const QJsonObject budgetSchema = runParameters.value(QStringLiteral("properties")).toObject()
+            .value(QStringLiteral("budgets")).toObject();
+        const QJsonArray budgetRequired = budgetSchema.value(QStringLiteral("required")).toArray();
+        for (const QString &field : {QStringLiteral("solves"), QStringLiteral("repairs"), QStringLiteral("modelTurns")})
+            QVERIFY(budgetRequired.contains(field));
+        const QJsonObject budgetProperties = budgetSchema.value(QStringLiteral("properties")).toObject();
+        QCOMPARE(budgetProperties.value(QStringLiteral("solves")).toObject().value(QStringLiteral("minimum")).toInt(), 1);
+        QCOMPARE(budgetProperties.value(QStringLiteral("solves")).toObject().value(QStringLiteral("maximum")).toInt(), 8);
+        QCOMPARE(budgetProperties.value(QStringLiteral("repairs")).toObject().value(QStringLiteral("minimum")).toInt(), 0);
+        QCOMPARE(budgetProperties.value(QStringLiteral("repairs")).toObject().value(QStringLiteral("maximum")).toInt(), 3);
+        QCOMPARE(budgetProperties.value(QStringLiteral("modelTurns")).toObject().value(QStringLiteral("minimum")).toInt(), 1);
+        QCOMPARE(budgetProperties.value(QStringLiteral("modelTurns")).toObject().value(QStringLiteral("maximum")).toInt(), 12);
     }
 
     void guiDocumentQueriesAndStructuralDynamicsUseTheVersionedHost()

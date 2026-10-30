@@ -10,7 +10,7 @@ import re
 import numpy as np
 
 from .native_results import query_registered
-from .series_analysis import validate_series
+from .series_analysis import validate_series, native_piezo_channel
 from .series_service import _model_hash as _linked_model_hash
 from .service import WorkflowError, canonical, digest, exact, file_hash, identifier
 
@@ -105,7 +105,8 @@ def selector(value):
             continue
         if type(result[key]) is not str:
             fail("INVALID_PARAMETERS", "Source selectors must contain bounded identifiers.")
-        identifier(result[key], key)
+        if key != "channelId" or native_piezo_channel(result[key]) is None:
+            identifier(result[key], key)
     if result["kind"] not in ("native", "reference", "energy") or result["mode"] not in ("active", "passive"):
         fail("INVALID_PARAMETERS", "Source kind or native mode is invalid.")
     if result["kind"] == "reference":
@@ -121,7 +122,7 @@ def selector(value):
     is_work = result["kind"] == "native" and result.get("channelId") == "control:work"
     if is_work and result["mode"] != "active":
         fail("CHANNEL_UNAVAILABLE", "Passive results have no accepted controller work ledger")
-    if result["kind"] != "energy" and not is_work and not _CHANNEL.fullmatch(result["channelId"]):
+    if result["kind"] != "energy" and not is_work and not _CHANNEL.fullmatch(result["channelId"]) and not (result["kind"] == "native" and native_piezo_channel(result["channelId"])):
         fail("INVALID_PARAMETERS", "Select a persisted physical native channel.")
     return result
 
@@ -208,9 +209,59 @@ def _catalog_pin(service, source):
     if type(proof) is not str or not proof or len(proof) > 128:
         fail("INVALID_RESPONSE", "Native proof scope is invalid.")
     ref = copy.deepcopy(catalog.get("sourceSnapshotRef"))
-    return {**parameters, "sourceKind": kind, "manifestSha256": sha(catalog.get("manifestSha256")),
+    accepted = {}
+    if "nativeAcceptedIdentity" in catalog:
+        accepted["nativeAcceptedIdentity"] = _accepted_identity(catalog["nativeAcceptedIdentity"])
+    return {**parameters, **accepted, "sourceKind": kind, "manifestSha256": sha(catalog.get("manifestSha256")),
             "modelSha256": _model_identity(ref), "sourceSnapshotRef": ref,
             "proofScope": proof, "frameCount": count}
+
+
+def _accepted_identity(value):
+    fields = {"family", "sourceFingerprint", "configurationIdentity", "backendIdentity", "backendControlSha256",
+              "targetSteps", "dtS", "initialTimeS", "identityScope", "electricalWorkSource"}
+    if (type(value) is not dict or set(value) != fields or
+            value.get("identityScope") != "compatibility-not-authentication" or
+            type(value.get("targetSteps")) is not int or not 1 <= value["targetSteps"] <= 2**63 - 1 or finite(value.get("dtS")) <= 0):
+        fail("INVALID_RESPONSE", "Native accepted identity is invalid")
+    finite(value["initialTimeS"])
+    if any(type(value[k]) is not str or not value[k] or len(value[k]) > 4096 for k in fields - {"targetSteps", "dtS", "initialTimeS"}):
+        fail("INVALID_RESPONSE", "Native accepted identity text is invalid")
+    if value["family"] not in {"axial", "layered"}:
+        fail("INVALID_RESPONSE", "Native accepted family is invalid")
+    for key in ("sourceFingerprint", "configurationIdentity", "backendControlSha256"):
+        sha(value[key])
+    backend = value["backendIdentity"]
+    native_backend = (type(backend) is str and re.fullmatch(
+        r"range-fea/native-(?:python-(?:axial|layered)/v1:[0-9a-f]{64}|(?:axial|layered)-Newmark/no-control/v1)", backend))
+    # These are backend identity tokens emitted by the native facades, not paths.
+    if not native_backend:
+        _safe_reference(backend)
+    _safe_reference({k: v for k, v in value.items() if k != "backendIdentity"})
+    return copy.deepcopy(value)
+
+
+def _coverage(value, frames):
+    continuous = all(b["recordNo"] == a["recordNo"] + 1 for a, b in zip(frames, frames[1:]))
+    expected = {"coverage": "exact selected certified accepted records; no interpolation or claim of complete FE history",
+                "sampledCoverage": True, "continuousBetweenSelectedRecords": continuous}
+    if type(value) is not dict or value != expected or any(type(value.get(k)) is not bool for k in ("sampledCoverage", "continuousBetweenSelectedRecords")):
+        fail("INVALID_RESPONSE", "Native accepted coverage is inconsistent")
+    return copy.deepcopy(value)
+
+
+def _piezo_metadata(channel_id, metadata):
+    quantity, axis = native_piezo_channel(channel_id)
+    units = {"piezoReadout": {"V", "C"}, "electrodeVoltage": {"V"}, "positiveElectrodeCharge": {"C"},
+             "idealAmplifierVoltage": {"V"}, "voltageAction": {"V"}, "electricalWork": {"J"}}
+    targets = ({"accepted-piezo-action"} if quantity == "voltageAction" else
+               {"accepted-piezo-electrical-ledger"} if quantity == "electricalWork" else
+               {"accepted-named-piezo-port", "accepted-piezo-action-record"} if quantity in {"piezoReadout", "electrodeVoltage"} else
+               {"accepted-named-piezo-port"})
+    if (metadata["channelId"] != channel_id or metadata["quantity"] != quantity or metadata["axis"] != axis or
+            metadata["variableId"] != "native-" + quantity or metadata["unit"] not in units[quantity] or metadata["nodeTarget"] not in targets):
+        fail("INVALID_RESPONSE", "Native piezo channel identity or SI unit is inconsistent")
+    return copy.deepcopy(metadata)
 
 
 def _snapshot(service, sources):
@@ -224,7 +275,7 @@ def _snapshot(service, sources):
     required = {"valid", "operation", "apiVersion", "schemaId", "completed", "live", "artifactId",
                 "jobId", "sourceKind", "sourceSnapshotRef", "proofScope", "manifestSha256",
                 "frameCount", "channels", "frames"}
-    if (not required <= value.keys() or value.keys() - required - {"mode"} or
+    if (not required <= value.keys() or value.keys() - required - {"mode", "nativeAcceptedCoverage"} or
             value.get("valid") is not True or value.get("completed") is not True or
             value.get("live") is not False or value.get("operation") != "snapshot" or
             value.get("apiVersion") != "range.native-series-snapshot/v1" or
@@ -244,7 +295,8 @@ def _snapshot(service, sources):
         fail("INVALID_RESPONSE", "Native snapshot channels are inconsistent.")
     identities = {}
     for channel_id, metadata in zip(ids, channels):
-        if type(metadata) is not dict or set(metadata) != {"channelId", "variableId", "quantity", "axis", "unit", "nodeTarget"}:
+        if (type(metadata) is not dict or set(metadata) != {"channelId", "variableId", "quantity", "axis", "unit", "nodeTarget"}
+                or any(type(v) is not str for v in metadata.values())):
             fail("INVALID_RESPONSE", "Native snapshot channel metadata is invalid.")
         if channel_id == "control:work":
             if source["mode"] != "active" or metadata != {"channelId": "control:work",
@@ -253,11 +305,16 @@ def _snapshot(service, sources):
                 fail("INVALID_RESPONSE", "Accepted control work identity or physical unit is inconsistent")
             identities[channel_id] = copy.deepcopy(metadata)
             continue
+        if native_piezo_channel(channel_id):
+            if "nativeAcceptedIdentity" not in pin:
+                fail("INVALID_RESPONSE", "Piezo channel has no certified accepted identity")
+            identities[channel_id] = _piezo_metadata(channel_id, metadata)
+            continue
         match = _CHANNEL.fullmatch(channel_id)
         node, quantity, axis = match.groups()
         variable, unit = _PHYSICAL[quantity]
         if metadata != {"channelId": channel_id, "variableId": variable, "quantity": quantity,
-                        "axis": axis, "unit": unit, "nodeTarget": "persistent-node-physical-id"}:
+                        "axis": axis, "unit": unit, "nodeTarget": ("physical-component-of-supported-native-kinematics" if "nativeAcceptedIdentity" in pin else "persistent-node-physical-id")}:
             fail("INVALID_RESPONSE", "Native channel identity or physical unit is inconsistent.")
         identities[channel_id] = {**metadata, "nodePhysicalId": int(node)}
     frames = value["frames"]
@@ -278,7 +335,12 @@ def _snapshot(service, sources):
             sha(frame[key])
         normalized.append({**frame, "timeS": time, "values": [finite(v) for v in frame["values"]]})
         previous_record, previous_time = record, time
-    if _catalog_pin(service, source) != pin:
+    if "nativeAcceptedIdentity" in pin:
+        pin["nativeAcceptedCoverage"] = _coverage(value.get("nativeAcceptedCoverage"), normalized)
+    elif "nativeAcceptedCoverage" in value:
+        fail("INVALID_RESPONSE", "Accepted coverage has no certified identity")
+    comparison_pin = {k: v for k, v in pin.items() if k != "nativeAcceptedCoverage"}
+    if _catalog_pin(service, source) != comparison_pin:
         fail("SOURCE_CHANGED", "Native source changed during extraction.")
     return pin, identities, normalized
 
@@ -520,6 +582,9 @@ def resolve_many(service, requested):
                         for f in frames]
         origin = {"proofScope": pin["proofScope"], "frameProvenanceSha256": digest(proof_frames),
                   "frameCount": len(frames)}
+        if "nativeAcceptedIdentity" in pin:
+            origin["nativeAcceptedCoverage"] = pin["nativeAcceptedCoverage"]
+            origin["nativeAcceptedGrid"] = {k: pin["nativeAcceptedIdentity"][k] for k in ("dtS", "initialTimeS", "targetSteps")}
         for source in group:
             identity = identities[source["channelId"]]
             if source["kind"] == "reference":

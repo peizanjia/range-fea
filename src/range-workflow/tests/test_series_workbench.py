@@ -420,5 +420,102 @@ class WorkbenchTest(unittest.TestCase):
         self.expect_error("SOURCE_CHANGED", lambda: self.call("result.raw.export.chunk", {"exportId": exported["exportId"], "offset": 0, "length": 1}))
 
 
+class ProducerSnapshots(VerifiedSnapshots):
+    """Exact C++ public snapshot/catalog shapes; still fake broker, not FE evidence."""
+    def __init__(self):
+        super().__init__()
+        self.bad_metadata = None
+        self.bad_coverage = None
+        self.record_stride = 1
+
+    def __call__(self, service, operation, parameters):
+        forwarded = copy.deepcopy(parameters)
+        if operation == "snapshot":
+            forwarded["channelIds"] = [c if c.startswith("node:") else "node:51000:velocity:X" for c in parameters["channelIds"]]
+        value = super().__call__(service, operation, forwarded)
+        if operation == "catalog":
+            value["nativeAcceptedIdentity"] = {"family": "axial", "sourceFingerprint": "a" * 64,
+                "configurationIdentity": "b" * 64, "backendIdentity": "range-fea/native-python-axial/v1:" + "a" * 64, "backendControlSha256": "d" * 64,
+                "targetSteps": self.count * self.record_stride, "dtS": self.dt, "initialTimeS": 0.,
+                "identityScope": "compatibility-not-authentication", "electricalWorkSource": "actual accepted mixed-truss positive-electrode electrical work; not mechanical actuator-force work"}
+        else:
+            for channel, metadata in zip(parameters["channelIds"], value["channels"]):
+                if channel.startswith("node:"):
+                    metadata["nodeTarget"] = "physical-component-of-supported-native-kinematics"
+                else:
+                    quantity, axis = series_sources.native_piezo_channel(channel)
+                    target = "accepted-piezo-electrical-ledger" if quantity == "electricalWork" else "accepted-piezo-action" if quantity == "voltageAction" else "accepted-named-piezo-port"
+                    unit = "J" if quantity == "electricalWork" else "C" if quantity == "positiveElectrodeCharge" else "V"
+                    metadata.update(channelId=channel, variableId="native-" + quantity, quantity=quantity, axis=axis, unit=unit, nodeTarget=target)
+                if self.bad_metadata:
+                    metadata.update(self.bad_metadata)
+            for frame in value["frames"]:
+                frame["recordNo"] *= self.record_stride
+                frame["timeS"] *= self.record_stride
+            value["nativeAcceptedCoverage"] = {"coverage": "exact selected certified accepted records; no interpolation or claim of complete FE history",
+                "sampledCoverage": True, "continuousBetweenSelectedRecords": self.record_stride == 1}
+            if self.bad_coverage:
+                value["nativeAcceptedCoverage"].update(self.bad_coverage)
+        return value
+
+
+class ProducerCompatibilityTest(unittest.TestCase):
+    setUp = WorkbenchTest.setUp
+    call = WorkbenchTest.call
+    plot = WorkbenchTest.plot
+    expect_error = WorkbenchTest.expect_error
+
+    def install_producer(self):
+        self.broker = ProducerSnapshots()
+        series_sources.query_registered.side_effect = self.broker
+
+    def test_actual_producer_channels_and_units(self):
+        self.install_producer()
+        channels = ["node:51000:velocity:X", "piezo:port:sense:readout:absolute",
+                    "piezo:port:sense%20one:readout:delta", "piezo:port:sense:voltage:absolute",
+                    "piezo:port:sense:charge:delta", "piezo:port:sense:amplifierVoltage:absolute",
+                    "piezo:action:drive%20one:applied", "piezo:electricalWork"]
+        for channel in channels:
+            with self.subTest(channel=channel):
+                chosen = {**self.source, "channelId": channel}
+                actual = series_sources.resolve_many(self.service, [chosen])[0]
+                self.assertEqual(actual["dto"]["channelId"], channel)
+                self.assertTrue(actual["dto"]["origin"]["nativeAcceptedCoverage"]["continuousBetweenSelectedRecords"])
+                self.assertEqual(actual["dto"]["origin"]["nativeAcceptedGrid"]["dtS"], .01)
+                self.assertNotIn("origin", actual["dto"]["samples"][0])
+                self.plot("amplitude", sources=[chosen])
+        self.broker.bad_metadata = {"unit": []}
+        self.expect_error("INVALID_RESPONSE", lambda: self.plot(sources=[{**self.source, "channelId": channels[1]}]))
+        self.broker.bad_metadata = {"unit": "N"}
+        self.expect_error("INVALID_RESPONSE", lambda: self.plot(sources=[{**self.source, "channelId": channels[1]}]))
+        self.broker.bad_metadata = {"nodeTarget": "invented-piezo-port"}
+        self.expect_error("INVALID_RESPONSE", lambda: self.plot(sources=[{**self.source, "channelId": channels[1]}]))
+
+    def test_work_selects_actual_electrical_ledger_for_node_and_port(self):
+        self.install_producer()
+        for channel in (self.source["channelId"], "piezo:port:sense%20one:readout:absolute", "piezo:electricalWork"):
+            result = self.plot("work", sources=[{**self.source, "channelId": channel}])
+            self.assertEqual(result["export"]["sources"][0]["channelId"], "piezo:electricalWork")
+            self.assertEqual(result["traces"][0]["sources"][0]["channel"]["quantity"], "electricalWork")
+            self.assertNotIn("controller", result["axes"]["y"]["label"].lower())
+
+    def test_sparse_coverage_retained_but_not_fft_and_false_claim_rejected(self):
+        self.install_producer()
+        self.broker.record_stride = 2
+        actual = series_sources.resolve_many(self.service, [self.source])[0]
+        self.assertFalse(actual["dto"]["origin"]["nativeAcceptedCoverage"]["continuousBetweenSelectedRecords"])
+        self.plot("time")
+        self.expect_error("INCOMPARABLE_RESULTS", lambda: self.plot("amplitude"))
+        self.broker.bad_coverage = {"continuousBetweenSelectedRecords": True}
+        self.expect_error("INVALID_RESPONSE", lambda: self.plot())
+
+    def test_canonical_channel_selector_and_coverage_are_closed(self):
+        self.install_producer()
+        for channel in ("piezo:port:sense%ZZ:readout:absolute", "piezo:port:sense%2fone:readout:absolute",
+                        "piezo:action:drive:force", "piezo:port:sense%41:readout:absolute"):
+            self.expect_error("INVALID_PARAMETERS", lambda: series_sources.selector({**self.source, "channelId": channel}))
+        self.broker.bad_coverage = {"extra": "unsupported"}
+        self.expect_error("INVALID_RESPONSE", lambda: self.plot())
+
 if __name__ == "__main__":
     unittest.main()

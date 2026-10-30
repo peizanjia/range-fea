@@ -6,6 +6,7 @@
 #include <QLoggingCategory>
 #include <QSettings>
 #include <exception>
+#include <memory>
 #include <stdexcept>
 
 #include <rbl_arguments_parser.h>
@@ -54,6 +55,9 @@ void MainTask::run()
         validOptions.append(RArgumentOption("typed-controller-id",RArgumentOption::String,QVariant(),"Expected typed controller implementation/revision identity",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("restart",RArgumentOption::Switch,QVariant(),"Restart solver",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("native-checkpoint-dir",RArgumentOption::Path,QVariant(),"Enable periodic accepted structural checkpoints in this directory",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-accepted-trace",RArgumentOption::Switch,QVariant(),"Persist every native piezo accepted FE state in a complete compact trace, with periodic full MODEL checkpoints",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-layered-steps",RArgumentOption::String,QVariant(),"Maximum native layered FE steps in this invocation; unsigned decimal, zero runs to original target",RArgumentOption::Optional,false));
+        validOptions.append(RArgumentOption("native-axial-steps",RArgumentOption::String,QVariant(),"Maximum native axial FE steps in this invocation; unsigned decimal, zero runs to original target",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("native-mixed-steps",RArgumentOption::String,QVariant(),"Maximum native mixed FE steps in this invocation; unsigned decimal, zero runs to original target",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("native-checkpoint-context-json",RArgumentOption::String,QVariant(),"Canonical range.native-checkpoint-context/v1 JSON; required with --native-checkpoint-dir",RArgumentOption::Optional,false));
         validOptions.append(RArgumentOption("pause-at-accepted-seq",RArgumentOption::String,QVariant(),"Positive decimal accepted Newmark structural sequence to pause at; requires --native-execution-state",RArgumentOption::Optional,false));
@@ -128,7 +132,9 @@ void MainTask::run()
 
         if (argumentsParser.isSet("linear-model-output"))
         {
-            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server","native-checkpoint-dir","native-checkpoint-context-json","native-mixed-steps","pause-at-accepted-seq","native-execution-state"})
+            if(argumentsParser.isSet("native-accepted-trace"))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,"Linear-model export cannot combine complete accepted trace output.");
+            for (const auto *option:{"control-program","control-args-json","control-timeout-ms","typed-config","typed-steps","typed-checkpoint","typed-controller-id","thermal-steps","thermal-checkpoint","restart","convergence-file","monitoring-file","task-id","task-server","native-checkpoint-dir","native-checkpoint-context-json","native-mixed-steps","native-layered-steps","native-axial-steps","pause-at-accepted-seq","native-execution-state"})
                 if (argumentsParser.isSet(option))
                     throw RError(RError::Type::InvalidInput,R_ERROR_REF,
                                  "Linear-model export cannot combine simulation/control/task output options.");
@@ -151,6 +157,10 @@ void MainTask::run()
         }
 
         SolverInput solverInput(argumentsParser.getValue("file").toString());
+        if (int(argumentsParser.isSet("native-mixed-steps")) + int(argumentsParser.isSet("native-layered-steps")) +
+            int(argumentsParser.isSet("native-axial-steps")) > 1)
+            throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                         "Native mixed, layered and axial step budgets cannot be combined.");
         if (argumentsParser.isSet("native-mixed-steps"))
         {
             bool valid = false;
@@ -167,7 +177,44 @@ void MainTask::run()
                                  "Native mixed step budgets cannot combine with thermal, typed FE or external control options.");
             solverInput.setNativeMixedStepBudget(steps);
         }
+        if (argumentsParser.isSet("native-layered-steps"))
+        {
+            bool valid = false;
+            const QString value = argumentsParser.getValue("native-layered-steps").toString();
+            const uint steps = value.toUInt(&valid,10);
+            if (!valid || QString::number(steps) != value)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--native-layered-steps must be an unsigned decimal integer (zero means unlimited).");
+            for (const auto *option : {"thermal-steps","thermal-checkpoint","typed-config",
+                                      "typed-steps","typed-checkpoint","typed-controller-id",
+                                      "control-program","control-args-json","control-timeout-ms"})
+                if (argumentsParser.isSet(option))
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "Native layered step budgets cannot combine with thermal, typed FE or external control options.");
+            solverInput.setNativeLayeredStepBudget(steps);
+        }
+        if (argumentsParser.isSet("native-axial-steps"))
+        {
+            bool valid = false;
+            const QString value = argumentsParser.getValue("native-axial-steps").toString();
+            const uint steps = value.toUInt(&valid,10);
+            if (!valid || QString::number(steps) != value)
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                             "--native-axial-steps must be an unsigned decimal integer (zero means unlimited).");
+            for (const auto *option : {"thermal-steps","thermal-checkpoint","typed-config",
+                                      "typed-steps","typed-checkpoint","typed-controller-id",
+                                      "control-program","control-args-json","control-timeout-ms"})
+                if (argumentsParser.isSet(option))
+                    throw RError(RError::Type::InvalidInput,R_ERROR_REF,
+                                 "Native axial step budgets cannot combine with thermal, typed FE or external control options.");
+            solverInput.setNativeAxialStepBudget(steps);
+        }
         QByteArray nativeCheckpointContextJson;
+        if (argumentsParser.isSet("native-accepted-trace")) {
+            if (!argumentsParser.isSet("native-checkpoint-dir"))
+                throw RError(RError::Type::InvalidInput,R_ERROR_REF,"--native-accepted-trace requires --native-checkpoint-dir.");
+            solverInput.setNativeAcceptedTrace(true);
+        }
         if (argumentsParser.isSet("native-checkpoint-dir") !=
             argumentsParser.isSet("native-checkpoint-context-json"))
         {
@@ -367,16 +414,23 @@ void MainTask::run()
         // Start solver. Main owns the bridge until this worker has finished;
         // the main event loop never waits synchronously for the worker.
         QThread* thread = new QThread;
-        SolverTask *solverTask = new SolverTask(solverInput, application);
+        SolverTask *solverTask = new SolverTask(solverInput);
         solverTask->setRuntimeControlBridge(runtimeBridge);
+
+        const auto solverExitCode = std::make_shared<int>(1);
 
         solverTask->moveToThread(thread);
 
         QObject::connect(thread, &QThread::started, solverTask, &SolverTask::run);
+        QObject::connect(solverTask, &SolverTask::finished, application,
+                         [solverExitCode](int exitCode) { *solverExitCode = exitCode; },
+                         Qt::QueuedConnection);
         QObject::connect(solverTask, &SolverTask::finished, solverTask, &SolverTask::deleteLater);
         QObject::connect(solverTask, &SolverTask::destroyed, thread, &QThread::quit);
         QObject::connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-        QObject::connect(thread, &QThread::finished, application, &QCoreApplication::quit);
+        QObject::connect(thread, &QThread::finished, application,
+                         [application, solverExitCode]() { application->exit(*solverExitCode); },
+                         Qt::QueuedConnection);
 
         thread->start();
     }

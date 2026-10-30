@@ -1,7 +1,9 @@
 #include <QVBoxLayout>
 
 #include "application_settings_widget.h"
+#if RANGE_ENABLE_AGENT
 #include "agent_widget.h"
+#endif
 
 ApplicationSettingsWidget::ApplicationSettingsWidget(ApplicationSettings *applicationSettings, QWidget *parent)
     : RApplicationSettingsWidget{applicationSettings,parent}
@@ -9,7 +11,9 @@ ApplicationSettingsWidget::ApplicationSettingsWidget(ApplicationSettings *applic
 {
     QWidget *generalWidget = this->createGeneralTab();
     this->tabWidget->addTab(generalWidget,tr("General"));
+#if RANGE_ENABLE_AGENT
     this->tabWidget->addTab(AgentWidget::createSettingsPage(this),tr("Agent"));
+#endif
 }
 
 void ApplicationSettingsWidget::selectTab(const QString &title)

@@ -17,6 +17,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow import series_sources, series_workbench
 from range_workflow import native_results
 from range_workflow.service import WorkflowError, WorkflowService, canonical, file_hash

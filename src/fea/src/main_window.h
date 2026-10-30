@@ -18,6 +18,13 @@
 #include "session.h"
 #include "sub_window_manager.h"
 
+#if RANGE_ENABLE_AGENT
+#include <memory>
+#include "agent_task_runner.h"
+#include "agent_widget.h"
+class RAgentEvaluationCaptureStore;
+#endif
+
 class RProgressBar;
 
 class MainWindow : public QMainWindow
@@ -73,7 +80,13 @@ class MainWindow : public QMainWindow
                             RCloudSessionManager *cloudSession,
                             RApplicationSettings *applicationSettings,
                             ActionList *actionList,
-                            QWidget *parent = nullptr);
+                            QWidget *parent = nullptr
+#if RANGE_ENABLE_AGENT
+                            , AgentTaskRunner::EvaluationArm evaluationArm = AgentTaskRunner::EvaluationArm::Standard,
+                            std::shared_ptr<RAgentEvaluationCaptureStore> evaluationCaptureStore = {},
+                            AgentEvaluationSlotBinding evaluationSlotBinding = {}
+#endif
+                            );
 
         //! Show transform geometry dock widget.
         void showTransformGeometryWidget();

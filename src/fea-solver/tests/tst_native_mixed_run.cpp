@@ -475,14 +475,20 @@ void TestNativeMixedRun::failedRollbackPoisonsSolver() try
 {
     QTemporaryDir dir;auto m=fixture();const auto checkpointDir=dir.filePath("checkpoints");auto store=participant(checkpointDir,m);
     auto solver=std::make_unique<RSolver>(m,dir.filePath("actual.rbm"),QString());solver->setAcceptedStepParticipant(store);solver->setNativeMixedStepBudget(1);solver->run();
+    const auto latestPath=QDir(checkpointDir).filePath("latest.json");
+    const auto acceptedLatest=raw(latestPath);
+    const auto acceptedSequence=store->readLatest().envelope.value("acceptedSeq").toInt();
     const auto baseline=recordBytes(record(m));store->setPhaseHook(Phase::AfterLatest,[&](Phase){
         store->setPhaseHook(Phase::BeforeRollbackLatest,[](Phase){throw std::runtime_error("actual rollback failure");});throw std::runtime_error("actual publish failure");});
     QVERIFY(!failure(*solver).isEmpty());QCOMPARE(recordBytes(record(m)),baseline);QVERIFY(!solver->isNativeMixedRetryable());QVERIFY(!store->isRetryable());
     QVERIFY(!failure(*solver).isEmpty());QVERIFY_EXCEPTION_THROWN(store->readLatest(),std::exception);QVERIFY(!store->rollbackEvidencePaths().empty());
     solver.reset();store.reset();
     const auto input=QString(64,'a'),runtime=QString(64,'c');
-    QVERIFY_EXCEPTION_THROWN(Store(checkpointDir,context(input,runtime,record(m).fixedTimeStep),input,
-        NativeAcceptedCheckpointContext::noControlSha256(),runtime,true,m,view),std::exception);
+    auto reopened=std::make_unique<Store>(checkpointDir,context(input,runtime,record(m).fixedTimeStep),input,
+        NativeAcceptedCheckpointContext::noControlSha256(),runtime,true,m,view);
+    QVERIFY(!QFile::exists(QDir(checkpointDir).filePath("pending-publication.json")));
+    QCOMPARE(raw(latestPath),acceptedLatest);
+    QCOMPARE(reopened->readLatest().envelope.value("acceptedSeq").toInt(),acceptedSequence);
 } REPORT_RUN_EXCEPTIONS
 void TestNativeMixedRun::configuredMonitoringAndUpfrontRejection() try
 {

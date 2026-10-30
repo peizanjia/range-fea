@@ -6,7 +6,19 @@
 #include <rnative_result_broker.h>
 #include <rproject_catalog.h>
 #include <rml_file_utils.h>
+#include <rmodel_command_service.h>
+#include <rtrusted_experiment_service.h>
+#include <rtrusted_mechanics_service.h>
+#include <rtrusted_verification_service.h>
 #include <rml_time_solver.h>
+#include <rgl_application_settings.h>
+#include <piezo_runtime_identity.h>
+#include <piezo_result_series.h>
+#include <piezo_axial_backend_bridge.h>
+#include <piezo_native_backend_bridge.h>
+#include <native_checkpoint_recovery.h>
+#include <rstructural_piezo_axial_restart_codec.h>
+#include <rstructural_piezo_layered_restart_codec.h>
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
@@ -33,6 +45,7 @@
 #include <cmath>
 #include <algorithm>
 #include <exception>
+#include <stdexcept>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -59,6 +72,8 @@ constexpr qsizetype maxNativeJobRecordsPerProject = 2000;
 constexpr qsizetype maxNativeJobCommitMarkersPerJob = 128;
 constexpr qsizetype maxNativeJobRegistryProjectsToScan = 4096;
 constexpr auto nativeJobRegistryGenesisSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+
+bool samePathText(const QString &left, const QString &right);
 
 QByteArray sha256File(const QString &fileName)
 {
@@ -140,45 +155,6 @@ QJsonObject persistedNativeJobRecord(const QJsonObject &record)
     persisted.insert(QStringLiteral("progressUnavailableReason"),
                      QStringLiteral("Progress samples are process-local and are not treated as recovery evidence."));
     return persisted;
-}
-
-QByteArray nativeNoControlSha256()
-{
-    return QCryptographicHash::hash(QByteArrayLiteral("range.native-checkpoint.no-control.v1"),
-                                    QCryptographicHash::Sha256);
-}
-
-bool sameRestartState(const RStructuralDynamicsRestartData &left,
-                      const RStructuralDynamicsRestartData &right)
-{
-    return left.available == right.available &&
-           left.completedSteps == right.completedSteps &&
-           left.time == right.time && left.fixedTimeStep == right.fixedTimeStep &&
-           left.meshNodeCount == right.meshNodeCount &&
-           left.meshElementCount == right.meshElementCount &&
-           left.physicalDofCount == right.physicalDofCount &&
-           left.meshFingerprint == right.meshFingerprint &&
-           left.dofFingerprint == right.dofFingerprint &&
-           left.systemFingerprint == right.systemFingerprint &&
-           left.q == right.q && left.v == right.v && left.a == right.a &&
-           left.externalForce == right.externalForce &&
-           left.cumulativeExternalWork == right.cumulativeExternalWork &&
-           left.cumulativeDampingDissipation == right.cumulativeDampingDissipation &&
-           left.initialMechanicalEnergy == right.initialMechanicalEnergy &&
-           left.supportResponseAvailable == right.supportResponseAvailable &&
-           left.supportFingerprint == right.supportFingerprint &&
-           left.supportReactions == right.supportReactions &&
-           left.supportPowers == right.supportPowers &&
-           left.cumulativeSupportWork == right.cumulativeSupportWork &&
-           left.controlAvailable == right.controlAvailable &&
-           left.controlProtocolVersion == right.controlProtocolVersion &&
-           left.controlFingerprint == right.controlFingerprint &&
-           left.controlChannelIds == right.controlChannelIds &&
-           left.controlLastCommands == right.controlLastCommands &&
-           left.controlPowers == right.controlPowers &&
-           left.cumulativeControlWork == right.cumulativeControlWork &&
-           left.controlControllerState == right.controlControllerState &&
-           left.controlDeterministicSeed == right.controlDeterministicSeed;
 }
 
 bool exactKeys(const QJsonObject &object, const QStringList &keys)
@@ -268,6 +244,113 @@ bool readNativeJobRecordFile(const QString &path, const QString &expectedJobId,
     parsedRecord.insert(QStringLiteral("nativeJobRegistrySha256"), savedHash);
     if (record) *record = parsedRecord;
     return true;
+}
+
+bool admitNativeAcceptedTrace(const QString &directory,const QJsonObject &context,
+                              const QString &inputPath,const QJsonObject &envelope,
+                              QByteArray *terminalPayload,RModel *terminalModel,QString *error,
+                              const NativeCheckpointRecovery::Plan *pendingRecoveryPlan=nullptr)
+{
+    const auto reject=[error](const QString &message){if(error)*error=message;return false;};
+    try{
+        const QString pendingPath=QDir(directory).filePath(QStringLiteral("pending-publication.json"));
+        if(pendingRecoveryPlan){
+            if(!pendingRecoveryPlan->traceMode() || !samePathText(pendingRecoveryPlan->directory(),directory))
+                return reject(QStringLiteral("Pending native trace plan does not match its checkpoint directory."));
+            QFile marker(pendingPath);
+            if(!marker.open(QIODevice::ReadOnly) || marker.readAll()!=pendingRecoveryPlan->markerBytes() || marker.error()!=QFileDevice::NoError)
+                return reject(QStringLiteral("Pending native trace recovery marker changed during qualification."));
+        }else if(QFileInfo(pendingPath).exists() || QFileInfo(pendingPath).isSymLink())
+            return reject(QStringLiteral("Native trace publication remains pending."));
+        const QStringList expectedKeys{"schema","sourceSha256","inputModelSha256","controlSha256","runtimeSha256","packageSha256",
+            "policy","maxAcceptedSteps","maxSimulationSeconds","acceptedSeq","timeS","dtS","modelFile","checkpointModelSha256",
+            "modelAcceptedSeq","stateFingerprintSha256","traceFile","traceHeaderSha256","traceCursor"};
+        if(!exactKeys(envelope,expectedKeys) || envelope.value("schema").toString()!=QStringLiteral("range.native-checkpoint/v2"))
+            return reject(QStringLiteral("Native trace envelope has invalid closed schema."));
+        auto expected=context;expected.remove("schema");expected.remove("modelSha256");expected["inputModelSha256"]=context.value("modelSha256");
+        for(auto it=expected.begin();it!=expected.end();++it)if(envelope.value(it.key())!=it.value())
+            return reject(QStringLiteral("Native trace envelope differs from queued checkpoint context."));
+        const auto integer=[](const QJsonValue &v,quint64 maximum){const double x=v.toDouble(-1.);
+            if(!v.isDouble() || !std::isfinite(x) || x<0 || std::floor(x)!=x || x>double(maximum))throw std::invalid_argument("Invalid trace envelope integer");return quint64(x);};
+        const quint64 accepted=integer(envelope.value("acceptedSeq"),std::numeric_limits<uint>::max());
+        const quint64 modelSequence=integer(envelope.value("modelAcceptedSeq"),accepted);
+        const QString modelName=envelope.value("modelFile").toString();
+        if(QFileInfo(modelName).fileName()!=modelName || !modelName.endsWith(".rbm") || modelName.contains('/') || modelName.contains('\\') ||
+           envelope.value("traceFile").toString()!=QStringLiteral("accepted-trace.rpt") ||
+           !isLowerSha256(envelope.value("checkpointModelSha256").toString()) || !isLowerSha256(envelope.value("traceHeaderSha256").toString()) ||
+           !isLowerSha256(envelope.value("stateFingerprintSha256").toString()) || !envelope.value("timeS").isDouble() || !std::isfinite(envelope.value("timeS").toDouble()))
+            return reject(QStringLiteral("Native trace file, state, or time proof is invalid."));
+        if(!envelope.value("traceCursor").isObject())return reject(QStringLiteral("Native trace cursor is missing."));
+        const auto cursor=envelope.value("traceCursor").toObject();
+        if(!exactKeys(cursor,{"byteEnd","lastRecordOffset","sequence","recordSha256","stateSha256"}) ||
+           !isLowerSha256(cursor.value("recordSha256").toString()) || !isLowerSha256(cursor.value("stateSha256").toString()))
+            return reject(QStringLiteral("Native trace cursor shape or hashes are invalid."));
+        PiezoAcceptedTrace::Cursor authority;authority.byteEnd=qint64(integer(cursor.value("byteEnd"),PiezoAcceptedTrace::MaxFileBytes));
+        authority.lastRecordOffset=qint64(integer(cursor.value("lastRecordOffset"),quint64(authority.byteEnd)));
+        authority.sequence=integer(cursor.value("sequence"),accepted);authority.recordSha32=QByteArray::fromHex(cursor.value("recordSha256").toString().toLatin1());
+        authority.stateSha32=QByteArray::fromHex(cursor.value("stateSha256").toString().toLatin1());
+        if(authority.sequence!=accepted || QString::fromLatin1(authority.stateSha32.toHex())!=envelope.value("stateFingerprintSha256").toString())
+            return reject(QStringLiteral("Native trace cursor does not bind the latest accepted runtime."));
+        if(pendingRecoveryPlan){
+            const auto &old=pendingRecoveryPlan->oldTraceCursor();
+            if(old.byteEnd!=authority.byteEnd ||
+               old.lastRecordOffset!=authority.lastRecordOffset || old.sequence!=authority.sequence ||
+               old.recordSha32!=authority.recordSha32 || old.stateSha32!=authority.stateSha32)
+                return reject(QStringLiteral("Pending native trace plan does not project this exact committed cursor."));
+        }
+        if(hasSymlinkComponent(inputPath) || QString::fromLatin1(sha256File(inputPath).toHex())!=context.value("modelSha256").toString())
+            return reject(QStringLiteral("Queued immutable trace input changed."));
+        RModel source;source.read(inputPath);const auto sourceCertificate=rPiezoRuntimeCertify(source);
+        if(sourceCertificate.family=="mixed")return reject(QStringLiteral("Mixed recovery requires its existing checkpoint schema."));
+        const QString tracePath=QDir(directory).filePath("accepted-trace.rpt"),modelPath=QDir(directory).filePath(modelName);
+        if(hasSymlinkComponent(tracePath) || hasSymlinkComponent(modelPath) || !QFileInfo(tracePath).isFile() ||
+           QString::fromLatin1(sha256File(modelPath).toHex())!=envelope.value("checkpointModelSha256").toString())
+            return reject(QStringLiteral("Native trace or periodic MODEL is linked, missing, or changed."));
+        QFile trace(tracePath);if(!trace.open(QIODevice::ReadOnly))return reject(QStringLiteral("Native trace cannot be read."));
+        const auto prefix=PiezoAcceptedTrace::verifyPrefix(trace,authority,pendingRecoveryPlan!=nullptr);const auto &header=prefix.header;
+        const auto sameBits=[](double a,double b){return QByteArray(reinterpret_cast<const char *>(&a),8)==QByteArray(reinterpret_cast<const char *>(&b),8);};
+        if(header.family!=sourceCertificate.family || header.sourceFingerprint!=sourceCertificate.sourceFingerprint ||
+           header.targetSteps!=sourceCertificate.targetSteps || header.baseSeq!=sourceCertificate.completedSteps ||
+           !sameBits(header.initialTime,sourceCertificate.initialTime) || !sameBits(header.dt,sourceCertificate.fixedTimeStep) ||
+           header.contextSha256!=QCryptographicHash::hash(compactJson(context),QCryptographicHash::Sha256) ||
+           QString::fromLatin1(header.headerSha32.toHex())!=envelope.value("traceHeaderSha256").toString() ||
+           prefix.terminal.time!=envelope.value("timeS").toDouble() ||
+           QFileInfo(header.baseModelFile).fileName()!=header.baseModelFile || !header.baseModelFile.endsWith(".rbm") || header.baseModelFile.contains('/') || header.baseModelFile.contains('\\'))
+            return reject(QStringLiteral("Native trace header differs from actual queued source and canonical clock."));
+        RModel periodic;periodic.read(modelPath);const auto periodicCertificate=rPiezoRuntimeCertify(periodic,true);
+        if(periodicCertificate.completedSteps!=modelSequence || periodicCertificate.sourceFingerprint!=sourceCertificate.sourceFingerprint)
+            return reject(QStringLiteral("Periodic MODEL does not bind its claimed native state."));
+        PiezoResultSeries::TraceProof proof;proof.baseModelPath=QDir(directory).filePath(header.baseModelFile);proof.tracePath=tracePath;
+        proof.baseModelSha256=header.baseModelSha256;proof.expectedHeaderSha256=header.headerSha32;proof.expectedContextSha256=header.contextSha256;
+        proof.expectedSourceFingerprint=sourceCertificate.sourceFingerprint;proof.cursor=authority;bool modelWitness=false;
+        const auto certification=PiezoResultSeries::streamAcceptedTrace(proof,{},[&](const PiezoResultSeries::Frame &frame,const QVector<PiezoResultSeries::Signal> &){
+            if(frame.completedFE==header.baseSeq && frame.stateSha256!=QString::fromLatin1(sourceCertificate.stateIdentity.toHex()))throw std::invalid_argument("Trace base differs from queued immutable native state");
+            if(frame.completedFE==modelSequence){if(frame.stateSha256!=QString::fromLatin1(periodicCertificate.stateIdentity.toHex()))throw std::invalid_argument("Periodic MODEL differs from native trace record");modelWitness=true;}
+        },{},pendingRecoveryPlan!=nullptr);
+        if(!certification.valid || !modelWitness)return reject(QStringLiteral("Complete native trace physical certification failed: %1").arg(certification.message));
+        if(terminalModel){
+            if(header.family=="axial"){
+                const auto backend=PiezoAxialBackendBridge::create(source);RStructuralPiezoAxialNativeRun frozen(source,backend.callbacks);
+                *terminalModel=frozen.modelForAcceptedRuntime(source,RStructuralPiezoAxialRestartCodec::decode(prefix.terminal.payload));
+            }else{
+                const auto &setup=source.getProblemSetup().getStructuralPiezoLayeredSetup();RStructuralPiezoLayeredRuntimeCallbacks callbacks;
+                const auto damping=setup.damping.kind;
+                if(!setup.excitationConfiguration.isEmpty() || !setup.controllerConfiguration.isEmpty() || !setup.designConfiguration.isEmpty() ||
+                   damping==RStructuralPiezoDampingKind::UniformModal || damping==RStructuralPiezoDampingKind::PerMode || damping==RStructuralPiezoDampingKind::PerCluster)
+                    callbacks=PiezoNativeBackendBridge::create(source).callbacks;
+                RStructuralPiezoLayeredNativeRun frozen(source,callbacks);
+                *terminalModel=frozen.modelForAcceptedRuntime(source,RStructuralPiezoLayeredRestartCodec::decode(prefix.terminal.payload));
+            }
+        }
+        QFile repeated(tracePath);if(!repeated.open(QIODevice::ReadOnly) || PiezoAcceptedTrace::verifyPrefix(repeated,authority,pendingRecoveryPlan!=nullptr).prefixSha32!=prefix.prefixSha32 ||
+           QString::fromLatin1(sha256File(inputPath).toHex())!=context.value("modelSha256").toString() ||
+           QString::fromLatin1(sha256File(modelPath).toHex())!=envelope.value("checkpointModelSha256").toString() ||
+           (pendingRecoveryPlan ? [&](){QFile marker(pendingPath);return !marker.open(QIODevice::ReadOnly) || marker.readAll()!=pendingRecoveryPlan->markerBytes() || marker.error()!=QFileDevice::NoError;}()
+                                : QFileInfo(pendingPath).exists() || QFileInfo(pendingPath).isSymLink()))
+            return reject(QStringLiteral("Native trace authority changed during certification."));
+        if(terminalPayload)*terminalPayload=prefix.terminal.payload;return true;
+    }catch(const RError &failure){return reject(failure.getMessage());}
+    catch(const std::exception &failure){return reject(QString::fromLocal8Bit(failure.what()));}
 }
 
 QString nativePathAttributes(const QString &path)
@@ -375,11 +458,19 @@ bool samePathText(const QString &left, const QString &right)
 #endif
 }
 
+bool isNativeWorkingResultPath(const QString &resultFileName)
+{
+    const QFileInfo file(resultFileName);QDir directory(file.absolutePath());
+    if(file.fileName()!=QStringLiteral("native-axial.rbm") && file.fileName()!=QStringLiteral("native-layered.rbm") &&
+       file.fileName()!=QStringLiteral("native-mixed.rbm"))return false;
+    return directory.dirName()==QStringLiteral("run-results") && directory.cdUp() && directory.dirName()==QStringLiteral("checkpoints");
+}
 QString getRunRoot(const QString &resultFileName)
 {
     if (resultFileName.isEmpty()) return {};
-    return QFileInfo(QDir(QFileInfo(resultFileName).absolutePath()).filePath(QStringLiteral("..")))
-            .absoluteFilePath();
+    QDir directory(QFileInfo(resultFileName).absolutePath());
+    if(isNativeWorkingResultPath(resultFileName))directory.cdUp();
+    directory.cdUp();return QDir::cleanPath(directory.absolutePath());
 }
 
 bool inspectUnverifiedWorkingNativeResult(const QJsonObject &record,
@@ -448,56 +539,31 @@ bool inspectUnverifiedWorkingNativeResult(const QJsonObject &record,
         return reject(QStringLiteral("The working result or pinned checkpoint MODEL could not be decoded: %1")
                       .arg(QString::fromLocal8Bit(readError.what())));
     }
-    const RStructuralDynamicsRestartData &state =
-            workingModel.getProblemSetup().getStructuralDynamicsRestartData();
-    const RStructuralDynamicsRestartData &checkpointState =
-            checkpointModel.getProblemSetup().getStructuralDynamicsRestartData();
-    const RStructuralDynamicsRestartData &baselineState =
-            originalInput.getProblemSetup().getStructuralDynamicsRestartData();
-    const RStructuralDynamicsSetup &dynamics = workingModel.getProblemSetup().getStructuralDynamicsSetup();
-    const RStructuralDynamicsSetup &originalDynamics = originalInput.getProblemSetup().getStructuralDynamicsSetup();
-    const RTimeSolver &timeSolver = workingModel.getTimeSolver();
-    try
-    {
-        state.validate();
-        checkpointState.validate();
-        if (baselineState.available) baselineState.validate();
+    RPiezoRuntimeCertificate state,checkpointState,baselineState;
+    try {
+        state=rPiezoRuntimeCertify(workingModel,true);
+        checkpointState=rPiezoRuntimeCertify(checkpointModel,true);
+        baselineState=rPiezoRuntimeCertify(originalInput);
+    } catch(const RError &failure) {return reject(QStringLiteral("The working result or checkpoint complete state is invalid: %1").arg(failure.getMessage()));}
+    const RTimeSolver &timeSolver=workingModel.getTimeSolver();
+    const quint64 baselineSteps=baselineState.completedSteps;
+    const double expectedTime=baselineState.time+(double(state.completedSteps)-double(baselineSteps))*dtS;
+    const double timeTolerance=1.0e-12*qMax(1.0,std::abs(expectedTime));
+    if(!state.available || state.completedSteps!=quint64(linkedRecordNo) || state.completedSteps!=quint64(timeSolver.getCurrentTimeStep())+1)
+        return reject(QStringLiteral("The working result LINK sequence disagrees with its accepted complete MODEL state."));
+    if(state.family!=checkpointState.family || state.family!=baselineState.family || state.sourceFingerprint!=checkpointState.sourceFingerprint ||
+       (state.canonicalTarget && (state.sourceFingerprint!=baselineState.sourceFingerprint || state.targetSteps!=baselineState.targetSteps)) ||
+       state.completedSteps<baselineSteps || state.completedSteps>targetSteps || targetSteps!=baselineState.targetSteps)
+        return reject(QStringLiteral("The working result complete state differs from the frozen source, checkpoint or original target."));
+    if(!state.canonicalTarget) {
+        const auto &legacy=workingModel.getProblemSetup().getStructuralDynamicsRestartData();
+        if(legacy.meshNodeCount!=originalInput.getNNodes() || legacy.meshElementCount!=originalInput.getNElements() ||
+           legacy.meshFingerprint!=RStructuralDynamicsRestartData::computeMeshFingerprint(workingModel))
+            return reject(QStringLiteral("The working result mesh differs from its frozen source."));
     }
-    catch (const RError &validationError)
-    {
-        return reject(QStringLiteral("The working result or checkpoint accepted state is invalid: %1")
-                      .arg(validationError.getMessage()));
-    }
-    const quint64 baselineSteps = baselineState.available ? baselineState.completedSteps : 0;
-    const double baselineTime = baselineState.available ? baselineState.time : 0.0;
-    const double expectedTime = baselineTime +
-            (double(state.completedSteps) - double(baselineSteps)) * dtS;
-    const double timeTolerance = 1.0e-12 * qMax(1.0, std::abs(expectedTime));
-    if (!state.available || state.completedSteps != quint64(linkedRecordNo) ||
-        state.completedSteps != quint64(timeSolver.getCurrentTimeStep()) + 1)
-        return reject(QStringLiteral("The working result LINK sequence disagrees with its accepted restart MODEL."));
-    if (state.completedSteps < baselineSteps || state.completedSteps > targetSteps ||
-        targetSteps != baselineSteps + originalDynamics.getNSteps())
-        return reject(QStringLiteral("The working accepted sequence lies outside the frozen original target range."));
-    if (!dynamics.getEnabled() || dynamics.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
-        workingModel.getProblemTaskTree().getProblemTypeMask() != R_PROBLEM_STRESS ||
-        workingModel.getProblemSetup().getStructuralControlSetup().enabled ||
-        workingModel.getProblemSetup().getStructuralCableSetup().enabled ||
-        workingModel.getProblemSetup().getStructuralPiezoSetup().enabled ||
-        workingModel.getProblemSetup().getStructuralThermalControlSetup().enabled || state.controlAvailable)
-        return reject(QStringLiteral("The working result MODEL no longer matches the supported uncontrolled Newmark mode."));
-    if (state.meshNodeCount != originalInput.getNNodes() || state.meshElementCount != originalInput.getNElements() ||
-        state.meshFingerprint != RStructuralDynamicsRestartData::computeMeshFingerprint(workingModel) ||
-        state.meshFingerprint != checkpointState.meshFingerprint)
-        return reject(QStringLiteral("The working result MODEL mesh no longer matches the frozen input and checkpoint."));
-    if (state.dofFingerprint != checkpointState.dofFingerprint ||
-        state.systemFingerprint != checkpointState.systemFingerprint)
-        return reject(QStringLiteral("The working result MODEL equation order or structural system fingerprint changed."));
-    if (std::abs(state.fixedTimeStep - dtS) > 1.0e-12 * qMax(1.0, std::abs(dtS)))
-        return reject(QStringLiteral("The working result MODEL fixed time step differs from the checkpoint context."));
-    if (std::abs(state.time - timeSolver.getCurrentTime()) > timeTolerance ||
-        std::abs(state.time - expectedTime) > timeTolerance)
-        return reject(QStringLiteral("The working result MODEL time disagrees with its accepted sequence and frozen input."));
+    if(std::abs(state.fixedTimeStep-dtS)>1.0e-12*qMax(1.0,std::abs(dtS)) ||
+       std::abs(state.time-timeSolver.getCurrentTime())>timeTolerance || std::abs(state.time-expectedTime)>timeTolerance)
+        return reject(QStringLiteral("The working result complete state time differs from its accepted sequence and frozen source."));
 
     const QString runRoot = getRunRoot(resultPath);
     const QString journalPath = record.value(QStringLiteral("logArtifactRefs")).toObject()
@@ -1195,7 +1261,10 @@ SolverManager::SolverManager(QObject *parent)
     , taskServer(0)
 {
     this->nativeJobOwnerInstanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    const QString appLocalRoot = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    const QString appLocalRoot = qEnvironmentVariableIsSet("RANGE_APPLICATION_PROFILE_DIR")
+        && !qEnvironmentVariable("RANGE_APPLICATION_PROFILE_DIR").isEmpty()
+        ? RApplicationSettings::getAppDataDir("local-data")
+        : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     if (!appLocalRoot.isEmpty() && QDir().mkpath(QDir(appLocalRoot).filePath(QStringLiteral("native-job-owners"))))
     {
         const QFileInfo rootInfo(QDir(appLocalRoot).filePath(QStringLiteral("native-job-owners")));
@@ -1285,6 +1354,12 @@ const QString &SolverManager::getTaskServerName() const
 
 void SolverManager::submit(SolverTask *solverTask)
 {
+    if (solverTask && solverTask->isTrustedDetachedTask())
+    {
+        RLogger::error("Trusted detached candidates can only be submitted through an approved Host experiment.\n");
+        solverTask->deleteLater();
+        return;
+    }
     QString error;
     if (this->submitValidated(solverTask, QJsonObject(), true, &error).isEmpty() && !error.isEmpty())
         RLogger::error("Solver task was rejected: %s\n", error.toUtf8().constData());
@@ -1298,6 +1373,33 @@ bool SolverManager::invokeOnOwner(const std::function<void()> &callback) const
         return true;
     }
     return QMetaObject::invokeMethod(const_cast<SolverManager*>(this), callback, Qt::BlockingQueuedConnection);
+}
+
+namespace {
+void validateNativeSource(const Model &model,QStringList &warnings,QStringList &errors)
+{
+    const auto &p=model.getProblemSetup();
+    if(p.getStructuralPiezoAxialSetup().hasNonDefaultData() || p.getStructuralPiezoAxialRestart().hasNonDefaultData()
+       || p.getStructuralPiezoLayeredSetup().enabled || p.getStructuralTrussDynamicsSetup().enabled)
+    {
+        try {
+            rPiezoRuntimeCertify(model);
+            if(!model.getMonitoringPointManager().empty())
+                errors.append(QStringLiteral("Native mixed/axial/layered dynamics cannot map legacy monitoring points."));
+            if(p.getStructuralPiezoAxialSetup().enabled) {
+                const auto recipe=QJsonDocument::fromJson(p.getStructuralPiezoAxialSetup().recipeConfiguration).object();
+                for(const auto &value:recipe.value(QStringLiteral("materials")).toArray()) {
+                    const auto material=value.toObject();
+                    if(material.value(QStringLiteral("sourceKind")).toString()==QStringLiteral("example"))
+                        warnings.append(SolverManager::tr("Material %1 uses editable example values; check them against your device before interpreting physical results.").arg(material.value(QStringLiteral("materialId")).toString()));
+                }
+            } else for(const auto &material:p.getStructuralPiezoLayeredSetup().materials)
+                if(material.sourceKind==RStructuralPiezoMaterialSourceKind::Example)
+                    warnings.append(SolverManager::tr("Material %1 uses editable example values; check them against your device before interpreting physical results.").arg(material.materialId));
+        } catch(const RError &error){errors.append(error.getMessage());}
+          catch(const std::exception &error){errors.append(QString::fromUtf8(error.what()));}
+    } else {SolverSetupChecker checker(model);checker.perform(warnings,errors);}
+}
 }
 
 QJsonObject SolverManager::validateRun(uint modelID) const
@@ -1368,12 +1470,10 @@ QJsonObject SolverManager::validateRunOnOwner(uint modelID) const
                     const Model &model = session->getModel(modelID);
                     modelName = model.getName();
                     modelReadable = true;
-                    SolverSetupChecker checker(model);
-                    QStringList modelWarnings;
-                    QStringList modelErrors;
-                    checker.perform(modelWarnings, modelErrors);
-                    for (const QString &message : modelErrors) errors.append(message);
-                    for (const QString &message : modelWarnings) warnings.append(message);
+                    QStringList modelWarnings,modelErrors;
+                    validateNativeSource(model,modelWarnings,modelErrors);
+                    for(const QString &message:modelErrors)errors.append(message);
+                    for(const QString &message:modelWarnings)warnings.append(message);
                     const QString solverPath = Application::instance()->getApplicationSettings()->getSolverPath();
                     if (solverPath.isEmpty() || !QFileInfo::exists(solverPath))
                         errors.append(QStringLiteral("The configured native solver executable is unavailable."));
@@ -1446,6 +1546,208 @@ QString SolverManager::submitValidated(SolverTask *solverTask, const QJsonObject
     return jobId;
 }
 
+QString SolverManager::submitTrustedDetached(SolverTask *solverTask, QString *error)
+{
+    if (error) error->clear();
+    if (!solverTask)
+    {
+        if (error) *error = QStringLiteral("No trusted detached solver task was supplied.");
+        return {};
+    }
+    QString jobId;
+    QString localError;
+    const bool invoked = this->invokeOnOwner([this, solverTask, &jobId, &localError]()
+    {
+        jobId = this->submitTrustedDetachedOnOwner(solverTask, &localError);
+    });
+    if (!invoked)
+    {
+        localError = QStringLiteral("Trusted detached solver submission could not run on the manager thread.");
+        solverTask->deleteLater();
+    }
+    if (error) *error = localError;
+    return jobId;
+}
+
+QString SolverManager::submitTrustedDetachedOnOwner(SolverTask *solverTask, QString *error)
+{
+    if (error) error->clear();
+    const auto reject = [solverTask, error](const QString &message)
+    {
+        if (error) *error = message;
+        solverTask->deleteLater();
+        return QString();
+    };
+    if (QThread::currentThread() != this->thread() ||
+        QThread::currentThread() != Application::instance()->getSession()->thread())
+        return reject(QStringLiteral("Trusted detached candidates must be checked on the document and manager thread."));
+
+    // A manager recreated in the same application session may not have queried
+    // the durable registry yet. Hydrate it before checking attempt replay.
+    this->loadNativeJobsFromDiskOnOwner();
+    if (!solverTask->isTrustedDetachedTask() || solverTask->isNativeRecoveryTask() ||
+        solverTask->getSourceStamp().first.isEmpty() ||
+        solverTask->getInputDerivedFrom() != QStringLiteral("trusted_experiment_candidate"))
+        return reject(QStringLiteral("The solver task is not a frozen trusted detached candidate."));
+
+    const QJsonObject authorization = solverTask->getTrustedExperimentProvenance();
+    const QJsonObject sourceBinding = authorization.value(QStringLiteral("sourceBinding")).toObject();
+    const QString experimentId = authorization.value(QStringLiteral("experimentId")).toString();
+    const QString experimentAttemptId = solverTask->getTrustedExperimentAttemptId();
+    const QString authorizationDigest = authorization.value(QStringLiteral("authorizationDigest")).toString();
+    const QString documentId = sourceBinding.value(QStringLiteral("documentId")).toString();
+    const QString revisionText = sourceBinding.value(QStringLiteral("documentRevision")).isString()
+            ? sourceBinding.value(QStringLiteral("documentRevision")).toString()
+            : QString::number(sourceBinding.value(QStringLiteral("documentRevision")).toDouble(-1.0), 'f', 0);
+    bool revisionOk = false;
+    const quint64 revision = revisionText.toULongLong(&revisionOk);
+    const QString sessionEpoch = sourceBinding.value(QStringLiteral("sessionEpoch")).toString();
+    const QString sessionId = sourceBinding.value(QStringLiteral("sessionId")).toString();
+    const QString workspaceId = sourceBinding.value(QStringLiteral("workspaceId")).toString();
+    const QString snapshotSha256 = sourceBinding.value(QStringLiteral("snapshotSha256")).toString();
+    QJsonObject authorizationPayload = authorization;
+    authorizationPayload.remove(QStringLiteral("authorizationDigest"));
+    const QString recomputedAuthorizationDigest = sha256Hex(
+        QJsonDocument(authorizationPayload).toJson(QJsonDocument::Compact));
+    const auto isSha256 = [](const QString &value)
+    {
+        return QRegularExpression(QStringLiteral("^[0-9a-f]{64}$")).match(value).hasMatch();
+    };
+    const QRegularExpression trustedIdPattern(QStringLiteral("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"));
+    if (!trustedIdPattern.match(experimentId).hasMatch() ||
+        !trustedIdPattern.match(experimentAttemptId).hasMatch() ||
+        !isSha256(authorizationDigest) || authorizationDigest != recomputedAuthorizationDigest ||
+        !revisionOk || documentId != solverTask->getSourceStamp().first ||
+        revision != solverTask->getSourceStamp().second || sessionEpoch.isEmpty() ||
+        sessionId.isEmpty() || workspaceId.isEmpty() || !isSha256(snapshotSha256) ||
+        !isSha256(authorization.value(QStringLiteral("problemSpecDigest")).toString()) ||
+        !isSha256(authorization.value(QStringLiteral("physicalSummaryDigest")).toString()) ||
+        !isSha256(authorization.value(QStringLiteral("numericalConfigDigest")).toString()))
+        return reject(QStringLiteral("The trusted experiment authorization is missing a valid source or physics identity."));
+
+    // Consume an attempt before comparing candidate bytes. A replay with an
+    // altered payload is still a replay and must not fall through as a fresh
+    // submission of the same authorization attempt.
+    for (auto it = this->nativeJobs.cbegin(); it != this->nativeJobs.cend(); ++it)
+        if (it.value().value(QStringLiteral("trustedExperimentId")).toString() == experimentId &&
+            it.value().value(QStringLiteral("trustedExperimentAttemptId")).toString() == experimentAttemptId)
+            return reject(QStringLiteral("This trusted experiment attempt was already submitted and cannot be replayed."));
+
+    const QString configuredDataRoot = Application::instance()->getApplicationSettings()->getDataDir();
+    const QString experimentStorage = QDir(configuredDataRoot.isEmpty() ? QDir::tempPath() : configuredDataRoot)
+            .filePath(QStringLiteral("trusted-experiments"));
+    RTrustedExperimentService experimentService(experimentStorage);
+    const auto persisted = experimentService.query(experimentId);
+    const QJsonObject persistedRecord = persisted.data.value(QStringLiteral("experiment")).toObject();
+    const QJsonObject persistedAttempt = persistedRecord.value(QStringLiteral("activeAttempt")).toObject();
+    const QJsonObject candidateProblemSpecInput = persistedRecord.value(QStringLiteral("candidateProblemSpecInput")).toObject();
+    const auto candidateProblem = RTrustedMechanicsService::validate(candidateProblemSpecInput);
+    const bool normalizedSpecMatches = candidateProblem.valid &&
+        candidateProblem.normalizedSpec == persistedRecord.value(QStringLiteral("candidateProblemSpec")).toObject();
+    const QString candidatePhysicalDigest = candidateProblem.valid
+            ? RTrustedMechanicsService::summaryDigest(RTrustedMechanicsService::physicalSummary(candidateProblem.normalizedSpec))
+            : QString();
+    const QString candidateNumericalDigest = candidateProblem.valid
+            ? RTrustedMechanicsService::summaryDigest(RTrustedMechanicsService::numericalSummary(candidateProblem.normalizedSpec))
+            : QString();
+    const QString inputSnapshotSha256 = QString::fromLatin1(solverTask->getInputSnapshotSha256().toHex());
+    const QString inputPackageSha256 = QString::fromLatin1(solverTask->getInputPackageSha256().toHex());
+    if (!persisted.ok || persistedRecord.value(QStringLiteral("state")).toString() != QStringLiteral("solving") ||
+        persistedRecord.value(QStringLiteral("authorization")).toObject() != authorization ||
+        !normalizedSpecMatches ||
+        candidatePhysicalDigest != authorization.value(QStringLiteral("physicalSummaryDigest")).toString() ||
+        persistedAttempt.value(QStringLiteral("physicalSummaryDigest")).toString() != candidatePhysicalDigest ||
+        persistedAttempt.value(QStringLiteral("numericalConfigDigest")).toString() != candidateNumericalDigest ||
+        persistedAttempt.value(QStringLiteral("attemptId")).toString() != experimentAttemptId ||
+        persistedAttempt.value(QStringLiteral("status")).toString() != QStringLiteral("running") ||
+        persistedAttempt.value(QStringLiteral("submissionClaimed")).toBool() ||
+        persistedAttempt.value(QStringLiteral("inputSnapshotSha256")).toString() != inputSnapshotSha256 ||
+        persistedAttempt.value(QStringLiteral("inputPackageSha256")).toString() != inputPackageSha256)
+        return reject(persistedAttempt.value(QStringLiteral("submissionClaimed")).toBool()
+            ? QStringLiteral("This trusted experiment attempt was already submitted and cannot be replayed.")
+            : QStringLiteral("The detached child does not match the persisted active experiment authorization attempt."));
+    Session *session = Application::instance()->getSession();
+    ModelCommandHost *host = session->getModelCommandHost();
+    if (host->sessionEpoch() != sessionEpoch || session->getID() != sessionId ||
+        host->projectWorkspace() != workspaceId)
+        return reject(QStringLiteral("The source session changed after the experiment was authorized."));
+    const uint sourceModelID = session->findModelByCommandIdentity(documentId);
+    if (sourceModelID == RConstants::eod || session->modelCommandStamp(sourceModelID) != solverTask->getSourceStamp())
+        return reject(QStringLiteral("The source document or revision changed after the experiment was authorized."));
+    if (RModelCommandService::stateFingerprint(session->getModel(sourceModelID)) != snapshotSha256)
+        return reject(QStringLiteral("The authorized source snapshot no longer matches the live model."));
+    if (this->isSolverQueued(documentId))
+        return reject(QStringLiteral("A native solver job is already active for the authorized source document."));
+
+    const QString inputPath = solverTask->getInputSnapshotFileName();
+    const QString inputDirectory = QFileInfo(inputPath).absolutePath();
+    if (!QFileInfo(inputPath).isFile() || solverTask->getInputSnapshotSha256().size() != 32 ||
+        sha256File(inputPath) != solverTask->getInputSnapshotSha256() ||
+        sha256Directory(inputDirectory) != solverTask->getInputPackageSha256())
+        return reject(QStringLiteral("The detached candidate input or package changed before queueing."));
+    std::unique_ptr<Model> candidate = solverTask->copyCapturedInputForValidation();
+    if (!candidate)
+        return reject(QStringLiteral("The detached candidate is no longer available for safe pre-queue validation."));
+    QStringList warnings;
+    QStringList errors;
+    validateNativeSource(*candidate, warnings, errors);
+    if (!errors.isEmpty()) return reject(errors.first());
+    if (!warnings.isEmpty())
+        return reject(QStringLiteral("The trusted candidate contains native solver warnings that require renewed user authorization: %1")
+                      .arg(warnings.join(QStringLiteral("; ")).left(1024)));
+    const QString solverPath = Application::instance()->getApplicationSettings()->getSolverPath();
+    if (solverPath.isEmpty() || !QFileInfo(solverPath).isFile())
+        return reject(QStringLiteral("The configured native solver executable is unavailable."));
+    RJobManager &legacyJobs = RJobManager::getInstance();
+    if (legacyJobs.getNRunning() > 0 || legacyJobs.getNWaiting() > 0)
+        return reject(QStringLiteral("A legacy model job is active or queued; trusted candidate execution is paused."));
+
+    const QString dataRoot = Application::instance()->getApplicationSettings()->getDataDir().isEmpty()
+            ? QDir::tempPath()
+            : Application::instance()->getApplicationSettings()->getDataDir();
+    const QString expectedRoot = QFileInfo(QDir(dataRoot).filePath(
+        QStringLiteral("trusted-experiments/") + experimentId)).absoluteFilePath();
+    const QString resultPath = QFileInfo(solverTask->getResultArtifactFileName()).absoluteFilePath();
+    const QString expectedRunRootPrefix = QDir::fromNativeSeparators(
+        QDir::cleanPath(QDir(expectedRoot).filePath(QStringLiteral(".range-runs")))) + QLatin1Char('/');
+    const QString runRoot = getRunRoot(resultPath);
+    const QFileInfo expectedRootInfo(expectedRoot);
+    const QFileInfo runRootInfo(runRoot);
+    if (!QDir::fromNativeSeparators(QDir::cleanPath(resultPath))
+             .startsWith(expectedRunRootPrefix, Qt::CaseInsensitive))
+        return reject(QStringLiteral("The detached result path is outside this experiment's private artifact directory."));
+    if (hasSymlinkComponent(expectedRoot) || hasSymlinkComponent(runRoot))
+        return reject(QStringLiteral("The detached result path contains a symbolic link."));
+    if (!samePathText(expectedRoot, expectedRootInfo.canonicalFilePath()) ||
+        !samePathText(runRoot, runRootInfo.canonicalFilePath()))
+        return reject(QStringLiteral("The detached result path is not canonical."));
+    if (this->nativeJobs.contains(solverTask->getTaskID().toString()) ||
+        this->nativeJobIdExistsOnDiskOnOwner(solverTask->getTaskID().toString()))
+        return reject(QStringLiteral("The detached solver job ID is already registered."));
+    RTrustedExperimentService::SourceIdentity currentSource;
+    currentSource.workspaceId = workspaceId;
+    currentSource.sessionId = sessionId;
+    currentSource.sessionEpoch = sessionEpoch;
+    currentSource.documentId = documentId;
+    currentSource.documentRevision = revisionText;
+    currentSource.snapshotSha256 = snapshotSha256;
+    const auto claimed = experimentService.claimSolveSubmission(experimentId, currentSource, experimentAttemptId);
+    if (!claimed.ok)
+        return reject(claimed.message.isEmpty()
+            ? QStringLiteral("The trusted solve attempt could not consume its one-shot submission claim.")
+            : claimed.message);
+    const QString jobId = solverTask->getTaskID().toString();
+    QString registryError;
+    if (!this->registerNativeTask(solverTask, jobId, {}, QStringLiteral("unlinked"),
+                                  false, {}, {}, &registryError))
+        return reject(registryError.isEmpty()
+                      ? QStringLiteral("The trusted detached child job could not be persisted before queueing.")
+                      : registryError);
+    this->lastLogFileName = solverTask->getLogFileName();
+    this->RJobManager::submit(solverTask);
+    return jobId;
+}
+
 QString SolverManager::submitTaskOnOwner(SolverTask *solverTask, const QJsonObject &projectSnapshotRef,
                                          bool warningsAccepted, QString *error)
 {
@@ -1453,6 +1755,12 @@ QString SolverManager::submitTaskOnOwner(SolverTask *solverTask, const QJsonObje
     if (!solverTask)
     {
         if (error) *error = QStringLiteral("No native solver task was supplied.");
+        return {};
+    }
+    if (solverTask->isTrustedDetachedTask())
+    {
+        if (error) *error = QStringLiteral("Trusted detached candidates must use the approved Host experiment path.");
+        solverTask->deleteLater();
         return {};
     }
     Session *session = Application::instance()->getSession();
@@ -1532,10 +1840,9 @@ QString SolverManager::submitTaskOnOwner(SolverTask *solverTask, const QJsonObje
         std::unique_ptr<Model> capturedInput = solverTask->copyCapturedInputForValidation();
         if (!capturedInput)
             return reject(QStringLiteral("The pre-captured solver input is no longer available for safe pre-queue validation."));
-        SolverSetupChecker checker(*capturedInput);
         QStringList capturedWarnings;
         QStringList capturedErrors;
-        checker.perform(capturedWarnings, capturedErrors);
+        validateNativeSource(*capturedInput,capturedWarnings,capturedErrors);
         if (!capturedErrors.isEmpty()) return reject(capturedErrors.first());
         if (!capturedWarnings.isEmpty() && !warningsAccepted)
             return reject(QStringLiteral("Native solver warnings require explicit acceptance."));
@@ -1556,10 +1863,9 @@ QString SolverManager::submitTaskOnOwner(SolverTask *solverTask, const QJsonObje
             frozenSnapshotVerified = true;
             Model frozenValidationModel;
             static_cast<RModel&>(frozenValidationModel) = *frozenModelBody;
-            SolverSetupChecker frozenChecker(frozenValidationModel);
             QStringList frozenWarningList;
             QStringList frozenErrors;
-            frozenChecker.perform(frozenWarningList, frozenErrors);
+            validateNativeSource(frozenValidationModel, frozenWarningList, frozenErrors);
             if (!frozenErrors.isEmpty()) return reject(frozenErrors.first());
             if (!frozenWarningList.isEmpty() && !warningsAccepted)
                 return reject(QStringLiteral("Frozen native solver warnings require explicit acceptance."));
@@ -1841,7 +2147,11 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         if (error) *error = QStringLiteral("The managed native job registry or process-owner lock is unavailable.");
         return false;
     }
-    if (solverTask->isNativeRecoveryTask() && !solverTask->hasNativeRecoveryLogicalLock())
+    // Queued outcome handlers can run after RJobManager has deleted the task.
+    // Retain this job's original lease; never dereference its queued sender or
+    // borrow a later lease while committing the durable terminal observation.
+    const auto recoveryLease=this->nativeRecoveryLogicalLocks.value(jobId);
+    if (solverTask->isNativeRecoveryTask() && (!solverTask->hasNativeRecoveryLogicalLock() || !recoveryLease || !recoveryLease->isLocked()))
     {
         if (error) *error = QStringLiteral("A native recovery attempt cannot be registered without its logical lineage lease.");
         return false;
@@ -1850,6 +2160,8 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
     const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     const QPair<QString,quint64> sourceStamp = solverTask->getSourceStamp();
     const QString sessionEpoch = Application::instance()->getSession()->getModelCommandHost()->sessionEpoch();
+    const QJsonObject trustedExperiment = solverTask->getTrustedExperimentProvenance();
+    const bool trustedDetached = solverTask->isTrustedDetachedTask();
     const QString inputPath = QFileInfo(solverTask->getInputSnapshotFileName()).absoluteFilePath();
     const QString packagePath = QFileInfo(inputPath).absolutePath();
     const QJsonObject logArtifactRefs{{QStringLiteral("solverLog"), solverTask->getLogFileName()},
@@ -1862,24 +2174,17 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                                    {QStringLiteral("sessionEpoch"), sessionEpoch}};
     QString nativeCheckpointDirectory;
     QJsonObject nativeCheckpointContext;
-    QString nativeCheckpointUnsupportedReason = QStringLiteral(
-        "Periodic recovery checkpoints are only enabled for uncontrolled Newmark structural dynamics.");
+    QString nativeCheckpointUnsupportedReason;
     std::unique_ptr<Model> checkpointModel = solverTask->copyCapturedInputForValidation();
     bool supportedCheckpointRun = false;
+    QByteArray controlHash;
     if (checkpointModel)
     {
-        const RProblemSetup &problemSetup = checkpointModel->getProblemSetup();
-        const RStructuralDynamicsSetup &dynamics = problemSetup.getStructuralDynamicsSetup();
-        const RProblemTypeMask problemTypes = checkpointModel->getProblemTaskTree().getProblemTypeMask();
-        supportedCheckpointRun = problemTypes == R_PROBLEM_STRESS && dynamics.getEnabled() &&
-                dynamics.getMethod() == RStructuralTimeIntegrationMethod::Newmark &&
-                !problemSetup.getStructuralControlSetup().enabled &&
-                !problemSetup.getStructuralCableSetup().enabled &&
-                !problemSetup.getStructuralPiezoSetup().enabled &&
-                !problemSetup.getStructuralThermalControlSetup().enabled;
-        if (problemSetup.getStructuralControlSetup().enabled)
-            nativeCheckpointUnsupportedReason = QStringLiteral(
-                "The GUI native controller transport has no revision-pinned executable and arguments; accepted checkpoints are unsupported for this controlled job.");
+        try {
+            rPiezoRuntimeCertify(*checkpointModel);
+            controlHash=rPiezoRuntimeControlSha256(*checkpointModel);
+            supportedCheckpointRun=true;
+        } catch(const RError &failure){nativeCheckpointUnsupportedReason=failure.getMessage();}
         if (supportedCheckpointRun)
         {
             QString preparationError;
@@ -1898,13 +2203,34 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                 .arg(nativeCheckpointUnsupportedReason);
         return false;
     }
-    const QJsonObject sourceSnapshotRef = projectSnapshotRef.isEmpty()
-            ? QJsonObject{{QStringLiteral("kind"), QStringLiteral("gui-native-input-snapshot/v1")},
+    QJsonObject sourceSnapshotRef = projectSnapshotRef.isEmpty()
+            ? QJsonObject{{QStringLiteral("kind"), trustedDetached
+                                      ? QStringLiteral("trusted-experiment-input-snapshot/v1")
+                                      : QStringLiteral("gui-native-input-snapshot/v1")},
                           {QStringLiteral("sourceRuntimeStamp"), sourceRuntimeStamp},
                           {QStringLiteral("inputDerivedFrom"), solverTask->getInputDerivedFrom()},
                           {QStringLiteral("inputSnapshotSha256"), QString::fromLatin1(solverTask->getInputSnapshotSha256().toHex())},
-                          {QStringLiteral("inputPackageSha256"), QString::fromLatin1(solverTask->getInputPackageSha256().toHex())}}
+                          {QStringLiteral("inputPackageSha256"), QString::fromLatin1(solverTask->getInputPackageSha256().toHex())},
+                          {QStringLiteral("trustedExperimentAuthorization"), trustedDetached
+                                      ? QJsonValue(trustedExperiment) : QJsonValue(QJsonValue::Null)}}
             : projectSnapshotRef;
+    if (trustedDetached)
+        sourceSnapshotRef.insert(QStringLiteral("modelSha256"),
+                                 QString::fromLatin1(solverTask->getInputSnapshotSha256().toHex()));
+    // Keep the complete managed path binding in the private job record. Result
+    // snapshots expose only this frozen identity, never filesystem locations.
+    QJsonObject publicSourceSnapshotRef=sourceSnapshotRef;
+    if(!projectSnapshotRef.isEmpty()){
+        const auto instance=projectSnapshotRef.value(QStringLiteral("instanceRef")).toObject();
+        publicSourceSnapshotRef={{QStringLiteral("kind"),QStringLiteral("project-native-input-snapshot/v1")},
+            {QStringLiteral("projectId"),projectSnapshotRef.value(QStringLiteral("projectId"))},
+            {QStringLiteral("persistentDocumentId"),projectSnapshotRef.value(QStringLiteral("persistentDocumentId"))},
+            {QStringLiteral("sourceRevision"),projectSnapshotRef.value(QStringLiteral("sourceRevision"))},
+            {QStringLiteral("modelSha256"),projectSnapshotRef.value(QStringLiteral("modelSha256"))},
+            {QStringLiteral("instanceRef"),QJsonObject{{QStringLiteral("documentId"),instance.value(QStringLiteral("documentId"))},
+                {QStringLiteral("sessionEpoch"),instance.value(QStringLiteral("sessionEpoch"))},
+                {QStringLiteral("documentRevision"),instance.value(QStringLiteral("documentRevision"))}}}};
+    }
 
     if (supportedCheckpointRun)
     {
@@ -1927,7 +2253,7 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                 nativeCheckpointContext = {{QStringLiteral("schema"), QString::fromLatin1(nativeCheckpointContextSchema)},
                                            {QStringLiteral("sourceSha256"), sourceSha256},
                                            {QStringLiteral("modelSha256"), solverInputSha256},
-                                           {QStringLiteral("controlSha256"), QString::fromLatin1(nativeNoControlSha256().toHex())},
+                                           {QStringLiteral("controlSha256"), QString::fromLatin1(controlHash.toHex())},
                                            {QStringLiteral("runtimeSha256"), QString::fromLatin1(runtimeHash.toHex())},
                                            {QStringLiteral("packageSha256"), QString::fromLatin1(packageHash.toHex())},
                                            {QStringLiteral("policy"), QString::fromLatin1(nativeCheckpointPolicy)},
@@ -1967,7 +2293,7 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
             }
         }
 
-    const bool provenanceFrozen = solverTask->freezeNativeResultProvenance(sourceRuntimeStamp, sourceSnapshotRef);
+    const bool provenanceFrozen = solverTask->freezeNativeResultProvenance(sourceRuntimeStamp, publicSourceSnapshotRef);
     if (!provenanceFrozen)
     {
         if (error) *error = QStringLiteral("Native job source and runtime provenance could not be frozen before queueing.");
@@ -1979,7 +2305,7 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
             ? QStringLiteral("unlinked")
             : projectSnapshotRef.value(QStringLiteral("projectId")).toString();
     const QJsonObject recoveryProvenance = solverTask->getNativeRecoveryProvenance();
-    const QJsonValue modelIdAtSubmit = solverTask->isNativeRecoveryTask()
+    const QJsonValue modelIdAtSubmit = (solverTask->isNativeRecoveryTask() || trustedDetached)
             ? QJsonValue(QJsonValue::Null) : QJsonValue(int(solverTask->getModelID()));
     const QString logicalSourceModelFile = solverTask->isNativeRecoveryTask()
             ? recoveryProvenance.value(QStringLiteral("logicalSourceModelFileRef")).toString()
@@ -1998,11 +2324,20 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                        {QStringLiteral("nativeResultProvenance"), solverTask->getNativeResultProvenance()},
                        {QStringLiteral("provenanceFrozen"), provenanceFrozen},
                        {QStringLiteral("nativeResultCatalogExpected"), nativeResultCatalogExpected},
+                       {QStringLiteral("resultPublication"), trustedDetached
+                            ? QStringLiteral("detached-candidate") : QStringLiteral("source-document")},
+                       {QStringLiteral("trustedExperimentId"), trustedDetached
+                            ? trustedExperiment.value(QStringLiteral("experimentId")) : QJsonValue(QJsonValue::Null)},
+                       {QStringLiteral("trustedExperimentAttemptId"), trustedDetached
+                            ? QJsonValue(solverTask->getTrustedExperimentAttemptId()) : QJsonValue(QJsonValue::Null)},
+                       {QStringLiteral("trustedAuthorizationDigest"), trustedDetached
+                            ? trustedExperiment.value(QStringLiteral("authorizationDigest")) : QJsonValue(QJsonValue::Null)},
                        {QStringLiteral("projectLink"), projectLink},
                        {QStringLiteral("projectSnapshotRef"), projectSnapshotRef},
-                       {QStringLiteral("inputDerivedFrom"), linkedSnapshot
-                                                               ? QStringLiteral("frozen_project_snapshot")
-                                                               : QStringLiteral("live_unlinked")},
+                       {QStringLiteral("inputDerivedFrom"), trustedDetached
+                                                               ? QStringLiteral("trusted_experiment_candidate")
+                                                               : linkedSnapshot ? QStringLiteral("frozen_project_snapshot")
+                                                                                : QStringLiteral("live_unlinked")},
                        {QStringLiteral("frozenSnapshotVerified"), linkedSnapshot},
                        {QStringLiteral("frozenSnapshotPath"), linkedSnapshot ? frozenSnapshotPath : QString()},
                        {QStringLiteral("frozenSnapshotSha256"), linkedSnapshot
@@ -2116,9 +2451,9 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
     }, Qt::QueuedConnection);
 
     QObject::connect(solverTask, &SolverTask::nativeProcessStarted, this,
-                     [this, jobId, solverTask](const QString &reportedJobId, qint64 processId)
+                     [this, jobId, taskGuard=QPointer<SolverTask>(solverTask)](const QString &reportedJobId, qint64 processId)
     {
-        if (reportedJobId != jobId || this->nativeTasks.value(jobId).data() != solverTask) return;
+        if (reportedJobId != jobId || !taskGuard || this->nativeTasks.value(jobId) != taskGuard) return;
         const QJsonObject record = this->nativeJobs.value(jobId);
         const QString state = record.value(QStringLiteral("state")).toString();
         if (state != QStringLiteral("queued") && state != QStringLiteral("running") &&
@@ -2277,7 +2612,7 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
                                       {QStringLiteral("updatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
     }, Qt::QueuedConnection);
     QObject::connect(solverTask, &SolverTask::terminalReported, this,
-                     [this, jobId, solverTask](const QString &reportedJobId, const QString &reportedState,
+                     [this, jobId, recoveryLease, completionIntent = solverTask->getCompletionIntent()](const QString &reportedJobId, const QString &reportedState,
                                    bool processStarted, bool processExited, int exitCode,
                                    bool resultReadbackComplete, const QString &resultArtifactPath,
                                    const QString &resultArtifactSha256, bool resultArtifactVerified,
@@ -2318,12 +2653,28 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
         QString state = reportedState;
         if (state == QStringLiteral("succeeded") && !completeEvidence)
             state = QStringLiteral("failed");
+        // Stop never exempts an otherwise successful readback from artifact,
+        // source-chain and manifest verification. Preserve actual failures.
+        // The sender may already be deleted when this queued evidence arrives.
+        const bool gracefulEvidenceFailed = state == QStringLiteral("cancelled") &&
+            completionIntent->isGracefulStop() && !completeEvidence;
+        if (gracefulEvidenceFailed) state = QStringLiteral("failed");
+        // The worker may have queued success just before the owner persisted
+        // Stop. The owner's durable intent decides this completion race.
+        if (state == QStringLiteral("succeeded") &&
+            currentRecord.value(QStringLiteral("cancellationRequested")).toBool())
+            state = QStringLiteral("cancelled");
         if (state == QStringLiteral("cancelled") && processStarted && !processExited)
             state = QStringLiteral("failed");
         if (state != QStringLiteral("succeeded") && state != QStringLiteral("failed") && state != QStringLiteral("cancelled"))
             state = QStringLiteral("failed");
         const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
         QString terminalMessage = message;
+        if (gracefulEvidenceFailed)
+            terminalMessage = QStringLiteral("The stopped solver result failed artifact, source-chain or manifest verification.");
+        if (state == QStringLiteral("cancelled") && terminalMessage.isEmpty() &&
+            currentRecord.value(QStringLiteral("cancellationRequested")).toBool())
+            terminalMessage = QStringLiteral("Stopped by the user; the verified accepted result prefix was retained.");
         if (state == QStringLiteral("failed") && message.isEmpty() && !catalogEvidenceComplete)
         {
             terminalMessage = currentRecord.value(QStringLiteral("nativeResultCatalogMessage")).toString();
@@ -2361,14 +2712,14 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
             (persistedState == QStringLiteral("succeeded") || persistedState == QStringLiteral("failed") ||
              persistedState == QStringLiteral("cancelled")))
         {
-            solverTask->releaseNativeRecoveryLogicalLock();
+            if(recoveryLease && recoveryLease->isLocked())recoveryLease->unlock();
             this->nativeRecoveryLogicalLocks.remove(jobId);
         }
         if (state == QStringLiteral("succeeded") && verifiedArtifact)
             this->lastResultArtifactFileName = actualResultPath;
         this->nativeTasks.remove(jobId);
     }, Qt::QueuedConnection);
-    QObject::connect(solverTask, &RJob::failed, this, [this, jobId, solverTask]()
+    QObject::connect(solverTask, &RJob::failed, this, [this, jobId, recoveryLease]()
     {
         const QString state = this->nativeJobs.value(jobId).value(QStringLiteral("state")).toString();
         if (state != QStringLiteral("queued") && state != QStringLiteral("running") && state != QStringLiteral("cancelling")) return;
@@ -2384,12 +2735,12 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
             (persistedState == QStringLiteral("succeeded") || persistedState == QStringLiteral("failed") ||
              persistedState == QStringLiteral("cancelled")))
         {
-            solverTask->releaseNativeRecoveryLogicalLock();
+            if(recoveryLease && recoveryLease->isLocked())recoveryLease->unlock();
             this->nativeRecoveryLogicalLocks.remove(jobId);
         }
         this->nativeTasks.remove(jobId);
     }, Qt::QueuedConnection);
-    QObject::connect(solverTask, &RJob::finished, this, [this, jobId, solverTask]()
+    QObject::connect(solverTask, &RJob::finished, this, [this, jobId, recoveryLease]()
     {
         const QString state = this->nativeJobs.value(jobId).value(QStringLiteral("state")).toString();
         if (state != QStringLiteral("queued") && state != QStringLiteral("running") && state != QStringLiteral("cancelling")) return;
@@ -2404,7 +2755,7 @@ bool SolverManager::registerNativeTask(SolverTask *solverTask, const QString &jo
             (persistedState == QStringLiteral("succeeded") || persistedState == QStringLiteral("failed") ||
              persistedState == QStringLiteral("cancelled")))
         {
-            solverTask->releaseNativeRecoveryLogicalLock();
+            if(recoveryLease && recoveryLease->isLocked())recoveryLease->unlock();
             this->nativeRecoveryLogicalLocks.remove(jobId);
         }
         this->nativeTasks.remove(jobId);
@@ -2480,11 +2831,72 @@ bool SolverManager::persistNativeJobRecord(const QString &jobId, QJsonObject *re
     }
 
     QLockFile lock(lockPath);
+    // This critical section can take longer than Qt's default stale timeout
+    // while it verifies historical registry artifacts. Disable age-based lock
+    // expiry so another writer cannot steal an active commit; QLockFile still
+    // recovers a stale lock when its same-host owner process is no longer live.
     lock.setStaleLockTime(0);
-    if (!lock.tryLock(0))
+    bool lockAcquired = lock.tryLock(0);
+    if (!lockAcquired && lock.error() == QLockFile::LockFailedError)
     {
-        if (error) *error = QStringLiteral("The native job record is locked by another writer.");
-        return false;
+        // The owner may release the lock between our failed acquisition and
+        // owner inspection. Retry once before reporting contention.
+        lockAcquired = lock.tryLock(0);
+    }
+    if (!lockAcquired)
+    {
+        QLockFile::LockError acquisitionError = lock.error();
+        if (acquisitionError == QLockFile::LockFailedError)
+        {
+            qint64 ownerPid = 0;
+            QString ownerHost;
+            QString ownerApp;
+            if (lock.getLockInfo(&ownerPid, &ownerHost, &ownerApp))
+            {
+                const auto bounded = [](const QString &value) { return value.simplified().left(128); };
+                if (error)
+                    *error = QStringLiteral("The native job record lock is held by PID %1 on host '%2' (application '%3').")
+                                 .arg(ownerPid).arg(bounded(ownerHost), bounded(ownerApp));
+                return false;
+            }
+
+            // The owner may release the lock while getLockInfo reads it. Retry
+            // once after an inconclusive inspection before reporting failure.
+            lockAcquired = lock.tryLock(0);
+            if (!lockAcquired)
+            {
+                acquisitionError = lock.error();
+                if (acquisitionError == QLockFile::LockFailedError && error)
+                    *error = QStringLiteral("The native job record lock remained unavailable while its owner information changed or could not be read.");
+                else if (acquisitionError == QLockFile::PermissionError && error)
+                    *error = QStringLiteral("The native job record lock could not be created because registry access was denied.");
+                else if (acquisitionError == QLockFile::UnknownError && error)
+                    *error = QStringLiteral("The native job record lock could not be created because of an I/O or filesystem error.");
+                else if (error)
+                    *error = QStringLiteral("The native job record lock could not be acquired (QLockFile error %1).")
+                                 .arg(int(acquisitionError));
+                return false;
+            }
+        }
+        else if (acquisitionError == QLockFile::PermissionError)
+        {
+            if (error)
+                *error = QStringLiteral("The native job record lock could not be created because registry access was denied.");
+            return false;
+        }
+        else if (acquisitionError == QLockFile::UnknownError)
+        {
+            if (error)
+                *error = QStringLiteral("The native job record lock could not be created because of an I/O or filesystem error.");
+            return false;
+        }
+        else
+        {
+            if (error)
+                *error = QStringLiteral("The native job record lock could not be acquired (QLockFile error %1).")
+                             .arg(int(acquisitionError));
+            return false;
+        }
     }
 
     NativeJobRegistrySnapshot currentSnapshot;
@@ -2945,6 +3357,8 @@ bool SolverManager::updateNativeJob(const QString &jobId, const QJsonObject &fie
             QJsonObject{{QStringLiteral("code"), QStringLiteral("NATIVE_JOB_PERSISTENCE_FAILED")},
                         {QStringLiteral("message"), persistenceError},
                         {QStringLiteral("recordRef"), this->nativeJobRecordPaths.value(jobId)}});
+        RLogger::error("Could not persist native job record (#%s): %s\n",
+                       jobId.toUtf8().constData(), persistenceError.toUtf8().constData());
     }
     else if (durableChange)
     {
@@ -3007,6 +3421,171 @@ QJsonObject SolverManager::jobQuery(const QString &jobId) const
     }))
         return {{QStringLiteral("found"), false}, {QStringLiteral("error"), QStringLiteral("wrong_thread")}};
     return result;
+}
+
+QJsonObject SolverManager::trustedResultVerification(const QString &jobId,
+                                                      const QString &artifactId,
+                                                      const QString &expectedManifestSha256,
+                                                      const QJsonObject &problemSpec,
+                                                      const QJsonObject &expectedCaptureIdentity,
+                                                      bool includeConvergenceMeasurements) const
+{
+    const auto failure = [](const QString &code, const QString &message) {
+        return QJsonObject{{QStringLiteral("schema"), QStringLiteral("range.trusted-artifact-reopen/v1")},
+                           {QStringLiteral("valid"), false},
+                           {QStringLiteral("artifactReverified"), false},
+                           {QStringLiteral("code"), code},
+                           {QStringLiteral("message"), message}};
+    };
+    static const QRegularExpression tokenGrammar(QStringLiteral("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"));
+    static const QRegularExpression sha256Grammar(QStringLiteral("^[0-9a-f]{64}$"));
+    const QSet<QString> expectedKeys{
+        QStringLiteral("jobId"), QStringLiteral("artifactId"), QStringLiteral("manifestSha256"),
+        QStringLiteral("inputSnapshotSha256"), QStringLiteral("inputPackageSha256"),
+        QStringLiteral("sourceSnapshotRefSha256"), QStringLiteral("normalizedProblemSpecSha256"),
+        QStringLiteral("physicalSummarySha256"), QStringLiteral("trustedExperimentId"),
+        QStringLiteral("trustedExperimentAttemptId"), QStringLiteral("trustedAuthorizationDigest")};
+    QSet<QString> actualKeys;
+    for (auto it = expectedCaptureIdentity.constBegin(); it != expectedCaptureIdentity.constEnd(); ++it)
+        actualKeys.insert(it.key());
+    if (actualKeys != expectedKeys)
+        return failure(QStringLiteral("INVALID_CAPTURE_IDENTITY"),
+                       QStringLiteral("The captured identity has missing or unexpected fields."));
+    if (!tokenGrammar.match(jobId).hasMatch() || !tokenGrammar.match(artifactId).hasMatch()
+        || !sha256Grammar.match(expectedManifestSha256).hasMatch())
+        return failure(QStringLiteral("INVALID_LOCATOR"),
+                       QStringLiteral("A valid job ID, artifact ID, and manifest SHA-256 are required."));
+    for (const QString &key : {QStringLiteral("jobId"), QStringLiteral("artifactId")})
+        if (!expectedCaptureIdentity.value(key).isString()
+            || !tokenGrammar.match(expectedCaptureIdentity.value(key).toString()).hasMatch())
+            return failure(QStringLiteral("INVALID_CAPTURE_IDENTITY"),
+                           QStringLiteral("The captured job or artifact identity is malformed."));
+    for (const QString &key : {QStringLiteral("manifestSha256"), QStringLiteral("inputSnapshotSha256"),
+                               QStringLiteral("inputPackageSha256"), QStringLiteral("sourceSnapshotRefSha256"),
+                               QStringLiteral("normalizedProblemSpecSha256"), QStringLiteral("physicalSummarySha256")})
+        if (!expectedCaptureIdentity.value(key).isString()
+            || !sha256Grammar.match(expectedCaptureIdentity.value(key).toString()).hasMatch())
+            return failure(QStringLiteral("INVALID_CAPTURE_IDENTITY"),
+                           QStringLiteral("A captured digest is malformed."));
+    for (const QString &key : {QStringLiteral("trustedExperimentId"),
+                               QStringLiteral("trustedExperimentAttemptId")})
+        if (!expectedCaptureIdentity.value(key).isString()
+            || !tokenGrammar.match(expectedCaptureIdentity.value(key).toString()).hasMatch())
+            return failure(QStringLiteral("INVALID_CAPTURE_IDENTITY"),
+                           QStringLiteral("A captured experiment or attempt identity is malformed."));
+    if (!expectedCaptureIdentity.value(QStringLiteral("trustedAuthorizationDigest")).isString()
+        || !sha256Grammar.match(expectedCaptureIdentity.value(QStringLiteral("trustedAuthorizationDigest")).toString()).hasMatch())
+        return failure(QStringLiteral("INVALID_CAPTURE_IDENTITY"),
+                       QStringLiteral("The captured authorization digest is malformed."));
+
+    if (expectedCaptureIdentity.value(QStringLiteral("jobId")).toString() != jobId
+        || expectedCaptureIdentity.value(QStringLiteral("artifactId")).toString() != artifactId
+        || expectedCaptureIdentity.value(QStringLiteral("manifestSha256")).toString() != expectedManifestSha256)
+        return failure(QStringLiteral("CAPTURE_LOCATOR_MISMATCH"),
+                       QStringLiteral("The requested locator does not match the captured job, artifact, and manifest."));
+
+    const QJsonObject before = this->jobQuery(jobId);
+    if (!before.value(QStringLiteral("found")).toBool())
+        return failure(QStringLiteral("UNKNOWN_NATIVE_JOB"),
+                       QStringLiteral("The captured native job is not present in the job registry."));
+    if (before.value(QStringLiteral("state")).toString() != QLatin1String("succeeded")
+        || before.value(QStringLiteral("eligibility")).toString() == QLatin1String("conflict")
+        || !before.value(QStringLiteral("resultArtifactVerified")).toBool()
+        || !before.value(QStringLiteral("resultSourceBindingVerified")).toBool()
+        || !before.value(QStringLiteral("resultManifestVerified")).toBool()
+        || !before.value(QStringLiteral("nativeResultCatalogAvailable")).toBool())
+        return failure(QStringLiteral("UNVERIFIED_NATIVE_JOB"),
+                       QStringLiteral("The registry does not contain a successfully verified terminal native result."));
+
+    const QJsonObject provenance = before.value(QStringLiteral("nativeResultProvenance")).toObject();
+    const QJsonObject sourceSnapshotRef = provenance.value(QStringLiteral("sourceSnapshotRef")).toObject();
+    const QString manifestPath = before.value(QStringLiteral("resultManifestRef")).toString();
+    const QString manifestSha256 = before.value(QStringLiteral("resultManifestSha256")).toString();
+    const QString sourceSnapshotRefSha256 = sha256Hex(compactJson(sourceSnapshotRef));
+    if (before.value(QStringLiteral("jobId")).toString() != jobId
+        || before.value(QStringLiteral("resultArtifactId")).toString() != artifactId
+        || before.value(QStringLiteral("inputSnapshotSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()
+        || before.value(QStringLiteral("inputPackageSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("inputPackageSha256")).toString()
+        || manifestSha256 != expectedManifestSha256
+        || !QFileInfo(manifestPath).isAbsolute() || sourceSnapshotRef.isEmpty()
+        || before.value(QStringLiteral("trustedExperimentId")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("trustedExperimentId")).toString()
+        || before.value(QStringLiteral("trustedExperimentAttemptId")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("trustedExperimentAttemptId")).toString()
+        || before.value(QStringLiteral("trustedAuthorizationDigest")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("trustedAuthorizationDigest")).toString()
+        || sourceSnapshotRefSha256 != expectedCaptureIdentity.value(QStringLiteral("sourceSnapshotRefSha256")).toString())
+        return failure(QStringLiteral("CAPTURE_IDENTITY_MISMATCH"),
+                       QStringLiteral("The native job registry does not match the captured result identity."));
+
+    const QJsonObject verificationIdentity{{QStringLiteral("artifactId"), artifactId},
+        {QStringLiteral("jobId"), jobId},
+        {QStringLiteral("inputSnapshotSha256"), before.value(QStringLiteral("inputSnapshotSha256"))},
+        {QStringLiteral("inputPackageSha256"), before.value(QStringLiteral("inputPackageSha256"))},
+        {QStringLiteral("sourceSnapshotRef"), sourceSnapshotRef}};
+    const QJsonObject report = RTrustedVerificationService::verify(
+        problemSpec, verificationIdentity, manifestPath, expectedManifestSha256, includeConvergenceMeasurements);
+    const QJsonObject reportIdentity = report.value(QStringLiteral("identity")).toObject();
+    if (report.value(QStringLiteral("schema")).toString() != QLatin1String("range.verification-report/v1")
+        || report.value(QStringLiteral("status")).toString() != QLatin1String("pass")
+        || !report.value(QStringLiteral("passed")).toBool()
+        || reportIdentity.value(QStringLiteral("manifestSha256")).toString() != expectedManifestSha256
+        || reportIdentity.value(QStringLiteral("artifactId")).toString() != artifactId
+        || reportIdentity.value(QStringLiteral("jobId")).toString() != jobId
+        || reportIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()
+        || reportIdentity.value(QStringLiteral("inputPackageSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("inputPackageSha256")).toString()
+        || reportIdentity.value(QStringLiteral("normalizedProblemSpecSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("normalizedProblemSpecSha256")).toString()
+        || reportIdentity.value(QStringLiteral("physicalSummarySha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("physicalSummarySha256")).toString()
+        || sha256Hex(compactJson(reportIdentity.value(QStringLiteral("sourceSnapshotRef")).toObject()))
+            != expectedCaptureIdentity.value(QStringLiteral("sourceSnapshotRefSha256")).toString())
+        return failure(QStringLiteral("VERIFICATION_FAILED"),
+                       QStringLiteral("The reopened native artifact did not pass verification against the captured identity and ProblemSpec."));
+
+    const QJsonObject after = this->jobQuery(jobId);
+    const QJsonObject afterSourceRef = after.value(QStringLiteral("nativeResultProvenance")).toObject()
+        .value(QStringLiteral("sourceSnapshotRef")).toObject();
+    if (!after.value(QStringLiteral("found")).toBool()
+        || after.value(QStringLiteral("state")).toString() != QLatin1String("succeeded")
+        || after.value(QStringLiteral("eligibility")).toString() == QLatin1String("conflict")
+        || after.value(QStringLiteral("resultArtifactId")).toString() != artifactId
+        || after.value(QStringLiteral("resultManifestRef")).toString() != manifestPath
+        || after.value(QStringLiteral("resultManifestSha256")).toString() != expectedManifestSha256
+        || after.value(QStringLiteral("inputSnapshotSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("inputSnapshotSha256")).toString()
+        || after.value(QStringLiteral("inputPackageSha256")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("inputPackageSha256")).toString()
+        || after.value(QStringLiteral("trustedExperimentId")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("trustedExperimentId")).toString()
+        || after.value(QStringLiteral("trustedExperimentAttemptId")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("trustedExperimentAttemptId")).toString()
+        || after.value(QStringLiteral("trustedAuthorizationDigest")).toString()
+            != expectedCaptureIdentity.value(QStringLiteral("trustedAuthorizationDigest")).toString()
+        || sha256Hex(compactJson(afterSourceRef)) != sourceSnapshotRefSha256)
+        return failure(QStringLiteral("NATIVE_JOB_CHANGED"),
+                       QStringLiteral("The native job identity changed while its result was being verified."));
+
+    const QString reportSha256 = sha256Hex(compactJson(report));
+    return {{QStringLiteral("schema"), QStringLiteral("range.trusted-artifact-reopen/v1")},
+            {QStringLiteral("valid"), true},
+            {QStringLiteral("artifactReverified"), true},
+            {QStringLiteral("jobId"), jobId},
+            {QStringLiteral("artifactId"), artifactId},
+            {QStringLiteral("manifestSha256"), expectedManifestSha256},
+            {QStringLiteral("trustedExperimentId"),
+                expectedCaptureIdentity.value(QStringLiteral("trustedExperimentId"))},
+            {QStringLiteral("trustedExperimentAttemptId"),
+                expectedCaptureIdentity.value(QStringLiteral("trustedExperimentAttemptId"))},
+            {QStringLiteral("trustedAuthorizationDigest"),
+                expectedCaptureIdentity.value(QStringLiteral("trustedAuthorizationDigest"))},
+            {QStringLiteral("sourceSnapshotRefSha256"), sourceSnapshotRefSha256},
+            {QStringLiteral("reportSha256"), reportSha256},
+            {QStringLiteral("verificationReport"), report}};
 }
 
 QJsonObject SolverManager::jobsQuery(int offset, int limit) const
@@ -3095,7 +3674,8 @@ QJsonObject SolverManager::nativeJobRecoveryQuery(const QString &jobId) const
 }
 
 QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
-                                                         bool logicalRecoveryLockHeldByCaller)
+                                                         bool logicalRecoveryLockHeldByCaller,
+                                                         NativeCheckpointRecovery::WriterLease *checkpointLease)
 {
     const auto qualified = [&jobId](const QString &eligibility, const QString &reason,
                                     const QJsonObject &extra = QJsonObject{})
@@ -3378,8 +3958,13 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
     const QString resultArtifactPath = record.value(QStringLiteral("resultArtifactRef")).toString();
     const QString runRoot = getRunRoot(resultArtifactPath);
     const QString expectedInputDirectory = QDir(runRoot).filePath(QStringLiteral("input"));
-    const QString expectedInputPath = QDir(expectedInputDirectory).filePath(QFileInfo(resultArtifactPath).fileName());
     const QString inputPath = record.value(QStringLiteral("inputSnapshotRef")).toString();
+    // Native output has a reserved basename independent of the authenticated
+    // input MODEL. Its package, context, raw source binding and bytes remain
+    // pinned below; ordinary legacy runs retain the shared-basename contract.
+    const bool nativeWorkingResult=isNativeWorkingResultPath(resultArtifactPath);
+    const QString expectedInputPath = QDir(expectedInputDirectory).filePath(
+        QFileInfo(nativeWorkingResult?inputPath:resultArtifactPath).fileName());
     const QString packagePath = record.value(QStringLiteral("inputPackageRef")).toString();
     const QString checkpointInputPath = record.value(QStringLiteral("nativeCheckpointInputModelRef")).toString();
     const QString checkpointInputName = QStringLiteral("native-checkpoint-input.") + QFileInfo(checkpointInputPath).suffix();
@@ -3400,6 +3985,14 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
         inputBindingFailures.append(QStringLiteral("input_package_path"));
     if (!samePathText(inputPath, expectedInputPath))
         inputBindingFailures.append(QStringLiteral("input_snapshot_path"));
+    if(inputPath.isEmpty() || !QFileInfo(inputPath).isAbsolute() || !QFileInfo(inputPath).isFile() ||
+       !samePathText(inputPath,QFileInfo(inputPath).canonicalFilePath()))
+        inputBindingFailures.append(QStringLiteral("input_snapshot_canonical_file"));
+    QString inputSourceError;
+    const auto inputBinding=RProjectCatalog::resolveSourceBinding(inputPath,&inputSourceError);
+    if(!inputBinding || inputBinding->sourceArtifacts.size()!=1 ||
+       !samePathText(inputBinding->resolvedSourcePath,inputPath) || inputBinding->savedArtifactHash!=inputSha)
+        inputBindingFailures.append(QStringLiteral("input_snapshot_raw_model"));
     if (!samePathText(checkpointInputPath, expectedCheckpointInputPath))
         inputBindingFailures.append(QStringLiteral("checkpoint_input_path"));
     if (QFileInfo(checkpointInputPath).suffix().compare(RModel::getDefaultFileExtension(false), Qt::CaseInsensitive) != 0 &&
@@ -3495,9 +4088,19 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
 
     const QString solverPath = Application::instance()->getApplicationSettings()->getSolverPath();
     const QString currentRuntimeSha = QString::fromLatin1(sha256File(solverPath).toHex());
+    QByteArray controlHash;
+    try {
+        RModel pinnedInput;pinnedInput.read(checkpointInputPath);
+        const auto sourceCertificate=rPiezoRuntimeCertify(pinnedInput);
+        if(nativeWorkingResult && QFileInfo(resultArtifactPath).fileName()!=QStringLiteral("native-%1.rbm").arg(sourceCertificate.family))
+            return qualified(QStringLiteral("conflict"),QStringLiteral("The native working output family differs from its frozen source authority."),qualificationFacts);
+        controlHash=rPiezoRuntimeControlSha256(pinnedInput);
+    } catch(const RError &failure) {
+        return qualified(QStringLiteral("conflict"),QStringLiteral("The frozen source or numerical runtime cannot be certified: %1").arg(failure.getMessage()),qualificationFacts);
+    }
     if (currentRuntimeSha != context.value(QStringLiteral("runtimeSha256")).toString() ||
         context.value(QStringLiteral("controlSha256")).toString() !=
-            QString::fromLatin1(nativeNoControlSha256().toHex()) ||
+            QString::fromLatin1(controlHash.toHex()) ||
         expectedSourceSha != context.value(QStringLiteral("sourceSha256")).toString())
         return qualified(QStringLiteral("conflict"), QStringLiteral("The current solver runtime, control mode, or source binding differs from the checkpoint context."),
                          qualificationFacts);
@@ -3521,8 +4124,30 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
 
     const QJsonObject recoveryFacts = record.value(QStringLiteral("recovery")).toObject();
     const QJsonObject checkpointSeed = record.value(QStringLiteral("nativeCheckpointSeed")).toObject();
+    const auto compactAuthority=record.value("nativeResultProvenance").toObject().value("executionContext").toObject().value("nativeAcceptedTrace").toObject();
+    const bool compactTrace=!compactAuthority.isEmpty();
+    if(compactTrace && (!record.value("provenanceFrozen").toBool() || !exactKeys(compactAuthority,{"checkpointDirectory","context","inputModelPath","inputModelSha256"}) ||
+       compactAuthority.value("context").toObject()!=context || !samePathText(compactAuthority.value("checkpointDirectory").toString(),checkpointDirectory) ||
+       !samePathText(compactAuthority.value("inputModelPath").toString(),checkpointInputPath) || compactAuthority.value("inputModelSha256")!=context.value("modelSha256")))
+        return qualified(QStringLiteral("conflict"),QStringLiteral("Compact trace authority differs from the queued task."),qualificationFacts);
     const QString expectedSeedPointerPath = QDir(checkpointDirectory).filePath(QStringLiteral("latest.json"));
-    if (!recoveryFacts.isEmpty())
+    if(compactTrace && !recoveryFacts.isEmpty()){
+        const QStringList seedKeys{"schema","sourceJobId","sourceEnvelopeRef","sourceEnvelopeSha256","stateFingerprintSha256","inputModelSha256","packageSha256","acceptedSeq","timeS"};
+        if(!exactKeys(checkpointSeed,seedKeys) || checkpointSeed.value("schema").toString()!=QStringLiteral("range.native-checkpoint-trace-seed/v2") ||
+           checkpointSeed.value("sourceJobId")!=recoveryFacts.value("recoverySourceJobId") || checkpointSeed.value("sourceEnvelopeRef")!=recoveryFacts.value("selectedEnvelopePath") ||
+           checkpointSeed.value("sourceEnvelopeSha256")!=recoveryFacts.value("selectedEnvelopeSha256") || checkpointSeed.value("stateFingerprintSha256")!=recoveryFacts.value("sourceStateFingerprintSha256") ||
+           checkpointSeed.value("inputModelSha256")!=context.value("modelSha256") || checkpointSeed.value("packageSha256")!=context.value("packageSha256") ||
+           checkpointSeed.value("acceptedSeq")!=recoveryFacts.value("acceptedSeq") || checkpointSeed.value("timeS")!=recoveryFacts.value("checkpointTimeS") ||
+           !isLowerSha256(checkpointSeed.value("stateFingerprintSha256").toString()) || !isLowerSha256(checkpointSeed.value("sourceEnvelopeSha256").toString()) ||
+           QString::fromLatin1(sha256File(checkpointSeed.value("sourceEnvelopeRef").toString()).toHex())!=checkpointSeed.value("sourceEnvelopeSha256").toString())
+            return qualified(QStringLiteral("conflict"),QStringLiteral("Compact recovery seed differs from its source terminal state and queued context."),qualificationFacts);
+        try{RModel seeded;seeded.read(checkpointInputPath);const auto state=rPiezoRuntimeCertify(seeded,true);
+            if(QString::fromLatin1(state.stateIdentity.toHex())!=checkpointSeed.value("stateFingerprintSha256").toString() ||
+               double(state.completedSteps)!=checkpointSeed.value("acceptedSeq").toDouble(-1))
+                return qualified(QStringLiteral("conflict"),QStringLiteral("Compact recovery base is not the selected exact terminal codec."),qualificationFacts);
+        }catch(const RError &failure){return qualified(QStringLiteral("conflict"),failure.getMessage(),qualificationFacts);}
+    }else if(compactTrace && !checkpointSeed.isEmpty())return qualified(QStringLiteral("conflict"),QStringLiteral("Compact checkpoint seed has no recovery ancestry."),qualificationFacts);
+    if (!recoveryFacts.isEmpty() && !compactTrace)
     {
         const QStringList seedKeys{QStringLiteral("schema"), QStringLiteral("sourceJobId"),
                                    QStringLiteral("sourceEnvelopeRef"), QStringLiteral("sourceEnvelopeSha256"),
@@ -3635,22 +4260,12 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                              QStringLiteral("The immutable recovery seed or queued input MODEL could not be decoded: %1")
                                  .arg(readError.getMessage()), qualificationFacts);
         }
-        const RStructuralDynamicsRestartData &seedRestart =
-                seedModel.getProblemSetup().getStructuralDynamicsRestartData();
-        const RStructuralDynamicsRestartData &inputRestart =
-                recoveryInputModel.getProblemSetup().getStructuralDynamicsRestartData();
-        try
-        {
-            seedRestart.validate();
-            inputRestart.validate();
+        RPiezoRuntimeCertificate seedRestart,inputRestart;
+        try {seedRestart=rPiezoRuntimeCertify(seedModel,true);inputRestart=rPiezoRuntimeCertify(recoveryInputModel,true);}
+        catch(const RError &validationError) {
+            return qualified(QStringLiteral("conflict"),QStringLiteral("The recovery seed or queued input complete state is invalid: %1").arg(validationError.getMessage()),qualificationFacts);
         }
-        catch (const RError &validationError)
-        {
-            return qualified(QStringLiteral("conflict"),
-                             QStringLiteral("The recovery seed or queued input restart state is invalid: %1")
-                                 .arg(validationError.getMessage()), qualificationFacts);
-        }
-        if (!sameRestartState(seedRestart, inputRestart) || !seedRestart.available ||
+        if (!rPiezoRuntimeSameAcceptedState(seedRestart,inputRestart) || !seedRestart.available ||
             seedRestart.completedSteps != quint64(seedAcceptedSeq) ||
             std::abs(seedRestart.time - seedTime) > 1.0e-12 * qMax(1.0, std::abs(seedTime)) ||
             std::abs(seedRestart.fixedTimeStep - seedDt) > 1.0e-12 * qMax(1.0, std::abs(seedDt)))
@@ -3658,7 +4273,7 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                              QStringLiteral("The immutable recovery seed no longer matches the exact queued accepted-state input."),
                              qualificationFacts);
     }
-    else if (record.value(QStringLiteral("nativeCheckpointSeed")).isObject())
+    else if (!compactTrace && record.value(QStringLiteral("nativeCheckpointSeed")).isObject())
     {
         return qualified(QStringLiteral("conflict"),
                          QStringLiteral("The native job has a checkpoint seed without recovery ancestry."),
@@ -3666,7 +4281,14 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
     }
 
     const QString writerLockPath = QDir(checkpointDirectory).filePath(QStringLiteral(".native-checkpoint.lock"));
-    if (QFileInfo(writerLockPath).exists())
+    if (checkpointLease)
+    {
+        if (!checkpointLease->ownsLease() || !samePathText(checkpointLease->directory(), checkpointDirectory))
+            return qualified(QStringLiteral("reconcile_required"),
+                             QStringLiteral("The caller does not hold the checkpoint writer lease for this source directory."),
+                             qualificationFacts);
+    }
+    else if (QFileInfo(writerLockPath).exists())
     {
         if (QFileInfo(writerLockPath).isSymLink() || hasSymlinkComponent(writerLockPath))
             return qualified(QStringLiteral("conflict"), QStringLiteral("The native checkpoint writer lock is linked."), qualificationFacts);
@@ -3679,6 +4301,23 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                               qualificationFacts);
     }
 
+    QString pendingRecoveryError;
+    auto pendingRecoveryPlan = NativeCheckpointRecovery::Plan::inspect(
+        checkpointDirectory, compactJson(context), &pendingRecoveryError);
+    if (!pendingRecoveryError.isEmpty())
+        return qualified(QStringLiteral("conflict"),
+                         QStringLiteral("Pending native checkpoint recovery evidence is invalid: %1").arg(pendingRecoveryError),
+                         qualificationFacts);
+    if (pendingRecoveryPlan && !isLowerSha256(pendingRecoveryPlan->token()))
+        return qualified(QStringLiteral("conflict"),
+                         QStringLiteral("Pending native checkpoint recovery plan has no stable SHA-256 identity."),
+                         qualificationFacts);
+    if (pendingRecoveryPlan &&
+        pendingRecoveryPlan->contextSha256() != sha256Hex(compactJson(context)))
+        return qualified(QStringLiteral("conflict"),
+                         QStringLiteral("Pending native checkpoint recovery plan is bound to a different checkpoint context."),
+                         qualificationFacts);
+
     const auto readPointer = [&](const QString &pointerName, QJsonObject *envelopeOut,
                                  QString *envelopePathOut, QString *envelopeHashOut,
                                  QString *checkpointPathOut, QString *checkpointHashOut,
@@ -3686,13 +4325,39 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
     {
         const QString pointerPath = QDir(checkpointDirectory).filePath(pointerName);
         QJsonObject pointer;
-        if (!readSmallObject(pointerPath, 64 * 1024, &pointer, readError)) return false;
-        QFile pointerFile(pointerPath);
-        if (!pointerFile.open(QIODevice::ReadOnly)) return false;
-        const QByteArray pointerBytes = pointerFile.readAll();
-        if (pointerFile.error() != QFileDevice::NoError || compactJson(pointer) != pointerBytes ||
+        QByteArray pointerBytes;
+        if (pendingRecoveryPlan && pointerName == QStringLiteral("latest.json"))
+        {
+            if (!pendingRecoveryPlan->latestExists())
+            {
+                if (readError) *readError = QStringLiteral("Pending recovery has no complete previous latest pointer to project.");
+                return false;
+            }
+            pointerBytes = pendingRecoveryPlan->latestBytes();
+            QJsonParseError parseError;
+            const QJsonDocument document = QJsonDocument::fromJson(pointerBytes, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !document.isObject())
+            {
+                if (readError) *readError = QStringLiteral("The saved previous latest pointer cannot be decoded.");
+                return false;
+            }
+            pointer = document.object();
+        }
+        else
+        {
+            if (!readSmallObject(pointerPath, 64 * 1024, &pointer, readError)) return false;
+            QFile pointerFile(pointerPath);
+            if (!pointerFile.open(QIODevice::ReadOnly)) return false;
+            pointerBytes = pointerFile.readAll();
+            if (pointerFile.error() != QFileDevice::NoError)
+            {
+                if (readError) *readError = QStringLiteral("The native checkpoint pointer could not be read completely.");
+                return false;
+            }
+        }
+        if (compactJson(pointer) != pointerBytes ||
             !exactKeys(pointer, {QStringLiteral("schema"), QStringLiteral("envelopeFile"), QStringLiteral("envelopeSha256")}) ||
-            pointer.value(QStringLiteral("schema")).toString() != QString::fromLatin1(nativeCheckpointPointerSchema))
+            pointer.value(QStringLiteral("schema")).toString() != (compactTrace?QStringLiteral("range.native-checkpoint-pointer/v2"):QString::fromLatin1(nativeCheckpointPointerSchema)))
         {
             if (readError) *readError = QStringLiteral("The native checkpoint pointer schema or canonical encoding is invalid.");
             return false;
@@ -3717,6 +4382,13 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
         {
             if (readError) *readError = QStringLiteral("The native checkpoint envelope is non-canonical or does not match its pointer hash.");
             return false;
+        }
+        if(compactTrace){
+            if(!admitNativeAcceptedTrace(checkpointDirectory,context,checkpointInputPath,envelope,nullptr,nullptr,readError,
+                                         pendingRecoveryPlan ? &*pendingRecoveryPlan : nullptr))return false;
+            if(envelopeOut)*envelopeOut=envelope;if(envelopePathOut)*envelopePathOut=envelopePath;if(envelopeHashOut)*envelopeHashOut=envelopeSha;
+            if(checkpointPathOut)*checkpointPathOut=QDir(checkpointDirectory).filePath(envelope.value("modelFile").toString());
+            if(checkpointHashOut)*checkpointHashOut=envelope.value("checkpointModelSha256").toString();return true;
         }
         const QStringList envelopeKeys{QStringLiteral("schema"), QStringLiteral("sourceSha256"),
                                        QStringLiteral("inputModelSha256"), QStringLiteral("controlSha256"),
@@ -3763,30 +4435,20 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
         {
             RModel inputModel;
             inputModel.read(checkpointInputPath);
-            const RProblemSetup &inputSetup = inputModel.getProblemSetup();
-            const RStructuralDynamicsSetup &inputDynamics = inputSetup.getStructuralDynamicsSetup();
-            if (inputModel.getProblemTaskTree().getProblemTypeMask() != R_PROBLEM_STRESS ||
-                !inputDynamics.getEnabled() ||
-                inputDynamics.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
-                inputSetup.getStructuralControlSetup().enabled || inputSetup.getStructuralCableSetup().enabled ||
-                inputSetup.getStructuralPiezoSetup().enabled || inputSetup.getStructuralThermalControlSetup().enabled ||
-                std::abs(inputDynamics.getTimeStep() - context.value(QStringLiteral("dtS")).toDouble()) >
-                    1.0e-12 * qMax(1.0, std::abs(context.value(QStringLiteral("dtS")).toDouble())))
-            {
-                if (readError) *readError = QStringLiteral("The frozen input no longer describes an uncontrolled Newmark structural-dynamics run.");
-                return false;
+            const auto initialRestart=rPiezoRuntimeCertify(inputModel);
+            if(std::abs(initialRestart.fixedTimeStep-context.value(QStringLiteral("dtS")).toDouble())>
+               1.0e-12*qMax(1.0,std::abs(initialRestart.fixedTimeStep))) {
+                if(readError)*readError=QStringLiteral("The frozen input time step differs from its checkpoint context.");return false;
             }
-            const RStructuralDynamicsRestartData &initialRestart =
-                    inputSetup.getStructuralDynamicsRestartData();
-            if (initialRestart.available) initialRestart.validate();
-            RModel checkpointModel;
-            checkpointModel.read(modelPath);
-            const RStructuralDynamicsRestartData &restart =
-                    checkpointModel.getProblemSetup().getStructuralDynamicsRestartData();
+            RModel checkpointModel;checkpointModel.read(modelPath);
+            const auto restart=rPiezoRuntimeCertify(checkpointModel,true);
+            if(restart.family!=initialRestart.family || (restart.canonicalTarget &&
+               (restart.sourceFingerprint!=initialRestart.sourceFingerprint || restart.targetSteps!=initialRestart.targetSteps))) {
+                if(readError)*readError=QStringLiteral("The checkpoint complete state differs from the actual frozen source or original target.");return false;
+            }
             const RTimeSolver &checkpointTimeSolver = checkpointModel.getTimeSolver();
-            restart.validate();
             const quint64 baselineSequence = initialRestart.available ? initialRestart.completedSteps : 0;
-            const double baselineTime = initialRestart.available ? initialRestart.time : 0.0;
+            const double baselineTime = initialRestart.time;
             const double expectedTime = baselineTime +
                     (seqValue.toDouble() - double(baselineSequence)) * context.value(QStringLiteral("dtS")).toDouble();
             if (!restart.available || restart.completedSteps != quint64(seqValue.toDouble()) ||
@@ -3829,7 +4491,11 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
 
     const QString latestPath = QDir(checkpointDirectory).filePath(QStringLiteral("latest.json"));
     const QString lastValidPath = QDir(checkpointDirectory).filePath(QStringLiteral("lastvalid.json"));
-    if (!QFileInfo::exists(latestPath) && !QFileInfo::exists(lastValidPath))
+    if (pendingRecoveryPlan && !pendingRecoveryPlan->latestExists())
+        return qualified(QStringLiteral("recompute_required"),
+                         QStringLiteral("The interrupted first native checkpoint has no complete previous state to recover."),
+                         qualificationFacts);
+    if (!pendingRecoveryPlan && !QFileInfo::exists(latestPath) && !QFileInfo::exists(lastValidPath))
     {
         if (record.contains(QStringLiteral("nativeCheckpointSeed")))
             return qualified(QStringLiteral("conflict"),
@@ -3839,7 +4505,7 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                          QStringLiteral("No complete accepted-state checkpoint was published before interruption."),
                          qualificationFacts);
     }
-    if (!QFileInfo::exists(latestPath))
+    if (!pendingRecoveryPlan && !QFileInfo::exists(latestPath))
         return qualified(QStringLiteral("conflict"),
                          QStringLiteral("The current native checkpoint pointer is missing while a previous pointer exists; its accepted-step loss cannot be measured safely."),
                          qualificationFacts);
@@ -3856,6 +4522,30 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
         return qualified(QStringLiteral("conflict"),
                          QStringLiteral("The current native checkpoint pointer does not verify: %1")
                              .arg(checkpointError), qualificationFacts);
+    {
+        QString recheckError;
+        const auto recheckedPlan = NativeCheckpointRecovery::Plan::inspect(
+            checkpointDirectory, compactJson(context), &recheckError);
+        const bool samePlan = recheckError.isEmpty() &&
+            (pendingRecoveryPlan
+                ? recheckedPlan && recheckedPlan->token() == pendingRecoveryPlan->token() &&
+                      recheckedPlan->markerBytes() == pendingRecoveryPlan->markerBytes()
+                : !recheckedPlan);
+        if (!samePlan)
+            return qualified(QStringLiteral("reconcile_required"),
+                             QStringLiteral("The checkpoint publication changed while recovery was being qualified; refresh its preview."),
+                             qualificationFacts);
+        if (!checkpointLease && QFileInfo(writerLockPath).exists())
+        {
+            QLockFile writerLock(writerLockPath);
+            writerLock.setStaleLockTime(0);
+            if (!writerLock.tryLock(0))
+                return qualified(QStringLiteral("reconcile_required"),
+                                  QStringLiteral("A native checkpoint writer became active during recovery qualification."),
+                                  qualificationFacts);
+            writerLock.unlock();
+        }
+    }
     const double acceptedSequence = envelope.value(QStringLiteral("acceptedSeq")).toDouble();
     const double acceptedTime = envelope.value(QStringLiteral("timeS")).toDouble();
     quint64 targetSteps = 0;
@@ -3863,20 +4553,10 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
     {
         RModel originalInput;
         originalInput.read(checkpointInputPath);
-        const RProblemSetup &originalSetup = originalInput.getProblemSetup();
-        const RStructuralDynamicsSetup &originalDynamics = originalSetup.getStructuralDynamicsSetup();
-        const RStructuralDynamicsRestartData &initialRestart = originalSetup.getStructuralDynamicsRestartData();
-        if (initialRestart.available) initialRestart.validate();
-        const quint64 baselineSteps = initialRestart.available ? initialRestart.completedSteps : 0;
-        const quint64 plannedSteps = originalDynamics.getNSteps();
-        if (!originalDynamics.getEnabled() || originalDynamics.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
-            plannedSteps == 0 || baselineSteps > std::numeric_limits<quint64>::max() - plannedSteps ||
-            baselineSteps + plannedSteps > std::numeric_limits<uint>::max() ||
-            acceptedSequence > double(baselineSteps + plannedSteps))
-            return qualified(QStringLiteral("conflict"),
-                             QStringLiteral("The original frozen input has an invalid target or the selected checkpoint exceeds it."),
-                             qualificationFacts);
-        targetSteps = baselineSteps + plannedSteps;
+        const auto initialRestart=rPiezoRuntimeCertify(originalInput);
+        targetSteps=initialRestart.targetSteps;
+        if(targetSteps==0 || targetSteps>std::numeric_limits<uint>::max() || acceptedSequence>double(targetSteps))
+            return qualified(QStringLiteral("conflict"),QStringLiteral("The original frozen input has an invalid target or the selected checkpoint exceeds it."),qualificationFacts);
     }
     catch (const RError &readError)
     {
@@ -3901,6 +4581,8 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                            {QStringLiteral("timeS"), acceptedTime},
                            {QStringLiteral("dtS"), envelope.value(QStringLiteral("dtS"))},
                            {QStringLiteral("usedLastValid"), false},
+                           {QStringLiteral("pendingRecoveryPlanSha256"), pendingRecoveryPlan
+                                ? QJsonValue(pendingRecoveryPlan->token()) : QJsonValue(QString())},
                            {QStringLiteral("context"), context},
                            {QStringLiteral("replayRange"), QJsonObject{
                                {QStringLiteral("afterAcceptedSeq"), acceptedSequence},
@@ -3909,9 +4591,10 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                                {QStringLiteral("maxAcceptedSteps"), 10},
                                {QStringLiteral("maxSimulationSeconds"), 1.0}}}};
     QJsonObject extra = qualificationFacts;
+    if(compactTrace){checkpoint.insert("nativeAcceptedTrace",compactAuthority);checkpoint.insert("stateFingerprintSha256",envelope.value("stateFingerprintSha256"));}
     extra.insert(QStringLiteral("checkpoint"), checkpoint);
     extra.insert(QStringLiteral("state"), QStringLiteral("interrupted"));
-    if (inspectPartialResult)
+    if (inspectPartialResult && !compactTrace)
     {
         QJsonObject partialResult;
         QString partialError;
@@ -3945,6 +4628,10 @@ QJsonObject SolverManager::nativeJobRecoveryQueryOnOwner(const QString &jobId,
                              QStringLiteral("The verified working result LINK exceeds the original accepted-step target."),
                              extra);
     }
+    if (acceptedSequence == 0)
+        return qualified(QStringLiteral("recompute_required"),
+                         QStringLiteral("The interrupted publication has only an initial baseline; recompute from the frozen input."),
+                         extra);
     if (remainingSteps == 0)
         return qualified(QStringLiteral("reconcile_required"),
                          QStringLiteral("The selected accepted checkpoint already reaches the original target; reconcile the existing result."),
@@ -4021,16 +4708,19 @@ bool SolverManager::requestNativeAcceptedBoundaryPauseOnOwner(const QString &job
 QString SolverManager::submitNativeRecovery(const QString &jobId,
                                             const QString &checkpointSha256,
                                             uint remainingSteps,
-                                            QString *error)
+                                            QString *error,
+                                            const QString &approvedPendingRecoveryPlanSha256)
 {
     if (error) error->clear();
     QString submittedJobId;
     QString localError;
     const bool invoked = this->invokeOnOwner([this, &jobId, &checkpointSha256, remainingSteps,
+                                               &approvedPendingRecoveryPlanSha256,
                                                &submittedJobId, &localError]()
     {
         submittedJobId = this->submitNativeRecoveryOnOwner(jobId, checkpointSha256,
-                                                             remainingSteps, &localError);
+                                                             remainingSteps, approvedPendingRecoveryPlanSha256,
+                                                             &localError);
     });
     if (!invoked) localError = QStringLiteral("Native recovery submission could not run on the manager thread.");
     if (error) *error = localError;
@@ -4040,6 +4730,7 @@ QString SolverManager::submitNativeRecovery(const QString &jobId,
 QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
                                                    const QString &checkpointSha256,
                                                    uint remainingSteps,
+                                                   const QString &approvedPendingRecoveryPlanSha256,
                                                    QString *error)
 {
     if (error) error->clear();
@@ -4066,7 +4757,32 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
     if (!logicalRecoveryLock->tryLock(0))
         return reject(QStringLiteral("reconcile_required: another GUI process is staging or executing an attempt for this logical native job."));
 
-    const QJsonObject qualification = this->nativeJobRecoveryQueryOnOwner(jobId, true);
+    const QJsonObject previewQualification = this->nativeJobRecoveryQueryOnOwner(jobId, true);
+    if (previewQualification.value(QStringLiteral("eligibility")).toString() != QStringLiteral("recoverable"))
+    {
+        const QString eligibility = previewQualification.value(QStringLiteral("eligibility")).toString();
+        return reject(QStringLiteral("%1: %2")
+                      .arg(eligibility.isEmpty() ? QStringLiteral("conflict") : eligibility,
+                           previewQualification.value(QStringLiteral("reason")).toString()));
+    }
+    const QJsonObject previewCheckpoint = previewQualification.value(QStringLiteral("checkpoint")).toObject();
+    const QString checkpointDirectory = QFileInfo(previewCheckpoint.value(QStringLiteral("checkpointPath")).toString()).absolutePath();
+    if (checkpointDirectory.isEmpty() || checkpointDirectory == QStringLiteral("."))
+        return reject(QStringLiteral("conflict: the selected native checkpoint has no canonical source directory."));
+    std::unique_ptr<NativeCheckpointRecovery::WriterLease> checkpointLease;
+    try
+    {
+        checkpointLease = std::make_unique<NativeCheckpointRecovery::WriterLease>(checkpointDirectory);
+    }
+    catch (const std::exception &failure)
+    {
+        return reject(QStringLiteral("reconcile_required: checkpoint writer lease could not be acquired: %1")
+                      .arg(QString::fromLocal8Bit(failure.what())));
+    }
+    if (!checkpointLease->ownsLease())
+        return reject(QStringLiteral("reconcile_required: a native checkpoint writer still owns the source directory."));
+
+    QJsonObject qualification = this->nativeJobRecoveryQueryOnOwner(jobId, true, checkpointLease.get());
     if (qualification.value(QStringLiteral("eligibility")).toString() != QStringLiteral("recoverable"))
     {
         const QString eligibility = qualification.value(QStringLiteral("eligibility")).toString();
@@ -4074,11 +4790,52 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
                       .arg(eligibility.isEmpty() ? QStringLiteral("conflict") : eligibility,
                            qualification.value(QStringLiteral("reason")).toString()));
     }
-    const QJsonObject checkpoint = qualification.value(QStringLiteral("checkpoint")).toObject();
+    QJsonObject checkpoint = qualification.value(QStringLiteral("checkpoint")).toObject();
+    if (checkpoint.value(QStringLiteral("pendingRecoveryPlanSha256")).toString() !=
+        approvedPendingRecoveryPlanSha256)
+        return reject(QStringLiteral("The approved pending recovery plan changed before checkpoint reconciliation."));
+    const QStringList previewChanges = [&]()
+    {
+        QStringList changed;
+        for (const auto &key : {QStringLiteral("checkpointSha256"), QStringLiteral("envelopeSha256"),
+                                QStringLiteral("pendingRecoveryPlanSha256"), QStringLiteral("remainingSteps")})
+            if (previewCheckpoint.value(key) != checkpoint.value(key)) changed.append(key);
+        return changed;
+    }();
+    if (!previewChanges.isEmpty())
+        return reject(QStringLiteral("The selected recovery preview changed while acquiring the checkpoint writer lease: %1.")
+                      .arg(previewChanges.join(QStringLiteral(", "))));
+    const bool compactTrace=!checkpoint.value("nativeAcceptedTrace").toObject().isEmpty();
     if (checkpoint.value(QStringLiteral("checkpointSha256")).toString() != checkpointSha256)
         return reject(QStringLiteral("The selected checkpoint changed after the fresh recovery preview."));
     if (checkpoint.value(QStringLiteral("remainingSteps")).toDouble(-1.0) != double(remainingSteps))
         return reject(QStringLiteral("The requested remaining step count does not match the qualified checkpoint target."));
+
+    const QString pendingPlanSha = checkpoint.value(QStringLiteral("pendingRecoveryPlanSha256")).toString();
+    if (!pendingPlanSha.isEmpty())
+    {
+        const QJsonObject context = checkpoint.value(QStringLiteral("context")).toObject();
+        QString planError;
+        auto recoveryPlan = NativeCheckpointRecovery::Plan::inspect(
+            checkpointDirectory, compactJson(context), &planError);
+        if (!planError.isEmpty() || !recoveryPlan || recoveryPlan->token() != pendingPlanSha)
+            return reject(QStringLiteral("reconcile_required: pending checkpoint recovery plan changed before approved reconciliation."));
+        if (!recoveryPlan->restore(*checkpointLease, &planError))
+            return reject(QStringLiteral("reconcile_required: the approved checkpoint rollback could not be restored: %1").arg(planError));
+        if (!recoveryPlan->finish(*checkpointLease, &planError))
+            return reject(QStringLiteral("reconcile_required: the restored checkpoint remains pending: %1").arg(planError));
+
+        const QJsonObject restoredQualification = this->nativeJobRecoveryQueryOnOwner(jobId, true, checkpointLease.get());
+        const QJsonObject restoredCheckpoint = restoredQualification.value(QStringLiteral("checkpoint")).toObject();
+        if (restoredQualification.value(QStringLiteral("eligibility")).toString() != QStringLiteral("recoverable") ||
+            restoredCheckpoint.value(QStringLiteral("checkpointSha256")) != checkpoint.value(QStringLiteral("checkpointSha256")) ||
+            restoredCheckpoint.value(QStringLiteral("envelopeSha256")) != checkpoint.value(QStringLiteral("envelopeSha256")) ||
+            restoredCheckpoint.value(QStringLiteral("acceptedSeq")) != checkpoint.value(QStringLiteral("acceptedSeq")) ||
+            restoredCheckpoint.value(QStringLiteral("remainingSteps")) != checkpoint.value(QStringLiteral("remainingSteps")))
+            return reject(QStringLiteral("reconcile_required: the restored previous checkpoint did not reproduce the approved recovery authority."));
+        qualification = restoredQualification;
+        checkpoint = restoredCheckpoint;
+    }
 
     const QJsonObject originalRecord = this->nativeJobs.value(jobId);
     const QString originalRegistrySha = originalRecord.value(QStringLiteral("nativeJobRegistrySha256")).toString();
@@ -4111,7 +4868,12 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
     try
     {
         originalInput.read(inputPath);
-        recoveryModel.read(checkpointPath);
+        if(!checkpoint.value("nativeAcceptedTrace").toObject().isEmpty()){
+            QJsonObject selectedEnvelope;QString traceError;
+            if(!readSmallObject(envelopePath,64*1024,&selectedEnvelope,&traceError) ||
+               !admitNativeAcceptedTrace(QFileInfo(envelopePath).absolutePath(),checkpoint.value("context").toObject(),inputPath,selectedEnvelope,nullptr,&recoveryModel,&traceError))
+                return reject(QStringLiteral("The selected terminal native trace cannot be reconstructed: %1").arg(traceError));
+        }else recoveryModel.read(checkpointPath);
     }
     catch (const RError &readError)
     {
@@ -4124,23 +4886,17 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
                       .arg(QString::fromLocal8Bit(readError.what())));
     }
 
-    const RProblemSetup &initialSetup = originalInput.getProblemSetup();
-    const RStructuralDynamicsSetup &initialDynamics = initialSetup.getStructuralDynamicsSetup();
-    const RStructuralDynamicsRestartData &initialRestart = initialSetup.getStructuralDynamicsRestartData();
-    const RStructuralDynamicsRestartData &acceptedRestart =
-            recoveryModel.getProblemSetup().getStructuralDynamicsRestartData();
-    if (!initialDynamics.getEnabled() || initialDynamics.getMethod() != RStructuralTimeIntegrationMethod::Newmark ||
-        initialSetup.getStructuralControlSetup().enabled || initialSetup.getStructuralCableSetup().enabled ||
-        initialSetup.getStructuralPiezoSetup().enabled || initialSetup.getStructuralThermalControlSetup().enabled ||
-        !acceptedRestart.available || acceptedRestart.completedSteps != acceptedSteps ||
-        std::abs(acceptedRestart.time - checkpointTime) > 1.0e-12 * qMax(1.0, std::abs(checkpointTime)))
-        return reject(QStringLiteral("The selected restart MODEL no longer matches the qualified uncontrolled Newmark checkpoint."));
-    const quint64 baselineSteps = initialRestart.available ? initialRestart.completedSteps : 0;
-    const quint64 originalAdditionalSteps = initialDynamics.getNSteps();
-    if (originalAdditionalSteps == 0 || baselineSteps > std::numeric_limits<quint64>::max() - originalAdditionalSteps)
-        return reject(QStringLiteral("The frozen native input has an invalid original target step count."));
-    const quint64 targetAcceptedSteps = baselineSteps + originalAdditionalSteps;
-    if (acceptedSteps < baselineSteps || acceptedSteps > targetAcceptedSteps)
+    RPiezoRuntimeCertificate initialRestart,acceptedRestart;
+    try {initialRestart=rPiezoRuntimeCertify(originalInput);acceptedRestart=rPiezoRuntimeCertify(recoveryModel,true);}
+    catch(const RError &failure){return reject(QStringLiteral("The selected complete restart MODEL cannot be certified: %1").arg(failure.getMessage()));}
+    if(!acceptedRestart.available || acceptedRestart.completedSteps!=acceptedSteps ||
+       acceptedRestart.family!=initialRestart.family ||
+       (acceptedRestart.canonicalTarget && (acceptedRestart.sourceFingerprint!=initialRestart.sourceFingerprint || acceptedRestart.targetSteps!=initialRestart.targetSteps)) ||
+       std::abs(acceptedRestart.time-checkpointTime)>1.0e-12*qMax(1.0,std::abs(checkpointTime)))
+        return reject(QStringLiteral("The selected complete state no longer matches the qualified checkpoint and frozen source."));
+    const quint64 baselineSteps=initialRestart.completedSteps;
+    const quint64 targetAcceptedSteps=initialRestart.targetSteps;
+    if(acceptedSteps<baselineSteps || acceptedSteps>targetAcceptedSteps)
         return reject(QStringLiteral("The selected checkpoint is outside the original accepted-step range."));
     const quint64 computedRemainingSteps = targetAcceptedSteps - acceptedSteps;
     if (computedRemainingSteps == 0)
@@ -4180,7 +4936,8 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
 
     recoveryModel.setFileName(inputPath);
     recoveryModel.getProblemSetup().setRestart(true);
-    recoveryModel.getProblemSetup().getStructuralDynamicsSetup().setNSteps(remainingSteps);
+    if(!acceptedRestart.canonicalTarget)
+        recoveryModel.getProblemSetup().getStructuralDynamicsSetup().setNSteps(remainingSteps);
     const QJsonObject originalProjectRef = originalRecord.value(QStringLiteral("projectSnapshotRef")).toObject();
     const bool linkedSnapshot = originalRecord.value(QStringLiteral("frozenSnapshotVerified")).toBool();
     if (linkedSnapshot && originalProjectRef.isEmpty())
@@ -4212,7 +4969,7 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
     replayRange.insert(QStringLiteral("targetAcceptedSeq"), double(targetAcceptedSteps));
     replayRange.insert(QStringLiteral("remainingSteps"), double(computedRemainingSteps));
     replayRange.insert(QStringLiteral("recoverySourceJobId"), jobId);
-    const QJsonObject recoveryProvenance{{QStringLiteral("logicalJobId"), logicalJobId},
+    QJsonObject recoveryProvenance{{QStringLiteral("logicalJobId"), logicalJobId},
                                          {QStringLiteral("recoverySourceJobId"), jobId},
                                          {QStringLiteral("logicalSourceRuntimeStamp"), logicalSourceRuntimeStamp},
                                          {QStringLiteral("selectedEnvelopePath"), envelopePath},
@@ -4235,6 +4992,10 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
                                          {QStringLiteral("sourcePartialResult"), qualification.value(QStringLiteral("partialResult"))},
                                          {QStringLiteral("logicalSourceModelFileRef"),
                                           originalRecord.value(QStringLiteral("sourceModelFileRef"))}};
+    if(compactTrace){
+        recoveryProvenance.insert("sourceNativeAcceptedTrace",checkpoint.value("nativeAcceptedTrace"));
+        recoveryProvenance.insert("sourceStateFingerprintSha256",checkpoint.value("stateFingerprintSha256"));
+    }
 
     const QString originalFrozenInputPath = originalRecord.value(QStringLiteral("inputSnapshotRef")).toString();
     const QString originalFrozenPackagePath = originalRecord.value(QStringLiteral("inputPackageRef")).toString();
@@ -4293,10 +5054,9 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
         discardUnqueuedTask();
         return reject(QStringLiteral("The detached native recovery input was not available for setup validation."));
     }
-    SolverSetupChecker checker(*capturedInput);
     QStringList warnings;
     QStringList errors;
-    checker.perform(warnings, errors);
+    validateNativeSource(*capturedInput,warnings,errors);
     if (!errors.isEmpty())
     {
         discardUnqueuedTask();
@@ -4304,7 +5064,7 @@ QString SolverManager::submitNativeRecoveryOnOwner(const QString &jobId,
                       .arg(errors.first()));
     }
 
-    const QJsonObject rechecked = this->nativeJobRecoveryQueryOnOwner(jobId, true);
+    const QJsonObject rechecked = this->nativeJobRecoveryQueryOnOwner(jobId, true, checkpointLease.get());
     const QJsonObject recheckedCheckpoint = rechecked.value(QStringLiteral("checkpoint")).toObject();
     const QStringList recheckChanges = [&]()
     {
@@ -4394,6 +5154,7 @@ QJsonObject SolverManager::nativeResultManifestForSource(const QString &sourcePa
                 result.insert(QStringLiteral("valid"), true);
                 result.insert(QStringLiteral("resultManifestRef"), descriptor.value(QStringLiteral("resultManifestRef")));
                 result.insert(QStringLiteral("resultManifestSha256"), descriptor.value(QStringLiteral("resultManifestSha256")));
+                result.insert(QStringLiteral("nativeArtifact"),QJsonObject{{QStringLiteral("executionContext"),record.value(QStringLiteral("nativeResultProvenance")).toObject().value(QStringLiteral("executionContext"))}});
                 return;
             }
         }
@@ -4658,30 +5419,83 @@ bool SolverManager::hasLiveModelTasks() const
 
 void SolverManager::stopRunningTasks()
 {
-    QList<SolverTask*> solverTasks;
+    QString stopError;
+    if (!this->invokeOnOwner([this, &stopError]()
     {
-        QMutexLocker<QRecursiveMutex> locker(&this->jobsMutex);
-        for (RJob *job : this->runningJobs)
+        QList<QPointer<SolverTask>> solverTasks;
         {
-            if (auto *solverTask = dynamic_cast<SolverTask*>(job)) solverTasks.append(solverTask);
+            QMutexLocker<QRecursiveMutex> locker(&this->jobsMutex);
+            for (RJob *job : this->runningJobs)
+                if (auto *task = dynamic_cast<SolverTask*>(job)) solverTasks.append(task);
         }
-    }
-    for (SolverTask *solverTask : solverTasks)
-    {
-        RLogger::info("Stopping solver task (#%s).\n",solverTask->getTaskID().toString().toUtf8().constData());
-        QString message = solverTask->getStopCommand();
-        foreach (QLocalSocket *localSocket, this->taskClients)
+        for (const QPointer<SolverTask> &task : solverTasks)
         {
+            if (!task) continue;
+            const QString jobId = task->getTaskID().toString();
+            if (this->nativeJobs.contains(jobId))
+            {
+                if (this->nativeTasks.value(jobId) != task) continue;
+                const QJsonObject before = this->nativeJobs.value(jobId);
+                const QString state = before.value(QStringLiteral("state")).toString();
+                if (state != QStringLiteral("queued") && state != QStringLiteral("running") &&
+                    state != QStringLiteral("cancelling")) continue;
+                if (!before.value(QStringLiteral("cancellationRequested")).toBool())
+                {
+                    const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+                    if (!this->updateNativeJob(jobId,
+                            {{QStringLiteral("state"), QStringLiteral("cancelling")},
+                             {QStringLiteral("cancellationRequested"), true},
+                             {QStringLiteral("cancelRequestedAt"), now},
+                             {QStringLiteral("updatedAt"), now}}))
+                    {
+                        // updateNativeJob retains failed candidates in RAM. Stop
+                        // must retain the original intent and its durable hash;
+                        // leave the persistence diagnostic intact and send no IPC.
+                        this->nativeJobs.insert(jobId, before);
+                        const QString persistenceDetail = this->nativeJobDiagnostics.value(jobId)
+                                                              .value(QStringLiteral("message")).toString();
+                        const QString message = persistenceDetail.isEmpty()
+                                ? QStringLiteral("Could not persist the user Stop request for job %1.").arg(jobId)
+                                : QStringLiteral("Could not persist the user Stop request for job %1: %2")
+                                      .arg(jobId, persistenceDetail);
+                        if (stopError.isEmpty()) stopError = message;
+                        RLogger::error("%s\n", message.toUtf8().constData());
+                        continue;
+                    }
+                }
+                else
+                {
+                    QString persistenceError;
+                    if (!this->validateNativeJobRecordOnDisk(jobId, &persistenceError))
+                    {
+                        if (stopError.isEmpty()) stopError = persistenceError;
+                        continue;
+                    }
+                }
+                // Separate from killRequested: the worker still verifies and
+                // retains the normally exited child's accepted-prefix result.
+                if (!task) continue;
+                task->requestGracefulStop();
+            }
+            // Unregistered legacy tasks retain their historical Stop behavior.
+            RLogger::info("Stopping solver task (#%s).\n",jobId.toUtf8().constData());
+            const QString message = task->getStopCommand();
             QByteArray block;
             QDataStream out(&block, QIODevice::WriteOnly);
             out.setVersion(QDataStream::Qt_6_8);
-            RLogger::info("Sendig signal: %s\n",message.toUtf8().constData());
-            out << quint32(message.size());
-            out << message;
-            localSocket->write(block);
-            localSocket->flush();
+            out << quint32(message.size()) << message;
+            for (QLocalSocket *socket : this->taskClients)
+            {
+                if (socket->state() != QLocalSocket::ConnectedState) continue;
+                RLogger::info("Sending signal: %s\n",message.toUtf8().constData());
+                socket->write(block);
+                socket->flush();
+            }
         }
-    }
+    }))
+        throw RError(RError::Type::Application, R_ERROR_REF, "Could not dispatch Stop on the solver manager thread.");
+    if (!stopError.isEmpty())
+        throw RError(RError::Type::Application, R_ERROR_REF, "%s",stopError.toUtf8().constData());
 }
 
 void SolverManager::killRunningTasks()
@@ -4732,6 +5546,21 @@ void SolverManager::onSolverTaskNewConnection()
     RLogger::info("Task client connected\n");
     while (this->taskServer->hasPendingConnections())
     {
-        this->taskClients.append(this->taskServer->nextPendingConnection());
+        QLocalSocket *socket = this->taskServer->nextPendingConnection();
+        this->taskClients.append(socket);
+        // Stop can be durably requested while a running worker is starting its
+        // child. Deliver it on connection too; each child checks its exact task ID.
+        for (auto task = this->nativeTasks.cbegin(); task != this->nativeTasks.cend(); ++task)
+        {
+            if (!task.value() || !task.value()->hasGracefulStopRequest() ||
+                !this->nativeJobs.value(task.key()).value(QStringLiteral("cancellationRequested")).toBool()) continue;
+            const QString message = task.value()->getStopCommand();
+            QByteArray block;
+            QDataStream out(&block, QIODevice::WriteOnly);
+            out.setVersion(QDataStream::Qt_6_8);
+            out << quint32(message.size()) << message;
+            socket->write(block);
+            socket->flush();
+        }
     }
 }

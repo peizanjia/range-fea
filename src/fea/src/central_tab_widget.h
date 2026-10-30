@@ -64,6 +64,12 @@ class CentralTabWidget : public QTabWidget
 
     private:
 
+        //! Append only a bounded recent suffix to a live output document.
+        void appendRecentOutput(RTextBrowser *browser, const QString &message);
+
+        //! Explain the display limit and show the configured log when it exists.
+        void updateOutputToolTip(RTextBrowser *browser, const QString &logFileName);
+
         //! Set text and icon for given tab.
         void setTabTitle(CentralTabWidget::Type tabType, RMessage::Type messageType = RMessage::Type::None, const QString &additionalText = QString());
 

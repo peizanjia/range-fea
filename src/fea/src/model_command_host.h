@@ -26,6 +26,9 @@ public:
     QJsonObject handle(const QJsonObject &request);
     //! Trusted read-only route. Metadata cannot grant proposal or execution rights.
     QJsonObject handleReadOnly(const QJsonObject &request, const QJsonArray &pinnedDocuments = {});
+    //! C++-only join of a completed trusted experiment with its exact verified child evidence.
+    //! This snapshot is not exposed through handle() or any model tool schema.
+    QJsonObject evaluationEvidenceSnapshot(const QString &experimentId) const;
     //! Trusted GUI approval boundary. This is deliberately not a handle operation.
     bool approvePreview(const QString &previewId);
     bool configureModal(const QList<uint> &modelIDs, const RModalSetup &setup, QString *error = nullptr);
@@ -48,10 +51,12 @@ signals:
     void eventPublished(const QJsonObject &event);
 
 private:
+    friend class Session;
     struct State;
     std::unique_ptr<State> state;
     Session *session;
     void pruneClosedModels();
+    void finalizeExperimentJob(const QString &jobId);
     bool closeEditingDurably(const QString &documentId, QString *error = nullptr,
                              const RProjectCatalog::PublicationLeasePtr &publicationLease = {});
     bool recordExternalChangeAfterNotification(uint modelID, const QString &reason,

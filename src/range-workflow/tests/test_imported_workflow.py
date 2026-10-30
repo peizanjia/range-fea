@@ -13,6 +13,7 @@ import unittest
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow import WorkflowClient, compare_native_series
 from range_workflow.model_sources import register_snapshot_source
 from range_workflow.project_catalog import resolve_project_snapshot

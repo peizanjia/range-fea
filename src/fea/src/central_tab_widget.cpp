@@ -1,6 +1,9 @@
 #include <QMessageBox>
 #include <QApplication>
 #include <QScrollBar>
+#include <QFileInfo>
+#include <QTextBlock>
+#include <QTextDocument>
 
 #include <rgl_logger_handler.h>
 
@@ -14,10 +17,28 @@ const QString CentralTabWidget::severeIconFile(":/icons/file/pixmaps/range-sever
 
 const bool useTabIcons = false;
 
+namespace
+{
+constexpr int maximumOutputBlocks = 2000;
+// QTextDocument includes the final paragraph terminator in characterCount().
+constexpr int maximumOutputCharacters = 256 * 1024;
+
+bool isOutputParagraphBreak(QChar character)
+{
+    return character == QLatin1Char('\n') || character == QLatin1Char('\r')
+        || character == QChar::ParagraphSeparator
+        || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1;
+}
+}
+
 CentralTabWidget::CentralTabWidget(QWidget *parent)
     : QTabWidget(parent)
 {
     this->setTabPosition(QTabWidget::South);
+    // Settings may create/log missing directories. Resolve once before this
+    // widget connects to RLoggerHandler; never call the getter under its lock.
+    this->setProperty("configuredApplicationLogFileName",
+                      Application::instance()->getApplicationSettings()->getLogFileName());
 
     this->mdiArea = new QMdiArea(this);
     this->mdiArea->setObjectName(QString::fromUtf8("mdiArea"));
@@ -26,6 +47,14 @@ CentralTabWidget::CentralTabWidget(QWidget *parent)
 
     this->applicationOutputBrowser = new RTextBrowser(true);
     this->processOutputBrowser = new RTextBrowser(true);
+    this->applicationOutputBrowser->setObjectName(QStringLiteral("applicationOutputBrowser"));
+    this->processOutputBrowser->setObjectName(QStringLiteral("processOutputBrowser"));
+    for (auto *browser : {this->applicationOutputBrowser, this->processOutputBrowser})
+    {
+        browser->document()->setUndoRedoEnabled(false);
+        browser->document()->setMaximumBlockCount(maximumOutputBlocks);
+        this->updateOutputToolTip(browser, QString());
+    }
     this->pickDetailsTree = new PickDetailsTree;
 
 
@@ -61,6 +90,82 @@ CentralTabWidget::CentralTabWidget(QWidget *parent)
 QMdiArea *CentralTabWidget::getMdiArea()
 {
     return this->mdiArea;
+}
+
+void CentralTabWidget::updateOutputToolTip(RTextBrowser *browser, const QString &logFileName)
+{
+    if (browser->property("outputLogFileName").toString() == logFileName
+        && !browser->toolTip().isEmpty())
+        return;
+    QString text = tr("Recent output only. Older messages remain in log files.");
+    browser->setProperty("outputLogFileName", QString());
+    if (!logFileName.isEmpty())
+    {
+        const QFileInfo file(logFileName);
+        if (file.isFile())
+        {
+            text += tr("\nFull log: %1").arg(file.absoluteFilePath());
+            browser->setProperty("outputLogFileName", logFileName);
+        }
+    }
+    browser->setToolTip(text);
+}
+
+void CentralTabWidget::appendRecentOutput(RTextBrowser *browser, const QString &message)
+{
+    // Bound the incoming suffix before allocating or inserting it. CRLF is one
+    // paragraph break in QTextCursor::insertText; the frame markers also break
+    // paragraphs there. A single enormous line must obey the character bound.
+    qsizetype start = qMax(qsizetype(0), message.size() - (maximumOutputCharacters - 1));
+    if (start > 0 && message.at(start - 1).isHighSurrogate() && message.at(start).isLowSurrogate())
+        ++start;
+    int breaks = 0;
+    for (qsizetype index = message.size(); index > start;)
+    {
+        --index;
+        if (!isOutputParagraphBreak(message.at(index)))
+            continue;
+        if (++breaks == maximumOutputBlocks)
+        {
+            start = index + 1;
+            --breaks;
+            break;
+        }
+        if (message.at(index) == QLatin1Char('\n') && index > start
+            && message.at(index - 1) == QLatin1Char('\r'))
+            --index;
+    }
+    const QString suffix = message.mid(start);
+    auto *document = browser->document();
+    const QTextCharFormat format = browser->currentCharFormat();
+    QTextCursor trim(document);
+    const int retainedBlocks = maximumOutputBlocks - breaks;
+    if (document->blockCount() > retainedBlocks)
+    {
+        trim.setPosition(document->findBlockByNumber(document->blockCount() - retainedBlocks).position(),
+                         QTextCursor::KeepAnchor);
+        trim.removeSelectedText();
+    }
+    int excess = int(qMax(qsizetype(0), document->characterCount() - 1 + suffix.size()
+                                      - (maximumOutputCharacters - 1)));
+    if (excess > 0)
+    {
+        if (document->characterAt(excess - 1).isHighSurrogate()
+            && document->characterAt(excess).isLowSurrogate())
+            ++excess;
+        trim.setPosition(0);
+        trim.setPosition(excess, QTextCursor::KeepAnchor);
+        trim.removeSelectedText();
+    }
+    browser->moveCursor(QTextCursor::End);
+    browser->setCurrentCharFormat(format);
+    browser->insertPlainText(suffix);
+
+    // The logger handler emits while holding its lock. Neither RLogger nor
+    // settings directory getters are safe to call from this callback.
+    this->updateOutputToolTip(browser, browser == this->processOutputBrowser
+        ? SolverManager::getInstance().getLastLogFileName()
+        : this->property("configuredApplicationLogFileName").toString());
 }
 
 void CentralTabWidget::setTabTitle(CentralTabWidget::Type tabType, RMessage::Type messageType, const QString &additionalText)
@@ -183,7 +288,7 @@ void CentralTabWidget::onInfoPrinted(const RMessage &message)
     this->applicationOutputBrowser->moveCursor(QTextCursor::End);
     this->applicationOutputBrowser->setTextBackgroundColor(QApplication::palette().base().color());
     this->applicationOutputBrowser->setTextColor(QApplication::palette().text().color());
-    this->applicationOutputBrowser->insertPlainText(RMessage::messageToLogString(message));
+    this->appendRecentOutput(this->applicationOutputBrowser, RMessage::messageToLogString(message));
     this->applicationOutputBrowser->moveCursor(QTextCursor::End);
     if (scrollBarAtMax)
     {
@@ -206,7 +311,7 @@ void CentralTabWidget::onWarningPrinted(const RMessage &message)
     this->applicationOutputBrowser->moveCursor(QTextCursor::End);
     this->applicationOutputBrowser->setTextBackgroundColor(QApplication::palette().base().color());
     this->applicationOutputBrowser->setTextColor(QColor(170,0,0));
-    this->applicationOutputBrowser->insertPlainText(RMessage::messageToLogString(message));
+    this->appendRecentOutput(this->applicationOutputBrowser, RMessage::messageToLogString(message));
     this->applicationOutputBrowser->moveCursor(QTextCursor::End);
     this->applicationOutputBrowser->setTextColor(QApplication::palette().text().color());
     this->applicationOutputBrowser->setCurrentCharFormat(charFormat);
@@ -222,7 +327,7 @@ void CentralTabWidget::onErrorPrinted(const RMessage &message)
     this->applicationOutputBrowser->moveCursor(QTextCursor::End);
     this->applicationOutputBrowser->setTextBackgroundColor(QColor(170,0,0));
     this->applicationOutputBrowser->setTextColor(QColor(255,255,255));
-    this->applicationOutputBrowser->insertPlainText(RMessage::messageToLogString(message));
+    this->appendRecentOutput(this->applicationOutputBrowser, RMessage::messageToLogString(message));
     this->applicationOutputBrowser->moveCursor(QTextCursor::End);
     this->applicationOutputBrowser->setTextBackgroundColor(QApplication::palette().base().color());
     this->applicationOutputBrowser->setTextColor(QApplication::palette().text().color());
@@ -242,7 +347,7 @@ void CentralTabWidget::onProcessReadyStandardOutput(const QString &message)
     this->processOutputBrowser->moveCursor(QTextCursor::End);
     this->processOutputBrowser->setTextBackgroundColor(QApplication::palette().base().color());
     this->processOutputBrowser->setTextColor(QApplication::palette().text().color());
-    this->processOutputBrowser->insertPlainText(message);
+    this->appendRecentOutput(this->processOutputBrowser, message);
     this->processOutputBrowser->moveCursor(QTextCursor::End);
     if (scrollBarAtMax)
     {
@@ -260,14 +365,13 @@ void CentralTabWidget::onProcessReadyStandardError(const QString &message)
     this->processOutputBrowser->moveCursor(QTextCursor::End);
     this->processOutputBrowser->setTextBackgroundColor(QColor(170,0,0));
     this->processOutputBrowser->setTextColor(QColor(255,255,255));
-    this->processOutputBrowser->insertPlainText(message);
+    this->appendRecentOutput(this->processOutputBrowser, message);
     this->processOutputBrowser->moveCursor(QTextCursor::End);
     this->processOutputBrowser->setTextBackgroundColor(QApplication::palette().base().color());
     this->processOutputBrowser->setTextColor(QApplication::palette().text().color());
     this->processOutputBrowser->setCurrentCharFormat(charFormat);
     QScrollBar *sb = this->processOutputBrowser->verticalScrollBar();
     sb->setValue(sb->maximum());
-    this->setCurrentIndex(this->processOutputTabPosition);
     this->setTabTitle(CentralTabWidget::ProcessOutput,RMessage::Type::Error);
 }
 
@@ -302,15 +406,18 @@ void CentralTabWidget::onPickLostChanged()
 
 void CentralTabWidget::onSolverJobStarted()
 {
-    this->setCurrentIndex(this->processOutputTabPosition);
+    this->updateOutputToolTip(this->processOutputBrowser, SolverManager::getInstance().getLastLogFileName());
+    this->setTabTitle(CentralTabWidget::ProcessOutput, RMessage::Type::Info);
 }
 
 void CentralTabWidget::onSolverJobFinished()
 {
-    this->setCurrentIndex(this->processOutputTabPosition);
+    this->updateOutputToolTip(this->processOutputBrowser, SolverManager::getInstance().getLastLogFileName());
+    this->setTabTitle(CentralTabWidget::ProcessOutput, RMessage::Type::Info);
 }
 
 void CentralTabWidget::onSolverJobFailed()
 {
-    this->setCurrentIndex(this->processOutputTabPosition);
+    this->updateOutputToolTip(this->processOutputBrowser, SolverManager::getInstance().getLastLogFileName());
+    this->setTabTitle(CentralTabWidget::ProcessOutput, RMessage::Type::Error);
 }

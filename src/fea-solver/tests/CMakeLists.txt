@@ -1,9 +1,22 @@
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+qt_add_executable(tst_native_piezo_accepted_trace
+    tst_native_piezo_accepted_trace.cpp ../src/native_accepted_checkpoint.cpp)
+target_include_directories(tst_native_piezo_accepted_trace PRIVATE ../src)
+target_link_libraries(tst_native_piezo_accepted_trace PRIVATE range-application-lib Qt6::Test)
+add_test(NAME tst_native_piezo_accepted_trace COMMAND tst_native_piezo_accepted_trace
+    -o "${CMAKE_CURRENT_BINARY_DIR}/native-piezo-trace-detail.txt,txt" -o -,txt)
+set_tests_properties(tst_native_piezo_accepted_trace PROPERTIES TIMEOUT 600)
+if(WIN32)
+    set_tests_properties(tst_native_piezo_accepted_trace PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 qt_add_executable(tst_native_accepted_checkpoint
     tst_native_accepted_checkpoint.cpp ../src/native_accepted_checkpoint.cpp)
 target_include_directories(tst_native_accepted_checkpoint PRIVATE ../src)
-target_link_libraries(tst_native_accepted_checkpoint PRIVATE range-solver-lib Qt6::Test)
+target_link_libraries(tst_native_accepted_checkpoint PRIVATE range-application-lib Qt6::Test)
+target_compile_definitions(tst_native_accepted_checkpoint PRIVATE RANGE_NATIVE_CHECKPOINT_TEST_HOOKS=1)
 add_test(NAME tst_native_accepted_checkpoint COMMAND tst_native_accepted_checkpoint)
 if(WIN32)
     set_tests_properties(tst_native_accepted_checkpoint PROPERTIES
@@ -15,7 +28,7 @@ qt_add_executable(tst_runtime_control_bridge
     ../src/runtime_parameter_gate.cpp ../src/native_execution_gate.cpp
     ../src/native_accepted_checkpoint.cpp)
 target_include_directories(tst_runtime_control_bridge PRIVATE ../src)
-target_link_libraries(tst_runtime_control_bridge PRIVATE range-solver-lib Qt6::Test Qt6::Network)
+target_link_libraries(tst_runtime_control_bridge PRIVATE range-application-lib Qt6::Test Qt6::Network)
 add_test(NAME tst_runtime_control_bridge COMMAND tst_runtime_control_bridge)
 set_tests_properties(tst_runtime_control_bridge PROPERTIES TIMEOUT 60)
 if(WIN32)
@@ -63,10 +76,14 @@ if(RANGE_REQUIRE_NUMERIC_TESTS)
 else()
     find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
 endif()
+file(TO_CMAKE_PATH "${Python3_EXECUTABLE}" _range_python3_executable_cmake)
 if(Python3_Interpreter_FOUND)
-    add_test(NAME tst_control_tcp_bridge COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_control_tcp_bridge.py")
-    add_test(NAME tst_control_learned COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_control_learned.py")
-    add_test(NAME tst_control_velocity_cpp COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_control_velocity_cpp.py" "$<TARGET_FILE:range-control-velocity>")
+    add_test(NAME tst_stage9_runtime_startup COMMAND "${Python3_EXECUTABLE}" -B
+        "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_runtime_startup.py" -v)
+    set_tests_properties(tst_stage9_runtime_startup PROPERTIES TIMEOUT 60)
+    add_test(NAME tst_control_tcp_bridge COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_control_tcp_bridge.py")
+    add_test(NAME tst_control_learned COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_control_learned.py")
+    add_test(NAME tst_control_velocity_cpp COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_control_velocity_cpp.py" "$<TARGET_FILE:range-control-velocity>")
     if(WIN32)
         set_tests_properties(tst_control_velocity_cpp PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -78,7 +95,7 @@ if(Python3_Interpreter_FOUND)
         target_include_directories(tst_controller_adapters_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../range-solver-lib/tests")
         target_link_libraries(tst_controller_adapters_cli PRIVATE range-solver-lib Qt6::Test)
         target_compile_definitions(tst_controller_adapters_cli PRIVATE
-            RANGE_CONTROL_PYTHON="${Python3_EXECUTABLE}"
+            RANGE_CONTROL_PYTHON="${_range_python3_executable_cmake}"
             RANGE_CONTROL_EXAMPLES="${CMAKE_CURRENT_SOURCE_DIR}/../examples")
         execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import torch"
             RESULT_VARIABLE control_torch_available OUTPUT_QUIET ERROR_QUIET)
@@ -93,13 +110,13 @@ if(Python3_Interpreter_FOUND)
             set_tests_properties(tst_controller_adapters_cli PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         endif()
-        add_test(NAME tst_stage9_analysis COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_analysis.py")
-        add_test(NAME tst_stage9_velocity_controller COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_velocity_controller.py")
+        add_test(NAME tst_stage9_analysis COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_analysis.py")
+        add_test(NAME tst_stage9_velocity_controller COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_stage9_velocity_controller.py")
         qt_add_executable(tst_stage9_cli tst_stage9_cli.cpp)
         target_include_directories(tst_stage9_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../range-solver-lib/tests")
         target_link_libraries(tst_stage9_cli PRIVATE range-solver-lib Qt6::Test)
         target_compile_definitions(tst_stage9_cli PRIVATE
-            RANGE_STAGE9_PYTHON="${Python3_EXECUTABLE}"
+            RANGE_STAGE9_PYTHON="${_range_python3_executable_cmake}"
             RANGE_STAGE9_EXAMPLES="${CMAKE_CURRENT_SOURCE_DIR}/../examples/stage9")
         add_dependencies(tst_stage9_cli fea-solver)
         add_test(NAME tst_stage9_cli COMMAND tst_stage9_cli)
@@ -150,7 +167,7 @@ qt_add_executable(tst_native_mixed_run
     tst_native_mixed_run.cpp
     ../src/native_accepted_checkpoint.cpp)
 target_include_directories(tst_native_mixed_run PRIVATE ../src)
-target_link_libraries(tst_native_mixed_run PRIVATE range-solver-lib Qt6::Test)
+target_link_libraries(tst_native_mixed_run PRIVATE range-application-lib Qt6::Test)
 target_compile_definitions(tst_native_mixed_run PRIVATE
     RANGE_FEA_SOLVER_EXECUTABLE="$<TARGET_FILE:fea-solver>")
 add_dependencies(tst_native_mixed_run fea-solver)
@@ -165,7 +182,7 @@ qt_add_executable(tst_native_control_run
     tst_native_control_run.cpp
     ../src/native_accepted_checkpoint.cpp)
 target_include_directories(tst_native_control_run PRIVATE ../src)
-target_link_libraries(tst_native_control_run PRIVATE range-solver-lib Qt6::Test)
+target_link_libraries(tst_native_control_run PRIVATE range-application-lib Qt6::Test)
 target_compile_definitions(tst_native_control_run PRIVATE
     RANGE_FEA_SOLVER_EXECUTABLE="$<TARGET_FILE:fea-solver>")
 add_dependencies(tst_native_control_run fea-solver)
@@ -176,6 +193,48 @@ if(WIN32)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 target_link_libraries(control_ndjson_fixture PRIVATE Qt6::Core)
+qt_add_executable(tst_piezo_native_backend_bridge
+    tst_piezo_native_backend_bridge.cpp)
+target_include_directories(tst_piezo_native_backend_bridge PRIVATE ../src)
+target_link_libraries(tst_piezo_native_backend_bridge PRIVATE range-application-lib Qt6::Test)
+target_compile_definitions(tst_piezo_native_backend_bridge PRIVATE
+    RANGE_PIEZO_BACKEND_PYTHON="${RANGE_PRIVATE_PYTHON_DIRECTORY_CMAKE}/python.exe"
+    RANGE_PIEZO_BACKEND_MODULE_ROOT="${CMAKE_SOURCE_DIR}/range-workflow/python")
+add_test(NAME tst_piezo_native_backend_bridge COMMAND tst_piezo_native_backend_bridge
+    -o "${CMAKE_CURRENT_BINARY_DIR}/piezo-backend-bridge-detail.txt,txt" -o -,txt)
+# Includes real beam/plate observer and MPC restart at every multirate phase.
+set_tests_properties(tst_piezo_native_backend_bridge PROPERTIES TIMEOUT 1800)
+if(WIN32)
+    set_tests_properties(tst_piezo_native_backend_bridge PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
+qt_add_executable(tst_native_layered_run
+    tst_native_layered_run.cpp
+    ../src/native_accepted_checkpoint.cpp)
+target_include_directories(tst_native_layered_run PRIVATE ../src)
+target_link_libraries(tst_native_layered_run PRIVATE range-application-lib Qt6::Test)
+target_compile_definitions(tst_native_layered_run PRIVATE
+    RANGE_FEA_SOLVER_EXECUTABLE="$<TARGET_FILE:fea-solver>")
+add_dependencies(tst_native_layered_run fea-solver)
+add_test(NAME tst_native_layered_run COMMAND tst_native_layered_run
+    -o "${CMAKE_CURRENT_BINARY_DIR}/native-layered-detail.txt,txt" -o -,txt)
+if(WIN32)
+    set_tests_properties(tst_native_layered_run PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
+qt_add_executable(tst_native_axial_run tst_native_axial_run.cpp ../src/native_accepted_checkpoint.cpp)
+target_include_directories(tst_native_axial_run PRIVATE ../src)
+target_link_libraries(tst_native_axial_run PRIVATE range-application-lib Qt6::Test Qt6::Network)
+target_compile_definitions(tst_native_axial_run PRIVATE RANGE_FEA_SOLVER_EXECUTABLE="$<TARGET_FILE:fea-solver>")
+add_dependencies(tst_native_axial_run fea-solver)
+add_test(NAME tst_native_axial_run COMMAND tst_native_axial_run
+    -o "${CMAKE_CURRENT_BINARY_DIR}/native-axial-detail.txt,txt" -o -,txt)
+set_tests_properties(tst_native_axial_run PROPERTIES TIMEOUT 900)
+if(WIN32)
+    set_tests_properties(tst_native_axial_run PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
 
 qt_add_executable(tst_control_ndjson_transport
     tst_control_ndjson_transport.cpp

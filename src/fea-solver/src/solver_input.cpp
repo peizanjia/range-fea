@@ -21,7 +21,10 @@ void SolverInput::_init(const SolverInput *pSolverInput)
         this->typedConfigurationFileName = pSolverInput->typedConfigurationFileName;
         this->nativeCheckpointDirectory = pSolverInput->nativeCheckpointDirectory;
         this->nativeCheckpointContextJson = pSolverInput->nativeCheckpointContextJson;
+        this->nativeAcceptedTrace = pSolverInput->nativeAcceptedTrace;
         this->nativeMixedStepBudget = pSolverInput->nativeMixedStepBudget;
+        this->nativeLayeredStepBudget = pSolverInput->nativeLayeredStepBudget;
+        this->nativeAxialStepBudget = pSolverInput->nativeAxialStepBudget;
         this->nativeExecutionGate = pSolverInput->nativeExecutionGate;
         this->restart = pSolverInput->restart;
     }
@@ -130,4 +133,14 @@ void SolverInput::setNativeExecutionGate(
 void SolverInput::setNativeMixedStepBudget(uint steps)
 {
     this->nativeMixedStepBudget = steps;
+}
+
+void SolverInput::setNativeLayeredStepBudget(uint steps)
+{
+    this->nativeLayeredStepBudget = steps;
+}
+
+void SolverInput::setNativeAxialStepBudget(uint steps)
+{
+    this->nativeAxialStepBudget = steps;
 }

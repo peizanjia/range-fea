@@ -1099,7 +1099,7 @@ void TestSolverAuditCli::nativeExecutionGatePausesAtAcceptedBoundaryAndResumesEx
     QCOMPARE(pausedState.value(QStringLiteral("pauseAtAcceptedSeq")).toDouble(),15.0);
     QCOMPARE(pausedState.value(QStringLiteral("acceptedSeq")).toDouble(),15.0);
     QCOMPARE(pausedState.value(QStringLiteral("checkpointAvailable")).toBool(),true);
-    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),15.0);
     QCOMPARE(pausedState.value(QStringLiteral("sourceSha256")).toString(),initialSourceSha256);
     QCOMPARE(pausedState.value(QStringLiteral("modelSha256")).toString(),initialModelSha256);
     QCOMPARE(pausedState.value(QStringLiteral("contextSha256")).toString(),sha256Bytes(contextBytes));
@@ -1474,8 +1474,13 @@ void TestSolverAuditCli::nativeExecutionGateRefusesExternalStateReplacement()
     QVERIFY2(pausedState.value(QStringLiteral("state")).toString() == QStringLiteral("paused"),
              qPrintable(pauseDiagnostic));
     QCOMPARE(pausedState.value(QStringLiteral("acceptedSeq")).toDouble(),15.0);
-    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),10.0);
+    QCOMPARE(pausedState.value(QStringLiteral("checkpointAcceptedSeq")).toDouble(),15.0);
     QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),15);
+
+    const auto checkpointsAtPause = nativeCheckpointEnvelopes(checkpointDirectory);
+    QCOMPARE(checkpointsAtPause.size(),2);
+    QCOMPARE(checkpointsAtPause.front().value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+    QCOMPARE(checkpointsAtPause.back().value(QStringLiteral("acceptedSeq")).toDouble(),15.0);
 
     const QByteArray externalContents("external state replacement must survive");
     QFile stateFile(statePath);
@@ -1490,9 +1495,7 @@ void TestSolverAuditCli::nativeExecutionGateRefusesExternalStateReplacement()
     QCOMPARE(stateFile.readAll(),externalContents);
     stateFile.close();
     QCOMPARE(nativeResultJournalRecords(resultJournalPath).size(),15);
-    QCOMPARE(nativeCheckpointEnvelopes(checkpointDirectory).size(),1);
-    QCOMPARE(nativeCheckpointEnvelopes(checkpointDirectory).front()
-                 .value(QStringLiteral("acceptedSeq")).toDouble(),10.0);
+    QCOMPARE(nativeCheckpointEnvelopes(checkpointDirectory),checkpointsAtPause);
 }
 
 void TestSolverAuditCli::staticCablePersistsCertifiedResult_data()

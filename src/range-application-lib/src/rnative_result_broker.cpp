@@ -1,4 +1,9 @@
 #include "rnative_result_broker.h"
+#include "piezo_result_series.h"
+#include "piezo_runtime_identity.h"
+#include <rstructural_truss_native_run.h>
+#include <map>
+#include <memory>
 
 #include <algorithm>
 #include <cmath>
@@ -6,6 +11,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -21,12 +27,40 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QStringList>
+#include <QTemporaryDir>
 
 #include <rml_file_header.h>
 #include <rml_file_io.h>
 #include <rml_file_utils.h>
 #include <rml_model.h>
 #include <rml_element_descriptor.h>
+
+#if defined(RANGE_APPLICATION_TEST_HOOKS)
+#include "rnative_result_broker_test_support.h"
+
+namespace
+{
+std::mutex frameParseHookMutex;
+RNativeResultBrokerTestSupport::FrameParseHook frameParseHook;
+
+void notifyFrameParseHook(const QString &path, RNativeResultBrokerTestSupport::FrameParsePhase phase)
+{
+    RNativeResultBrokerTestSupport::FrameParseHook hook;
+    {
+        std::lock_guard<std::mutex> lock(frameParseHookMutex);
+        hook = frameParseHook;
+    }
+    if (hook) hook(path, phase);
+}
+}
+
+void RNativeResultBrokerTestSupport::setFrameParseHookForTesting(FrameParseHook hook)
+{
+    std::lock_guard<std::mutex> lock(frameParseHookMutex);
+    frameParseHook = std::move(hook);
+}
+#endif
 
 namespace
 {
@@ -39,6 +73,7 @@ constexpr uint MaxNodes = 100000;
 constexpr int MaxPageSize = 200;
 constexpr int MaxSnapshotChannels = 16;
 constexpr qint64 MaxSnapshotBytes = 32 * 1024 * 1024;
+constexpr qint64 MaxVerifiedModelBytes = MaxSnapshotBytes;
 constexpr int MaxSnapshotValidatedFiles = 100000;
 const QString ManifestName = QStringLiteral("native-result.manifest.json");
 const QString ManifestApiVersion = QStringLiteral("range.native-results/v1");
@@ -198,6 +233,16 @@ QString hashFile(const QString &path, qint64 maximumBytes, const QString &code)
     return sha256;
 }
 
+void recheckValidatedFiles(const ValidatedHashLedger &ledger)
+{
+    SnapshotHashGuard suspend(nullptr);
+    for(auto it=ledger.constBegin();it!=ledger.constEnd();++it){const QFileInfo info(it.key());
+        if(info.isSymLink() || info.canonicalFilePath()!=it->canonicalPath ||
+           hashFile(it.key(),it->maximumBytes,QStringLiteral("RESULT_CHANGED_DURING_READ"))!=it->sha256)
+            fail(QStringLiteral("RESULT_CHANGED_DURING_READ"),QStringLiteral("A validated native result or ancestry artifact changed before the operation completed."));
+    }
+}
+
 QString canonicalDirectory(const QString &path)
 {
     const QFileInfo info(path);
@@ -227,6 +272,82 @@ QString safeChildPath(const QString &canonicalRoot,
     if (parent.isEmpty() || QDir::cleanPath(parent) != canonicalRoot)
         fail(code, QStringLiteral("A result artifact must be a direct child of the canonical result directory."));
     return QDir(canonicalRoot).filePath(info.fileName());
+}
+
+void preflightVerifiedModelByteBudget(const QString &manifestPath,
+                                     const QString &expectedManifestSha256)
+{
+    if (!isSha256(expectedManifestSha256))
+        fail(QStringLiteral("INVALID_EXPECTED_SHA256"), QStringLiteral("expectedSha256 must be a lowercase SHA-256 digest."));
+
+    const QFileInfo manifestInfo(manifestPath);
+    if (manifestInfo.isSymLink() || QFileInfo(manifestInfo.absolutePath()).isSymLink() ||
+        !manifestInfo.exists() || !manifestInfo.isFile() || manifestInfo.fileName() != ManifestName)
+        fail(QStringLiteral("INVALID_MANIFEST_PATH"), QStringLiteral("The manifest must be the published regular native result manifest."));
+    const QString root = manifestInfo.absoluteDir().canonicalPath();
+    if (root.isEmpty())
+        fail(QStringLiteral("INVALID_MANIFEST_PATH"), QStringLiteral("The manifest directory has no canonical path."));
+    const QString checkedManifest = safeChildPath(QDir::cleanPath(root), manifestInfo.absoluteFilePath(),
+        QStringLiteral("INVALID_MANIFEST_PATH"));
+
+    QFile manifestFile(checkedManifest);
+    if (!manifestFile.open(QIODevice::ReadOnly) || manifestFile.size() < 0 ||
+        manifestFile.size() > MaxManifestBytes)
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The manifest is unreadable or exceeds 16 MiB."));
+    const QByteArray bytes = manifestFile.read(MaxManifestBytes + 1);
+    if (bytes.size() > MaxManifestBytes || !manifestFile.atEnd() || manifestFile.error() != QFile::NoError)
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The manifest exceeds 16 MiB while being read."));
+    if (digestBytes(bytes) != expectedManifestSha256)
+        fail(QStringLiteral("STALE_MANIFEST_SHA256"), QStringLiteral("The manifest bytes do not match expectedSha256."));
+    recordValidatedHash(checkedManifest, expectedManifestSha256, MaxManifestBytes);
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The hash-bound manifest is not a JSON object."));
+    const QJsonObject manifest = document.object();
+    const QString analysisType = manifest.value(QStringLiteral("analysis")).toObject()
+        .value(QStringLiteral("type")).toString();
+    QStringList relativePaths;
+    if (analysisType == QLatin1String("structural-dynamics"))
+    {
+        const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
+        if (frames.isEmpty() || frames.size() > MaxFrames)
+            fail(QStringLiteral("UNSUPPORTED_FRAME_LIMIT"),
+                 QStringLiteral("Verified extraction requires 1 through 10000 persisted MODEL frames."));
+        relativePaths.reserve(frames.size());
+        for (const QJsonValue &value : frames)
+        {
+            if (!value.isObject() || !value.toObject().value(QStringLiteral("relativePath")).isString())
+                fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("A transient frame has no bounded MODEL path."));
+            relativePaths.append(value.toObject().value(QStringLiteral("relativePath")).toString());
+        }
+    }
+    else if (analysisType == QLatin1String("static") || analysisType == QLatin1String("modal"))
+    {
+        const QJsonObject terminal = manifest.value(QStringLiteral("terminalModel")).toObject();
+        if (!terminal.value(QStringLiteral("relativePath")).isString())
+            fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The terminal MODEL path is missing."));
+        relativePaths.append(terminal.value(QStringLiteral("relativePath")).toString());
+    }
+    else
+        fail(QStringLiteral("INVALID_MANIFEST"), QStringLiteral("The manifest analysis type is unsupported."));
+
+    qint64 aggregateBytes = 0;
+    for (const QString &relativePath : relativePaths)
+    {
+        const QString modelPath = safeChildPath(root, QDir(root).filePath(relativePath),
+            QStringLiteral("UNSAFE_RESULT_PATH"));
+        const QFileInfo modelInfo(modelPath);
+        const qint64 modelBytes = modelInfo.size();
+        if (modelBytes <= 0 || modelBytes > MaxFrameBytes)
+            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"),
+                 QStringLiteral("A MODEL exceeds the broker's 256 MiB per-record limit."));
+        if (modelBytes > MaxVerifiedModelBytes - aggregateBytes)
+            fail(QStringLiteral("UNSUPPORTED_SIZE_LIMIT"),
+                 QStringLiteral("Verified extraction exceeds the 32 MiB aggregate MODEL byte limit."));
+        aggregateBytes += modelBytes;
+    }
 }
 
 bool isBinaryModelPath(const QString &path)
@@ -557,6 +678,52 @@ bool closeTime(double a, double b)
     return std::fabs(a - b) <= 1.0e-10 * std::max(1.0, std::max(std::fabs(a), std::fabs(b)));
 }
 
+// A provider cache exists only inside one public owner-thread operation.
+// Nested ancestry validation borrows that scope; no provider survives a query.
+struct NativeReaderScope;
+thread_local NativeReaderScope *nativeReaders=nullptr;
+struct NativeReaderScope
+{
+    NativeReaderScope *previous=nativeReaders;
+    std::map<QString,std::unique_ptr<PiezoResultSeries::Reader>> readers;
+    NativeReaderScope(){nativeReaders=this;}
+    ~NativeReaderScope(){nativeReaders=previous;}
+};
+std::shared_ptr<const PiezoResultSeries::Frame> certifyPiezo(const RModel &model)
+{
+    if(!nativeReaders)fail(QStringLiteral("INVALID_ACCEPTED_CHECKPOINT"),QStringLiteral("Native result certification has no owner-thread query scope."));
+    const auto &p=model.getProblemSetup();const bool axial=p.getStructuralPiezoAxialSetup().enabled;
+    const QString source=axial?p.getStructuralPiezoAxialSetup().computeSourceFingerprint(model):p.getStructuralPiezoLayeredSetup().computeSourceFingerprint(model);
+    const auto key=(axial?QStringLiteral("axial:"):QStringLiteral("layered:"))+source;
+    auto &reader=nativeReaders->readers[key];if(!reader)reader=std::make_unique<PiezoResultSeries::Reader>(model);
+    return reader->certifyAcceptedModel(model);
+}
+QJsonObject piezoIdentity(const PiezoResultSeries::Frame &f)
+{
+    return {{"family",f.family},{"sourceFingerprint",f.sourceFingerprint},{"configurationIdentity",f.configurationIdentity},
+            {"backendIdentity",f.backendIdentity},{"backendControlSha256",f.backendControlSha256},
+            {"targetSteps",double(f.targetSteps)},{"dtS",f.dtS},{"initialTimeS",f.initialTimeS},
+            {"identityScope","compatibility-not-authentication"},{"electricalWorkSource",f.electricalWorkSource}};
+}
+QJsonArray piezoChannels(const PiezoResultSeries::Frame &f)
+{
+    QJsonArray result;
+    for(const auto &signal:f.channels){QString variable;
+        for(const auto &field:fieldDefinitions())if(signal.quantity==QLatin1String(field.quantity))variable=QString::fromLatin1(field.id);
+        if(variable.isEmpty())variable="native-"+signal.quantity;
+        result.append(QJsonObject{{"channelId",signal.channelId},{"variableId",variable},{"quantity",signal.quantity},{"axis",signal.axis},
+            {"unit",signal.unit},{"nodeTarget",signal.nodeTarget},{"nodePhysicalId",double(signal.physicalNodeId)},
+            {"portId",signal.portId},{"actionRecord",signal.actionRecord}});
+    }
+    return result;
+}
+
+QJsonObject acceptedCoverage(const QJsonArray &frames)
+{
+    bool continuous=true;for(qsizetype i=1;i<frames.size();++i)if(frames[i].toObject().value("recordNo").toInt()!=frames[i-1].toObject().value("recordNo").toInt()+1)continuous=false;
+    return {{"coverage","exact selected certified accepted records; no interpolation or claim of complete FE history"},{"sampledCoverage",true},{"continuousBetweenSelectedRecords",continuous}};
+}
+
 struct ModelInfo
 {
     QString analysisType;
@@ -571,6 +738,8 @@ struct ModelInfo
     bool beamModel = false;
     QVector<uint> translationNodeIds;
     QVector<uint> rotationNodeIds;
+    std::shared_ptr<const PiezoResultSeries::Frame> piezo;
+    bool nativeMixed=false;
 };
 
 ModelInfo inspectModel(const QString &path,
@@ -580,14 +749,64 @@ ModelInfo inspectModel(const QString &path,
                        RModel *parsedModel = nullptr,
                        const QString &expectedFileSha = QString())
 {
-    const QFileInfo fileInfo(path);
-    if (fileInfo.size() <= 0 || fileInfo.size() > MaxFrameBytes)
+    QFile sourceFile(path);
+    if (!sourceFile.open(QIODevice::ReadOnly))
+        fail(QStringLiteral("INVALID_NATIVE_FILE"), QStringLiteral("A native MODEL frame could not be opened."));
+    const qint64 sourceSize = sourceFile.size();
+    if (sourceSize <= 0 || sourceSize > MaxFrameBytes)
         fail(QStringLiteral("UNSUPPORTED_FRAME_SIZE"),
              QStringLiteral("A native MODEL frame exceeds the 256 MiB broker limit."));
-    const QString beforeSha = hashFile(path, MaxFrameBytes, QStringLiteral("INVALID_NATIVE_FILE"));
+
+    QTemporaryDir snapshotDirectory;
+    if (!snapshotDirectory.isValid())
+        fail(QStringLiteral("FRAME_SNAPSHOT_UNAVAILABLE"),
+             QStringLiteral("A private immutable snapshot for the native MODEL frame could not be created."));
+    const QString suffix = QFileInfo(path).suffix();
+    const QString snapshotPath = QDir(snapshotDirectory.path()).filePath(
+        QStringLiteral("verified-frame.") + suffix);
+    QFile snapshotFile(snapshotPath);
+    if (!snapshotFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        fail(QStringLiteral("FRAME_SNAPSHOT_UNAVAILABLE"),
+             QStringLiteral("A private snapshot file for the native MODEL frame could not be created."));
+
+    QCryptographicHash snapshotHash(QCryptographicHash::Sha256);
+    qint64 copiedBytes = 0;
+    while (!sourceFile.atEnd())
+    {
+        const QByteArray chunk = sourceFile.read(1024 * 1024);
+        if (chunk.isEmpty())
+        {
+            if (sourceFile.error() != QFile::NoError)
+                fail(QStringLiteral("INVALID_NATIVE_FILE"),
+                     QStringLiteral("A native MODEL frame could not be read completely."));
+            break;
+        }
+        copiedBytes += chunk.size();
+        if (copiedBytes > MaxFrameBytes)
+            fail(QStringLiteral("UNSUPPORTED_FRAME_SIZE"),
+                 QStringLiteral("A native MODEL frame grew beyond the 256 MiB broker limit while being captured."));
+        if (snapshotFile.write(chunk) != chunk.size())
+            fail(QStringLiteral("FRAME_SNAPSHOT_UNAVAILABLE"),
+                 QStringLiteral("A private native MODEL snapshot could not be written completely."));
+        snapshotHash.addData(chunk);
+    }
+    if (sourceFile.error() != QFile::NoError || copiedBytes != sourceSize)
+        fail(QStringLiteral("RESULT_CHANGED_DURING_READ"),
+             QStringLiteral("A native MODEL frame changed size while its byte snapshot was captured."));
+    sourceFile.close();
+    if (!snapshotFile.flush() || snapshotFile.size() != copiedBytes)
+        fail(QStringLiteral("FRAME_SNAPSHOT_UNAVAILABLE"),
+             QStringLiteral("The private native MODEL snapshot is incomplete."));
+    snapshotFile.close();
+
+    const QString beforeSha = QString::fromLatin1(snapshotHash.result().toHex());
     if (!expectedFileSha.isEmpty() && beforeSha != expectedFileSha)
         fail(QStringLiteral("RESULT_FRAME_TAMPERED"), QStringLiteral("A MODEL frame no longer matches its published SHA-256."));
-    const RFileHeader header = readHeader(path);
+    recordValidatedHash(path, beforeSha, MaxFrameBytes);
+    if (!snapshotFile.open(QIODevice::ReadOnly))
+        fail(QStringLiteral("FRAME_SNAPSHOT_UNAVAILABLE"),
+             QStringLiteral("The private native MODEL snapshot could not be reopened for parsing."));
+    const RFileHeader header = readHeader(snapshotPath);
     if (header.getType() != R_FILE_TYPE_MODEL)
         fail(QStringLiteral("NUMBERED_RECORD_NOT_MODEL"),
              QStringLiteral("Every numbered result record must be a raw MODEL, never a LINK."));
@@ -597,7 +816,13 @@ ModelInfo inspectModel(const QString &path,
     try
     {
         ProfileTimer timing(ProfileModelRead);
-        model.read(path);
+        #if defined(RANGE_APPLICATION_TEST_HOOKS)
+        notifyFrameParseHook(path, RNativeResultBrokerTestSupport::FrameParsePhase::BeforeParse);
+        #endif
+        model.readFromVerifiedFile(snapshotPath, snapshotFile);
+        #if defined(RANGE_APPLICATION_TEST_HOOKS)
+        notifyFrameParseHook(path, RNativeResultBrokerTestSupport::FrameParsePhase::AfterParse);
+        #endif
     }
     catch (...)
     {
@@ -611,25 +836,37 @@ ModelInfo inspectModel(const QString &path,
     const RProblemTypeMask taskTypes = model.getProblemTaskTree().getProblemTypeMask();
     const RStructuralDynamicsSetup &dynamics = model.getProblemSetup().getStructuralDynamicsSetup();
     const RStructuralControlSetup &control = model.getProblemSetup().getStructuralControlSetup();
-    try { control.validate(); }
-    catch (...) { fail(QStringLiteral("INVALID_CONTROL_METADATA"),
-                       QStringLiteral("The native MODEL has invalid persisted control metadata.")); }
-    if (control.enabled != provenance.controlEnabled ||
-        (control.enabled && control.controllerId != provenance.controllerId))
-    {
-        fail(QStringLiteral("CONTROL_PROVENANCE_MISMATCH"),
-             QStringLiteral("The MODEL control setup disagrees with caller-declared control provenance."));
-    }
-
-    ModelInfo info;
-    info.sha256 = beforeSha;
-    info.nodeIds = physicalNodeIds(model);
-    const QJsonArray nodeIdsJson = idsToJson(info.nodeIds);
-    info.nodeMapSha256 = physicalMapSha256(nodeIdsJson);
-    const QSet<uint> computable = computableStressElements(model);
-    info.translationNodeIds = translationNodePhysicalIds(model, computable);
-    info.rotationNodeIds = rotationNodePhysicalIds(model, computable);
-    info.beamModel = !info.rotationNodeIds.isEmpty();
+    ModelInfo info;info.sha256=beforeSha;info.nodeIds=physicalNodeIds(model);info.nodeMapSha256=physicalMapSha256(idsToJson(info.nodeIds));
+    const auto &setup=model.getProblemSetup();
+    const bool nativePiezo=setup.getStructuralPiezoAxialSetup().enabled || setup.getStructuralPiezoLayeredSetup().enabled;
+    info.nativeMixed=setup.getStructuralTrussDynamicsSetup().enabled && !nativePiezo;
+    try {
+        control.validate();
+        if(nativePiezo){
+            info.piezo=certifyPiezo(model);const auto &f=*info.piezo;const bool active=f.controlKind!=QLatin1String("none");
+            if(control.enabled || active!=provenance.controlEnabled ||
+               (active && (provenance.controllerId!=QStringLiteral("internal-native-piezo/")+f.controlKind ||
+                 provenance.json.value(QStringLiteral("control")).toObject().value(QStringLiteral("controllerVersionSha256")).toString()!=f.backendControlSha256)))
+                fail(QStringLiteral("CONTROL_PROVENANCE_MISMATCH"),QStringLiteral("The actual internal piezo controller and backend identity disagree with frozen provenance."));
+            QSet<uint> translations,rotations;
+            for(const auto &signal:f.channels)if(signal.physicalNodeId){
+                bool angular=false;for(const auto &field:fieldDefinitions())if(signal.quantity==QLatin1String(field.quantity)){info.variables.insert(QString::fromLatin1(field.id));angular=field.angular;break;}
+                (angular?rotations:translations).insert(signal.physicalNodeId);
+            }
+            for(uint id:info.nodeIds){if(translations.contains(id))info.translationNodeIds.append(id);if(rotations.contains(id))info.rotationNodeIds.append(id);}
+        }else {
+            if(control.enabled!=provenance.controlEnabled || (control.enabled && control.controllerId!=provenance.controllerId))
+                fail(QStringLiteral("CONTROL_PROVENANCE_MISMATCH"),QStringLiteral("The MODEL control setup disagrees with caller-declared control provenance."));
+            if(info.nativeMixed){
+                const auto certificate=rPiezoRuntimeCertify(model,true);info.meshFingerprint=certificate.sourceFingerprint;
+                const auto &ids=setup.getStructuralTrussDynamicsRestartData().orderedPhysicalNodeIds;
+                for(uint id:info.nodeIds)if(std::find(ids.begin(),ids.end(),id)!=ids.end())info.translationNodeIds.append(id);
+                info.variables={QStringLiteral("var-displacement"),QStringLiteral("var-velocity"),QStringLiteral("var-acceleration")};
+            }else {const QSet<uint> computable=computableStressElements(model);info.translationNodeIds=translationNodePhysicalIds(model,computable);info.rotationNodeIds=rotationNodePhysicalIds(model,computable);}
+        }
+    }catch(const RError &error){fail(QStringLiteral("INVALID_ACCEPTED_CHECKPOINT"),error.getMessage());}
+     catch(const std::exception &error){fail(QStringLiteral("INVALID_ACCEPTED_CHECKPOINT"),QString::fromUtf8(error.what()));}
+    info.beamModel=!info.rotationNodeIds.isEmpty();
 
     if (taskTypes == R_PROBLEM_STRESS && dynamics.getEnabled())
     {
@@ -651,6 +888,15 @@ ModelInfo inspectModel(const QString &path,
 
         if (verifyPersistedFrame)
         {
+            if(info.piezo){const auto &f=*info.piezo;
+                if(f.completedFE!=uint(expectedRecordNo) || !closeTime(f.timeS,info.timeS) || !closeTime(f.dtS,dynamics.getTimeStep()))
+                    fail(QStringLiteral("INVALID_ACCEPTED_CHECKPOINT"),QStringLiteral("The complete piezo runtime differs from this persisted record sequence, time or step."));
+                info.timeS=f.timeS;info.meshFingerprint=f.sourceFingerprint;
+            }else if(info.nativeMixed){const auto certificate=rPiezoRuntimeCertify(model,true);
+                if(!certificate.available || certificate.completedSteps!=uint(expectedRecordNo) || !closeTime(certificate.time,info.timeS) || !closeTime(certificate.fixedTimeStep,dynamics.getTimeStep()))
+                    fail(QStringLiteral("INVALID_ACCEPTED_CHECKPOINT"),QStringLiteral("The complete mixed runtime differs from this persisted record sequence, time or step."));
+                info.timeS=certificate.time;
+            }else {
             const RStructuralDynamicsRestartData &checkpoint =
                 model.getProblemSetup().getStructuralDynamicsRestartData();
             try { checkpoint.validate(); }
@@ -671,10 +917,11 @@ ModelInfo inspectModel(const QString &path,
             // RTimeSolver array is used only as a consistency check above.
             info.timeS = checkpoint.time;
             info.meshFingerprint = checkpoint.meshFingerprint;
+            }
         }
         info.analysisType = QStringLiteral("structural-dynamics");
         info.recordNo = expectedRecordNo;
-        info.variables = inspectSupportedVariables(model, info.beamModel);
+        if(!info.piezo && !info.nativeMixed)info.variables = inspectSupportedVariables(model, info.beamModel);
         if (!info.variables.contains(QStringLiteral("var-displacement")))
             fail(QStringLiteral("MISSING_REQUIRED_FIELD"),
                  QStringLiteral("A structural dynamics frame must persist nodal displacement values."));
@@ -705,6 +952,8 @@ ModelInfo inspectModel(const QString &path,
         fail(QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"),
              QStringLiteral("Only stress static, stress modal, and persisted stress structural-dynamics results are supported."));
     }
+    if(hashFile(path,MaxFrameBytes,QStringLiteral("INVALID_NATIVE_FILE"))!=beforeSha)
+        fail(QStringLiteral("RESULT_CHANGED_DURING_READ"),QStringLiteral("A native MODEL changed during source and accepted-state certification."));
     return info;
 }
 
@@ -789,7 +1038,7 @@ struct Channel
 
 bool hasControlWorkChannel(const QJsonObject &manifest)
 {
-    return manifest.value(QStringLiteral("analysis")).toObject().value(QStringLiteral("type")).toString() ==
+    return !manifest.contains("nativeAcceptedChannels") && manifest.value(QStringLiteral("analysis")).toObject().value(QStringLiteral("type")).toString() ==
                QLatin1String("structural-dynamics") &&
            manifest.value(QStringLiteral("sourceKind")).toString() == QLatin1String("native-active-fe") &&
            manifest.value(QStringLiteral("control")).toObject().value(QStringLiteral("enabled")).toBool(false);
@@ -814,6 +1063,7 @@ QVector<FieldDefinition> availableChannelFields(const QJsonObject &manifest)
 
 int totalChannelCount(const QJsonObject &manifest)
 {
+    if(manifest.contains("nativeAcceptedChannels"))return manifest.value("nativeAcceptedChannels").toArray().size();
     qint64 count = 0;
     for (const FieldDefinition &field : availableChannelFields(manifest))
         count += 3 * qint64(manifest.value(field.angular ? QStringLiteral("rotationNodePhysicalIds")
@@ -826,6 +1076,11 @@ int totalChannelCount(const QJsonObject &manifest)
 
 QVector<Channel> channelPage(const QJsonObject &manifest, int offset, int limit)
 {
+    if(manifest.contains("nativeAcceptedChannels")){
+        QVector<Channel> page;const auto all=manifest.value("nativeAcceptedChannels").toArray();
+        for(int i=offset;i<std::min(int(all.size()),offset+limit);++i){const auto c=all[i].toObject();page.append({c["channelId"].toString(),c["variableId"].toString(),c["quantity"].toString(),c["axis"].toString(),c["unit"].toString(),c["nodeTarget"].toString()});}
+        return page;
+    }
     const QVector<FieldDefinition> fields = availableChannelFields(manifest);
     const QStringList axes{QStringLiteral("X"), QStringLiteral("Y"), QStringLiteral("Z")};
     QVector<Channel> page;
@@ -1393,6 +1648,17 @@ void validateManifestShape(const QString &root, const QJsonObject &manifest)
              terminalModel.value(QStringLiteral("sha256")).toString()))
         fail(QStringLiteral("RESULT_ARTIFACT_TAMPERED"), QStringLiteral("The terminal MODEL no longer matches its published SHA-256."));
 
+    ModelInfo terminalNative;
+    if(analysisType==QLatin1String("structural-dynamics")){
+        terminalNative=inspectModel(targetPath,terminalRecordNo,validateProvenance(frameOrigin(manifest)),true);
+        if(terminalNative.piezo){
+            if(!manifest.value("nativeAcceptedIdentity").isObject() || !manifest.value("nativeAcceptedChannels").isArray() ||
+               manifest.value("nativeAcceptedIdentity").toObject()!=piezoIdentity(*terminalNative.piezo) ||
+               manifest.value("nativeAcceptedChannels").toArray()!=piezoChannels(*terminalNative.piezo))
+                fail(QStringLiteral("INVALID_MANIFEST"),QStringLiteral("The certified native source or physical/named-port channel metadata differs from the actual terminal state."));
+        }else if(manifest.contains("nativeAcceptedIdentity") || manifest.contains("nativeAcceptedChannels"))
+            fail(QStringLiteral("INVALID_MANIFEST"),QStringLiteral("A legacy result cannot claim native piezo signal metadata."));
+    }
     QString resultStem = RFileUtils::getFileNameWithOutTimeStep(
         logicalLatest.value(QStringLiteral("relativePath")).toString(), 5);
     static const QRegularExpression directRecord(QStringLiteral("^(.*)-(\\d{5,10})\\.(ram|rbm)$"));
@@ -1446,6 +1712,20 @@ void validateManifestShape(const QString &root, const QJsonObject &manifest)
                                                 QStringLiteral("UNSAFE_RESULT_PATH"));
         if (hashFile(framePath, MaxFrameBytes, QStringLiteral("RESULT_FRAME_TAMPERED")) != sha)
             fail(QStringLiteral("RESULT_FRAME_TAMPERED"), QStringLiteral("A MODEL frame no longer matches its published SHA-256."));
+        if(terminalNative.piezo || terminalNative.nativeMixed){
+            const bool unattributed = reused &&
+                frame.value(QStringLiteral("originKind")).toString() == QLatin1String("legacy-history-unattributed") &&
+                frame.value(QStringLiteral("origin")).isNull();
+            // The validated legacy proof retains unavailable producer attribution.
+            // Physical inspection still uses this manifest's complete frozen authority.
+            const QJsonObject inspectionOrigin = unattributed
+                ? frameOrigin(manifest) : frame.value(QStringLiteral("origin")).toObject();
+            const ModelInfo actual=inspectModel(framePath,recordNo,validateProvenance(inspectionOrigin),true,nullptr,sha);
+            if(actual.meshFingerprint!=terminalNative.meshFingerprint || actual.nativeMixed!=terminalNative.nativeMixed ||
+               !closeTime(actual.timeS,timeS) || bool(actual.piezo)!=bool(terminalNative.piezo) ||
+               (actual.piezo && (piezoIdentity(*actual.piezo)!=piezoIdentity(*terminalNative.piezo) || piezoChannels(*actual.piezo)!=piezoChannels(*terminalNative.piezo))))
+                fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"),QStringLiteral("Native frames disagree on their actual source, runtime, ports or physical domain."));
+        }
         previousRecord = recordNo;
         previousTime = timeS;
     }
@@ -1490,12 +1770,26 @@ struct ParsedQueryChannel
     QString unit;
     bool angular = false;
     bool controlWork = false;
+    QString nativeChannelId,nodeTarget=QStringLiteral("persistent-node-physical-id");
 };
 
 ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonObject &arguments)
 {
     const QString id = arguments.value(QStringLiteral("channelId")).toString();
     ParsedQueryChannel channel;
+    if(manifest.contains("nativeAcceptedChannels")){
+        const auto all=manifest.value("nativeAcceptedChannels").toArray();
+        for(const auto &entry:all){const auto c=entry.toObject();if(c["channelId"].toString()!=id)continue;
+            channel.nativeChannelId=id;channel.quantity=c["quantity"].toString();channel.axis=c["axis"].toString();
+            channel.variableId=c["variableId"].toString();channel.unit=c["unit"].toString();channel.nodeTarget=c["nodeTarget"].toString();channel.nodeId=uint(c["nodePhysicalId"].toDouble());
+            if(arguments.contains("nodePhysicalId")){
+                const auto node=arguments.value("nodePhysicalId");if(!channel.nodeId || !node.isDouble() || node.toDouble()!=double(channel.nodeId))
+                    fail(QStringLiteral("INVALID_ARGUMENTS"),QStringLiteral("The requested node identity does not match this actual native channel."));
+            }
+            return channel;
+        }
+        fail(QStringLiteral("CHANNEL_UNAVAILABLE"),QStringLiteral("This native source has no certified channel with the requested physical component or named port."));
+    }
     if (id == QLatin1String("control:work"))
     {
         if (!hasControlWorkChannel(manifest))
@@ -1503,6 +1797,7 @@ ParsedQueryChannel resolveQueryChannel(const QJsonObject &manifest, const QJsonO
         if (arguments.contains(QStringLiteral("nodePhysicalId")))
             fail(QStringLiteral("INVALID_ARGUMENTS"), QStringLiteral("The control work scalar has no node physical identifier."));
         channel.controlWork = true;
+        channel.nodeTarget=QStringLiteral("accepted-control-ledger");
         channel.quantity = QStringLiteral("controlWork");
         channel.variableId = QStringLiteral("control-cumulative-work");
         channel.axis = QStringLiteral("scalar");
@@ -1563,12 +1858,33 @@ ModelInfo readQueryFrame(const QString &root,
         info.translationNodeIds != idsFromJson(manifest.value(QStringLiteral("translationNodePhysicalIds")).toArray()) ||
         info.rotationNodeIds != idsFromJson(manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray()))
         fail(QStringLiteral("RESULT_FRAME_METADATA_CHANGED"), QStringLiteral("A MODEL frame's persisted time or domain changed."));
+    if(info.piezo && (manifest.value("nativeAcceptedIdentity").toObject()!=piezoIdentity(*info.piezo) || manifest.value("nativeAcceptedChannels").toArray()!=piezoChannels(*info.piezo)))
+        fail(QStringLiteral("RESULT_FRAME_METADATA_CHANGED"),QStringLiteral("The actual native source, backend or named channel catalog differs from its manifest."));
     return info;
 }
 
 double valueFromModel(const RModel &model, const ModelInfo &info,
                       const ParsedQueryChannel &channel)
 {
+    if(!channel.nativeChannelId.isEmpty()){
+        if(!info.piezo)fail(QStringLiteral("CHANNEL_UNAVAILABLE"),QStringLiteral("The accepted native piezo channel has no complete state authority."));
+        for(const auto &signal:info.piezo->channels)if(signal.channelId==channel.nativeChannelId){
+            if(signal.unit!=channel.unit || signal.quantity!=channel.quantity || signal.axis!=channel.axis || signal.nodeTarget!=channel.nodeTarget || signal.physicalNodeId!=channel.nodeId)
+                fail(QStringLiteral("RESULT_FRAME_METADATA_CHANGED"),QStringLiteral("The accepted native signal identity or SI unit changed."));
+            return signal.value;
+        }
+        fail(QStringLiteral("CHANNEL_UNAVAILABLE"),QStringLiteral("The complete accepted state has no requested named native signal."));
+    }
+    if(info.nativeMixed){
+        const auto &state=model.getProblemSetup().getStructuralTrussDynamicsRestartData();
+        const auto it=std::find(state.orderedPhysicalNodeIds.begin(),state.orderedPhysicalNodeIds.end(),channel.nodeId);
+        if(it==state.orderedPhysicalNodeIds.end() || channel.angular || channel.controlWork)
+            fail(QStringLiteral("CHANNEL_UNAVAILABLE"),QStringLiteral("The complete mixed state has no requested physical translation channel."));
+        const auto &values=channel.quantity=="displacement"?state.q:channel.quantity=="velocity"?state.v:state.a;
+        const size_t index=3*size_t(it-state.orderedPhysicalNodeIds.begin())+channel.component;
+        if(index>=values.size() || !std::isfinite(values[index]))fail(QStringLiteral("INVALID_ACCEPTED_CHECKPOINT"),QStringLiteral("The complete mixed physical vector is invalid."));
+        return values[index];
+    }
     if (channel.controlWork)
     {
         const RStructuralDynamicsRestartData &checkpoint = model.getProblemSetup().getStructuralDynamicsRestartData();
@@ -1725,8 +2041,7 @@ QJsonObject querySnapshot(const QString &root, const QJsonObject &manifest,
             {QStringLiteral("variableId"), channel.variableId},
             {QStringLiteral("quantity"), channel.quantity},
             {QStringLiteral("axis"), channel.axis}, {QStringLiteral("unit"), channel.unit},
-            {QStringLiteral("nodeTarget"), channel.controlWork ? QStringLiteral("accepted-control-ledger")
-                                                               : QStringLiteral("persistent-node-physical-id")}});
+            {QStringLiteral("nodeTarget"), channel.nodeTarget}});
     }
     const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
     if (frames.isEmpty() || frames.size() > MaxFrames)
@@ -1747,6 +2062,7 @@ QJsonObject querySnapshot(const QString &root, const QJsonObject &manifest,
         {QStringLiteral("proofScope"), manifest.value(QStringLiteral("proofScope"))},
         {QStringLiteral("manifestSha256"), manifestSha256},
         {QStringLiteral("frameCount"), frames.size()}, {QStringLiteral("channels"), channelMetadata}};
+    if(manifest.contains("nativeAcceptedIdentity"))response.insert("nativeAcceptedCoverage",acceptedCoverage(frames));
     qint64 outputBytes = QJsonDocument(response).toJson(QJsonDocument::Compact).size() + 12;
     QJsonArray samples;
     for (const QJsonValue &rawFrame : frames)
@@ -1812,6 +2128,9 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
     const QJsonObject &provenanceObject)
 {
     PublishResult result;
+    NativeReaderScope readerScope;
+    ValidatedHashLedger validatedFiles;
+    SnapshotHashGuard captureFiles(&validatedFiles);
     try
     {
         const QString root = canonicalDirectory(resultDirectory);
@@ -1906,6 +2225,9 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
                     frame.rotationNodeIds != terminalModelInfo.rotationNodeIds || frame.timeS <= previousTime)
                     fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"),
                          QStringLiteral("Numbered MODEL frames disagree on analysis, physical node order, or actual time."));
+                if(bool(frame.piezo)!=bool(terminalModelInfo.piezo) || (frame.piezo &&
+                   (piezoIdentity(*frame.piezo)!=piezoIdentity(*terminalModelInfo.piezo) || piezoChannels(*frame.piezo)!=piezoChannels(*terminalModelInfo.piezo))))
+                    fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"),QStringLiteral("Native frames differ in certified configuration, backend or named port metadata."));
                 previousTime = frame.timeS;
                 if (firstFrame)
                 {
@@ -1981,7 +2303,7 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
             for (const QJsonObject &frame : frameObjects) array.append(frame);
             return array;
         }();
-        const QJsonObject manifest{
+        QJsonObject manifest{
             {QStringLiteral("apiVersion"), ManifestApiVersion},
             {QStringLiteral("artifactId"), artifactId},
             {QStringLiteral("jobId"), provenance.jobId},
@@ -2015,6 +2337,7 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
             {QStringLiteral("reusedHistory"), provenanceObject.value(QStringLiteral("reusedHistory")).toArray()},
             {QStringLiteral("frames"), framesArray}
         };
+        if(terminalModelInfo.piezo){manifest.insert("nativeAcceptedIdentity",piezoIdentity(*terminalModelInfo.piezo));manifest.insert("nativeAcceptedChannels",piezoChannels(*terminalModelInfo.piezo));manifest.insert("nativeAcceptedCoverage",acceptedCoverage(framesArray));}
         validateManifestShape(root, manifest);
         const QJsonObject compactManifest = compactManifestOrigins(manifest);
         // Apply the same bounded normalization before publication as on reads.
@@ -2025,6 +2348,7 @@ RNativeResultBroker::PublishResult RNativeResultBroker::publishResult(
             fail(QStringLiteral("UNSUPPORTED_MANIFEST_SIZE"),
                  QStringLiteral("The validated frame index exceeds the 16 MiB manifest limit."));
 
+        recheckValidatedFiles(validatedFiles);
         QSaveFile output(manifestPath);
         output.setDirectWriteFallback(false);
         if (!output.open(QIODevice::WriteOnly) || output.write(manifestBytes) != manifestBytes.size() || !output.commit())
@@ -2097,6 +2421,8 @@ static QJsonObject queryManifest(const QString &root,
                 {QStringLiteral("inputSnapshotSha256"), manifest.value(QStringLiteral("inputSnapshotSha256"))},
                 {QStringLiteral("inputPackageSha256"), manifest.value(QStringLiteral("inputPackageSha256"))},
                 {QStringLiteral("runtime"), manifest.value(QStringLiteral("runtime"))},
+                {QStringLiteral("nativeAcceptedIdentity"), manifest.value(QStringLiteral("nativeAcceptedIdentity"))},
+                {QStringLiteral("nativeAcceptedCoverage"), manifest.value(QStringLiteral("nativeAcceptedCoverage"))},
                 {QStringLiteral("control"), manifest.value(QStringLiteral("control"))},
                 {QStringLiteral("sampleScope"), manifest.value(QStringLiteral("sampleScope"))},
                 {QStringLiteral("reusedHistory"), historyPage},
@@ -2181,6 +2507,7 @@ static QJsonObject queryManifest(const QString &root,
                 {QStringLiteral("samples"), samples},
                 {QStringLiteral("offset"), offset},
                 {QStringLiteral("limit"), limit}};
+            if(manifest.contains("nativeAcceptedIdentity"))response.insert("nativeAcceptedCoverage",acceptedCoverage(frames));
             if (more) response.insert(QStringLiteral("nextCursor"), encodeCursor(artifactId, offset + samples.size()));
             return response;
         }
@@ -2266,15 +2593,17 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
                                      const QJsonObject &arguments)
 {
     QueryProfileGuard profiling;
+    NativeReaderScope readerScope;
     try
     {
         ValidatedHashLedger validatedHashes;
-        SnapshotHashGuard capture(operation == QLatin1String("snapshot") ? &validatedHashes : nullptr);
+        SnapshotHashGuard capture(&validatedHashes);
         QString root;
         const QJsonObject manifest = loadManifest(manifestPath, expectedSha256, &root);
         if (operation == QLatin1String("snapshot"))
             return querySnapshot(root, manifest, manifestPath, expectedSha256, arguments, validatedHashes);
         QJsonObject result = queryManifest(root, manifest, operation, arguments);
+        recheckValidatedFiles(validatedHashes);
         result.insert(QStringLiteral("completed"), true);
         result.insert(QStringLiteral("live"), false);
         return result;
@@ -2283,12 +2612,122 @@ QJsonObject RNativeResultBroker::query(const QString &manifestPath,
     catch (...) { return failureJson(QStringLiteral("NATIVE_RESULT_ERROR"), QStringLiteral("Native result query failed.")); }
 }
 
+RNativeResultBroker::VerifiedModelsResult RNativeResultBroker::readVerifiedModels(
+    const QString &manifestPath, const QString &expectedManifestSha256)
+{
+    VerifiedModelsResult failure;
+    NativeReaderScope readerScope;
+    try
+    {
+        ValidatedHashLedger validatedHashes;
+        SnapshotHashGuard capture(&validatedHashes);
+        preflightVerifiedModelByteBudget(manifestPath, expectedManifestSha256);
+        QString root;
+        const QJsonObject manifest = loadManifest(manifestPath, expectedManifestSha256, &root);
+        const QJsonObject analysis = manifest.value(QStringLiteral("analysis")).toObject();
+        const QString analysisType = analysis.value(QStringLiteral("type")).toString();
+        const QJsonObject terminal = manifest.value(QStringLiteral("terminalModel")).toObject();
+        QVector<VerifiedRecord> records;
+
+        if (analysisType == QLatin1String("structural-dynamics"))
+        {
+            const QJsonArray frames = manifest.value(QStringLiteral("frames")).toArray();
+            if (frames.isEmpty() || frames.size() > MaxFrames)
+                fail(QStringLiteral("UNSUPPORTED_FRAME_LIMIT"),
+                     QStringLiteral("Verified extraction requires 1 through 10000 persisted MODEL frames."));
+            records.reserve(frames.size());
+            for (const QJsonValue &value : frames)
+            {
+                const QJsonObject frame = value.toObject();
+                const int declaredRecordNo = frame.value(QStringLiteral("recordNo")).toInt(-1);
+                const double declaredTimeS = frame.value(QStringLiteral("timeS")).toDouble(
+                    std::numeric_limits<double>::quiet_NaN());
+                auto model = std::make_shared<RModel>();
+                const ModelInfo info = readQueryFrame(root, manifest, frame, model.get());
+                if (info.analysisType != analysisType || info.recordNo != declaredRecordNo ||
+                    !std::isfinite(declaredTimeS) || !closeTime(info.timeS, declaredTimeS) ||
+                    info.sha256 != frame.value(QStringLiteral("sha256")).toString())
+                    fail(QStringLiteral("RESULT_FRAME_METADATA_CHANGED"),
+                         QStringLiteral("A persisted MODEL does not match its hash-bound transient descriptor."));
+                records.append(VerifiedRecord{declaredRecordNo, info.timeS, info.sha256,
+                    frame.value(QStringLiteral("originKind")).toString(), std::move(model)});
+            }
+        }
+        else
+        {
+            const int recordNo = terminal.value(QStringLiteral("recordNo")).toInt(-1);
+            const QString terminalPath = safeChildPath(root,
+                QDir(root).filePath(terminal.value(QStringLiteral("relativePath")).toString()),
+                QStringLiteral("UNSAFE_RESULT_PATH"));
+            auto model = std::make_shared<RModel>();
+            const ModelInfo info = inspectModel(terminalPath, recordNo,
+                validateProvenance(frameOrigin(manifest)), true, model.get(),
+                terminal.value(QStringLiteral("sha256")).toString());
+            QSet<QString> manifestVariables;
+            for (const QJsonValue &entry : manifest.value(QStringLiteral("availableVariables")).toArray())
+                manifestVariables.insert(entry.toString());
+            if (info.analysisType != analysisType || info.recordNo != recordNo ||
+                (analysisType == QLatin1String("modal") && info.modeIndex != analysis.value(QStringLiteral("modeIndex")).toInt(-1)) ||
+                info.sha256 != terminal.value(QStringLiteral("sha256")).toString() ||
+                info.nodeIds != idsFromJson(manifest.value(QStringLiteral("nodePhysicalIds")).toArray()) ||
+                info.nodeMapSha256 != manifest.value(QStringLiteral("nodePhysicalIdMapSha256")).toString() ||
+                info.translationNodeIds != idsFromJson(manifest.value(QStringLiteral("translationNodePhysicalIds")).toArray()) ||
+                info.rotationNodeIds != idsFromJson(manifest.value(QStringLiteral("rotationNodePhysicalIds")).toArray()) ||
+                info.variables != manifestVariables)
+                fail(QStringLiteral("RESULT_MODEL_METADATA_CHANGED"),
+                     QStringLiteral("The terminal MODEL does not match the manifest analysis, variables, or physical node identities."));
+            records.append(VerifiedRecord{recordNo, info.timeS, info.sha256,
+                QStringLiteral("terminal"), std::move(model)});
+        }
+
+        // Re-read the manifest hash explicitly, then recheck every file and
+        // ancestor captured by loadManifest/inspectModel before releasing any
+        // parsed models to the caller.
+        const QString checkedManifest = safeChildPath(root, manifestPath,
+            QStringLiteral("INVALID_MANIFEST_PATH"));
+        if (hashFile(checkedManifest, MaxManifestBytes, QStringLiteral("INVALID_MANIFEST")) !=
+            expectedManifestSha256)
+            fail(QStringLiteral("STALE_MANIFEST_SHA256"),
+                 QStringLiteral("The manifest changed before verified models could be returned."));
+        recheckValidatedFiles(validatedHashes);
+
+        VerifiedModelsResult result;
+        result.valid = true;
+        result.manifestSha256 = expectedManifestSha256;
+        result.artifactId = manifest.value(QStringLiteral("artifactId")).toString();
+        result.jobId = manifest.value(QStringLiteral("jobId")).toString();
+        result.inputSnapshotSha256 = manifest.value(QStringLiteral("inputSnapshotSha256")).toString();
+        result.inputPackageSha256 = manifest.value(QStringLiteral("inputPackageSha256")).toString();
+        result.sourceSnapshotRef = manifest.value(QStringLiteral("sourceSnapshotRef")).toObject();
+        result.sourceKind = manifest.value(QStringLiteral("sourceKind")).toString();
+        result.analysisType = analysisType;
+        result.records = std::move(records);
+        return result;
+    }
+    catch (const BrokerFailure &error)
+    {
+        failure.code = error.code;
+        failure.message = error.message;
+    }
+    catch (...)
+    {
+        failure.code = QStringLiteral("NATIVE_RESULT_ERROR");
+        failure.message = QStringLiteral("Verified native model extraction failed.");
+    }
+    // `failure` is intentionally a fresh DTO: if any frame or final recheck
+    // fails, none of the locally accumulated models escape.
+    return failure;
+}
+
 QJsonObject RNativeResultBroker::queryLive(const QString &resultDirectory,
                                          const QJsonObject &provenanceObject,
                                          const QJsonArray &journalFrames,
                                          const QString &operation,
                                          const QJsonObject &arguments)
 {
+    NativeReaderScope readerScope;
+    ValidatedHashLedger validatedFiles;
+    SnapshotHashGuard captureFiles(&validatedFiles);
     try
     {
         if (operation == QLatin1String("snapshot"))
@@ -2336,6 +2775,9 @@ QJsonObject RNativeResultBroker::queryLive(const QString &resultDirectory,
                     info.translationNodeIds != first.translationNodeIds ||
                     info.meshFingerprint != first.meshFingerprint)
                     fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"), QStringLiteral("Live frames disagree on their physical domain."));
+                if(bool(info.piezo)!=bool(first.piezo) || (info.piezo &&
+                   (piezoIdentity(*info.piezo)!=piezoIdentity(*first.piezo) || piezoChannels(*info.piezo)!=piezoChannels(*first.piezo))))
+                    fail(QStringLiteral("INCONSISTENT_FRAME_METADATA"),QStringLiteral("Live native frames differ in their certified source or named channels."));
                 sharedVariables.intersect(info.variables);
             }
             QJsonObject frame{{QStringLiteral("recordNo"), int(record)}, {QStringLiteral("seq"), seq},
@@ -2363,7 +2805,9 @@ QJsonObject RNativeResultBroker::queryLive(const QString &resultDirectory,
         manifest.insert(QStringLiteral("availableVariables"), variables);
         manifest.insert(QStringLiteral("frames"), frames);
         manifest.insert(QStringLiteral("reusedHistory"), provenanceObject.value(QStringLiteral("reusedHistory")).toArray());
+        if(first.piezo){manifest.insert("nativeAcceptedIdentity",piezoIdentity(*first.piezo));manifest.insert("nativeAcceptedChannels",piezoChannels(*first.piezo));manifest.insert("nativeAcceptedCoverage",acceptedCoverage(frames));}
         QJsonObject result = queryManifest(root, manifest, operation, arguments);
+        recheckValidatedFiles(validatedFiles);
         result.insert(QStringLiteral("completed"), false);
         result.insert(QStringLiteral("live"), true);
         result.insert(QStringLiteral("generation"), previousSeq);

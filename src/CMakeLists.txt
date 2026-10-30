@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(RangeFea)
+set(RANGE_PRIVATE_PYTHON_DIRECTORY "" CACHE PATH "Verified private Python runtime assembled by scripts/packaging/build_private_python.py")
+file(TO_CMAKE_PATH "${RANGE_PRIVATE_PYTHON_DIRECTORY}" RANGE_PRIVATE_PYTHON_DIRECTORY_CMAKE)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -70,31 +72,22 @@ endif()
 # Open MP configuration - End  ------------------------------------------------
 
 find_package(OpenGL REQUIRED)
-if(MSVC)
-    set(OpenMP_RUNTIME_MSVC llvm)
-endif()
 find_package(OpenMP REQUIRED)
-
-# MSVC's LLVM OpenMP mode links against libomp140.x86_64.dll.  Unlike the
-# standard VC runtime DLLs collected by InstallRequiredSystemLibraries, this
-# runtime is not added to the install tree automatically.  Resolve it at
-# configure time so installed and packaged executables do not silently depend
-# on a copy that happens to be present in System32 on the build host.
-if(MSVC AND OpenMP_RUNTIME_MSVC STREQUAL "llvm")
-    find_file(RANGE_MSVC_LLVM_OPENMP_RUNTIME
-        NAMES libomp140.x86_64.dll
-        PATHS
-            "$ENV{SystemRoot}/System32"
-            "$ENV{WINDIR}/System32"
-        NO_DEFAULT_PATH
-        DOC "Redistributable MSVC LLVM OpenMP runtime"
-    )
-    if(NOT RANGE_MSVC_LLVM_OPENMP_RUNTIME)
+if(MSVC)
+    # Reusing a CMake tree configured for /openmp:llvm can leave the LLVM
+    # runtime cached even after the project stops requesting it. Reject any
+    # remaining LLVM flags or libraries so packaging cannot pair libomp with
+    # the MSVC vcomp redistributable. Configure a fresh build directory.
+    string(TOLOWER "${OpenMP_CXX_FLAGS}" _range_openmp_cxx_flags_lower)
+    string(TOLOWER
+        "${OpenMP_CXX_LIB_NAMES};${OpenMP_LIB_NAMES};${OpenMP_CXX_LIBRARIES};${OpenMP_libomp_LIBRARY};${OpenMP_omp_LIBRARY};${OpenMP_RUNTIME_MSVC}"
+        _range_openmp_link_settings_lower)
+    if(_range_openmp_cxx_flags_lower MATCHES "openmp:llvm"
+       OR _range_openmp_link_settings_lower MATCHES "libomp|openmp:llvm")
         message(FATAL_ERROR
-            "MSVC LLVM OpenMP runtime libomp140.x86_64.dll was not found. "
-            "Install the matching Microsoft Visual C++ Redistributable before configuring Range FEA.")
+            "The MSVC CMake cache still selects LLVM OpenMP. "
+            "Configure a fresh build directory; do not reuse a cache created with /openmp:llvm.")
     endif()
-    message(STATUS "MSVC LLVM OpenMP runtime: ${RANGE_MSVC_LLVM_OPENMP_RUNTIME}")
 endif()
 find_package(Qt6 6.10 REQUIRED COMPONENTS Core Concurrent HttpServer Network Widgets OpenGL OpenGLWidgets Multimedia PrintSupport LinguistTools)
 qt_standard_project_setup()
@@ -103,6 +96,7 @@ qt_standard_project_setup()
 option(RANGE_BUILD_TESTS "Build unit tests" OFF)
 option(RANGE_REQUIRE_NUMERIC_TESTS
     "Fail configuration unless the Python, NumPy, and SciPy numeric tests are available" OFF)
+option(RANGE_ENABLE_AGENT "Build the optional AI Agent integration" ON)
 if(RANGE_REQUIRE_NUMERIC_TESTS AND NOT RANGE_BUILD_TESTS)
     message(FATAL_ERROR "RANGE_REQUIRE_NUMERIC_TESTS requires RANGE_BUILD_TESTS=ON")
 endif()
@@ -116,6 +110,7 @@ endif()
 add_library(common_defines INTERFACE)
 target_compile_definitions(common_defines
     INTERFACE
+        RANGE_ENABLE_AGENT=$<BOOL:${RANGE_ENABLE_AGENT}>
         VERSION="${PROJECT_VERSION}"
         YEAR=${PROJECT_YEAR}
         PACKAGENAME="${PROJECT_PACKAGE_NAME}"
@@ -147,7 +142,10 @@ function(set_debug_suffix_if_needed target_name)
     endif()
 endfunction()
 
-set(all_targets range-base-lib range-cloud-lib range-ai-lib range-gui-lib TetGen range-model-lib range-solver-lib range-application-lib fea-solver fea)
+set(all_targets range-base-lib range-cloud-lib range-gui-lib TetGen range-model-lib range-solver-lib range-application-lib fea-solver fea)
+if(RANGE_ENABLE_AGENT)
+    list(INSERT all_targets 2 range-ai-lib)
+endif()
 
 foreach(tgt IN LISTS all_targets)
     add_subdirectory(${tgt})
@@ -408,9 +406,129 @@ endif()
 if(WIN32)
     install(TARGETS fea DESTINATION bin COMPONENT Application)
     install(TARGETS fea-solver DESTINATION bin COMPONENT Application)
-    if(RANGE_MSVC_LLVM_OPENMP_RUNTIME)
-        install(FILES "${RANGE_MSVC_LLVM_OPENMP_RUNTIME}" DESTINATION bin COMPONENT Application)
+    install(FILES "${CMAKE_SOURCE_DIR}/TetGen/LICENSE"
+            DESTINATION doc/licenses/TetGen COMPONENT Application)
+
+    get_filename_component(_range_qt_license_default
+        "${_qt_bin_dir}/../../../Licenses" ABSOLUTE)
+    set(RANGE_QT_LICENSE_DIRECTORY "${_range_qt_license_default}" CACHE PATH
+        "Qt supplier-local notice directory; not a complete deployed-module license mapping")
+    foreach(_range_qt_notice COPYING.txt Copyright.txt LICENSE LICENSE.FDL LICENSE.GPL3-EXCEPT)
+        if(EXISTS "${RANGE_QT_LICENSE_DIRECTORY}/${_range_qt_notice}")
+            install(FILES "${RANGE_QT_LICENSE_DIRECTORY}/${_range_qt_notice}"
+                    DESTINATION doc/licenses/Qt-sdk COMPONENT Application)
+        else()
+            message(WARNING "Qt supplier notice missing: ${RANGE_QT_LICENSE_DIRECTORY}/${_range_qt_notice}; final package coverage remains unverified.")
+        endif()
+    endforeach()
+    # Install the Qt 6.11.1 attribution pages for deployed Qt modules and the
+    # qtpdf module/plugin copied by Qt deploy; preserve the Qt Docs subdirectories.
+    get_filename_component(_range_qt_docs_default
+        "${_qt_bin_dir}/../../../Docs/Qt-${Qt6_VERSION}" ABSOLUTE)
+    set(RANGE_QT_DOCS_DIRECTORY "${_range_qt_docs_default}" CACHE PATH
+        "Qt documentation directory matching the deployed Qt version")
+    set(_range_qt_attribution_relative_pages
+        qtcore/qtcore-attribution-android-gradle-wrapper.html
+        qtcore/qtcore-attribution-blake2.html
+        qtcore/qtcore-attribution-doubleconversion.html
+        qtcore/qtcore-attribution-easing.html
+        qtcore/qtcore-attribution-extra-cmake-modules.html
+        qtcore/qtcore-attribution-forkfd.html
+        qtcore/qtcore-attribution-kwin.html
+        qtcore/qtcore-attribution-md4.html
+        qtcore/qtcore-attribution-md5.html
+        qtcore/qtcore-attribution-pcre2-sljit.html
+        qtcore/qtcore-attribution-pcre2.html
+        qtcore/qtcore-attribution-qeventdispatcher-cf.html
+        qtcore/qtcore-attribution-rfc6234.html
+        qtcore/qtcore-attribution-sha1.html
+        qtcore/qtcore-attribution-sha3-endian.html
+        qtcore/qtcore-attribution-sha3-keccak.html
+        qtcore/qtcore-attribution-siphash.html
+        qtcore/qtcore-attribution-tika-mimetypes.html
+        qtcore/qtcore-attribution-tinycbor.html
+        qtcore/qtcore-attribution-tlexpected.html
+        qtcore/qtcore-attribution-unicode-character-database.html
+        qtcore/qtcore-attribution-unicode-cldr.html
+        qtcore/qtcore-attribution-zlib.html
+        qtdoc/qt-attribution-llvm.html
+        qtdoc/qt-attribution-llvmpipe.html
+        qtgui/qtgui-attribution-aglfn.html
+        qtgui/qtgui-attribution-android-native-style.html
+        qtgui/qtgui-attribution-cocoa-platform-plugin.html
+        qtgui/qtgui-attribution-d3d12memoryallocator.html
+        qtgui/qtgui-attribution-dejayvu.html
+        qtgui/qtgui-attribution-emoji-segmenter.html
+        qtgui/qtgui-attribution-freetype-bdf.html
+        qtgui/qtgui-attribution-freetype-pcf.html
+        qtgui/qtgui-attribution-freetype-zlib.html
+        qtgui/qtgui-attribution-freetype.html
+        qtgui/qtgui-attribution-grayraster.html
+        qtgui/qtgui-attribution-harfbuzz-ng.html
+        qtgui/qtgui-attribution-icc-srgb-color-profile.html
+        qtgui/qtgui-attribution-libjpeg.html
+        qtgui/qtgui-attribution-libpng.html
+        qtgui/qtgui-attribution-md4c.html
+        qtgui/qtgui-attribution-opengl-es2-headers.html
+        qtgui/qtgui-attribution-opengl-headers.html
+        qtgui/qtgui-attribution-pixman.html
+        qtgui/qtgui-attribution-rhi-miniengine-d3d12-mipmap.html
+        qtgui/qtgui-attribution-smooth-scaling-algorithm.html
+        qtgui/qtgui-attribution-vulkan-xml-spec.html
+        qtgui/qtgui-attribution-vulkanmemoryallocator.html
+        qtgui/qtgui-attribution-webgradients.html
+        qtgui/qtgui-attribution-wintab.html
+        qtgui/qtgui-attribution-xcb-xinput.html
+        qtgui/qtgui-attribution-xserverhelper.html
+        qtmultimedia/qtmultimedia-attribution-dr-libs.html
+        qtmultimedia/qtmultimedia-attribution-ffmpeg-boost.html
+        qtmultimedia/qtmultimedia-attribution-ffmpeg-libjpeg.html
+        qtmultimedia/qtmultimedia-attribution-ffmpeg-zlib.html
+        qtmultimedia/qtmultimedia-attribution-ffmpeg.html
+        qtmultimedia/qtmultimedia-attribution-signalsmith-stretch.html
+        qtmultimedia/qtmultimedia-attribution-tlfs.html
+        qtnetwork/qtnetwork-attribution-libpsl.html
+        qtnetwork/qtnetwork-attribution-psl-data.html
+        qtpdf/qtpdf-3rdparty-abseil.html
+        qtpdf/qtpdf-3rdparty-fast-float.html
+        qtpdf/qtpdf-3rdparty-freetype.html
+        qtpdf/qtpdf-3rdparty-icu.html
+        qtpdf/qtpdf-3rdparty-libjpeg-turbo.html
+        qtpdf/qtpdf-3rdparty-libpng.html
+        qtpdf/qtpdf-3rdparty-pdfium.html
+        qtpdf/qtpdf-3rdparty-the-chromium-project.html
+        qtpdf/qtpdf-3rdparty-zlib.html
+        qtsvg/qtsvg-attribution-xsvg.html
+    )
+    set(_range_qt_attribution_installed_count 0)
+    foreach(_range_qt_attribution_relative_path IN LISTS _range_qt_attribution_relative_pages)
+        set(_range_qt_attribution_source
+            "${RANGE_QT_DOCS_DIRECTORY}/${_range_qt_attribution_relative_path}")
+        get_filename_component(_range_qt_attribution_module
+            "${_range_qt_attribution_relative_path}" DIRECTORY)
+        if(EXISTS "${_range_qt_attribution_source}")
+            install(FILES "${_range_qt_attribution_source}"
+                    DESTINATION "doc/licenses/Qt-sdk/attribution/${_range_qt_attribution_module}"
+                    COMPONENT Application)
+            math(EXPR _range_qt_attribution_installed_count
+                "${_range_qt_attribution_installed_count} + 1")
+        endif()
+    endforeach()
+    if(NOT _range_qt_attribution_installed_count EQUAL 71)
+        message(WARNING
+            "Only ${_range_qt_attribution_installed_count} of 71 identified Qt attribution pages are available under ${RANGE_QT_DOCS_DIRECTORY}; notice coverage remains incomplete.")
     endif()
+    # Preserve the SDK's original SBOM and embedded extracted-license texts.
+    # This is supplier reference data, not a claim that all entries are deployed.
+    get_filename_component(_range_qt_kit_dir "${_qt_bin_dir}/.." ABSOLUTE)
+    if(IS_DIRECTORY "${_range_qt_kit_dir}/sbom")
+        install(DIRECTORY "${_range_qt_kit_dir}/sbom/"
+                DESTINATION doc/licenses/Qt-sdk/sbom COMPONENT Application)
+    else()
+        message(WARNING "Qt SDK SBOM directory missing: ${_range_qt_kit_dir}/sbom; final package coverage remains unverified.")
+    endif()
+    # This SDK has no separate extracted-license directory; its SPDX JSON
+    # hasExtractedLicensingInfos retain those texts inside the copied SBOM.
     if(RANGE_GMSH_RUNTIME)
         install(FILES "${RANGE_GMSH_RUNTIME}" DESTINATION bin COMPONENT Application)
         if(EXISTS "${RANGE_GMSH_ROOT}/share/doc/gmsh/LICENSE.txt")
@@ -420,7 +538,10 @@ if(WIN32)
     endif()
     install(DIRECTORY ${PROJECT_TARGET_NAME}/help/ DESTINATION help COMPONENT Application)
     install(DIRECTORY ${PROJECT_TARGET_NAME}/data/ DESTINATION data COMPONENT Application)
-    install(DIRECTORY ${PROJECT_TARGET_NAME}/doc/ DESTINATION doc COMPONENT Application)
+    # Install the generated aggregate license below; do not first copy the
+    # source document to the same destination and duplicate its manifest path.
+    install(DIRECTORY ${PROJECT_TARGET_NAME}/doc/ DESTINATION doc COMPONENT Application
+            PATTERN "LICENSE.txt" EXCLUDE)
     install(DIRECTORY ${PROJECT_TARGET_NAME}/etc/ DESTINATION etc COMPONENT Application)
     install(DIRECTORY ${PROJECT_TARGET_NAME}/materials/ DESTINATION materials COMPONENT Application)
     install(DIRECTORY ${_qt_deploy_dir}/ DESTINATION bin COMPONENT Application)
@@ -436,8 +557,14 @@ if(WIN32)
             install(FILES "${_openssl_exe}" DESTINATION bin COMPONENT Application)
             install(FILES "${_openssl_crypto}" DESTINATION bin COMPONENT Application)
             install(FILES "${_openssl_ssl}" DESTINATION bin COMPONENT Application)
+            if(EXISTS "${OPENSSL_ROOT}/LICENSE.txt")
+                install(FILES "${OPENSSL_ROOT}/LICENSE.txt"
+                        DESTINATION doc/licenses/OpenSSL RENAME LICENSE.txt COMPONENT Application)
+            else()
+                message(FATAL_ERROR "OPENSSL_ROOT is set, but LICENSE.txt is missing: ${OPENSSL_ROOT}/LICENSE.txt")
+            endif()
         else()
-            message(WARNING "OPENSSL_ROOT is set to '${OPENSSL_ROOT}', but required OpenSSL runtime files were not found. Skipping bundling OpenSSL into the installer.")
+            message(FATAL_ERROR "OPENSSL_ROOT is set to '${OPENSSL_ROOT}', but required OpenSSL runtime files were not found. Refusing to create an install without the selected OpenSSL runtime.")
         endif()
     endif()
 
@@ -657,5 +784,27 @@ if(APPLE)
     endif()
 endif()
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # Use the toolset's official redistributable tree for vcomp140.dll. The
+    # module installs this Release runtime into bin as part of Application;
+    # it must not source a DLL from System32 or debug_nonredist.
+    set(CMAKE_INSTALL_OPENMP_LIBRARIES ON)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT Application)
+endif()
 include(InstallRequiredSystemLibraries)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    set(_range_msvc_openmp_runtime_found FALSE)
+    foreach(_range_system_runtime IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+        get_filename_component(_range_system_runtime_name "${_range_system_runtime}" NAME)
+        if(_range_system_runtime_name MATCHES "^vcomp[0-9]+\\.dll$")
+            set(_range_msvc_openmp_runtime_found TRUE)
+            break()
+        endif()
+    endforeach()
+    if(NOT _range_msvc_openmp_runtime_found)
+        message(FATAL_ERROR
+            "The MSVC OpenMP redistributable vcomp DLL was not found. "
+            "Install the matching Visual C++ redistributable component before packaging a Release build.")
+    endif()
+endif()
 include(CPack)

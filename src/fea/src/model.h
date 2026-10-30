@@ -80,14 +80,25 @@ class Model : public RModel
         //! Explicit command provenance for atomic static binding history entries.
         std::optional<RModelCommandService::Delta> staticBindingHistoryDelta;
         QString staticBindingHistoryId;
+        struct PiezoExperimentHistory
+        {
+            QString beforeFingerprint, afterFingerprint, identity;
+        };
+        std::optional<PiezoExperimentHistory> piezoExperimentHistory;
 
     private:
 
         //! Internal initialization function.
         void _init(const Model *pModel = nullptr);
 
+        //! Apply GUI model normalization after a native model read.
+        void finishRead(const QString &fileName);
+
         //! Mark consolidation caches as invalid.
         void invalidateConsolidationCache(int cacheMask = Model::ConsolidateActionAll);
+
+        //! Exchange detached empty draw caches after complete experiment publication.
+        void swapPiezoExperimentCaches(Model &emptyCaches) noexcept;
 
         //! Return const pointer to element group data.
         const REntityGroupData *getElementGroupData(REntityGroupType elementGroupType,
@@ -474,6 +485,9 @@ class Model : public RModel
         //! Read model from the file.
         void read (const QString &fileName);
 
+        //! Read model from an already opened verified file handle.
+        void readFromVerifiedFile(const QString &fileName, QFile &verifiedFile);
+
         //! Write model to the file.
         void write (const QString &fileName, bool writeLinkFile = true);
 
@@ -530,6 +544,19 @@ class Model : public RModel
                                              QString *error = nullptr) const;
         //! Publish only the binding fields, preserving GUI state and allocator high-water marks.
         bool applyStaticMeshBindingHistory(bool undo, const QString &expectedIdentity,
+            const QString &expectedFingerprint, QString *error = nullptr,
+            const std::function<bool(const RModel &)> &validatePrepared = {});
+
+        //! Publish the complete piezo experiment and its typed history atomically.
+        bool commitPiezoExperimentWithHistory(const RModel &candidate,
+            const QString &beforeFullFingerprint, const QString &afterFullFingerprint,
+            uint maxDepth, const QString &description, QString *error = nullptr,
+            const std::function<bool(const RModel &)> &validatePrepared = {});
+        bool hasPiezoExperimentHistory(bool undo) const;
+        QString piezoExperimentHistoryIdentity(bool undo) const;
+        bool previewPiezoExperimentHistory(bool undo, QString *candidateFingerprint,
+            QString *error = nullptr) const;
+        bool applyPiezoExperimentHistory(bool undo, const QString &expectedIdentity,
             const QString &expectedFingerprint, QString *error = nullptr,
             const std::function<bool(const RModel &)> &validatePrepared = {});
 

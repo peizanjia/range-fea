@@ -308,7 +308,8 @@ bool buildJournalRecord(const RModelCommandSession::JournalOptions &options,
             record.selectionSnapshot.insert(QStringLiteral("parametersEncoding"), QStringLiteral("json-text/v1"));
         }
     }
-    else if (commandId == QStringLiteral("mesh.rebind.static"))
+    else if (commandId == QStringLiteral("mesh.rebind.static")
+             || commandId == QStringLiteral("piezo.configure-experiment"))
     {
         // Rebind constraints use nullable XYZ axes. Encode the canonical
         // request without loosening InteractionRecord v1's null/string limits.
@@ -349,8 +350,8 @@ bool buildJournalRecord(const RModelCommandSession::JournalOptions &options,
     record.selectionSnapshot.insert(QStringLiteral("preRevision"), preRevision);
     record.selectionSnapshot.insert(QStringLiteral("postRevision"), modelRevision);
     record.selectionSnapshot.insert(QStringLiteral("stateHashScope"), QStringLiteral("supported_model_state"));
-    // Scope 3 extends scope 2 with all native node/element geometry.
-    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 3);
+    // Scope 4 also binds complete analysis, results and derived physics state.
+    record.selectionSnapshot.insert(QStringLiteral("stateHashScopeVersion"), 4);
     if (!options.sourcePath.isEmpty())
         record.selectionSnapshot.insert(QStringLiteral("sourcePath"), options.sourcePath);
     if (!options.sourceSha256.isEmpty())
@@ -1296,7 +1297,8 @@ QJsonObject RModelCommandSession::execute(const QJsonObject &request)
         response.insert(QStringLiteral("changedPaths"), operation.changedPaths);
         response.insert(QStringLiteral("fingerprint"), operation.fingerprint);
         response.insert(QStringLiteral("diagnostics"), operation.diagnostics);
-        if (operation.delta.kind == RModelCommandService::Delta::Kind::MeshRebind)
+        if (operation.delta.kind == RModelCommandService::Delta::Kind::MeshRebind
+            || operation.delta.kind == RModelCommandService::Delta::Kind::PiezoExperiment)
         {
             response.insert(QStringLiteral("report"), operation.report);
             response.insert(QStringLiteral("readSet"), operation.readSet);

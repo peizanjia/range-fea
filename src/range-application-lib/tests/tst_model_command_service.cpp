@@ -7,6 +7,7 @@
 #include <rmodel_command_service.h>
 #include <rmodel_command_session.h>
 #include <rml_structural_control_setup.h>
+#include <rbl_error.h>
 
 namespace
 {
@@ -241,8 +242,26 @@ void TestModelCommandService::staticRebindRejectsDirtyHistoryAndArguments()
     auto stale = rebound.candidate; stale.getNode(0).set(0.01, 0, 0);
     QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
     stale = rebound.candidate; stale.getProblemSetup().getStructuralControlSetup().controllerId = "unexpected";
-    QCOMPARE(RModelCommandService::stateFingerprint(stale), post); // Private reset guard closes the v3 gap.
-    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    RModel invalidBefore = stale;
+    QVERIFY_EXCEPTION_THROWN(RModelCommandService::stateFingerprint(stale), RError);
+    const auto invalidHistory = RModelCommandService::applyDelta(stale, rebound.delta, false);
+    QVERIFY(!invalidHistory.valid);
+    QCOMPARE(invalidHistory.code, QString("invalid_model"));
+    const auto &invalidControl = stale.getProblemSetup().getStructuralControlSetup();
+    const auto &originalControl = invalidBefore.getProblemSetup().getStructuralControlSetup();
+    QCOMPARE(invalidControl.enabled, originalControl.enabled);
+    QCOMPARE(invalidControl.controlProtocolVersion, originalControl.controlProtocolVersion);
+    QCOMPARE(invalidControl.controllerId, originalControl.controllerId);
+    QCOMPARE(invalidControl.deterministicSeed, originalControl.deterministicSeed);
+    QVERIFY(invalidControl.channelConditioning.empty());
+    QVERIFY(originalControl.channelConditioning.empty());
+    // The invalid control cannot be serialized. Reset only that field in
+    // detached comparison copies, after checking every original control field.
+    RModel invalidAfter = stale;
+    invalidBefore.getProblemSetup().getStructuralControlSetup() = RStructuralControlSetup();
+    invalidAfter.getProblemSetup().getStructuralControlSetup() = RStructuralControlSetup();
+    QCOMPARE(RModelCommandService::stateFingerprint(invalidAfter),
+             RModelCommandService::stateFingerprint(invalidBefore));
     stale = rebound.candidate; stale.getProblemSetup().getStructuralDynamicsRestartData().q = {1};
     QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
     stale = rebound.candidate; stale.getPoint(0).addBoundaryCondition(RBoundaryCondition(R_BOUNDARY_CONDITION_DISPLACEMENT_NORMAL));
@@ -254,8 +273,12 @@ void TestModelCommandService::staticRebindRejectsDirtyHistoryAndArguments()
     stale = rebound.candidate; stale.getPoint(0).getData().getVariableData()[R_VARIABLE_DISPLACEMENT_X] = 0;
     QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
     stale = rebound.candidate; stale.getSurface(0).set(0, stale.getSurface(0).get(1));
-    QCOMPARE(RModelCommandService::stateFingerprint(stale), post);
-    QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
+    const QString changedMembership = RModelCommandService::stateFingerprint(stale);
+    QVERIFY(changedMembership != post);
+    const auto staleMembership = RModelCommandService::applyDelta(stale, rebound.delta, false);
+    QVERIFY(!staleMembership.valid);
+    QCOMPARE(staleMembership.code, QString("stale_history"));
+    QCOMPARE(RModelCommandService::stateFingerprint(stale), changedMembership);
     stale = rebound.candidate; stale.getPoint(0).setVolume(2.0);
     QCOMPARE(RModelCommandService::applyDelta(stale, rebound.delta, false).code, QString("stale_history"));
     auto arguments = staticRebindArguments(); arguments.insert("nearestNode", true);

@@ -3790,11 +3790,27 @@ bool RProjectCatalog::advanceOperation(const QString &operationId, OperationPhas
     if (error) error->clear();
     if (errorCode) errorCode->clear();
     QString localError;
-    if (QThread::currentThreadId() != ownerThread || !validUuid(operationId)
-        || operationPhaseName(phase).isEmpty()
-        || !validOperationAssociation(association))
+    if (QThread::currentThreadId() != ownerThread)
     {
-        setError(error, QStringLiteral("Operation ID, phase, owner thread, or association is invalid."));
+        setError(error, QStringLiteral("Operation must be advanced on the catalog owner thread."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    if (!validUuid(operationId))
+    {
+        setError(error, QStringLiteral("Operation ID is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    if (operationPhaseName(phase).isEmpty())
+    {
+        setError(error, QStringLiteral("Operation phase is invalid."));
+        setErrorCode(errorCode, QStringLiteral("invalid_argument"));
+        return false;
+    }
+    if (!validOperationAssociation(association))
+    {
+        setError(error, QStringLiteral("Operation association contains invalid or unsafe evidence."));
         setErrorCode(errorCode, QStringLiteral("invalid_argument"));
         return false;
     }

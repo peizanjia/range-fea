@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import math
 import re
+from urllib.parse import quote, unquote
 from typing import Any
 
 import numpy as np
@@ -48,6 +49,33 @@ def _bounded_text(value: Any, field: str, pattern: re.Pattern[str]) -> str:
     if type(value) is not str or not pattern.fullmatch(value):
         _fail(f"{field} must be a bounded identifier")
     return value
+
+
+def native_piezo_channel(value: Any) -> tuple[str, str] | None:
+    """Recognize only the canonical QUrl percent-encoded producer vocabulary."""
+    if type(value) is not str or len(value) > 128:
+        return None
+    if value == "piezo:electricalWork":
+        return "electricalWork", "scalar"
+    match = re.fullmatch(r"piezo:(port|action):([^:]+):(.+)", value)
+    if not match:
+        return None
+    kind, encoded, suffix = match.groups()
+    try:
+        decoded = unquote(encoded, encoding="utf-8", errors="strict")
+        if not decoded or quote(decoded, safe="-._~", encoding="utf-8", errors="strict") != encoded:
+            return None
+    except (UnicodeError, ValueError):
+        return None
+    if kind == "action" and suffix in {"heldRequested", "requested", "amplitudeLimited", "previousApplied", "applied"}:
+        return "voltageAction", suffix
+    if kind == "port":
+        parts = suffix.split(":")
+        quantities = {"readout": "piezoReadout", "voltage": "electrodeVoltage",
+                      "charge": "positiveElectrodeCharge", "amplifierVoltage": "idealAmplifierVoltage"}
+        if len(parts) == 2 and parts[0] in quantities and parts[1] in {"absolute", "delta"}:
+            return quantities[parts[0]], parts[1]
+    return None
 
 
 def _number(value: Any, field: str) -> float:
@@ -135,7 +163,11 @@ def validate_series(value: Any) -> dict:
     if (type(model_sha) is not str or not _HASH.fullmatch(model_sha) or
             type(source_hash) is not str or not _HASH.fullmatch(source_hash)):
         _fail("modelSha256 and sourceHash must be lowercase SHA-256 digests")
-    channel_id = _bounded_text(value["channelId"], "channelId", _IDENTIFIER)
+    channel_id = value["channelId"]
+    if native_piezo_channel(channel_id) is None:
+        channel_id = _bounded_text(channel_id, "channelId", _IDENTIFIER)
+        if channel_id.startswith("piezo:"):
+            _fail("channelId is not a canonical native piezo channel")
     axis = _bounded_text(value["axis"], "axis", _LABEL)
     variable = _bounded_text(value["variable"], "variable", _IDENTIFIER)
     unit = _bounded_text(value["unit"], "unit", _LABEL)
@@ -220,9 +252,42 @@ def _uniform_interval(series: dict) -> float:
     dt = times[1] - times[0]
     if not math.isfinite(dt) or dt <= 0:
         _fail("sample interval must be finite and positive")
-    tolerance = max(1.0e-12, 1.0e-9 * dt)
-    if any(abs((right - left) - dt) > tolerance for left, right in zip(times, times[1:])):
-        _fail("frequency analysis requires a uniform time grid; interpolation is not performed")
+    samples = series["samples"]
+    if series["sourceKind"] in {"native-active-fe", "native-passive-fe"}:
+        if any(b["recordNo"] != a["recordNo"] + 1 for a, b in zip(samples, samples[1:])):
+            _fail("frequency analysis requires continuous accepted FE records")
+    origin = series.get("origin", {})
+    grid = origin.get("nativeAcceptedGrid") if type(origin) is dict else None
+    if grid is not None:
+        if type(grid) is not dict or set(grid) != {"dtS", "initialTimeS", "targetSteps"}:
+            _fail("accepted FE nominal grid is invalid")
+        dt = _number(grid["dtS"], "dtS")
+        initial = _number(grid["initialTimeS"], "initialTimeS")
+        target = grid["targetSteps"]
+        if dt <= 0 or type(target) is not int or target < 1:
+            _fail("accepted FE nominal grid is invalid")
+        expected = [initial + sample["recordNo"] * dt for sample in samples]
+        if any(sample["recordNo"] > target for sample in samples):
+            _fail("accepted FE records exceed the nominal grid")
+    else:
+        expected = None
+    # The uncertainty allowance must itself fit the frozen 1e-9 relative
+    # interval bound. Coarse timestamps cannot establish an FFT sampling rate,
+    # even when their selected values happen to lie on a nominal grid.
+    relative_bound = 1.0e-9 * dt
+    grid_values = times + ([initial] + expected if expected is not None else [])
+    uncertainty = 8 * max(math.ulp(value) for value in grid_values + [dt])
+    if relative_bound <= 0 or uncertainty > relative_bound:
+        _fail("frequency analysis requires timestamps precise enough to resolve the uniform time grid and sampling rate")
+    for left, right in zip(times, times[1:]):
+        if abs((right - left) - dt) > relative_bound:
+            _fail("frequency analysis requires a uniform time grid; interpolation is not performed")
+    if expected is not None:
+        # Authority additionally fixes the clock origin and accepted FE index.
+        for actual, nominal in zip(times, expected):
+            tolerance = 8 * max(math.ulp(actual), math.ulp(nominal), math.ulp(dt))
+            if abs(actual - nominal) > tolerance:
+                _fail("frequency analysis requires a uniform time grid; interpolation is not performed")
     return dt
 
 

@@ -1406,6 +1406,15 @@ class WorkflowService:
                               "sha256": file_hash(path), "sizeBytes": size})
         return artifacts
 
+    def _release_extension_writer_locked(self, job_id: str):
+        stored_job = self._state.get("jobs", {}).get(job_id, {})
+        command = stored_job.get("command", "")
+        command_entry = self._commands.get(command)
+        if command_entry and command_entry.get("registry_write"):
+            extension_id = self._command_extension_id(command, stored_job.get("parameters", {}))
+            if extension_id and self._extension_writers.get(extension_id) == job_id:
+                self._extension_writers.pop(extension_id, None)
+
     def _run_job(self, job_id: str, cancel: threading.Event, execution_parameters: dict | None = None):
         directory = None
         try:
@@ -1462,6 +1471,9 @@ class WorkflowService:
                 candidate["jobs"][job_id].update(state="succeeded", completedAt=utc(), result=result, artifacts=artifacts)
                 self._commit(candidate, "job.publish", "succeeded", job_id=job_id, artifacts=artifacts,
                              parameters={"command": job["command"], "artifactCount": len(artifacts)})
+                # A terminal job must not remain externally busy after queries
+                # can observe its published state.
+                self._release_extension_writer_locked(job_id)
         except Exception as error:
             code = getattr(error, "code", "EXECUTION_FAILED")
             message = str(error) if isinstance(error, (WorkflowError, ProcessFailure)) else "Job execution failed; inspect job diagnostics"
@@ -1489,17 +1501,12 @@ class WorkflowService:
                     try:
                         self._commit(candidate, "job.finish", state, job_id=job_id,
                                      parameters={"code": code})
+                        self._release_extension_writer_locked(job_id)
                     except WorkflowError:
                         self._fault = True
         finally:
             with self._lock:
-                stored_job = self._state.get("jobs", {}).get(job_id, {})
-                command = stored_job.get("command", "")
-                command_entry = self._commands.get(command)
-                if command_entry and command_entry.get("registry_write"):
-                    extension_id = self._command_extension_id(command, stored_job.get("parameters", {}))
-                    if extension_id and self._extension_writers.get(extension_id) == job_id:
-                        self._extension_writers.pop(extension_id, None)
+                self._release_extension_writer_locked(job_id)
 
     def capabilities(self) -> dict:
         from .extensions import MAX_PENDING_PREVIEW_BYTES

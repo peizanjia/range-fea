@@ -6,6 +6,7 @@
 #include <QTemporaryDir>
 
 #include <cmath>
+#include <algorithm>
 #include <functional>
 #include <limits>
 #include <vector>
@@ -14,6 +15,16 @@
 #include <rml_model.h>
 
 #include "rnative_result_broker.h"
+#include "../src/rnative_result_broker_test_support.h"
+#include <piezo_result_series.h>
+#include <piezo_runtime_identity.h>
+#include <rpiezo_experiment_service.h>
+#include <piezo_axial_backend_bridge.h>
+#include <piezo_native_backend_bridge.h>
+#include <rstructural_truss_native_run.h>
+#include <rstructural_piezo_axial_restart_codec.h>
+#include <rstructural_piezo_layered_restart_codec.h>
+#include <rbl_error.h>
 
 namespace
 {
@@ -174,11 +185,48 @@ QString framePath(const QString &directory, int recordNo)
     return QDir(directory).filePath(QStringLiteral("run-%1.rbm").arg(recordNo, 5, 10, QLatin1Char('0')));
 }
 
+RModel nativeSource(const QString &family,bool controlled)
+{
+    const bool axial=family!="beam" && family!="plate";const bool plate=family=="plate";
+    RModel source;
+    if(plate){for(const auto &node:{RNode(0,0,0),RNode(1,0,0),RNode(1,1,0),RNode(0,1,0)})source.addNode(node);
+        RElement e(R_ELEMENT_QUAD1);for(uint i=0;i<4;++i)e.setNodeId(i,i);source.addElement(e,true,0);
+    }else {for(uint i=0;i<3;++i)source.addNode(RNode(double(i),0,0));for(uint i=0;i<2;++i){RElement e(axial?R_ELEMENT_TRUSS1:R_ELEMENT_BEAM1);e.setNodeId(0,i);e.setNodeId(1,i+1);source.addElement(e,true,0);}}
+    for(uint i=0;i<source.getNNodes();++i)source.setNodePhysicalId(i,101+11*i);
+    for(uint i=0;i<source.getNElements();++i)source.setElementPhysicalId(i,501+13*i);
+    source.setProblemTaskTree(RProblemTaskItem::generateDefaultTree(R_PROBLEM_STRESS));source.getTimeSolver().setInputStartTime(.001);
+    auto recipe=RPiezoExperimentService::exampleRecipe(source,axial?"axialRod":plate?"flatPlate":"planarBeam");recipe["replaceLegacyConditions"]=true;recipe["steps"]=3;
+    if(controlled)recipe["controller"]=QJsonObject{{"kind","PI"},{"kp",.3},{"ki",.02},{"selectedOutputs",QJsonArray{"tip_displacement"}},{"bias",QJsonArray{.3}},{"controlEveryFESteps",2}};
+    const auto compiled=RPiezoExperimentService::preview(source,recipe);if(!compiled.valid)throw std::invalid_argument(qPrintable(compiled.message));
+    auto model=compiled.candidate;if(family=="mixed")model.getProblemSetup().setStructuralPiezoAxialSetup({});return model;
+}
+QString nativeRecords(const RModel &source,const QString &directory,bool sparse=false)
+{
+    const QString logical=QDir(directory).filePath("native.rbm");
+    const auto save=[&](const RModel &model,uint step){if(!sparse || step!=2)model.write(logical,true);};
+    if(source.getProblemSetup().getStructuralPiezoAxialSetup().enabled){const auto b=PiezoAxialBackendBridge::create(source);RStructuralPiezoAxialNativeRun run(source,b.callbacks);
+        for(uint i=1;i<=3;++i){auto step=run.prepare(source);run.validatePrepared(*step);run.commit(*step);save(run.acceptedModel(source),i);}}
+    else if(source.getProblemSetup().getStructuralPiezoLayeredSetup().enabled){const auto b=PiezoNativeBackendBridge::create(source);RStructuralPiezoLayeredNativeRun run(source,b.callbacks);
+        for(uint i=1;i<=3;++i){auto step=run.prepare(source);run.validatePrepared(*step);run.commit(*step);save(run.acceptedModel(source),i);}}
+    else {RStructuralTrussNativeRun run(source);for(uint i=1;i<=3;++i){auto step=run.prepare(source);run.validatePrepared(*step);run.commit(*step);save(run.acceptedModel(source),i);}}
+    return logical;
+}
+QJsonObject nativeProvenance(const RModel &source,bool controlled)
+{
+    auto p=provenance("native-source");if(controlled)p["control"]=QJsonObject{{"enabled",true},{"controllerId","internal-native-piezo/PI"},{"controllerVersionSha256",QString::fromLatin1(rPiezoRuntimeControlSha256(source).toHex())}};return p;
+}
+
 class NativeResultBrokerTest : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void nativePiezoChannelsUseActualAcceptedState_data();
+    void nativePiezoChannelsUseActualAcceptedState();
+    void rejectsNativeControllerAndOpaqueAuthorityTampering_data();
+    void rejectsNativeControllerAndOpaqueAuthorityTampering();
+    void validatesCompleteMixedRestartWithoutScalarAdapter();
+    void validatesUnattributedMixedHistoryWithoutInventingOrigin();
     void publishesBoundedSeriesAndStableSummary();
     void preservesSparseOutputAndOptionalFieldAvailability();
     void rejectsPartialFrameAndReorderedNodeMetadata();
@@ -187,6 +235,11 @@ private slots:
     void rejectsStaleManifestAndTamperedFrame();
     void catalogsStaticRawModelButRejectsTimeSeries();
     void catalogsModalResultAndRejectsTimeSeries();
+    void extractsVerifiedStaticModalAndTransientModels();
+    void parsesTheSameBytesThatWereHashedDuringPathReplacement();
+    void parsesEachTransientFrameFromTheHashedHandleDuringPathReplacement();
+    void rejectsVerifiedModelsWhenManifestOrArtifactsAreStale();
+    void rejectsVerifiedModelAggregateBytesBeforeParsing();
     void summarizesExtremeFiniteValuesWithoutOverflow();
     void derivesSourceKindFromPersistedControlSetup();
     void rejectsTamperedUnrequestedFrameAtEveryQueryBoundary();
@@ -588,6 +641,420 @@ void NativeResultBrokerTest::catalogsModalResultAndRejectsTimeSeries()
         QJsonObject{{QStringLiteral("channelId"), QStringLiteral("node:1:displacement:X")}});
     QVERIFY(!series.value(QStringLiteral("valid")).toBool());
     QCOMPARE(series.value(QStringLiteral("code")).toString(), QStringLiteral("UNSUPPORTED_ANALYSIS_MODE"));
+}
+
+void NativeResultBrokerTest::extractsVerifiedStaticModalAndTransientModels()
+{
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RModel model = staticModel();
+        const QString logicalPath = QDir(directory.path()).filePath(QStringLiteral("static.rbm"));
+        model.write(logicalPath, true);
+        const auto published = RNativeResultBroker::publishResult(directory.path(),
+            RFileUtils::getFileNameWithTimeStep(logicalPath, 0), provenance());
+        QVERIFY2(published.valid, qPrintable(published.message));
+        const auto extracted = RNativeResultBroker::readVerifiedModels(
+            published.manifestPath, published.manifestSha256);
+        QVERIFY2(extracted.valid, qPrintable(extracted.code + QStringLiteral(": ") + extracted.message));
+        QCOMPARE(extracted.manifestSha256, published.manifestSha256);
+        QCOMPARE(extracted.artifactId, published.artifactId);
+        QCOMPARE(extracted.jobId, provenance().value(QStringLiteral("jobId")).toString());
+        QCOMPARE(extracted.inputSnapshotSha256, provenance().value(QStringLiteral("inputSnapshotSha256")).toString());
+        QCOMPARE(extracted.inputPackageSha256, provenance().value(QStringLiteral("inputPackageSha256")).toString());
+        QCOMPARE(extracted.sourceSnapshotRef, provenance().value(QStringLiteral("sourceSnapshotRef")).toObject());
+        QCOMPARE(extracted.sourceKind, QStringLiteral("native-passive-fe"));
+        QCOMPARE(extracted.analysisType, QStringLiteral("static"));
+        QCOMPARE(extracted.records.size(), 1);
+        QCOMPARE(extracted.records.first().recordNo, 0);
+        QCOMPARE(extracted.records.first().timeS, 0.0);
+        QCOMPARE(extracted.records.first().originKind, QStringLiteral("terminal"));
+        QVERIFY(extracted.records.first().model);
+        QCOMPARE(extracted.records.first().model->getNNodes(), uint(2));
+    }
+
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RModel model = staticModel();
+        model.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS_MODAL));
+        model.getProblemSetup().getModalSetup().setMode(0);
+        const QString logicalPath = QDir(directory.path()).filePath(QStringLiteral("modal.rbm"));
+        model.write(logicalPath, true);
+        const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+        QVERIFY2(published.valid, qPrintable(published.message));
+        const auto extracted = RNativeResultBroker::readVerifiedModels(
+            published.manifestPath, published.manifestSha256);
+        QVERIFY2(extracted.valid, qPrintable(extracted.code + QStringLiteral(": ") + extracted.message));
+        QCOMPARE(extracted.analysisType, QStringLiteral("modal"));
+        QCOMPARE(extracted.records.size(), 1);
+        QCOMPARE(extracted.records.first().recordNo, 1);
+        QCOMPARE(extracted.records.first().originKind, QStringLiteral("terminal"));
+        QVERIFY(extracted.records.first().model);
+        QCOMPARE(extracted.records.first().model->getProblemSetup().getModalSetup().getMode(), uint(0));
+    }
+
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString logicalPath = writeDynamicFrame(directory.path(), 1);
+        writeDynamicFrame(directory.path(), 2);
+        const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+        QVERIFY2(published.valid, qPrintable(published.message));
+        const auto extracted = RNativeResultBroker::readVerifiedModels(
+            published.manifestPath, published.manifestSha256);
+        QVERIFY2(extracted.valid, qPrintable(extracted.code + QStringLiteral(": ") + extracted.message));
+        QCOMPARE(extracted.analysisType, QStringLiteral("structural-dynamics"));
+        QCOMPARE(extracted.records.size(), 2);
+        for (int index = 0; index < extracted.records.size(); ++index)
+        {
+            const auto &record = extracted.records.at(index);
+            QCOMPARE(record.recordNo, index + 1);
+            QCOMPARE(record.timeS, 0.1 * double(index + 1));
+            QCOMPARE(record.originKind, QStringLiteral("produced"));
+            QVERIFY(record.model);
+            QFile frame(framePath(directory.path(), index + 1));
+            QVERIFY(frame.open(QIODevice::ReadOnly));
+            QCOMPARE(record.modelSha256, sha(frame.readAll()));
+        }
+    }
+}
+
+void NativeResultBrokerTest::parsesTheSameBytesThatWereHashedDuringPathReplacement()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    RModel original = staticModel();
+    const QString originalLogicalPath = QDir(directory.path()).filePath(QStringLiteral("static.rbm"));
+    original.write(originalLogicalPath, true);
+    const QString originalFramePath = RFileUtils::getFileNameWithTimeStep(originalLogicalPath, 0);
+
+    RModel replacement = staticModel();
+    replacement.setName(QStringLiteral("replacement-frame"));
+    const QString replacementLogicalPath = QDir(directory.path()).filePath(QStringLiteral("replacement.rbm"));
+    replacement.write(replacementLogicalPath, true);
+    const QString replacementFramePath = RFileUtils::getFileNameWithTimeStep(replacementLogicalPath, 0);
+
+    const auto published = RNativeResultBroker::publishResult(
+        directory.path(), originalFramePath, provenance());
+    QVERIFY2(published.valid, qPrintable(published.message));
+    const QString terminalRelativePath = published.manifest.value(QStringLiteral("terminalModel")).toObject()
+        .value(QStringLiteral("relativePath")).toString();
+    const QString terminalPath = QDir(directory.path()).filePath(terminalRelativePath);
+    const QString backupPath = terminalPath + QStringLiteral(".original-backup");
+
+    struct RestoreOriginalPath
+    {
+        QString originalPath;
+        QString backupPath;
+        bool active = false;
+        QString error;
+
+        bool restore()
+        {
+            if (!active) return error.isEmpty();
+            if (!QFile::remove(originalPath)) {
+                error = QStringLiteral("Could not remove the temporary replacement frame.");
+                return false;
+            }
+            if (!QFile::rename(backupPath, originalPath)) {
+                error = QStringLiteral("Could not restore the original frame path.");
+                return false;
+            }
+            active = false;
+            return true;
+        }
+
+        ~RestoreOriginalPath() { restore(); }
+    } restoreOriginal{terminalPath, backupPath};
+
+    struct ClearParseHook
+    {
+        ~ClearParseHook()
+        {
+            RNativeResultBrokerTestSupport::setFrameParseHookForTesting({});
+        }
+    } clearParseHook;
+
+    bool beforeParseSeen = false;
+    bool afterParseSeen = false;
+    RNativeResultBrokerTestSupport::setFrameParseHookForTesting(
+        [&](const QString &path, RNativeResultBrokerTestSupport::FrameParsePhase phase) {
+            if (QDir::cleanPath(path) != QDir::cleanPath(terminalPath)) return;
+            if (phase == RNativeResultBrokerTestSupport::FrameParsePhase::BeforeParse) {
+                beforeParseSeen = true;
+                if (!QFile::rename(terminalPath, backupPath)) {
+                    restoreOriginal.error = QStringLiteral("Could not move the original frame aside.");
+                    return;
+                }
+                if (!QFile::rename(replacementFramePath, terminalPath)) {
+                    QFile::rename(backupPath, terminalPath);
+                    restoreOriginal.error = QStringLiteral("Could not move the replacement frame into place.");
+                    return;
+                }
+                restoreOriginal.active = true;
+            } else {
+                afterParseSeen = true;
+                restoreOriginal.restore();
+            }
+        });
+
+    const auto extracted = RNativeResultBroker::readVerifiedModels(
+        published.manifestPath, published.manifestSha256);
+    RNativeResultBrokerTestSupport::setFrameParseHookForTesting({});
+    restoreOriginal.restore();
+
+    QVERIFY2(restoreOriginal.error.isEmpty(), qPrintable(restoreOriginal.error));
+    QVERIFY2(extracted.valid, qPrintable(extracted.code + QStringLiteral(": ") + extracted.message));
+    QVERIFY(beforeParseSeen);
+    QVERIFY(afterParseSeen);
+    QCOMPARE(extracted.records.size(), 1);
+    QVERIFY(extracted.records.first().model);
+    QCOMPARE(extracted.records.first().model->getName(), QStringLiteral("static-result"));
+}
+
+void NativeResultBrokerTest::parsesEachTransientFrameFromTheHashedHandleDuringPathReplacement()
+{
+    QTemporaryDir temporaryDirectory;
+    QVERIFY(temporaryDirectory.isValid());
+    const QString resultDirectory = QDir(temporaryDirectory.path()).filePath(QStringLiteral("results"));
+    const QString replacementDirectory = QDir(temporaryDirectory.path()).filePath(QStringLiteral("replacements"));
+    QVERIFY(QDir().mkpath(resultDirectory));
+    QVERIFY(QDir().mkpath(replacementDirectory));
+
+    const QString logicalPath = writeDynamicFrame(resultDirectory, 1);
+    writeDynamicFrame(resultDirectory, 2);
+    QVector<QString> targets{framePath(resultDirectory, 1),
+                             framePath(resultDirectory, 2)};
+    QVector<QString> replacements;
+    QVector<QString> backups;
+    for (int index = 0; index < targets.size(); ++index)
+    {
+        const int recordNo = index + 1;
+        RModel replacement = dynamicModel(recordNo);
+        replacement.setName(QStringLiteral("replacement-frame-%1").arg(recordNo));
+        const QString replacementLogicalPath = QDir(replacementDirectory)
+            .filePath(QStringLiteral("run.rbm"));
+        replacement.write(replacementLogicalPath, true);
+        replacements.append(framePath(replacementDirectory, recordNo));
+        backups.append(targets.at(index) + QStringLiteral(".original-backup"));
+        QVERIFY(QFileInfo::exists(replacements.last()));
+    }
+
+    const auto published = RNativeResultBroker::publishResult(
+        resultDirectory, logicalPath, provenance());
+    QVERIFY2(published.valid, qPrintable(published.message));
+
+    struct RestoreFrames
+    {
+        QVector<QString> targets;
+        QVector<QString> backups;
+        QVector<bool> active;
+        QString error;
+
+        bool restore(int index)
+        {
+            if (!active.value(index)) return error.isEmpty();
+            if (!QFile::remove(targets.at(index)))
+            {
+                error = QStringLiteral("Could not remove a temporary replacement frame.");
+                return false;
+            }
+            if (!QFile::rename(backups.at(index), targets.at(index)))
+            {
+                error = QStringLiteral("Could not restore an original transient frame.");
+                return false;
+            }
+            active[index] = false;
+            return true;
+        }
+
+        ~RestoreFrames()
+        {
+            for (int index = 0; index < active.size(); ++index) restore(index);
+        }
+    } restore{targets, backups, QVector<bool>(targets.size(), false)};
+
+    struct ClearParseHook
+    {
+        ~ClearParseHook()
+        {
+            RNativeResultBrokerTestSupport::setFrameParseHookForTesting({});
+        }
+    } clearParseHook;
+
+    QVector<int> beforeParseCounts(targets.size(), 0);
+    QVector<int> afterParseCounts(targets.size(), 0);
+    RNativeResultBrokerTestSupport::setFrameParseHookForTesting(
+        [&](const QString &path, RNativeResultBrokerTestSupport::FrameParsePhase phase) {
+            for (int index = 0; index < targets.size(); ++index)
+            {
+                if (QDir::cleanPath(path) != QDir::cleanPath(targets.at(index))) continue;
+                if (phase == RNativeResultBrokerTestSupport::FrameParsePhase::BeforeParse)
+                {
+                    if (!QFile::rename(targets.at(index), backups.at(index)))
+                    {
+                        restore.error = QStringLiteral("Could not move an original transient frame aside.");
+                        return;
+                    }
+                    if (!QFile::copy(replacements.at(index), targets.at(index)))
+                    {
+                        QFile::rename(backups.at(index), targets.at(index));
+                        restore.error = QStringLiteral("Could not copy a replacement transient frame.");
+                        return;
+                    }
+                    restore.active[index] = true;
+                    ++beforeParseCounts[index];
+                }
+                else
+                {
+                    ++afterParseCounts[index];
+                    restore.restore(index);
+                }
+                return;
+            }
+        });
+
+    const auto extracted = RNativeResultBroker::readVerifiedModels(
+        published.manifestPath, published.manifestSha256);
+    RNativeResultBrokerTestSupport::setFrameParseHookForTesting({});
+    for (int index = 0; index < targets.size(); ++index) restore.restore(index);
+
+    QVERIFY2(restore.error.isEmpty(), qPrintable(restore.error));
+    QVERIFY2(extracted.valid, qPrintable(extracted.code + QStringLiteral(": ") + extracted.message));
+    for (int index = 0; index < targets.size(); ++index)
+    {
+        QVERIFY(beforeParseCounts.at(index) > 0);
+        QCOMPARE(afterParseCounts.at(index), beforeParseCounts.at(index));
+    }
+    QCOMPARE(extracted.records.size(), 2);
+    for (int index = 0; index < extracted.records.size(); ++index)
+    {
+        const auto &record = extracted.records.at(index);
+        QVERIFY(record.model);
+        QCOMPARE(record.model->getName(), QStringLiteral("result-frame"));
+        QFile originalFrame(targets.at(index));
+        QVERIFY(originalFrame.open(QIODevice::ReadOnly));
+        QCOMPARE(record.modelSha256, sha(originalFrame.readAll()));
+    }
+}
+
+void NativeResultBrokerTest::rejectsVerifiedModelsWhenManifestOrArtifactsAreStale()
+{
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RModel model = staticModel();
+        const QString logicalPath = QDir(directory.path()).filePath(QStringLiteral("static.rbm"));
+        model.write(logicalPath, true);
+        const auto published = RNativeResultBroker::publishResult(directory.path(),
+            RFileUtils::getFileNameWithTimeStep(logicalPath, 0), provenance());
+        QVERIFY2(published.valid, qPrintable(published.message));
+        const auto stale = RNativeResultBroker::readVerifiedModels(
+            published.manifestPath, QString(64, QLatin1Char('0')));
+        QVERIFY(!stale.valid);
+        QCOMPARE(stale.code, QStringLiteral("STALE_MANIFEST_SHA256"));
+        QVERIFY(stale.records.isEmpty());
+
+        QFile terminal(QDir(directory.path()).filePath(
+            published.manifest.value(QStringLiteral("terminalModel")).toObject()
+                .value(QStringLiteral("relativePath")).toString()));
+        QVERIFY(terminal.open(QIODevice::WriteOnly | QIODevice::Append));
+        QCOMPARE(terminal.write(QByteArrayLiteral("tampered")), qint64(8));
+        terminal.close();
+        const auto staleArtifact = RNativeResultBroker::readVerifiedModels(
+            published.manifestPath, published.manifestSha256);
+        QVERIFY(!staleArtifact.valid);
+        QVERIFY(staleArtifact.code == QStringLiteral("RESULT_ARTIFACT_TAMPERED") ||
+                staleArtifact.code == QStringLiteral("RESULT_CHANGED_DURING_READ"));
+        QVERIFY(staleArtifact.records.isEmpty());
+    }
+
+    for (bool truncate : {false, true})
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString logicalPath = writeDynamicFrame(directory.path(), 1);
+        writeDynamicFrame(directory.path(), 2);
+        const auto published = RNativeResultBroker::publishResult(directory.path(), logicalPath, provenance());
+        QVERIFY2(published.valid, qPrintable(published.message));
+        QFile frame(framePath(directory.path(), 1));
+        if (truncate)
+        {
+            QVERIFY(frame.open(QIODevice::WriteOnly));
+            QVERIFY(frame.resize(8));
+        }
+        else
+        {
+            QVERIFY(frame.open(QIODevice::WriteOnly | QIODevice::Append));
+            QCOMPARE(frame.write(QByteArrayLiteral("tampered")), qint64(8));
+        }
+        frame.close();
+        const auto damaged = RNativeResultBroker::readVerifiedModels(
+            published.manifestPath, published.manifestSha256);
+        QVERIFY(!damaged.valid);
+        QCOMPARE(damaged.code, QStringLiteral("RESULT_FRAME_TAMPERED"));
+        QVERIFY(damaged.records.isEmpty());
+    }
+}
+
+void NativeResultBrokerTest::rejectsVerifiedModelAggregateBytesBeforeParsing()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    RModel model = staticModel();
+    const QString logicalPath = QDir(directory.path()).filePath(QStringLiteral("static.rbm"));
+    model.write(logicalPath, true);
+    const auto published = RNativeResultBroker::publishResult(directory.path(),
+        RFileUtils::getFileNameWithTimeStep(logicalPath, 0), provenance());
+    QVERIFY2(published.valid, qPrintable(published.message));
+
+    const QString terminalRelativePath = published.manifest.value(QStringLiteral("terminalModel")).toObject()
+        .value(QStringLiteral("relativePath")).toString();
+    const QString terminalPath = QDir(directory.path()).filePath(terminalRelativePath);
+    QFile terminal(terminalPath);
+    QVERIFY(terminal.open(QIODevice::WriteOnly | QIODevice::Append));
+    const QByteArray padding(1024 * 1024, '\0');
+    qint64 remaining = 32 * 1024 * 1024 + 1;
+    while (remaining > 0)
+    {
+        const qint64 count = std::min<qint64>(remaining, padding.size());
+        QCOMPARE(terminal.write(padding.constData(), count), count);
+        remaining -= count;
+    }
+    terminal.close();
+
+    QCryptographicHash modelHash(QCryptographicHash::Sha256);
+    QVERIFY(terminal.open(QIODevice::ReadOnly));
+    while (!terminal.atEnd())
+    {
+        const QByteArray chunk = terminal.read(1024 * 1024);
+        QVERIFY(!chunk.isEmpty());
+        modelHash.addData(chunk);
+    }
+    terminal.close();
+    const QString terminalSha256 = QString::fromLatin1(modelHash.result().toHex());
+
+    QJsonObject manifest = published.manifest;
+    QJsonObject terminalDescriptor = manifest.value(QStringLiteral("terminalModel")).toObject();
+    terminalDescriptor.insert(QStringLiteral("sha256"), terminalSha256);
+    manifest.insert(QStringLiteral("terminalModel"), terminalDescriptor);
+    QJsonObject logicalDescriptor = manifest.value(QStringLiteral("logicalLatest")).toObject();
+    logicalDescriptor.insert(QStringLiteral("sha256"), terminalSha256);
+    manifest.insert(QStringLiteral("logicalLatest"), logicalDescriptor);
+    const QByteArray manifestBytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+    QFile manifestFile(published.manifestPath);
+    QVERIFY(manifestFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(manifestFile.write(manifestBytes), qint64(manifestBytes.size()));
+    manifestFile.close();
+
+    const auto rejected = RNativeResultBroker::readVerifiedModels(
+        published.manifestPath, sha(manifestBytes));
+    QVERIFY(!rejected.valid);
+    QCOMPARE(rejected.code, QStringLiteral("UNSUPPORTED_SIZE_LIMIT"));
+    QVERIFY(rejected.message.contains(QStringLiteral("32 MiB aggregate MODEL byte limit")));
+    QVERIFY(rejected.records.isEmpty());
 }
 
 void NativeResultBrokerTest::summarizesExtremeFiniteValuesWithoutOverflow()
@@ -1377,6 +1844,178 @@ void NativeResultBrokerTest::rejectsMissingAndUnrepresentableControlWorkLedger()
         }
     }
 }
+
+void NativeResultBrokerTest::nativePiezoChannelsUseActualAcceptedState_data()
+{
+    QTest::addColumn<QString>("family");QTest::addColumn<bool>("controlled");
+    for(const auto &family:{QString("axial"),QString("beam"),QString("plate")}){
+        QTest::newRow(qPrintable(family+"-passive"))<<family<<false;QTest::newRow(qPrintable(family+"-PI"))<<family<<true;
+    }
+}
+void NativeResultBrokerTest::nativePiezoChannelsUseActualAcceptedState() try
+{
+    QFETCH(QString,family);QFETCH(bool,controlled);QTemporaryDir directory;QVERIFY(directory.isValid());
+    const auto source=nativeSource(family,controlled);const auto logical=nativeRecords(source,directory.path(),true);const auto declared=nativeProvenance(source,controlled);
+    const auto published=RNativeResultBroker::publishResult(directory.path(),logical,declared);QVERIFY2(published.valid,qPrintable(published.code+": "+published.message));
+    QCOMPARE(published.manifest["mode"].toString(),controlled?QString("active"):QString("passive"));
+    const auto channels=RNativeResultBroker::query(published.manifestPath,published.manifestSha256,"channels",{{"limit",200}});QVERIFY2(channels["valid"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(channels).toJson())));
+    const QString port=family=="axial"?"rod_514":"sense";const QString sensor="piezo:port:"+port+":readout:absolute",delta="piezo:port:"+port+":readout:delta";
+    const auto metadata=channels["channels"].toArray();QStringList ids;for(const auto &c:metadata)ids.append(c.toObject()["channelId"].toString());
+    QVERIFY(ids.contains(sensor));QVERIFY(ids.contains(delta));QVERIFY(ids.contains("piezo:electricalWork"));QVERIFY(!ids.contains("control:work"));
+    if(family=="beam"){QVERIFY(!ids.contains("node:123:rotation:X"));QVERIFY(!ids.contains("node:123:displacement:Y"));QVERIFY(ids.contains("node:123:rotation:Y"));}
+    if(family=="plate"){QVERIFY(ids.contains("node:123:rotation:X"));QVERIFY(ids.contains("node:123:rotation:Y"));QVERIFY(!ids.contains("node:123:rotation:Z"));}
+    const auto snapshot=RNativeResultBroker::query(published.manifestPath,published.manifestSha256,"snapshot",{{"channelIds",QJsonArray{sensor,delta,"piezo:electricalWork","node:123:displacement:X"}}});
+    QVERIFY2(snapshot["valid"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(snapshot).toJson())));QCOMPARE(snapshot["frames"].toArray().size(),2);
+    RModel terminal;terminal.read(QDir(directory.path()).filePath("native-00003.rbm"));terminal.getProblemSetup().setRestart(true);PiezoResultSeries::Reader reader(terminal);const auto actual=reader.certifyAcceptedModel(terminal);
+    const auto find=[&](const QString &id){const auto it=std::find_if(actual->channels.begin(),actual->channels.end(),[&](const auto &v){return v.channelId==id;});if(it==actual->channels.end())throw std::invalid_argument("Missing actual certified signal");return it->value;};
+    const auto values=snapshot["frames"].toArray().last().toObject()["values"].toArray();QCOMPARE(values[0].toDouble(),find(sensor));QCOMPARE(values[1].toDouble(),find(delta));QCOMPARE(values[2].toDouble(),actual->electricalWorkJ);QCOMPARE(values[3].toDouble(),find("node:123:displacement:X"));
+    const auto summary=RNativeResultBroker::query(published.manifestPath,published.manifestSha256,"summary",{{"channelId",sensor}});QVERIFY(summary["valid"].toBool());
+    const auto series=RNativeResultBroker::query(published.manifestPath,published.manifestSha256,"series",{{"channelId",sensor}});QVERIFY(series["valid"].toBool());QCOMPARE(series["samples"].toArray().size(),2);QVERIFY(!series["nativeAcceptedCoverage"].toObject()["continuousBetweenSelectedRecords"].toBool());
+    QVERIFY(!RNativeResultBroker::query(published.manifestPath,published.manifestSha256,"series",{{"channelId","piezo:port:missing:readout:absolute"}})["valid"].toBool());
+    QJsonArray live;for(const auto &f:published.manifest["frames"].toArray()){auto frame=f.toObject();frame["seq"]=double(live.size()+1);live.append(frame);}
+    const auto liveResult=RNativeResultBroker::queryLive(directory.path(),declared,live,"series",{{"channelId",sensor}});QVERIFY2(liveResult["valid"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(liveResult).toJson())));QVERIFY(liveResult["live"].toBool());
+}
+catch(const RError &error){QFAIL(qPrintable(error.getMessage()));}catch(const std::exception &error){QFAIL(error.what());}
+void NativeResultBrokerTest::rejectsNativeControllerAndOpaqueAuthorityTampering_data()
+{
+    QTest::addColumn<QString>("family");QTest::newRow("axial")<<QString("axial");QTest::newRow("beam")<<QString("beam");
+}
+void NativeResultBrokerTest::rejectsNativeControllerAndOpaqueAuthorityTampering() try
+{
+    QFETCH(QString,family);QTemporaryDir wrongProvenance,malformed;QVERIFY(wrongProvenance.isValid());QVERIFY(malformed.isValid());
+    const auto source=nativeSource(family,true);const auto logical=nativeRecords(source,wrongProvenance.path());auto wrong=nativeProvenance(source,true);auto control=wrong["control"].toObject();control["controllerVersionSha256"]=QString(64,'c');wrong["control"]=control;
+    const auto denied=RNativeResultBroker::publishResult(wrongProvenance.path(),logical,wrong);QVERIFY(!denied.valid);QCOMPARE(denied.code,QString("CONTROL_PROVENANCE_MISMATCH"));
+    const auto logical2=nativeRecords(source,malformed.path());const auto declared=nativeProvenance(source,true);const auto published=RNativeResultBroker::publishResult(malformed.path(),logical2,declared);QVERIFY2(published.valid,qPrintable(published.message));
+    const QString path=QDir(malformed.path()).filePath("native-00001.rbm");RModel frame;frame.read(path);
+    if(family=="axial"){auto &r=frame.getProblemSetup().getStructuralPiezoAxialRestart();auto state=RStructuralPiezoAxialRestartCodec::decode(r.runtimeState);state.opaqueControllerState="not-json";r.runtimeState=RStructuralPiezoAxialRestartCodec::encode(state);}
+    else {auto &r=frame.getProblemSetup().getStructuralPiezoLayeredRestart();auto state=RStructuralPiezoLayeredRestartCodec::decode(r.stateBytes);state.opaqueControllerState="not-json";r.stateBytes=RStructuralPiezoLayeredRestartCodec::encode(state);}
+    // write(...,false) strips the numbered suffix and would replace the logical
+    // LINK. Write exactly this numbered MODEL; all other byte proofs stay valid.
+    struct ExactModelWriter : RModel {
+        explicit ExactModelWriter(const RModel &model) : RModel(model) {}
+        using RModel::writeBinary;
+    };
+    ExactModelWriter(frame).writeBinary(path);
+    RModel persisted;persisted.read(path);
+    if(family=="axial")QCOMPARE(RStructuralPiezoAxialRestartCodec::decode(persisted.getProblemSetup().getStructuralPiezoAxialRestart().runtimeState).opaqueControllerState,QByteArray("not-json"));
+    else QCOMPARE(RStructuralPiezoLayeredRestartCodec::decode(persisted.getProblemSetup().getStructuralPiezoLayeredRestart().stateBytes).opaqueControllerState,QByteArray("not-json"));
+    for(const auto &key:{QString("logicalLatest"),QString("terminalModel")}){
+        const auto proof=published.manifest[key].toObject();QFile unchanged(QDir(malformed.path()).filePath(proof["relativePath"].toString()));
+        QVERIFY(unchanged.open(QIODevice::ReadOnly));QCOMPARE(sha(unchanged.readAll()),proof["sha256"].toString());
+    }
+    QFile file(path);QVERIFY(file.open(QIODevice::ReadOnly));const QString forgedFrameSha=sha(file.readAll());file.close();
+    auto manifest=published.manifest;auto frames=manifest["frames"].toArray();auto entry=frames[0].toObject();entry["sha256"]=forgedFrameSha;frames[0]=entry;manifest["frames"]=frames;
+    const QByteArray bytes=QJsonDocument(manifest).toJson(QJsonDocument::Compact);QFile changed(published.manifestPath);QVERIFY(changed.open(QIODevice::WriteOnly|QIODevice::Truncate));QCOMPARE(changed.write(bytes),qint64(bytes.size()));changed.close();
+    for(const auto &operation:{QString("catalog"),QString("channels"),QString("series"),QString("summary"),QString("snapshot")}){
+        QJsonObject args;if(operation=="snapshot")args["channelIds"]=QJsonArray{"piezo:electricalWork"};else if(operation=="series" || operation=="summary")args["channelId"]="piezo:electricalWork";
+        const auto response=RNativeResultBroker::query(published.manifestPath,sha(bytes),operation,args);QVERIFY2(!response["valid"].toBool(),qPrintable(operation));QCOMPARE(response["code"].toString(),QString("INVALID_ACCEPTED_CHECKPOINT"));
+    }
+}
+catch(const RError &error){QFAIL(qPrintable(error.getMessage()));}catch(const std::exception &error){QFAIL(error.what());}
+void NativeResultBrokerTest::validatesCompleteMixedRestartWithoutScalarAdapter() try
+{
+    QTemporaryDir directory;QVERIFY(directory.isValid());const auto source=nativeSource("mixed",false);const auto logical=nativeRecords(source,directory.path());
+    const auto published=RNativeResultBroker::publishResult(directory.path(),logical,provenance());QVERIFY2(published.valid,qPrintable(published.code+": "+published.message));
+    const auto series=RNativeResultBroker::query(published.manifestPath,published.manifestSha256,"series",{{"channelId","node:123:displacement:X"}});QVERIFY(series["valid"].toBool());QCOMPARE(series["samples"].toArray().size(),3);
+    RModel frame;frame.read(QDir(directory.path()).filePath("native-00003.rbm"));QVERIFY(!frame.getProblemSetup().getStructuralDynamicsRestartData().available);
+    const auto &state=frame.getProblemSetup().getStructuralTrussDynamicsRestartData();const auto it=std::find(state.orderedPhysicalNodeIds.begin(),state.orderedPhysicalNodeIds.end(),123u);QVERIFY(it!=state.orderedPhysicalNodeIds.end());
+    QCOMPARE(series["samples"].toArray().last().toObject()["value"].toDouble(),state.q[3*size_t(it-state.orderedPhysicalNodeIds.begin())]);
+}
+catch(const RError &error){QFAIL(qPrintable(error.getMessage()));}catch(const std::exception &error){QFAIL(error.what());}
+
+void NativeResultBrokerTest::validatesUnattributedMixedHistoryWithoutInventingOrigin() try
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto source = nativeSource(QStringLiteral("mixed"), false);
+    const QString logical = nativeRecords(source, directory.path());
+    const QString copiedPath = QDir(directory.path()).filePath(QStringLiteral("native-00001.rbm"));
+    QFile copied(copiedPath);
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    const QByteArray copiedBytes = copied.readAll();
+    copied.close();
+    RModel copiedModel;
+    copiedModel.read(copiedPath);
+    const QJsonObject proof{
+        {QStringLiteral("recordNo"), 1},
+        {QStringLiteral("relativePath"), QStringLiteral("native-00001.rbm")},
+        {QStringLiteral("sha256"), sha(copiedBytes)},
+        {QStringLiteral("originalFrameSha256"), sha(copiedBytes)},
+        {QStringLiteral("sourceRestartSha256"), sha(copiedBytes)},
+        {QStringLiteral("originKind"), QStringLiteral("legacy-history-unattributed")},
+        {QStringLiteral("origin"), QJsonValue(QJsonValue::Null)}};
+    QJsonObject declared = provenance(QStringLiteral("resumed-mixed-job"));
+    declared.insert(QStringLiteral("reusedHistory"), QJsonArray{proof});
+    QJsonObject invalidProof = proof;
+    invalidProof.insert(QStringLiteral("origin"), QJsonObject{});
+    QJsonObject invalidDeclaration = declared;
+    invalidDeclaration.insert(QStringLiteral("reusedHistory"), QJsonArray{invalidProof});
+    const auto invalidOrigin = RNativeResultBroker::publishResult(directory.path(), logical, invalidDeclaration);
+    QVERIFY(!invalidOrigin.valid);
+    QCOMPARE(invalidOrigin.code, QStringLiteral("INVALID_HISTORY_PROVENANCE"));
+    invalidProof = proof;
+    invalidProof.remove(QStringLiteral("sourceRestartSha256"));
+    invalidDeclaration.insert(QStringLiteral("reusedHistory"), QJsonArray{invalidProof});
+    const auto missingRestart = RNativeResultBroker::publishResult(directory.path(), logical, invalidDeclaration);
+    QVERIFY(!missingRestart.valid);
+    QCOMPARE(missingRestart.code, QStringLiteral("INVALID_HISTORY_PROVENANCE"));
+
+    const auto published = RNativeResultBroker::publishResult(directory.path(), logical, declared);
+    QVERIFY2(published.valid, qPrintable(published.code + QStringLiteral(": ") + published.message));
+    const auto history = published.manifest.value(QStringLiteral("frames")).toArray().first().toObject();
+    QVERIFY(history.value(QStringLiteral("origin")).isNull());
+    QCOMPARE(history.value(QStringLiteral("historyProof")).toObject(), proof);
+    const QJsonObject arguments{{QStringLiteral("channelId"), QStringLiteral("node:123:displacement:X")}};
+    const auto series = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+        QStringLiteral("series"), arguments);
+    QVERIFY2(series.value(QStringLiteral("valid")).toBool(), qPrintable(series.value(QStringLiteral("message")).toString()));
+    const auto samples = series.value(QStringLiteral("samples")).toArray();
+    QCOMPARE(samples.size(), 3);
+    QVERIFY(samples.first().toObject().value(QStringLiteral("origin")).isNull());
+    QCOMPARE(samples.first().toObject().value(QStringLiteral("historyProof")).toObject(), proof);
+    const auto &state = copiedModel.getProblemSetup().getStructuralTrussDynamicsRestartData();
+    const auto node = std::find(state.orderedPhysicalNodeIds.begin(), state.orderedPhysicalNodeIds.end(), 123u);
+    QVERIFY(node != state.orderedPhysicalNodeIds.end());
+    QCOMPARE(samples.first().toObject().value(QStringLiteral("value")).toDouble(),
+        state.q[3 * size_t(node - state.orderedPhysicalNodeIds.begin())]);
+    const auto snapshot = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+        QStringLiteral("snapshot"), {{QStringLiteral("channelIds"), QJsonArray{QStringLiteral("node:123:displacement:X")}}});
+    QVERIFY2(snapshot.value(QStringLiteral("valid")).toBool(), qPrintable(snapshot.value(QStringLiteral("message")).toString()));
+    QCOMPARE(snapshot.value(QStringLiteral("frames")).toArray().first().toObject()
+        .value(QStringLiteral("originSha256")).toString(), sha("null"));
+
+    QFile manifestFile(published.manifestPath);
+    QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+    const QByteArray originalManifest = manifestFile.readAll();
+    manifestFile.close();
+    auto forgedManifest = published.manifest;
+    auto forgedFrames = forgedManifest.value(QStringLiteral("frames")).toArray();
+    auto attributedFrame = forgedFrames.at(1).toObject();
+    attributedFrame.insert(QStringLiteral("origin"), QJsonObject{});
+    forgedFrames[1] = attributedFrame;
+    forgedManifest.insert(QStringLiteral("frames"), forgedFrames);
+    const QByteArray forgedBytes = QJsonDocument(forgedManifest).toJson(QJsonDocument::Compact);
+    QVERIFY(manifestFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(manifestFile.write(forgedBytes), qint64(forgedBytes.size()));
+    manifestFile.close();
+    const auto invalidAttributedOrigin = RNativeResultBroker::query(published.manifestPath, sha(forgedBytes),
+        QStringLiteral("series"), arguments);
+    QVERIFY(!invalidAttributedOrigin.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(invalidAttributedOrigin.value(QStringLiteral("code")).toString(), QStringLiteral("INVALID_HISTORY_PROVENANCE"));
+    QVERIFY(!invalidAttributedOrigin.contains(QStringLiteral("samples")));
+    QVERIFY(manifestFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(manifestFile.write(originalManifest), qint64(originalManifest.size()));
+    manifestFile.close();
+    QVERIFY(copied.open(QIODevice::Append));
+    QCOMPARE(copied.write("changed"), qint64(7));
+    copied.close();
+    const auto tampered = RNativeResultBroker::query(published.manifestPath, published.manifestSha256,
+        QStringLiteral("series"), arguments);
+    QVERIFY(!tampered.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(tampered.value(QStringLiteral("code")).toString(), QStringLiteral("RESULT_FRAME_TAMPERED"));
+    QVERIFY(!tampered.contains(QStringLiteral("samples")));
+}
+catch(const RError &error){QFAIL(qPrintable(error.getMessage()));}catch(const std::exception &error){QFAIL(error.what());}
 
 } // namespace
 

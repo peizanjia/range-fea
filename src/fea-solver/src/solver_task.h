@@ -2,7 +2,6 @@
 #define SOLVER_TASK_H
 
 #include <QObject>
-#include <QCoreApplication>
 #include <QByteArray>
 #include <optional>
 #include <memory>
@@ -40,24 +39,24 @@ class SolverTask : public QObject
         QString typedConfigurationFileName;
         QString nativeCheckpointDirectory;
         QByteArray nativeCheckpointContextJson;
+        bool nativeAcceptedTrace = false;
         std::optional<uint> nativeMixedStepBudget;
+        std::optional<uint> nativeLayeredStepBudget;
+        std::optional<uint> nativeAxialStepBudget;
         std::shared_ptr<NativeExecutionGate> nativeExecutionGate;
         RuntimeControlBridge *runtimeControlBridge = nullptr; // Main application owns lifetime.
         //! Force to restart solver
         bool restart;
-        //! Pointer to application object.
-        QCoreApplication *app;
-
     public:
 
         //! Constructor.
-        explicit SolverTask(const SolverInput &solverInput, QCoreApplication *app, QObject *parent = nullptr);
+        explicit SolverTask(const SolverInput &solverInput, QObject *parent = nullptr);
         void setRuntimeControlBridge(RuntimeControlBridge *bridge) { runtimeControlBridge = bridge; }
 
     signals:
 
-        //! Signal that solver has finished.
-        void finished(void);
+        //! Signal that solver has finished with its process exit code.
+        void finished(int exitCode);
         
     public slots:
 

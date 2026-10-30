@@ -1,0 +1,116 @@
+{
+  "schema": "range.piezo-representative-cases-spec/v1",
+  "created": "2026-10-12",
+  "artifactKind": "acceptance-specification-not-results",
+  "executionStatus": "PENDING_CPP_REGISTRATION_BUILD_AND_EXECUTION",
+  "presetRevision": "PC10-preset-v2",
+  "productComplete": false,
+  "contract": "docs/PIEZO_CONTROL_DELIVERY.md: PC-10 and physical/numerical hard gates",
+  "testSource": "src/range-application-lib/tests/tst_piezo_delivery_examples.cpp",
+  "scope": {
+    "source": "RPiezoExperimentService::templateCandidate/exampleRecipe/preview, actual TRUSS1/BEAM1/QUAD1 source assembly, actual private backend, actual NativeRun prepare/validatePrepared/commit",
+    "scientificRows": 24,
+    "persistenceRows": 6,
+    "controllerKinds": ["none", "PI", "LQR", "MPC"],
+    "excitationKinds": ["free", "forced"],
+    "controlEveryFESteps": [2, 3],
+    "readoutsInEveryScientificCase": ["openCircuitVoltage", "shortCircuitCharge", "idealChargeAmplifier", "actuatorCharge"],
+    "offRowsMeaning": "Uncontrolled FE response and same-input FE/ROM reference qualification, not closed-loop control performance",
+    "activeRowsMeaning": "Native FE closed-loop performance relative to its FE off baseline; separate independently fed-back ROM reference performance relative to its own ROM off baseline",
+    "sameInputReplayMeaning": "Actual applied FE voltages are replayed in FE and ROM with identical force endpoints. This is numerical approximation evidence, not an independently closed-loop ROM experiment."
+  },
+  "sourceRecipe": {
+    "topology": {
+      "axialRod": "Four connected TRUSS1 members, five nodes, transverse translations constrained, first node fixed; one voltage actuator and three independent sensor members",
+      "planarBeam": "Four connected layered BEAM1 members, five nodes, planar axial/bending cantilever, shared host/patch kinematics, unsupported 3D modes absent",
+      "flatPlate": "Four actual layered QUAD1 members over a predetermined 1 m by 1 m square plate, ten nodes, clamped edge, membrane/bending/shear native plate kernel; not a TRI membrane surrogate"
+    },
+    "material": {
+      "sourceKind": "example",
+      "sourceIdPattern": "range-fea/PC10/finite-SI-strong-coupling/{family}/{materialId}/v1",
+      "sourceSha256": "Computed from compact declared material JSON before adding sourceSha256; never a fabricated vendor identity",
+      "youngPa": 1000000,
+      "poissonRatio": 0.25,
+      "densityKgPerM3": 1000,
+      "stressCouplingCPerM2": 50,
+      "permittivityFPerM": 0.01,
+      "tensorConvention": "Finite stress-charge cE/e/epsilonS in SI, production transverse-free-stress reduction and actual native assembly",
+      "intention": "Admissible strong coupling makes actions and readouts numerically observable; synthetic continuum example, not realistic vendor hardware qualification"
+    },
+    "layeredGeometry": "Host z=-.05..+.05 m; actuator layer +.05..+.06 m; sensor total thickness .01 m divided into three distinct electrode layers with shared binary64 edge array [-.06,-.06+.01/3,-.06+2*.01/3,-.05]. Adjacent layers consume the SAME edge values and the last sensor endpoint is exactly the host lowerZ. Beam is 1 m long with .1 m layer width; plate template is explicitly 1 m square. Four-element production connectivity is retained.",
+    "initialState": "Physical first full-FE mass-normalized mode velocity, normalized to maximum physical component 1e-5 m/s or rad/s; source nodal initial fields compiled by preview. No invented plant state.",
+    "workpoint": "Zero initial actuator voltage and charge, zero background force in these new representative fixtures. General nonzero q0/V0/Q0/background-offset qualification belongs to the named existing special tests below.",
+    "damping": "One authoritative physical Rayleigh C: alpha=.02 1/s, beta=1e-5 s, same full FE C for full/selected ROM and off/on baselines",
+    "forcedInput": "Production node force expression 1e-6 + 2e-5*t N at actual tip output physical node/axis; source waveform is affine so recorded endpoint FOH is exact",
+    "timeGrid": "For scientific performance rows, probe actual full-FE omega, choose dt=.12/omegaMax and steps=ceil((2*pi/omegaFirst)/dt), covering at least one complete first-mode period. Admission requires 48..12000 steps; exceeding the bound fails explicitly rather than silently shortening the window. Empty source first end time is explicitly dt, preserving t0=firstEnd-dt=0. N*dt*omegaMax is .24 or .36 rad for N=2/3. Persistence-only phase tests deliberately override steps to 2*N+1 and make no performance claim. The unmodified E=70 GPa default dt=.001 s is not qualified by this fixture.",
+    "linearization": "Axial native geometric laws remain authoritative. Initial velocities and forcing are small; differences to the linear reference must meet the measured convergence tolerance. This does not certify large displacement/cable switching/nonlinear control. Layered source is the supported small-deformation native FE.",
+    "selectedModes": "Primary LQR/MPC controllers use ALL certified FE modes, so model-control qualification does not presume unmeasured omitted-mode stability. A separate first-certified-cluster ROM is exported for identical-applied-input approximation/defect bounds, never splitting a cluster. Both full and truncated ROM use the same full-FE Rayleigh C. Actual outside-first-cluster energy is recorded for on/off FE and independent full-ROM closed loops. A truncated controller is not qualified by these presets.",
+    "controllers": {
+      "PI": "Actual selected nodal velocity measurements build the work-conjugate output B^T*v. Let b1=PhiFirst^T*B and zetaTarget=.05, gamma=2*zetaTarget*omegaFirst/b1^2. kp row is gamma*(P*T*B)^T over its nonzero physical velocity components; ki=.002*omegaFirst*kp. This gives dissipative proportional feedback for all FE modes rather than a first-mode sign assumption at a noncollocated tip. Gains and complete selected physical output identities are preserved in the raw recipe.",
+      "LQR": "Production discrete DARE on the complete basis. Q=diag(omegaAll^2,I), twice physical incremental mechanical energy in mass-normalized modal coordinates. With b1=PhiFirst^T*B, zetaTarget=.05 and s=(2*sqrt(1+zetaTarget^2)-1)^2-1, R=b1^2/(s*omegaFirst^2). This fixed effort-weight rule follows isolated continuous first-mode energy-LQR damping; actual sampled full-model poles and measured FE behavior determine acceptance, not the target approximation. State projection remains Phi^T*M*deltaq and Phi^T*M*v.",
+      "MPC": "Same complete-basis physical-energy Q and prescribed effort R, Qf=Q, horizon=5, actual production QP, verificationTolerance=1e-7; the short horizon is an explicit preset and performance remains a measured gate, with no fallback",
+      "limits": "Absolute actuator voltage +/-20 V and desired sample delta limit 20 V, native per-FE-step rate conditioning; replay records actual applied voltage rather than requested target"
+    }
+  },
+  "representativePresets": [
+    {"id": "PC10-R01", "family": "axialRod", "controller": "none", "excitation": "free", "N": 2, "qtRow": "axialRod-none-free", "acceptance": ["physicalSource", "readouts", "modalCertificates", "sameInputReplay", "truncatedBound"]},
+    {"id": "PC10-R02", "family": "planarBeam", "controller": "none", "excitation": "free", "N": 2, "qtRow": "planarBeam-none-free", "acceptance": ["physicalSource", "readouts", "modalCertificates", "sameInputReplay", "truncatedBound"]},
+    {"id": "PC10-R03", "family": "flatPlate", "controller": "none", "excitation": "free", "N": 2, "qtRow": "flatPlate-none-free", "acceptance": ["physicalSource", "readouts", "modalCertificates", "sameInputReplay", "truncatedBound"]},
+    {"id": "PC10-R04", "family": "axialRod", "controller": "LQR", "excitation": "forced", "N": 3, "qtRow": "axialRod-LQR-forced", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop", "DARE"]},
+    {"id": "PC10-R05", "family": "planarBeam", "controller": "LQR", "excitation": "forced", "N": 3, "qtRow": "planarBeam-LQR-forced", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop", "DARE"]},
+    {"id": "PC10-R06", "family": "flatPlate", "controller": "LQR", "excitation": "forced", "N": 3, "qtRow": "flatPlate-LQR-forced", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop", "DARE"]},
+    {"id": "PC10-R07", "family": "axialRod", "controller": "MPC", "excitation": "forced", "N": 3, "qtRow": "axialRod-MPC-forced", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop", "KKT", "nativeRestore"]},
+    {"id": "PC10-R08", "family": "planarBeam", "controller": "MPC", "excitation": "forced", "N": 3, "qtRow": "planarBeam-MPC-forced", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop", "KKT", "nativeRestore"]},
+    {"id": "PC10-R09", "family": "flatPlate", "controller": "MPC", "excitation": "forced", "N": 3, "qtRow": "flatPlate-MPC-forced", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop", "KKT", "nativeRestore"]},
+    {"id": "PC10-R10", "family": "planarBeam", "controller": "PI", "excitation": "free", "N": 2, "qtRow": "planarBeam-PI-free", "acceptance": ["allScientific", "realFeedback", "sameSourceOffOn", "independentROMClosedLoop"]}
+  ],
+  "acceptanceThresholds": {
+    "status": "Prospective thresholds. No measurement or pass is claimed until actual C++ test execution.",
+    "physicalSource": "Exactly four structural elements of declared native family, actual complete M/K/C identical for off/on and selected/full export",
+    "readouts": "All four port rows exist, nonzero actual time signal and nonzero selected-basis modal Lq response >1e-15; actual FE readout versus continuous full-FE Cy/D/bias output error <=1e-11 + 2e-6*rowPeak. Actuator charge D is nonzero; independent isolated sensor actuator direct D norm <1e-12.",
+    "modalCertificates": "Every actual production modal relative residual <1e-8 and mass orthogonality error <1e-8; actual cluster membership is recorded",
+    "RK4Reference": "Eight versus sixteen RK4 subdivisions over actual native intervals: energy-norm error / full-reference peak <1e-7",
+    "fullBasis": "Independently integrated all-mode ROM lifted through actual Phi versus full-FE reference relative energy-norm error <2e-7",
+    "nativeRefinement": "Native coarse versus RK4 full-FE relative energy error <.025; each dt/2 and dt/4 replay max error <=.55 preceding error + 1e-6*referencePeak, all voltages held and all source force endpoints identical",
+    "truncatedBound": "At every original FE endpoint, energy-norm full-FE minus lifted selected ROM error <= initial projection error + sum(1.1*dt*maxResolvedEnergyDefect) + 1e-8*peak. Defect is resolved at sixteen subdivisions. This is a numerical a posteriori envelope; 10% integration allowance is not a rigorous supremum certificate for arbitrary signals.",
+    "realFeedback": "Production proposal from accepted initial FE state changes by >1e-14 V when actual FE velocity feedback changes 10%; applied voltage peak >1e-12 V; physical response must be nonvacuous (reference energy peak >1e-14)",
+    "sameSourceOffOn": "UNCHANGED threshold: FE on/off RMS of incremental mechanical energy norm ratio <=1.02 on identical source/initial state/load over at least one first-mode period. Record actual ratios, initial/peak/final/integrated mechanical energy, tip RMS/peak, outside-first-cluster modal energy, applied voltage and actual clipping. This is a measured finite-window nonregression criterion, not a guaranteed suppression percentage or settling-time claim.",
+    "independentROMClosedLoop": "Both proposal and every postFE receive this ROM endpoint's reconstructed q/v/a, physical time, actual held voltage, force and readouts, never accepted FE trajectory values. Acceleration/readouts use the exported projected-full-FE readout closure at the ROM state/input, preserving La/direct/affine terms; this differs from the internal truncated modal acceleration derivative. Opaque state starts from the actual provider initial state, checks ready/proposed, feStep/controlTick/previousApplied/heldDelta, and validates every accepted N phase. Its own on/off energy-norm RMS ratio <=1.02 and applied action is nonzero. This reference experiment does not create a certified NativeRun state. Kept separate from same-input replay and native FE performance.",
+    "DARE": "Actual production riccatiRelativeResidual <1e-8, actual K array exists, and every recorded discrete closed-loop pole has modulus <1; no fallback controller",
+    "KKT": "Each actual MPC frame has primal, stationarity, dual, complementarity and actionStationarity residuals; observed maximum <1e-6; missing solver certificate is failure",
+    "nativeRestore": "RAM and RBM for each family, N=2/3 respectively, checkpoints after a sample boundary and every held phase; identical recipe and COMPLETE native restart codec bytes immediately after disk read and after completion",
+    "basisForThresholds": "Modal/DARE/KKT thresholds reflect production numerical certificates with a small reporting margin; time refinement ratio .55 allows deviation from ideal second-order .25 without accepting no convergence; full-basis errors must be below the independently checked RK4 reference budget. Amplitude floors reject vacuous examples. Output mixed-unit rows use separate row peaks. Performance ratio 1.02 is explicitly a nonregression limit, not evidence of an advertised control gain."
+  },
+  "existingSpecialQualifications": [
+    {"testSource": "src/range-application-lib/tests/tst_piezo_axial_backend_bridge.cpp", "test": "actualOperatorsReadoutsAndAcceleration", "role": "Nonzero actual axial q0/V0/Q0 and native positive-piezo/acceleration direct operators", "executionInThisArtifact": "NOT_RUN_BY_SPEC_CREATION"},
+    {"testSource": "src/fea-solver/tests/tst_piezo_native_backend_bridge.cpp", "test": "configuredForceColumnsAndAffineBias", "role": "Nonzero layered background offset, actual bias derivative and La force direct output terms", "executionInThisArtifact": "NOT_RUN_BY_SPEC_CREATION"},
+    {"testSource": "src/fea-solver/tests/tst_piezo_native_backend_bridge.cpp", "test": "forceAwareObserverAndMPCRestart", "role": "N=2/3 force-aware observer/MPC, nonzero canonical initial time, every-split native restart", "executionInThisArtifact": "NOT_RUN_BY_SPEC_CREATION"},
+    {"testSource": "src/range-application-lib/tests/tst_piezo_axial_backend_bridge.cpp", "test": "everyDiskPhase", "role": "Actual provider/controller/plant checkpoint phase qualification", "executionInThisArtifact": "NOT_RUN_BY_SPEC_CREATION"},
+    {"testSource": "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp", "test": "diskEverySplit", "role": "Native RAM/RBM all-phase byte equality and arbitrary initial time", "executionInThisArtifact": "NOT_RUN_BY_SPEC_CREATION"}
+  ],
+  "evidenceRecording": {
+    "standardOutput": "Measured PC10 FE and final PC10 lines are emitted BEFORE performance assertions and contain actual ratios/peaks/spillover, source/recipe/export hashes, actual private versions, modal/controller certificates and numerical replay/refinement metrics. Failures also emit PC10 FAILED with actual available metrics and error, without suppressing failed cases.",
+    "optionalPersistentArtifacts": "Set RANGE_PIEZO_DELIVERY_EVIDENCE_DIR to an explicit writable run directory. Every row writes progress/failure/qualification state, raw actual recipe, exact v2 preset metadata (actual omega-derived duration/cycles, basis, b1, effort weight and angular sample bounds), selected/full/truncated exported operators/certificates/versions, native FE on/off and independent ROM on/off trajectories as available, and measured metrics. Progress is unqualified, partial metrics remain absent rather than fabricated zero passes, and a caught failure overwrites status to FAILED while retaining accepted samples. Failure before primary FE construction records its phase/error without inventing a source fingerprint. The specification contains no replacement run results.",
+    "failurePolicy": "Any certificate, solver, bound or performance failure raises and becomes QFAIL, with partial/full evidence saved first when an explicit evidence directory is supplied. Never change the 1.02 gate, use a fallback controller, or select a successful random seed. Preserve original first-run logs separately. Old first-cluster/high-gain/0.095-cycle results do not qualify v2 presets.",
+    "sourceHashMeaning": "Compatibility/source invalidation provenance, not cryptographic authenticity or proof of original authorship",
+    "coordinateMapping": "Verified against actual bridge source: axial P=I_(3N), T=3N-by-r free selector, q0=full 3N reference; sample state is T^T P^T(qPhysical-P*q0) and T^T P^T*v with dimension and reconstruction checks. Layered q0 remains generalized, P maps to six physical components per node, and its accepted integrator q/v are already free-coordinate increments."
+  },
+  "pendingProductGates": [
+    {"gate": "20k first real plot within 5 seconds", "status": "PENDING_REAL_GUI_MEASUREMENT", "forbiddenSubstitute": "No synthetic benchmark or fake sample"},
+    {"gate": "20k complete CSV within 30 seconds and memory budget", "status": "PENDING_REAL_OUTPUT_MEASUREMENT"},
+    {"gate": "Actual window save/reopen, editable presets and centralized approval", "status": "PENDING_GUI_EXECUTION", "note": "New native RAM/RBM tests do not replace GUI operation evidence"},
+    {"gate": "Clean private installation and complete mandatory regression", "status": "PENDING_PC11"},
+    {"gate": "Long-horizon vibration suppression and selected-mode/high-order spillover", "status": "PENDING_SEPARATE_QUALIFICATION", "note": "These bounded transient rows and explicit residual envelopes do not certify arbitrary high-order behavior"}
+  ],
+  "registrationHandoff": {
+    "owner": "root orchestrator",
+    "targetSuggested": "tst_piezo_delivery_examples",
+    "libraries": "Follow existing application-lib/fea-solver actual backend bridge test target link pattern, including native solver library and Qt Test",
+    "compileDefinitions": ["RANGE_PIEZO_BACKEND_PYTHON", "RANGE_PIEZO_BACKEND_MODULE_ROOT"],
+    "automoc": true,
+    "initialBoundedRun": "tst_piezo_delivery_examples sameSourceScientificEvidence:axialRod-LQR-free sameSourceScientificEvidence:planarBeam-LQR-free sameSourceScientificEvidence:flatPlate-LQR-free",
+    "completeRun": "tst_piezo_delivery_examples -o <actual-run-log>.txt,txt",
+    "knownProductionRepairsRequired": ["Axial composer must bind truss source before axial SHA guard", "Axial provider initialization must explicitly declare physicalComponentsPerNode=3"],
+    "workPerformedForThisArtifact": "Owned new C++ source and JSON specification only. v2 repairs exact shared layer interfaces, whole-period sampling, full-basis physical-energy control and failure evidence. Worker performs static checks only; root owns registration/build/actual execution. No production source, other Python/C++ source, build or commit is modified by this worker."
+  }
+}

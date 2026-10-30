@@ -240,6 +240,8 @@ private slots:
     void partialUncommittedBlobIsDiagnosedAndIgnored();
     void sensitiveValuesAndAssignmentsAreRedacted();
     void unsupportedRolesAndAuthorityFieldsAreRejected();
+    void executionReferencesPersistBoundTrustedIdentity();
+    void cancellationFactsPersistWhenNoChildJobsExist();
     void lookupFactsRemainHistoricalEvidence();
     void unresolvedReservationsProtectLateOutcome();
     void unresolvedReservationProtectsConversationByteLimit();
@@ -565,6 +567,121 @@ void TstAgentConversationStore::unsupportedRolesAndAuthorityFieldsAreRejected()
     const QJsonObject unchanged = store.page(id, 0, 10, &project.error);
     QVERIFY2(!unchanged.isEmpty(), qPrintable(project.error));
     QCOMPARE(unchanged.value(QStringLiteral("messageCount")).toInt(), 0);
+}
+
+void TstAgentConversationStore::executionReferencesPersistBoundTrustedIdentity()
+{
+    ProjectFixture project;
+    QVERIFY2(project.open(), qPrintable(project.error));
+    RAgentConversationStore store;
+    QVERIFY2(project.configure(store), qPrintable(project.error));
+    const QJsonObject created = store.create(QStringLiteral("Trusted execution intent"), &project.error);
+    QVERIFY2(!created.isEmpty(), qPrintable(project.error));
+    const QString conversationId = created.value(QStringLiteral("conversationId")).toString();
+    const QString taskId = uuid();
+    const QString experimentId = uuid();
+    const QString previewId = uuid();
+    const QString sourceDocumentId = uuid();
+    const QString sourceSessionEpoch = uuid();
+    const QString authorizationDigest(64, QLatin1Char('c'));
+    const QString trustedAuthorizationPreviewId = uuid();
+    const QString trustedAuthorizationExperimentId = uuid();
+    const QString trustedAuthorizationDigest(64, QLatin1Char('d'));
+    const QJsonObject facts{{QStringLiteral("status"), QStringLiteral("pending")},
+        {QStringLiteral("code"), QStringLiteral("OUTCOME_NOT_OBSERVED")},
+        {QStringLiteral("command"), QStringLiteral("experiment.run")},
+        {QStringLiteral("idempotencyKey"), uuid()},
+        {QStringLiteral("experimentId"), experimentId},
+        {QStringLiteral("previewId"), previewId},
+        {QStringLiteral("sourceDocumentId"), sourceDocumentId},
+        {QStringLiteral("sourceSessionEpoch"), sourceSessionEpoch},
+        {QStringLiteral("sourceRevision"), QStringLiteral("7")},
+        {QStringLiteral("authorizationDigest"), authorizationDigest},
+        {QStringLiteral("authorizationMode"), QStringLiteral("bounded_task_authorization")},
+        {QStringLiteral("trustedAuthorizationPreviewId"), trustedAuthorizationPreviewId},
+        {QStringLiteral("trustedAuthorizationExperimentId"), trustedAuthorizationExperimentId},
+        {QStringLiteral("trustedAuthorizationDigest"), trustedAuthorizationDigest}};
+    const QJsonObject intent{{QStringLiteral("messageId"), uuid()},
+        {QStringLiteral("taskId"), taskId}, {QStringLiteral("role"), QStringLiteral("fact")},
+        {QStringLiteral("text"), QStringLiteral("Trusted experiment intent was recorded before submission.")},
+        {QStringLiteral("facts"), facts}};
+    const QJsonObject appended = store.append(conversationId, QStringLiteral("1"), QJsonArray{intent}, &project.error);
+    QVERIFY2(!appended.isEmpty(), qPrintable(project.error));
+    QCOMPARE(appended.value(QStringLiteral("messageCount")).toInt(), 1);
+
+    QJsonObject malformedFacts = facts;
+    malformedFacts.insert(QStringLiteral("authorizationDigest"), QStringLiteral("invalid-digest"));
+    QJsonObject malformedIntent = intent;
+    malformedIntent.insert(QStringLiteral("messageId"), uuid());
+    malformedIntent.insert(QStringLiteral("facts"), malformedFacts);
+    QString error;
+    QVERIFY(store.append(conversationId, QStringLiteral("2"), QJsonArray{malformedIntent}, &error).isEmpty());
+    QVERIFY(!error.isEmpty());
+
+    RAgentConversationStore reopened;
+    QVERIFY2(project.configure(reopened), qPrintable(project.error));
+    const QJsonObject saved = reopened.exportConversation(conversationId, &project.error);
+    QVERIFY2(!saved.isEmpty(), qPrintable(project.error));
+    const QJsonObject savedFacts = saved.value(QStringLiteral("messages")).toArray().first().toObject()
+        .value(QStringLiteral("facts")).toObject();
+    QCOMPARE(savedFacts.value(QStringLiteral("experimentId")).toString(), experimentId);
+    QCOMPARE(savedFacts.value(QStringLiteral("previewId")).toString(), previewId);
+    QCOMPARE(savedFacts.value(QStringLiteral("sourceDocumentId")).toString(), sourceDocumentId);
+    QCOMPARE(savedFacts.value(QStringLiteral("sourceSessionEpoch")).toString(), sourceSessionEpoch);
+    QCOMPARE(savedFacts.value(QStringLiteral("sourceRevision")).toString(), QStringLiteral("7"));
+    QCOMPARE(savedFacts.value(QStringLiteral("authorizationDigest")).toString(), authorizationDigest);
+    QCOMPARE(savedFacts.value(QStringLiteral("authorizationMode")).toString(), QStringLiteral("bounded_task_authorization"));
+    QCOMPARE(savedFacts.value(QStringLiteral("trustedAuthorizationPreviewId")).toString(), trustedAuthorizationPreviewId);
+    QCOMPARE(savedFacts.value(QStringLiteral("trustedAuthorizationExperimentId")).toString(), trustedAuthorizationExperimentId);
+    QCOMPARE(savedFacts.value(QStringLiteral("trustedAuthorizationDigest")).toString(), trustedAuthorizationDigest);
+}
+
+void TstAgentConversationStore::cancellationFactsPersistWhenNoChildJobsExist()
+{
+    ProjectFixture project;
+    QVERIFY2(project.open(), qPrintable(project.error));
+    RAgentConversationStore store;
+    QVERIFY2(project.configure(store), qPrintable(project.error));
+    const QJsonObject created = store.create(QStringLiteral("Cancellation evidence"), &project.error);
+    QVERIFY2(!created.isEmpty(), qPrintable(project.error));
+    const QString conversationId = created.value(QStringLiteral("conversationId")).toString();
+    const QString experimentId = uuid();
+    const QJsonObject facts{{QStringLiteral("schema"), QStringLiteral("range.agent-experiment-cancellation/v1")},
+        {QStringLiteral("experimentId"), experimentId},
+        {QStringLiteral("sourceDocumentId"), uuid()}, {QStringLiteral("sourceSessionEpoch"), uuid()},
+        {QStringLiteral("authorizationDigest"), QString(64, QLatin1Char('d'))},
+        {QStringLiteral("sourceRevision"), QStringLiteral("12")},
+        {QStringLiteral("trigger"), QStringLiteral("user_stop")},
+        {QStringLiteral("status"), QStringLiteral("cancelled")},
+        {QStringLiteral("code"), QStringLiteral("CANCELLED")},
+        {QStringLiteral("beforeState"), QStringLiteral("prepared")},
+        {QStringLiteral("afterState"), QStringLiteral("cancelled")},
+        {QStringLiteral("cancellationPersisted"), QStringLiteral("true")},
+        {QStringLiteral("childCancellationRequestFailed"), QStringLiteral("false")},
+        {QStringLiteral("childJobSetMatches"), QStringLiteral("true")},
+        {QStringLiteral("childJobsTerminal"), QStringLiteral("true")},
+        {QStringLiteral("childJobCount"), QStringLiteral("0")},
+        {QStringLiteral("terminalChildJobCount"), QStringLiteral("0")},
+        {QStringLiteral("childJobStates"), QStringLiteral("none")},
+        {QStringLiteral("childJobsTruncated"), QStringLiteral("false")}};
+    const QJsonObject entry{{QStringLiteral("messageId"), uuid()},
+        {QStringLiteral("taskId"), uuid()}, {QStringLiteral("role"), QStringLiteral("fact")},
+        {QStringLiteral("text"), QStringLiteral("The Host confirmed cancellation before a child job started.")},
+        {QStringLiteral("facts"), facts}};
+    const QJsonObject appended = store.append(conversationId, QStringLiteral("1"), QJsonArray{entry}, &project.error);
+    QVERIFY2(!appended.isEmpty(), qPrintable(project.error));
+
+    RAgentConversationStore reopened;
+    QVERIFY2(project.configure(reopened), qPrintable(project.error));
+    const QJsonObject page = reopened.page(conversationId, 0, 10, &project.error);
+    QVERIFY2(!page.isEmpty(), qPrintable(project.error));
+    QCOMPARE(page.value(QStringLiteral("messages")).toArray().size(), 1);
+    const QJsonObject persistedFacts = page.value(QStringLiteral("messages")).toArray().first().toObject()
+        .value(QStringLiteral("facts")).toObject();
+    QCOMPARE(persistedFacts.value(QStringLiteral("experimentId")).toString(), experimentId);
+    QCOMPARE(persistedFacts.value(QStringLiteral("childJobStates")).toString(), QStringLiteral("none"));
+    QCOMPARE(persistedFacts.value(QStringLiteral("childJobCount")).toString(), QStringLiteral("0"));
+    QCOMPARE(persistedFacts.value(QStringLiteral("childJobSetMatches")).toString(), QStringLiteral("true"));
 }
 
 void TstAgentConversationStore::lookupFactsRemainHistoricalEvidence()

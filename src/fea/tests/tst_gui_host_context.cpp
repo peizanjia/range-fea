@@ -553,6 +553,8 @@ private slots:
         const auto beforeStamp = session->modelCommandStamp(0);
         const auto beforeJournal = journalBytes();
         const QString beforeHistoryId = model.staticMeshBindingHistoryIdentity(true);
+        const QString boundWithResultsHash = RModelCommandService::stateFingerprint(model);
+        QVERIFY(boundWithResultsHash != boundHash);
         {
             ObserveHistoryActionErrors logs;
             // Exercise the installed QAction connection, not a Model try/catch.
@@ -562,7 +564,7 @@ private slots:
         QCOMPARE(changed.size(), 0); QCOMPARE(pickChanged.size(), 0);
         QCOMPARE(session->modelCommandStamp(0), beforeStamp);
         QCOMPARE(journalBytes(), beforeJournal);
-        QCOMPARE(RModelCommandService::stateFingerprint(model), boundHash);
+        QCOMPARE(RModelCommandService::stateFingerprint(model), boundWithResultsHash);
         QCOMPARE(model.getNVariables(), 1u); QCOMPARE(model.getVariable(0).getValue(0, 3), 0.125);
         QCOMPARE(model.getUndoStackSize(), 1u); QCOMPARE(model.getRedoStackSize(), 0u);
         QCOMPARE(model.staticMeshBindingHistoryIdentity(true), beforeHistoryId);
@@ -570,6 +572,7 @@ private slots:
         QCOMPARE(picks.getItems(0).size(), 3);
         QVERIFY(picks.hasItem(sourceSurface)); QVERIFY(picks.hasItem(sourceNode)); QVERIFY(picks.hasItem(ownedPoint));
         model.clearResults();
+        QCOMPARE(RModelCommandService::stateFingerprint(model), boundHash);
         undo->trigger();
         QCOMPARE(changed.size(), 1); QCOMPARE(pickChanged.size(), 1);
         QCOMPARE(RModelCommandService::stateFingerprint(model), unboundHash);
@@ -583,6 +586,8 @@ private slots:
         const auto redoStamp = session->modelCommandStamp(0);
         const auto redoJournal = journalBytes();
         const QString redoId = model.staticMeshBindingHistoryIdentity(false);
+        const QString unboundWithResultsHash = RModelCommandService::stateFingerprint(model);
+        QVERIFY(unboundWithResultsHash != unboundHash);
         {
             ObserveHistoryActionErrors logs;
             redo->trigger();
@@ -591,11 +596,12 @@ private slots:
         QCOMPARE(changed.size(), 1); QCOMPARE(pickChanged.size(), 1);
         QCOMPARE(session->modelCommandStamp(0), redoStamp); QCOMPARE(journalBytes(), redoJournal);
         QCOMPARE(model.staticMeshBindingHistoryIdentity(false), redoId);
-        QCOMPARE(RModelCommandService::stateFingerprint(model), unboundHash);
+        QCOMPARE(RModelCommandService::stateFingerprint(model), unboundWithResultsHash);
         QCOMPARE(model.getNVariables(), 1u); QCOMPARE(model.getVariable(0).getValue(0, 3), 0.125);
         QCOMPARE(model.getUndoStackSize(), 0u); QCOMPARE(model.getRedoStackSize(), 1u);
         QCOMPARE(picks.getItems(0).size(), 2); QVERIFY(picks.hasItem(sourceSurface)); QVERIFY(picks.hasItem(sourceNode));
         model.clearResults();
+        QCOMPARE(RModelCommandService::stateFingerprint(model), unboundHash);
         redo->trigger();
         QCOMPARE(changed.size(), 2); QCOMPARE(pickChanged.size(), 1);
         QCOMPARE(RModelCommandService::stateFingerprint(model), boundHash);

@@ -1,5 +1,7 @@
 # 当前开发与验收计划
 
+> **文档定位（2026-10-30）：**标题及下文“当前”描述本文更新时的产品路线。当前课程项目另按 [Trusted Computation Agent Stage 0–8](TRUSTED_COMPUTATION_AGENT_PLAN.md) 管理，其可攜状态以[阶段检查点](acceptance/phase-checkpoint-20261030.md)为准；旧产品 Stage、CW、PC、WF 编号不合并。跨工作线阅读从[文档索引](README.md)和[续作入口](CONTINUATION.md)开始。历史 `.planning/` 路径只指向原工作区本机记录，不随仓库发布。
+
 更新：2026-10-11。本文维护总体阶段、已验收基线及执行入口；总体目标见 `../PROJECT_ROADMAP.md`，实际完成证据见 `../HANDOFF.md`，历史过程见 `../DEVELOPMENT_LOG.md`。阶段号表达依赖，不代表工时或完成百分比。
 
 ## 当前重点：少操作的结构控制工作台

@@ -1,5 +1,251 @@
 # 开发执行与交互记录
 
+> **阅读说明（2026-10-30）：**本文件保留各日期的工程与交互摘要，不是完整聊天逐字稿，也不是统一的当前验收表。当前目标及工作线从[文档索引](docs/README.md)进入，用户决策续接见[续作交互记录](docs/CONTINUATION_LOG.md)，Trusted Agent 当前可攜状态以[2026-10-30 阶段检查点](docs/acceptance/phase-checkpoint-20261030.md)为准。下文的进程、权限、阈值和完成数字仅描述当时快照；本地 `.planning/` 和 `audit/` 记录不随 fresh clone 上传，不能充当远端可复核证据。压电 3/36 与 33/36 的历史台账冲突以各自日期记录，不按旧文字推定整体完成。
+
+## 2026-10-20 21:08 PC-11 axialRod Run04 完成计算、结果登记失败
+
+Release 私有安装 GUI 任务 `2026102019340001` 达到 20,000/20,000 accepted FE steps，solver 自然退出并写出 checkpoint RBM；产品 job record 因 lock ownership/read 错误持续停留在 `queued`，`processStarted=false`。验收脚本没有取得 terminal result，退出码 1；真实 plot 与完整 CSV 步骤未到达，因此 PC-11-A02 仍 pending。用户已把内存门槛改为整机 RAM `<90%`，50ms 采样峰值 76.5929%（90,839 samples）；working-set sampler 因用户要求正常关闭 GUI 后查询已退出 PID 而 INVALID，不用于新门槛。GUI 通过正常 `Quit?` 退出，solver 和 GUI PID 均确认结束。审计收据 `build/audit-20261020/piezo-acceptance/focused-functional-002/pc11-current-gui-r4-run-04/run04-disposition.json`；追加状态 `functional-addendum-20261020-17.json`。整体计划仍 33/36 pass、3/36 pending，`productComplete=false`。下一步先定位/修复运行后 job-record persistence，再续做产品结果读取、绘图和完整 CSV；不重复本次 20k 计算。
+
+## 2026-10-14 14:42 交接退出与量化进度
+
+用户要求按技能整理交接并退出。本轮新增 [当前接管快照](docs/PIEZO_CONTROL_HANDOFF_20261014_1440.md)，刷新 `HANDOFF.md`、续接总册、交互记录及 `.planning/2026-10-13-piezo-control-handoff/`；冻结合同/机器计划未改。梁 `planarBeam-MPC-forced`、板 `flatPlate-MPC-free` 的 runner summary 均 `exitCode=0, qualified=true`，PC-10 局部 FE/持久化矩阵为 29/30（96.7%），余板 `flatPlate-MPC-forced` 在 `initTestCase` 后交接中断，无合格收据。v45 OFF `ALL_BUILD` 编译 GUI 期间 Ctrl+C 退出 1，是主动中断，不是源编译失败。退出后查询无对应 CMake/科学测试/Python 子进程。Save 环境预检的 installed-file 句柄持有修补与 PS5.1 10 案例通过，仍需独立审查。候选控制两项 P2、root-seal/finalizer 正例/聚合、完整候选 19-ID 静态链未完成；静态候选 0/19 PASS。正式验收 **0/36 accepted（0%）**、`productComplete=false`，无产品 GUI 资格。
+
+## 2026-10-14 14:00 PC-10 至 27/30 与 GUI 恢复入口定向通过
+
+梁 `planarBeam-MPC-free`、板 `flatPlate-LQR-forced` 两条长行的 summary 均 exit0/qualified true，PC-10 累计 27/30：轴向科学 8、梁科学 7、板科学 6、三族 RAM/RBM 6；余梁 1／板 2。定向 Qt 通过 `selectionRecoveryShowsModelTreeWithoutChangingGlobalSelection` 在锁住当前来源时的恢复按钮可见、解锁后正常隐藏，修改后 3 PASS／0 FAIL；完整工作台 314.41 秒 1/1 PASS 属该小修前的诊断构建，不能移称修改后全套回归。真实安装 GUI、静态候选及三族 20k 仍无 GO，36 条 pending、`productComplete=false`。
+
+## 2026-10-14 13:58 OFF 诊断工作台复测与恢复入口
+
+首次 OFF v44 选定 CTest 4/5，工作台因诊断配置的私有 Python 路径为空报 backend 路径缺失，内部 17 PASS／30 FAIL／1 SKIP；原失败日志保留。配置 `build/private-python-v3`、重编 GUI 测试目标后，工作台完整 CTest 1/1 PASS，314.41 秒。读 GUI 源码确认 11 顶层模块和压电六页，已有少操作的集中预览／一次确认及保存实验 Run→确认逻辑；单一模型暂不可读时恢复按钮错误隐藏，已改为文件不可用时保持可见，并加入锁住来源的定向 Qt 案例，重编/复测尚未完成。真实安装窗口视觉、紧凑尺寸、键盘/UIA 仍未验。静态 root-bootstrap 正常/失败分支的未锁 mkdir 已移除，两项 P2 经 Sol medium 复审关闭；native mutated-handle 路径在本机未触达。PC-10 仍为 25/30，全部 36 项和产品仍 pending。
+
+## 2026-10-14 13:40 OFF 全目标诊断完成、静态证据链型别复核
+
+OFF v44 隔离全目标诊断构建 exit0，`Release/fea.exe` SHA256 `963A9432EE6E855FA5568D92416345CFB7133313B92FAD826889C18769C055BE`；该构建期间源脚本仍在编辑，不能代替最终同源发行。选定 OFF CTest 已启动。PC-10 板 `flatPlate-LQR-free` summary 为 exit0/qualified true，真 FE／持久化增加至 25/30，剩余梁 2／板 3。Sol medium 确认 finalizer 旧数组型别绕过 P1 已关闭，包树候选／冻结／build 跨源绑定已复审，另补严格标量与 17 个函数级正反例；未运行完整 manifest 链。root-bootstrap 最终 receipt 使用同一已锁父目录 handle 的 native 相对创建，但独立 Sol medium 指出更早的父目录自动创建可在 junction 切换后造成越界目录副作用，同时检测夹具可吞下越界创建后清理的异常；Luna 正修，候选仍 PENDING。freeze／聚合器标量硬化与 OFF Release build-receipt 夹具仍在进行，首次夹具因并发源变更按合同拒绝。无静态 GO、无真实安装 GUI 资格，12 阶段／36 项均 pending，`productComplete=false`。
+
+## 2026-10-14 13:18 v43 模块边界修复、Save 判定覆审与交接更新
+
+四个实际静态 producer 的可信模块边界与 24 个 PS5.1 对抗案例已通过。聚合器现先将实际测试、helper、四 producer 六文件与冻结后来源行逐个核 hash，保持 Windows 只读共享文件句柄跨子测试运行，再复核 hash；独立 Sol medium 审查无剩余 P1/P2。没有完整候选 manifest，故模块 ID 仍未形成候选级 PASS，产品 GO 仍 false。Save 纯判定原把整数 `0`／字符串 `'False'` 误当布尔 false，已改严格 `[bool]` 检查；15 个 PS5.1 案例和独立覆审通过，新单次收据为 `build/audit-20261014/piezo-delivery/gui-fresh-run-v43-output-audit/save-predicate-fixture-v43-f119b41938ff402baf00187fd335f3f6.json`，只证明 no-product-action/PENDING。root-bootstrap 原 12 个合成案例通过，但独立审查在真实 PS5.1 重现预载 `ConvertFrom-Json` 执行的 P1，另指出输出父路径替换 P2；Luna 正修，不采纳为静态 gate。新 OFF 全目标诊断编译与 PC-10 梁／板余下 7 行继续；当前 23/30。跨平台续接页已在顶部写出精确当前位置、运行任务、剩余门槛与操作顺序。冻结 12 阶段／36 项均 pending，`productComplete=false`。
+
+## 2026-10-14 13:08 OFF 新 map 诊断阴性、全目标诊断构建
+
+新 OFF 隔离 `fea.exe` 与公开 API 负测目标构建退出 0，后者 CTest 1/1 PASS。新 `fea-link.map` SHA256 `96F00F796AD5EC7B3FBAF0088535C48D60CEA42B45160998621ECB24BD40DECA`，直接搜索先前旧 Cloud AI 对象、query 与 Agent/OpenAI 命名无命中；尚无 fresh install/inventory/正式独立 map gate，故不将诊断 map 当发行 PASS。OFF 全目标诊断构建已启动；PC-10 梁／板 PI 受迫新增后暂 23/30 行合格。v43 模块 producer 接线的独立 Sol medium 审查发现 helper 内未限定 `Where-Object`／`ForEach-Object` 可被预载函数劫持，修复中；候选模块门槛保持 pending。完整 36 标准及产品仍未交付。
+
+## 2026-10-14 12:59（Asia/Singapore）压电控制续开发
+
+继续 `PIEZO_CONTROL_DELIVERY`，未使用 Codex with ChatGPT。OFF Cloud AI 隔离 v44 GUI 诊断构建仍在编译；旧 OFF map 的 430 个旧 Cloud AI 命中未获新 map 推翻，旧安装不放行。`scripts/packaging/piezo_gui_static_v43/` 已收纳 v43 静态生产／准入工具；诊断源预检 PASS（2086 文件、7 子模块、SHA256 `5d978b100a27e50cd53556ecde028e5f15d05b043cfa280765cb7478d568d463`），后续源码改动使其不具最终冻结资格。监督器三项 P2 清理／哈希漏洞已修复、PS5.1 聚焦测试及独立覆审通过；仍为 fixture-only/no-GO。另经 Sol medium 发现本地模块 helper 测试不能证明实际 producer，候选总表保留该两门槛 PENDING，只提升 parser；另 14 项候选静态门槛尚未通过，实际 producer 接线正在开发。PC-10 新增梁／板 PI-forced，23/30 真 FE／持久化行合格，其余梁／板继续。最终全量同源构建、安装 GUI、三族 20k 性能、完整 36 标准仍待，`productComplete=false`。
+
+## 2026-10-14 12:45 OFF 边界修复、门控复审与持久化工具
+
+- OFF 旧 Cloud AI 查询源码已加条件编译隔离，Cloud/GUI 子库 OFF 构建、公开 API 负测 1/1 与 ON 两库构建通过；独立 Sol medium 无确定 P1/P2。新版完整 OFF `fea.exe` 尚在 v44 隔离诊断构建，未重新安装或产出可判定的 map。
+- 独立 map gate 的未解析表间空档经 Sol medium 指出并修复，17/17 合成测试通过；修订程序重放旧真实 map 仍 FAIL，430 条旧 Cloud AI 命中。v43 admission 的失败 source/build receipt 及 OFF map receipt 强制 pin 已补，66/66 合成测试通过。源范围漏扫 `src/build/` 与 static harness 父目录定位已用 Windows PowerShell 5.1 修复／复测；搬至受版本控制的 `scripts/packaging/piezo_gui_static_v43/` 后，66/66 Python、producer 路径、producer→admission 源范围及 3 个拒错案例通过。实物源冻结、包树、静态 GO 和产品动作仍未执行。
+- PC-10 真 FE／持久化逐行合格 21/30：梁与板各新增 PI-free；其余两族长跑继续。三族安装版 20k 与 5 秒首图、30 秒 CSV、512000000 字节合并工作集均未实测，12 阶段／36 条保持 pending，`productComplete=false`。
+
+## 2026-10-14 12:11 OFF 链接图独立审查发现 P1
+
+- Sol medium 读取真实 `fea-link.map` 后确认旧 Cloud AI 查询 widget 与 cloud AI request/response 对象已进入 OFF `fea.exe`，且相关方法有实际 RVA；不仅是 archive 中存在。初次只查 `range-ai`／`agent_widget`／`openai` 字符串的阴性结果范围过窄。当前 OFF 安装与 `inventory-v43-off-final-v1.json` 虽在文件／目录／PE 静态检查上 PASS，**不能作为无 AI 的发行包或 GUI GO**。正式 root 中断了当时尚未完成首个用例的 OFF GUI／reader CTest，保留 `ctest-v43-off-final-gui-reader.INTERRUPTED.md`，后续修改 Cloud AI 条件编译后须重建、重新安装、盘点、map 审查及回归。旧 ON 科学测试 EXE 字节未变，PC-10 运行继续。
+
+## 2026-10-14 12:06 v43 双变体终版构建、全新安装与 OFF 实物树
+
+- ON/OFF 两棵 Release 全量终版构建及各自全新安装退出 0。正式 `inventory_v43.py` 对 OFF 安装 `install-off-v43` 得到 3171 文件、261 目录、18 项检查均 PASS；清单 SHA256 `740FAE403C4BFA070D3F80B21851A6C9E41D81F9F9D4055A53F91498BC8B505C`。外部 pin 的 `inventory_adapter_v43.py` 真树重扫 `INVENTORY_TREE_MATCH`，安装共 395456372 字节；它明确不放行 GUI。ON 最终 `install-on-v44` 清单 3173 文件、261 目录、18 PASS，SHA256 `EE39683472A583778FC9BA46188CE0886E9F0ECDE850FA43CE9829E85D0A5964`。两份清单都把发行资格标为链接图尚未独立审定；OFF `fea-link.map` 已生成，SHA256 `F231C73DDA854F612D466B5DA73F00F69E85063BCAEC3F274F6B97CD220A5D5D`，初查没有 `range-ai`、Agent 组件或 `openai` 字符串。
+- GUI 新增缺少／多选时的选模直达入口和保存实验 Run 摘要。OFF 工作台整组 CTest 在最后测试夹具清理前 47 PASS／0 FAIL／1 预期 SKIP，清理后新增案例 3 PASS；独立 Sol medium 只读审查未见确定 P1/P2。双变体最终源码重建已完成，但该重建后的完整 GUI 回归、真实安装窗口视觉及屏幕阅读器还要再验。
+- PC-10 当前逐行 JSON 19/30 `QUALIFIED`（轴向科学 8、梁科学 3、板科学 2、三族 RAM/RBM 6），剩余梁 5、板 6 行续跑。科学复制 EXE SHA256 与最终 ON Release 目标完全相同 `B57E381A57E66C0807B2C91ABD7AC34A6679C09715893CC3CE6BB76FF05EB62B`。v43 source/package/admission 静态链仍构建，产品 GUI 与三族 20k 均未运行，12 阶段／36 项仍 pending、`productComplete=false`。
+
+## 2026-10-14 11:36 v43 最终路径回归、ON 实物盘点与 PC-10 续跑
+
+- ON 全量 Release 构建 exit 0，首次全新 ON 安装 exit 0。schema-v2 `build/audit-20261014/piezo-delivery/inventory-v43-on-v2.json` 对 3173 文件、18 项检查给出 PASS；首次因私有 `python.exe`／`pythonw.exe` 未指定供应映射的失败报告保留。该清单仍标 `INCOMPLETE_LINK_MAP_NOT_SUPPLIED`，而且 GUI 操作修补尚待，不能作为最终包。OFF 全量 Release 构建仍进行中。为核对 OFF 的实际静态成员，`src/fea/CMakeLists.txt` 增加 OFF Release `fea-link.map` 选项，待重新配置／链接及独立复核。
+- v43 最终长路径元数据护栏之后，`tst_piezo_workbench_widget` CTest 通过，内部 46 PASS、0 FAIL、1 预期 SKIP；`tst_piezo_accepted_trace` 与 `tst_solver_snapshot` 通过。`tst_piezo_result_series` 首次四项目录 CTest 因原 300 秒上限超时，失败日志保留；单测分层恢复 45.366 秒 3/3 PASS。在不删测试的前提下将该目标 CTest 上限改为 900 秒，完整单目标 CTest 1/1 PASS、内部 29 PASS／0 FAIL／1 预期 SKIP，260.92 秒。四项首次合跑仍是 75%，不能计为通过；GUI 操作修补后还须重新构建／回归。
+- PC-10 真实 FE／重放目前轴向 8/8、梁 LQR-free 1/8、三族 RAM/RBM 6/6 的逐行 JSON `qualificationStatus=QUALIFIED`，合计 15/30；梁其余 7 行与板 8 行正由 `pc10-v43-smoke/run-remaining-v43.py` 两个进程续跑。报告只涵盖当前复制测试 EXE，最终须核对 EXE SHA 与最终源构建是否相同。PC-11 20k 三族安装版首图／CSV／合并工作集尚未测，静态候选尚未 GO。独立 Sol medium 对 v43 清单转接骨架找到 API pin 绕过和必要 check ID 未核对两项 P2，Luna 正修并补空目录差异拒绝；所有 12 阶段／36 项仍 pending，`productComplete=false`。
+
+## 2026-10-14 10:07 新 MSVC Release 编译与聚焦 GUI 测试
+
+- PC-09 的三份已审 GUI 修正及合并修复已合入正式源码；PC-11 读历史与 GUI 分段计时也已合入作诊断。新 `build/vs2026-piezo-msvc-openmp-v43` 配置、`fea`、`fea-solver`、`tst_gui_model_lifecycle` Release 构建已 exit 0。第一次 lifecycle 链接因测试的 `#define private public` 在 MSVC 下改变三个符号名失败；改为两个 GUI 类显式测试友元，重新增量构建成功。旧失败日志 `build/audit-20261014/piezo-delivery/build-v43-gui-release.log` 和修复后日志 `build-v43-gui-release-friend-resume.log` 都保留。
+- MSVC OpenMP 替换已合入 CMake、求解器和 CI；ON 两个 Release EXE 的 PE dependents 均有 `VCOMP140.DLL`，不见旧 `libomp`。安装副本与 Redist 源字节、Qt/TetGen/Agent 许可及真实 GUI 仍待验。初次配置用系统 Python 3.14 漏注册 NumPy/SciPy Stage 9 测试；已以私有 Python v3/`RANGE_REQUIRE_NUMERIC_TESTS=ON` 重配，ON 注册 236 项。OFF 独立 Release 配置同样完成，注册 227 项，尚未建置。
+- PC-10 正式测试源已合入 24 科学行及 6 RAM/RBM 持久行收据字段；隔离 verifier 经 Sol medium 二次复审无剩余 P1/P2，root 重跑合成用例 20/20 PASS。真实 C++ 目标、30 行收据和同源数值资格尚未执行。当前 `tst_piezo_workbench_widget` 注册 CTest 在跑，结果未定；新安装、v43 GUI 静态 GO、20k 三家族均未开始。
+- 隔离的新 v43 安装清单验证器初版合成 10/10，但 Sol medium 复审连续发现第三方 OpenSSL 无 build peer、dumpbin 期间 EXE 改写、项目 EXE supplier 覆盖与移位伪装；前几项已补，最后一项正修，未用其批准安装。冻结 12 阶段/36 项仍 pending、`productComplete=false`。
+
+## 2026-10-14 08:56 PC-09 合并候选、PC-10 收据审查和 PC-11 归因
+
+- 在 `build/audit-20261014/piezo-gui-integration-sandbox/` 对三份 PC-09 GUI 隔离补丁做同源合并，补齐完整配方确认拦截、预览可展开区、物理 ID 与自动结果关联。Sol medium 合并审查指出接受 trace 未被直接监控、源短暂锁定会丢失 pending 作业；候选已加入紧凑历史权威文件/目录监控、精确作业 ID 的有界重试以及相应 GUI 测试。二次静态复审暂无明确 P1/P2；未合入正式源码、编译或运行。
+- PC-10 隔离方案列出 24 科学行、6 持久化行和 15 阶段检查。Sol medium 指出 verifier 容许空数据与自定义空矩阵通过，Luna 正修；现有 9/9 合成测试和 `git apply --check` 不能用于 PC-10 阶段验收。
+- PC-11 旧 v33 的 20,001 条记录约 8.195 秒完成认证，首图 8.676 秒，合计峰值 517,238,784 字节，超过 512,000,000 字节门槛且原收据 wrong-family INVALID。热路径计时只存在隔离补丁，不能声称优化有效。Agent-free ON Debug 构建和 GUI v39 外部 runner 可信边界修复正在进行，正式 50 ms step8 未获运行条件。36 项 pending，`productComplete=false`。
+
+## 2026-10-14 08:33 PC-06 线性外力步长细化与 GUI 提案再审
+
+- PC-06 同一个真实四 BEAM1、八步接受外部 `f(t)=0.075+1800t N` 场景增加原网格重放＝真实接受端点，以及按原时间力端点线性插值的 1/2/4/8 倍 FE 步长对 32 倍参考网格的位移/速度比较。粗网格缺陷非空；相邻误差比均小于 0.35，实际约 0.25。最终注释明确该细化共享原生 Newmark、参考网格不是解析真值，不能宣称所有波形或独立解析精度。源修改后旧 v41 Release 目标重新编译，焦点 Qt 3 PASS、0 FAIL；Sol medium 唯读审查细化段无 P1/P2。新 SHA 收据 `build/audit-20261014/piezo-delivery/pc02-pc03-pc06-local-build/receipt-local-refinement.json` 取代同目录旧 PC-06 来源快照，但旧收据保留历史；PC-06 三项仍 pending。
+- PC-09 完整配方预览隔离提案的 Sol medium 首审三个 P2（初始电学量单位、标量↔矩阵具体值、直接调用确认绕过）已修，最终 SHA 版本复审无 P1/P2；结果自动关联隔离提案修复了 500 ms GUI 定时器反复 SHA 外部文件问题，Sol medium 最终静态复审无 P1/P2。两者均未合入或运行，且与物理 ID／可展开预览补丁有 `showPreview()` 合并点。完整预览提案有一个非阻断测试不足：其 stale-preview 片段需在修改 steps 前重新生成有效预览；正式合入时修。
+- GUI v39 的 28 个活跃 PowerShell 脚本、1877 个命令 AST 与可信 Utility/Management 清单核对 PASS；旧 v42 安装和四项 producer 来源 pin 不适用于之后的新源码／安装，v39 只作诊断。Save ACL 预检 clean/假 Security 路径各 17 案 PASS；manifest/freeze/50 ms step8/最终静态链未结束，产品 NO-GO。Agent-free ON Debug `fea` 仍编译中，OFF 安装完成但不能代替最终新 Release。
+
+## 2026-10-14 08:16 PC-02/03 解析 oracle 与 PC-06 外部时间力局部实跑
+
+- 在旧 v41 Release 树构建新梁/板解析 oracle 和 PC-06 应用测试目标均成功。板 oracle 首跑抛出“Layered native dynamics requires enabled dynamics and consistent mass”；测试场景已与真实梁场景一样启用 Newmark、1e-5 s 步长、8 步及一致质量，重编后梁/板注册 CTest 2/2 PASS。该修复只补场景的求解准入配置，不改独立矩阵/力学断言。
+- PC-06 焦点测试首跑指出导出配方电极元数据顺序与网格装配 `portIds` 顺序不同；原错误断言已改为配方 ID 去重/覆盖与实际装配算子列逐个相等两层约束。Sol medium 指出仅做集合比较会漏掉同电压传感端口标签交换，该 P2 已补，最终复审无剩余 P1/P2。重新构建后四个真实 BEAM1、八个接受步、线性时间力、端点反力/电荷/能量账本、源码篡改拒绝与同一步恢复重试焦点 Qt 3 PASS、0 FAIL，约 4.3 秒。SHA 固定输出与 EXE/来源清单在 `build/audit-20261014/piezo-delivery/pc02-pc03-pc06-local-build/receipt-local-final.json`。该例用导出的真 FE 算子检查端点账本，不能代替独立梁算子、全波形、三家族或最终同源 Release 资格。
+- Agent-free OFF 新前缀安装 exit 0，ON Debug 构建仍在 `fea`，ON 定向测试和安装待完成。GUI v39 的 PS5.1 模块可信边界独立预检 PASS，manifest/freeze/完整静态链未结束；产品 GUI 仍 NO-GO。PC-09 完整预览隔离提案完成且仅静态适用，结果自动关联提案等待 Sol medium 性能/完整性复审；两个提案都未合入。36 项 pending、`productComplete=false`。
+
+## 2026-10-14 07:49 GUI 全量预览 P1、结果便捷性 P2 与 v38 预检
+
+- PC-09/11 当前源码的 11 个 `workflowPages` 顶层页签含 Piezo control，压电内部另有 6 页；已把逐页对象名和安装版完整故事写入 `docs/evidence/piezo_gui_operation_acceptance_matrix.md`，状态全部仍为待窗口实测。Sol medium 唯读审查确认 P1：集中预览未列出整份 recipe 将提交的端口、支座、阻尼、激励、初始状态等实际变更；确认前必须提供完整可读前后值。P2：Run 后结果图及 CSV 分别要求文件选择器，宜绑定已注册完成任务的认证工件且保留历史显式打开与篡改拒绝。两项仅在独立隔离补丁中准备，尚未改正式来源。全局停止会提示停止所有 solver，Undo 属全局动作；并发/插入编辑的实际操作范围待安装版验证。
+- GUI v38 的 ACL 干净/假 Security 优先路径各 17 案 PASS、worker 模块来源与 watchdog 正负例 PASS。source-preflight attempt009 因 v37 摘要残留正确失败，attempt010 修占位与负例后 PASS；首次 freeze 前检因人工抄写旧失败收据内 admission SHA 出错而 fail-closed，原证据保留。Luna 正从不可变收据程序化派生跨文件摘要，重跑来源预检/封存全链；未到 50 ms step8，也未启动产品 GUI。36 项 pending、`productComplete=false`。
+
+## 2026-10-14 07:31 OFF 注册生命周期通过与 PC-06 独立复审
+
+- Agent-free OFF 私有 Python v3 的 `test_extensions.py` 完整直接执行 12/12 PASS（117.690 秒），注册 `tst_gui_model_lifecycle` 15 PASS、0 FAIL、2 SKIP，CTest 50.01 秒、exit 0。直接脚本不等同于 `tst_workflow_extensions` 注册 CTest；后者仍须单独运行。OFF 安装、ON 构建/回归尚未开始，当前为 v38 50 ms GUI supervisor 静态夹具保留低负载窗口。
+- PC-06 真实分层梁外部时间函数端点账本新增不中断候选与失败后重试的完整 restart byte 对照，以及从导出 `M/K^E/Ce` 独立重建初始和各端点能量。Sol medium 复审确认原两处 P2 已补，但发现源码改动先触发源 SHA 拒绝，测试错误文案须改为 `external source/dependency SHA256 mismatch; recompile required`；正在做该单行修正，尚未编译/运行。
+- GUI v37 Save 判据夹具缺 `Get-Acl` 保持 `STATIC_FAIL/NO-GO`；v38 已从原冻结 150 项 payload 干净重建，正式 isolationRoot 未创建，正补 PowerShell 5.1 Security 模组来源预检，再重新 build/freeze/静态全链。没有产品 GUI 动作，36 项 pending、`productComplete=false`。
+
+## 2026-10-14 07:20 PC-05 双模态解析 ZOH 局部回归与 v37 冻结后测试夹具失败
+
+- `test_piezo_design.py` 新增双模态欠阻尼闭式 ZOH／双输入／加速度直接项独立算例；私有 Python v3 单项通过、同文件完整 20/20 通过，源 SHA `1cadb305b0926eeda7fb1d81fc5af4b3aa49d768e8910ead124915f28862b758`。它不代替真 FE 多模态和安装工件证据，PC-05 仍 pending；详见 `docs/evidence/piezo_pc04_08_gap_audit.md`。
+- v37 source-preflight attempt009、watchdog attempt004 重新 PASS 并成功 freeze。PATH-shadow/root-seal 静态步通过，但 save-predicate 测试在关闭 PS 自动加载后调用 `Get-Acl` 时报命令不存在；该调用只在测试夹具，不在产品脚本。v37 冻结树、失败收据保留，未进 supervisor/step8/产品 GUI。待在新 clean sibling 将 ACL 夹具改为经验证的 .NET API 或精确系统模块导入，并重跑全前置链；不能修改 v37 冻结内容。
+
+## 2026-10-14 07:05 OFF 目标完整编译、v37 模块来源实测与旧 workflow 失败归因
+
+- Agent-free OFF `fea.exe` 与 `tst_gui_model_lifecycle.exe` 目标完成增量编译、exit 0；后者 SHA `0D72D4F6A4E8A7383130B209C221EF070C145A0252AA029A2DAE28C319F7C63D`，`fea.exe` SHA `3ED53F5AEF63D9ADF130216B600B49D864C7A52F12D9AD9BA693D757E5B8031C`。前次边界中断 exit 1 与续建 PASS 分开保存；现暂停在测试边界，给 v37 的 50 ms 静态采样留独占窗口。OFF 完整测试/安装和 ON 变体尚未完成。
+- v37 在真实 Windows PowerShell 5.1 `-NoProfile` 下执行 build-worker-boundary：系统模块路径与假 Utility 模块优先路径各 exit 0，假模块加载及导出命令副作用均未出现；外部 `worker-boundary-module-trust-attempt003.json` 为 `PASS`。这只是 build 入口；预载 shadow、bootstrap `-VerifyOnly`、全新 freeze/step8/finalizer 尚未完成，产品仍 NO-GO。
+- 旧 v39 `tst_workflow_extensions` 的第一次候选验证等候在旧 10 秒 `wait()` 到期，日志只证明该刻工作未终结，不证明 worker 最终失败；验证源未变，当前测试等候改为 45 秒并增加状态诊断，需私有 Python v3 聚焦及完整目标实跑。冻结 36 项仍 pending，`productComplete=false`。
+- PC-04/05 唯读审计复核：桥接的模态阻尼预计算请求只传 `damping`，不用用户的 `modeIndices`；先以完整基产生权威 FE `C`，正式初始化再以选模投影同一 `C`。审计初稿所疑“截断基被拿去算全阶 C”不成立，已更正。真正待验的是各阻尼策略在真实 FE 上的共用 C／PSD、全基/截断基误差、多模态 ZOH、非零电荷偏置与安装工件读回；不以静态推断改动生产代码。
+
+## 2026-10-14 06:58 OpenMP 可发布运行时隔离提案复审与 GUI 模块信任边界
+
+- `build/audit-20261014/piezo-delivery/openmp-release-proposal/` 已形成 CMake、solver/test、Windows CI 三份隔离补丁。MSVC `/openmp`/vcomp 的配置探针通过；旧 `-openmp:llvm` 和 `libomp` cache 负例被 fail-closed guard 拒绝。独立 Sol medium 第二轮唯读复审确认先前缓存 P1、CI P2 在提案中关闭，未发现新 P1/P2。六个 live 来源 SHA 仍与提案前像一致，**补丁未合入正式源码**；新 Release 全目标、CTest、安装及 PE import/许可仍待。
+- v37 预冻结过程中发现清理后的 PS5.1 wrapper 无法自动解析 `Get-FileHash`；root bootstrap 在自检前使用该函数，16 个包内脚本也有依赖。正在建立精确 `$PSHOME` Utility manifest/PSM1 SHA 门槛和 module shadow 正负例，避免仅在测试 runner 手工导入模块而漏掉产品信任起点。原失败保留，v37 尚未 freeze/step8/产品 GUI。Agent-free OFF lifecycle 增量编译继续，无完整退出码；36 项 pending，`productComplete=false`。
+
+## 2026-10-14 06:41 断点续接、v37 预检及旧 20k 家族协议定位
+
+- 用户继续要求完整开发，明确不使用 Codex with ChatGPT。v37 从 v36 的 123 个冻结 payload 行按字节重建干净候选，原 step8 失败夹具和父版冻结/失败收据保留；正在按 ownership proof schema 分别验证合法短命退出行与完整身份行，尚未冻结或运行正式 step8，产品仍 NO-GO。Agent-free OFF `fea` 因共同私有 Python 默认宏正重编译后段，随后须重跑聚合、OFF 安装及 ON 构建/回归；50 ms supervisor 夹具只在无编译的独占窗口运行。
+- 旧 v33 `INVALID/Wrong family` 的首个失败点是验收器逐字比较 manifest `axialRod` 与绘图事件旧内部名 `axial`，并非已证明的 FE 家族数值错误；当前 canonical verifier 24 项轻量测试通过、1 项跳过。旧 8.676s 首图和 517238784-byte 峰值仍独立未达标，梁/板没有旧 GUI 实跑证据。细节已补入 `docs/evidence/piezo_pc09_11_gap_audit.md`。36 项 pending、`productComplete=false`。
+
+## 2026-10-14 06:27 v36 supervisor 夹具脚本失败与 OFF workflow 定位
+
+- v36 从 v35 已核对来源在新 sibling 重建，封存前 watchdog 正负例在外部克隆根 PASS；正式隔离根在冻结前不存在。worker 边界构建、source preflight、freeze PASS，README steps 3–7 各 exit 0，123 项封存 payload 在每步前后哈希一致。step 8 的真实 supervisor 正向夹具已输出 `MEASURED`，但 `test-supervisor-v28.ps1:27` 对 `ownership-proof.json` 每行都直接读取 `.image`；其中一行是采样器按 retained handle、生命周期、无后代核实的合法 `exitedBeforeIdentity=true` 短命 `csc` 子进程，仅有 PID／parent／创建／退出时间而没有 image，PowerShell StrictMode 因缺字段报错。正向测试没有发布 PASS 收据，后续测试、finalizer、产品 GUI 未运行；v36 原封存树、外部错误和 15 个夹具文件保留，结论 **STATIC_FAIL／NO-GO**。新候选须按 proof schema 分别审查已证实退出行和有镜像身份的存活行，不得忽略未知存活者，并重跑全静态链。
+- Agent-free OFF recovery 聚合已 PASS 723.64s。lifecycle 注册 timeout 仅该测试提高到 600s 后完整运行 219.075s：14 pass、1 fail、2 skip，唯一失败为 workflow 面板无结果；精确案例指定私有 Python 3.13.5 后 27.668s PASS，确认 build-tree 原默认选中系统 Python 3.14 且缺 SciPy。安装版 `WorkflowProcess` 首选 `bin/../runtime/python/python.exe`，build-tree CMake 正在把已配置的私有 Python 优先写入 `fea`／生命周期测试同一默认宏；重配置后的 `.vcxproj` 均已核对私有路径，正在重建后重跑。OFF 安装／ON 构建仍待。36 项 pending、`productComplete=false`。
+
+## 2026-10-14 06:15 v35 输出根污染与 OFF recovery 通过
+
+- v35 的封存前来源预检、私有 Python verifier 24 项（1 skipped）、PS5.1 parser 34 脚本以及 watchdog 正负契约通过；README／manifest／外部 bootstrap SHA 精确一致。冻结 106 项 payload 长度和 SHA 稳定。正式 README step 3 PATH-shadow 检查正确拒绝已经存在的 `v35-output-01`：封存前 watchdog 夹具误把自身证据写进 manifest 固定的隔离根，导致它不再是新根。没有 step 3 PASS 收据，也未继续 50 ms 夹具／finalizer／产品 GUI。外部 `static-fail-adjudication-v35-step03.json` SHA `4192539390c1c18f8f33070429b426b439a5da76f528e414d7223a5760219fa2` 保存根因与 106 项一致性；v35 **STATIC_FAIL／NO-GO**，原输出和封存树不移动、不清理。Luna 在 clean v36 中把 preflight fixture 证据放到正式隔离根外，并在封存前／step 3 前核对根不存在。
+- Agent-free OFF 的 `tst_piezo_solver_recovery` 聚合在临时 `QJsonValueRef` 改为 `int` 快照后完整 PASS，723.64 秒、exit 0；修改前 axial 单例 0xC0000005，修改后 axial/layered 单例均 PASS。`ctest --timeout 600` 不会覆盖 lifecycle 测试已注册的 120 秒属性，第二次仍在 120.08 秒被截断；正在对该聚合项单独提高注册 TIMEOUT、重新配置并完整重跑。OFF workbench、runtime-control、history 已分别通过；OFF 安装与 ON 回归未完成。
+- GUI 可用性独立提案只在审计区准备，未改正式来源：物理单元 ID 将显示在杆／梁／板成员表和自动分组预览，集中预览提供有界展开。root 审阅发现少行长文案也可溢出，已要求按实际内容高度触发展开并增加回归；待 Agent-free 释放源码边界后合并、构建与实窗口验证。36 项仍 pending，`productComplete=false`。
+
+## 2026-10-14 05:56 v34 静态失败与 Agent-free OFF 定向回归
+
+- v34 在新冻结树完成来源预检、私有 Python verifier 24 项测试（1 项跳过）、PS5.1 语法检查与静态步骤 1–5；106 个封存 payload 的长度和 SHA 匹配。步骤 6 watchdog 正向夹具失败：测试先在脚本作用域 dot-source 真实 toolchain，却将两个 mock 定义于 `global:`，实际调用被脚本作用域真实函数遮蔽，夹具缺 `toolchain-lock-v28.json`。独立 Sol medium 只读终审还确认 README root 启动示例的 bootstrap SHA `bb0da1dc…` 与外部脚本／manifest 实际 `d012a0e5…` 不同，按文档会在执行前拒绝。两项 P2、无其他明确 P1/P2；v34 **STATIC_FAIL／NO-GO**，保留冻结包和外部失败收据，不运行 step8/finalizer/产品 GUI。Luna 在全新 v35 sibling 修测试作用域、README SHA 与精确一致性检查，然后重做全链。
+- Agent-free OFF Debug 重新配置固定私有 Python 后，聚焦五项 CTest 中 workbench 全套 354.10 秒 PASS，runtime-control/history PASS；lifecycle 聚合受其注册的 120 秒 TIMEOUT 中止，但原崩溃单例 `solverPublicationDoesNotOverwriteNewerEdits` 已 PASS，零总量进度现输出有限 1.0。solver-recovery 在 `unavailableExternalFunctionRejectsBeforeQueue:axial` 发生 0xC0000005；原二进制单例已重现。测试源码把临时 `jobsQuery()` 的 `QJsonValueRef` 存为 `auto`，之后比较悬垂代理；正在改成 `int` 快照并重跑 axial/layered/聚合，保留前后收据。OFF 安装和 ON 回归仍待。
+- PC-10 24 行三家族算例现有 v44 Release 执行档及测试源已固定 SHA，但完整运行尚未开始；因单目标可耗数小时，等 GUI 时序夹具与变体回归无重负载窗口再跑。MSVC 本机探针确认 `/openmp` 使用 `VCOMP140.DLL`，现有两处 `reduction(max:...)` 报 C7660、`omp_get_thread_limit()` 不声明／不链接，替代 `parallel/single` 和局部最大值加 `critical` 小程序已通过；正式来源改动待 Agent-free 释放边界。36 项仍 pending，`productComplete=false`。
+
+## 2026-10-14 05:42 v33 静态失败与 OFF Debug 修复
+
+- v33 封存后前七项静态检查及 step8 supervisor 夹具通过：46 次采样覆盖 2.250485 秒，最大间隔 50.5996 ms，Job 绑定/排空与故障负例符合预期；后续 pinned Python 静态 harness 在 `test-static-v28.py:613` 用 README 逐字短语而非实际契约断言，因等义措辞不同 exit 1。原始外部 `static-test-failure-001`、冻结树、收据全部保留；v33 **STATIC_FAIL**，没有 finalizer、Sol 最终复审或产品启动。v34 新 sibling 正重做静态 harness 的语义检查与全新封存/全链。
+- Agent-free OFF 三个 Debug 目标 `fea`、`fea-solver`、`tst_gui_model_lifecycle` 编译通过，首轮五项聚焦 CTest 只有 runtime-control/history 通过。28 个 workbench 失败共因 OFF CMakeCache 的私有 Python 路径为空；已以 SHA pin 的 `build/private-python-v3` 绝对路径重配并核验编译宏，正重新构建。lifecycle 测试在单元素交叉检查产生 `RProgressPrint(0,0)`，原 `rbl_progress.cpp` 把它变成 NaN 并在日志百分比转整数时触发 Qt Debug QFATAL；root 已在 `src/range-base-lib/src/rbl_progress.cpp` 对零总量报告有限的 1.0，Sol medium 唯读审查无 P1/P2，失败测试重跑待定。solver recovery 首轮未处理异常亦待重配后复测。以上首轮失败收据保留，不冒充通过。
+
+## 2026-10-14 05:26 GUI 可用性与 DXC 来源核查
+
+- 独立 Luna 唯读 GUI 流程检查未发现 P1；源码及测试确认未改动的已保存实验按“Run saved → 原生预览/警告 → 一次 Confirm”提交单个任务。两个 P2 待修：成员表和集中预览未显示实际物理单元 ID；预览表固定最大 120 px，长模态/材料/警告列表难以整体审阅。当前 Agent-free OFF/ON 编译与安装验证仍占有相关源码边界，待其完成后修改并重新构建、测试和实测布局。
+- 将 Microsoft 官方 DXC v1.8.2502 发布包和对应 NuGet 1.8.2502.8 包下载至 `build/audit-20261013/piezo-delivery/pc11-dxc-official-v1.8.2502/`，归档流 SHA 对比表明两包的 x64 `dxcompiler.dll`/`dxil.dll` 都与 v42 安装字节不同。`candidate-comparison.json` 保存归档与 DLL 摘要；不能把 v42 字节归因于这两个包，PC-11 来源/通知仍未关闭。详情见 `docs/PIEZO_DEPENDENCY_PROVENANCE.md`。
+- 用与 v42 安装版完全同 SHA 的构建 EXE 重放当前 Qt 6.11.1 `windeployqt --dry-run --list source`，清单仅列 D3DCompiler，标准错误称当前找不到 DXC/DXIL。旧 `qtlib` 目录残留文件被整目录安装是一个待验证解释，不能当历史证明；下一次从空目录部署并用真实 GUI/绘图验收检查 DXC/DXIL 是否可安全缺席。
+- v33 GUI 门禁新 sibling 已建立；canonical/包内 verifier 字节一致，qualification→worker `acceptedSeq` 正负契约在私有 Python 24/24 测试中通过。新包冻结及 README 前七项静态检查通过，停在需要独占低负载的 50 ms supervisor 夹具之前，没有产品 GUI 动作。Agent-free OFF 生命周期目标继续编译，尚未取得定向 CTest/安装/ON 回归结果；36 项 pending、`productComplete=false`。
+- PC-10 独立唯读矩阵核对确认 24 行三家族×四控制器×自由/受迫的科学测试源码存在，但 v42 全量 CTest 在该目标开始后中断，v44 仅有链接证据，不能把 24 行记为已运行。轴向多杆预载的四条 66 步轨迹及八个 RAM/RBM 恢复相位已有独立定向收据，仅覆盖局部 A01。GUI 相关测试使用短的直接原生 trace 或合成 ResultStore，未替代三家族实际安装窗口 20k 及首图/CSV/内存验收。PC-10 A01–A03 仍 pending，见 `docs/evidence/piezo_pc09_11_gap_audit.md`。
+
+## 2026-10-14 05:14 GUI v32 独立审查 P1
+
+- v32 全新种子预检、23 项 packaged verifier 家族测试、worker build/freeze 及 PATH/root seal/17 项 Save 判据通过。step5 外部 runner 初次引用错收据文件名，脚本自身 PASS；纠正 runner 后 exit 0，封存 payload 101 项复核 0 mismatch。独立 Sol medium 随即发现产品链 P1：verifier `qualify()` 检查终端 `acceptedSeq=20000` 却没有在 qualification JSON 返回该字段，worker StrictMode 必读，合格运行也会中止于正常 GUI 关闭前。v32 停止后续清单，保留收据；独立结论 `STATIC_FAIL`，未发现另一个可确认 P1/P2。
+- v33 隔离修 canonical `pc11_gui_verify.py`、包内固定副本与测试，要求完整 qualification→worker 键契约正负例；重新 build/freeze、全静态清单、复审、root GO 后才可产品动作。当前仍无新 GUI/20k 资格，36 项 pending、`productComplete=false`。
+
+## 2026-10-14 05:08 v31 种子封存污染与 v32
+
+- v31 在源修订过程中发现种子误带 v30 的 100 行 tree receipt、toolchain lock 与 freeze；修订后的 sampler、verifier、README、manifest 不能由旧哈希认证。v31 原件保留并标为 superseded/invalidated。v32 以不含旧 tree/lock/freeze/最终收据的新 sibling 重建，不继承失效静态结论。
+- v31 检查还发现包内旧 GUI verifier 用反向家族映射；当前 verifier 已把 compact axial 映射为 axialRod，并要求 layered 携带 planarBeam/flatPlate modelFamily。当前版本 23 项 verifier 正负测试通过，v32 将固定准确字节/SHA 与来源。产品梁/板 GUI 仍未跑。Agent-free OFF solver Debug build exit 0，GUI target 仍在编译；36 项 pending、`productComplete=false`。
+
+## 2026-10-14 04:51 GUI v30 短命子进程取样竞态
+
+- v30 在新隔离根通过 worker 编译／freeze 和静态 step 3–7；第 8 步 supervisor 正向夹具中，已 pin 的 Python PID 42048 在退出附近发生 `QueryFullProcessImageNameW` 错误 5。sampler 保守报 `INVALID/alive-unreadable pinned identity`，没有 supervisor PASS 收据；44 个样本／最大间隔 50.617 ms 仅为诊断。worker 后续成功终止，terminal token/PID 与 Job 排空正确；不能倒推查询当刻已退出。原始收据保留，产品动作均 false。
+- 新 v31 sibling 只对已 pin 子进程身份查询失败做同一轮共享、最多 20 ms 的 retained-handle 退出确认；仍存活／不可读继续失败。补延迟 signaled 正例和永不 signaled 负例，再从全新根跑完整静态链，独立审查及 root GO 仍未开始。Agent-free OFF/ON 配置图通过，OFF build 增量进行中；36 项 pending、`productComplete=false`。
+
+## 2026-10-14 04:36 GUI v29 静态链继续受阻，v30 隔离重跑
+
+- v29 全新 output-09 的 README 前 12 步通过；sampler 两条生产启动路径各 73 参数、精确映像 SHA 与父进程白名单通过。supervisor 正向 47 次／2.301 秒取样，最大间隔 51.314 ms，Job 排空和注入故障均符合预期。第 13 步 pinned Python harness 的 `readme_text.index('Get-FileHash') == -1` 在字串本来不存在时抛 `ValueError`，没有 staticIntegrity 收据；依赖后续步骤未运行。v29 封存包和失败证据保留，新 v30 sibling 修 harness 后从全新输出根重跑完整清单。没有产品 GUI/Save/Run/Confirm/20k 新资格。
+- Agent-free 可选构建变体（默认保留 Agent）已经过第二轮 Sol medium 源码复审，无剩余实质发现；目前仅是源码层结论，ON/OFF 新配置、编译、定向测试与独立安装正在进行。12 阶段 36 验收项仍 pending，`productComplete=false`。
+
+## 2026-10-14 03:59 GUI v26 静态失败与新 v29 修复
+
+- v26 全新输出根的静态清单前十步通过（PATH、root seal、17 项 Save 判据、supervisor/worker、native Job、PS parser、finalizer 完整性）；第十一项 Python harness 因变量误名 `finalizer_integrity_receipt` 退出 1，第十二项 finalizer 正确拒绝缺失收据，后四步依赖阻断。失败日志原样留存。
+- 独立 Sol medium 唯读复审判 `STATIC_FAIL/NO-GO`：watchdog JSON 返回值被 invoke-full 当对象、GUI sampler 少 Job/SHA 参数、private Python 父进程白名单不能容纳真实 fea/solver→Python 链。前两项已在无产品启动的 PowerShell/Python 路径复现。新隔离 `gui-fresh-run-v29-prep` 修三个 P2 与 harness typo，需重新冻结、全静态回归、独立复审与 root 技术 GO；当前无产品 GUI/Save/Run/Confirm/20k 新资格。
+
+## 2026-10-14 02:48 GUI v19 终态竞态与 v20 修复中
+
+- v18 已把封存树逐档 bytes/SHA、隔离 clone 篡改、完整静态收据和真实外部审查/决策文件核验加入准入链；v19 新根执行时发现 `worker-v28.ps1` 直接写 `terminal.json` 与 supervisor 看到文件存在即读取之间的占用/半写竞态。success/deadline、handshake、native Job 启动和 PS parser 局部通过，sampler-stuck 故障被一般失败遮蔽，不能算全静态通过。
+- finalizer 路径篡改负例实际拒绝，但测试脚本对 child stderr 的捕获提前失败；Python static harness 对 map key 引号的字串断言过时。原收据均保留。v20 正改终态临时文件完整写入后发布、严格 token/PID 与有界 sharing 重试，补半写负例并修两项 harness；修后须重新冻结、全清单、独立复审。没有最终 GUI GO，更没有产品 Save/Run/Confirm。
+
+## 2026-10-14 02:23 GUI v17 静态链及独立审查
+
+- v17 PATH/preparation、root seal、17 项 Save predicate、supervisor、worker handshake、native Job 边界及 PowerShell parser 静态夹具通过；正向 sampler 46 次、最大间隔约 50.48 ms，故障夹具各自走预期状态。Python static harness 的 ready-file 顺序切片断言假阳性中断，原始失败、封存链与旧收据均保留；无最终静态收据，更无产品 GUI/Save/Run/Confirm。
+- 独立 Sol medium 只读复审指出：篡改测试原地修改封存文件而 finalizer 未全树复核；bootstrap-test-pending 初步收据可被启动门槛接受；Python 优化模式可跳过 assert；外部审查与 root 决策哈希没有绑定实际文件内容/状态。Luna 正一次性修 v18，完成后仍需重新冻结、全清单和独立复审。
+- v33 旧 INVALID axial 20k 的首图 8.676 秒中，记录认证到 8.195 秒、数据就绪到 8.652 秒、画布绘制约 24 ms；峰值 517238784 bytes 发生在确认后、求解器启动前，不能归咎于绘图。详细源码路径与测量边界已记入 `docs/evidence/piezo_pc09_11_gap_audit.md`。
+
+## 2026-10-14 01:50 v44 构建与 GUI v11 静态阻断
+
+- PC-10 反力测试增量之后，`build/audit-20261014/piezo-delivery/root-release-build-v44/build.log` 的全目标 Release 构建退出 0；目前只有日志/退出码，没有完整同源冻结收据，234 项 CTest 未完成。PC-00 旧格式、PC-08 provider 重试和 PC-10 四杆案例仍只是局部证据，36 项保持 pending。
+- GUI v28 静态 v11 已通过 PATH-shadow、root-seal、Save 判据、parser、worker handshake；native-launch 失败注入出现 Job 指派前 direct child=1，未取得该瞬态子进程身份，失败收据与旧 PASS 隔离保存。v12 正补 PID/映像/哈希/创建时间和父进程寿命取证并准备重新封存；尚无最终静态收据/独立审查/root GO，更无产品 GUI、Save、Run、Confirm 或三家族 20k。详情及续接顺序见 `docs/PIEZO_CONTROL_CONTINUATION_HANDOFF.md` 顶部。
+- PC-11 私有同机安装的许可盘点发现 `libomp` 再分发、D3D/DXC 精确来源、`range-ai-lib` 授权及最终 Qt/TetGen 映射缺口；已向用户询问 Agent 的交付取舍，在答复前不假定选择。用户要求继续开发且不使用 Codex with ChatGPT。
+
+## 2026-10-14 00:54 PC-10 四杆 PZT 预应力代表案例局部验证
+
+- 既有 `tst_piezo_pzt_prestress.cpp` 的四根非平行 TRUSS1、四个 PZT 端口及非零 q0/V0/Q0/f0 已覆盖多杆预应力基础案例；新增按独立夹具成员内力和外载计算 13 个受约束 DOF 的 `reactions0`，核对两个自由 DOF 零反力与整体力平衡。最大反力误差及合力残差均约 `1.07e-14 N`，受约束反力范数 `11.12 N`。
+- Release 聚焦 LQR-free 通过，完整注册 CTest 1/1（227.96 秒），Qt 14/14；四个 LQR/MPC 自由／受迫轨迹各 66 个接受 FE 步且证据状态 `QUALIFIED`，八个 RAM/RBM 相位行执行。`build/audit-20261014/pc10-prestress-multirod/receipt.json` 的 17 个工件哈希与 provider 前后清单匹配；独立 Sol medium 审查无 P1/P2。收据未固定全部链接库或整个未提交源码，仍为 PC-10-A01 局部证据，PC-10 及 36 项均 pending。
+
+## 2026-10-14 00:42 PC-08 真 provider 重试及 GUI 准入进度
+
+- 轴向 sensor-only MPC/RAM N=2 真 FE 的 `postFE` 候选先由实际 Python provider 计算，再单次抛错；接受态 codec 与 MODEL 序列化字节未变，重试及最终字节与无故障基线相同。聚焦 3/3、完整注册目标 1/1（364.15 秒）。v2 收据 `build/audit-20261014/pc08-true-provider-retry-v2/receipt.json` 固定 18 个工件，实际 Python 解释器、93 文件 provider 包、2469 文件私有运行时及前后相同清单；独立 Sol medium 复审无 P1/P2。只覆盖此轴向切片，PC-08 仍 pending。
+- 当前源码 Release 全目标构建 `build/audit-20261014/piezo-delivery/root-release-build-v43/build.log` 退出 0；PC-10 四杆非零 PZT 预应力既有目标正补独立支座反力检查并定向验证。GUI v28 夹具发现 Job 分配前 `conhost.exe` 逸出，失败收据保留，改为暂停建进程、先归属 Job 再恢复；尚未静态封存/独立复审，也未启动产品 GUI。最终 234 项同源 CTest 和三家族实际 20k 仍待执行，36 项 pending、`productComplete=false`。
+
+## 2026-10-13 23:58 PC-05 三家族真 FE/ROM 导出局部验证
+
+- 新 `actualMatrixPackageFEAndRom` 三行分别通过轴向杆、分层梁、平板真 FE 原生算子核对 `M/K/C/G/Ce/B`、矩阵包 JSON 写入回读、源/配置/DOF/单位与直接项；一个质量归一模态的连续/精确 ZOH 用独立阻尼振子闭式解验证。
+- Release 聚焦 5/5，注册 CTest 1/1，内部 Qt 27/0/1（原有符号链接权限跳过）；`build/audit-20261013/pc05-fe-rom-export/receipt.json` 七个哈希匹配。独立 Sol medium 审查无 P1/P2。只作为 A01/A02 局部证据，多模态 ZOH、独立单元物理 oracle 与 A03 非零工作点读回仍待完成；PC-05 pending。
+
+## 2026-10-13 23:45 PC-06 七波形真 FE 桥接局部验证
+
+- 七种内置时间波形在真轴向 FE 同一力通道的各区间左右端点按独立公式核对；实际接受 q/v/a、三步控制保持、功/耗散/能量与直接原生 FE 试算一致。中途改变 `kp` 导致新 `prepare()` 拒绝且原接受态字节未变；首版末步负例已被修订取代。
+- v2 七行聚焦通过、完整注册目标 CTest 1/1（255.06 秒），`build/audit-20261013/pc06-axial-waveforms/receipt-v2.md` 七项 SHA 核对通过；独立 Sol medium 审查无 P1/P2。仍只验证单个 X 通道/六区间集成，不覆盖全部外部文件失效、波形边界或独立求解器精度，PC-06 pending。
+
+## 2026-10-13 23:41 GUI v27 静态审查失败与 v28 修复边界
+
+- v27 final static receipt 已冻结，31 文件链、安装 3167/provider 49/原始权威 10、PATH 假冒与篡改负测通过；但独立 Sol medium 判 STATIC FAIL、产品 GO NO-GO。六项 P2 涉 seal 字段、监督证据目录、结果目录、GUI 进程白名单、Job 归属前启动 Python，以及 bootstrap 先执行后鉴别。没有运行产品 GUI/Save/Run/Confirm/绘图/CSV。
+- 仅在新 `build/audit-20261013/piezo-delivery/gui-fresh-run-v28-prep/` 修订并测试有效 seal、进程归属和外部哈希核验；v27 不改写。最终 20k 三家族资格与 5s/30s/512000000 bytes 门槛仍待实测。
+
+## 2026-10-13 23:33 PC-04 真 FE 近重模态簇局部证据
+
+- 两个独立支承的相同分层 BEAM1 悬臂组成八元素真 FE，现行 C++→私有 Python 设计后端产生近重簇 `[0,1]`。完整基独立残差 `8.85e-16`、质量正交 `3.33e-15`；选中 24×2 基残差 `5.24e-17`、正交 `2.22e-16`。合法整簇选择保留相同物理 M/K/P/T 与映射，非法拆簇拒绝。
+- 首版定向测试虽然通过，独立 Sol medium 审查发现未验证有效选择确实收缩结果。v2 补 `selectedModes`/Phi/omega 及选中基独立验算，Release 定向 QTest 3/3，二次审查无实质 P1/P2；收据 `build/audit-20261013/pc04-modal-cluster/receipt-v2.json`。首版 receipt 的共享执行档路径已被 v2 重建覆盖，仅作历史记录；PC-04 仍 pending，完整目标及最终源冻结回归未执行。
+
+## 2026-10-13 23:18 PC-03 非零工作点、仿射支座与传感桥接
+
+- 新偏心 BEAM1 真 FE 案例在同一场景验证非零 q0/V0/Q0/f0、`p=0.001` 仿射约束、支反力、fullK 有限差分、自由 DOF 力平衡、电荷方程和接受步传感读出；v3 Release 注册目标 40/40 Qt。`build/audit-20261013/pc03-a01-v3/` 的八个哈希已核对，独立 Sol medium 审查无 P1/P2。生产组装与电学参考共享，故只认定局部一致性证据，PC-03 不结项。
+- PC-04 正准备真实 FE 的近重模态簇/整簇选模/拆簇拒绝测试。选模变更 `designConfiguration` 会依法改变完整 source fingerprint；比较同物理 FE 的 M/K，而分别核对每次导出指纹。
+
+## 2026-10-13 23:06 压电交付续作：平板收敛、PC-07 修复及 GUI 准入
+
+- PC-02 真平板 2/4/8/16 网格对独立简支 Mindlin–Navier 参考的 1024 内点 L2 位移误差为 47.45%→12.88%→3.325%→0.878%；连续电极解析 Ce/Q 对各网格一致。Release 目标 9/9 Qt、CTest 1/1，独立 Sol medium 审查无实质 P1/P2；`build/audit-20261013/pc02-plate-mesh-refinement/receipt.json` 固定源、执行档和测试日志。该证据是 PC-02-A03 局部切片，未关闭阶段。
+- PC-07 先版真轴向 FE 五控制器测试的单采样/饱和 P2 已修订为两采样独立标量 oracle 与明确限幅、状态、回滚断言。Release 目标 CTest 1/1、Qt 33/33，最终收据 `build/audit-20261013/pc07-basic-fe/receipt-v2.json`；独立 Sol medium 复审无新 P1/P2，仍仅为 PC-07-A01 局部证据。
+- v26 GUI Save/Run 静态包独立审查通过，实际 GO 因 PATH `python` 和 admission verifier 冻结链 P2 持续禁止；v27 只在新审计目录静态修复，未运行实际 GUI 或三家族 20k。PC-03 非零工作点/传感桥接继续开发。完整 234 项 CTest 旧批中断，等待最终冻结源重新构建/全跑。用户明确不使用 Codex with ChatGPT，36 项仍 pending、`productComplete=false`。
+
+## 2026-10-13 21:35 压电交付续作：板连续电极与旧完整回归中断
+
+- 用户要求继续冻结 `PIEZO_CONTROL_DELIVERY`，明确不使用 Codex with ChatGPT。12 阶段/36 项状态尚未结项，`productComplete=false`；三家族私有安装真实 20k GUI 验收均未完成。
+- PC-02 两 Q4 共享电极真 FE 测试覆盖电荷/开路电压汇总、磁盘重启及非法端口拒绝，Release 完整目标 34/34 Qt 用例通过。独立 Sol medium 审查无实质 P1/P2，但每单元 Ce/G 参考仍使用生产 MITC4 内核，不能用该测试单独关闭 PC-02-A03。梁 2/4/8 网格细化证据及审查另见 `build/audit-20261013/pc02-a03/receipt.json`。
+- 234 项 CTest v42 前 113 项通过，第 114 项长时计算中因后续 PC-01/02/03 测试源码变化而中断；自有 CTest 和子进程退出，原日志和 `full-ctest-v42/INTERRUPTED.md` 保留，不宣称完整回归通过。源冻结后须重新构建和完整重跑。
+- v25b GUI 静态监督包已通过独立审查；v26 实际 Save/Run 集成仍为静态 NO-GO。未启动新安装的 GUI Save/Run/Confirm/20k 性能故事。PC-03 偏心质量测试及 PC-04–08 缺口核查正在进行。
+
+## 2026-10-13 16:19 v8 原工作区项目清单变更与恢复
+
+- v7 被独立 Sol medium 审查阻止执行：UIA 的 ID/Name OR 查找对共用工具列/页签 ID 产生歧义。v8 修正并经 no-Go/独立审查后仅执行一次唯读诊断；实际选中工作区及原生模型文件，但产品打开模型在原 v33 工作区 `project.json` 新增 draft，原权威 guard FAIL；首图/CSV 均未开始，GUI 以精确 PID 正常退出。
+- 保留 v8 失败、原始 guard 和改写后项目文件字节。通过只移除新增 draft 文本重建原 2200 bytes，SHA 严格匹配原冻结值 `725dbe...` 后，以带备份 `File.Replace` 恢复；恢复收据、变更版证据和备份均在 v8 输出目录。恢复后 91 个 pin 零不符。v9 改为经全字节核对的工作区/profile 副本诊断，未执行。
+- v40 lazy SDK 镜像静态资料虽齐，Sol reviewer 因共用 build、CTest 定义未全 pin、import receipt 可缺而给 NO-GO。v41 静态包维持 `PREPARED_BLOCKED_BY_ISOLATED_BUILD`；Root 隔离 CMake 配置已完成，Release build 正进行。无 47 项新测或产品完整验收结果。
+
+## 2026-10-13 15:38 压电续作：v40 workflow、v5/v6 GUI 唯读诊断
+
+- 用户最新指示不使用 Codex with ChatGPT，继续冻结 `PIEZO_CONTROL_DELIVERY`。正式 12 阶段/36 项仍 pending，`productComplete=false`。
+- v39 workflow mirror 旧 baseline 第 27 项失败保留。定位为 extension 测试 10s 等待短于私有运行时验证＋子进程实际耗时；另发现 job 终态可查询而写入锁尚未释放的竞态。修正服务锁释放顺序、测试等待与夹具释放、CTest 上限。最终测试源码下私有 Python v2 全 10/10 通过，159.984s；新 47 项镜像仍待重冻结/重跑。旧 221 项完整性数字缺独立可重现命令和收据，暂不作为验证事实。
+- v5 owned Qt picker 可用，但已浮动 control dock 导致硬编码 Float 控件失效；v6 解决 dock 状态分支后，发现结果控件在原生模型打开前不存在。两次诊断均有失败 receipt、原权威 guard PASS、精确 PID 正常 Quit，没有真实首图/CSV 请求或产品资格。v7 正按先开模型后读结果准备；所有旧审计输出保持不变。
+
 本文件记录项目阶段执行中的关键决策、用户反馈、异常、纠正和验证结果。记录按时间追加；详细命令和代码差异以 Git 提交为准。
 
 ## 2026-09-26 Stage 8 持久身份与暂态监测事务
@@ -369,3 +615,19 @@ WF08/WF09/WF14按首批支持范围接受。WF10 A08保留20k首次绘图5秒失
 - Catalog bce470e独立24/24，合成2材料/10器件、严格SI/本构转换。私有安装Python3.13.5目录/solver SHA一致，缩减PATH help通过。真实native目录绑定、校准数据、干净机器/新GUI仍未验证。
 - CW-02 done；CW-06仅A01 pass，面投影/插值/功/收敛保持pending；CW-04 in_progress，productComplete=false。报告docs/acceptance/CW-foundation-20261011.json与CW-02.md/CW-06-A01.md。
 - 下一CW03/CW07共同动力设计冻结并独立审查，明确端口功与内部能、有效索长固定质量、解析anchor运动、左右加速度及precommit checkpoint。旧postcommit observer不满足新存储失败回滚保证。pure mixed assembly首批writer仅新增三个文件，root统一接线和验收，不把kernel当成完整动力产品。
+
+## 2026-10-30 current-source phase checkpoint and handoff
+
+- Reviewed the recent GitHub Windows Regression notification. It failed before configuration because the Qt composite action looked for its bundled JavaScript at the wrong root. The workflow now calls the pinned upstream `action/` entry point; the next hosted run after push must verify it.
+- Refreshed personal `origin` and `upstream` refs. The personal feature branch was at `9ea1d515`; it contains `origin/main` and has diverged from upstream main. Six submodule commits are published and match their root gitlinks; no upstream merge is part of this phase.
+- Incremental Windows Release build after final edits passed. Partial targeted tests passed for the Agent runner, extension widget, external piezo integration, and focused dock resizing. Failure-diagnostic snapshot opening and durable native-job registry locking still fail in focused model-operation tests; two scientific Python tests need a clean private runtime. Full CTest remains 239/246 from the pre-final-fix baseline.
+- Kept meaningful future work visible: the 180-slot comparison is waived only for this course submission and remains unperformed research work; Case B live provider evidence, complete installed GUI flow, Linux build, dependency/contribution review, and final release qualification are open. Do not mark those plans obsolete or accepted.
+- Updated the portable checkpoint, documentation index, and continuation records. Curated interaction/decision records under `docs/` are the cross-device history; raw attempt data, profiles, and logs stay in ignored `artifacts/` or `.planning/`.
+
+## 2026-10-13 PIEZO_CONTROL_DELIVERY 跨平台交接与 v39 首失败
+
+- 用户确认从断点持续推进到功能完整交付，重置卡只在剩余 1% 时使用；20k 合并进程树内存上限为 512 MB；GUI 需兼顾视觉平衡与操作便利。任务调度 Luna 优先、明确困难才 Sol medium、独立 reviewer 使用 Sol medium。用户选临时地址且未配置域名，并确认旧聊天已停止、由当前工作区接管。
+- 新增 `docs/PIEZO_CONTROL_CONTINUATION_HANDOFF.md` 汇总当前分支/提交/脏工作区、冻结范围、验收数字、审计路径、当前断点、分步接续顺序和可复制提示；新增 `docs/PIEZO_CONTROL_INTERACTION_LOG.md` 记录上述明确决策与交互事实。原项目 `docs/CONVERSATIONS.md` 是产品对话组件设计文档，不作为开发聊天记录。`docs/PIEZO_CONTROL_DELIVERY.md`、计划 JSON 与性能合同均未修改。
+- 最新 Release CTest mirror v39 baseline 在 47 个目标中的第 27 个停止：26 pass，`tst_workflow_extensions` 1 fail。实际失败为 `test_extension_lane_hot_activation_and_pinned_run_survive` 的 `AssertionError: extension job did not finish`；10 tests 耗时 98.246s。candidate `NOT_STARTED`，无 CMake build/cold measurement。失败后 221 项 runner/source/package 完整性核对通过。完整原始日志和 immutable partial receipt 路径见新 handoff；后续需先复现并诊断此失败，不能放宽超时冒充通过。
+- 最新 v33 轴向 20k Full 的已核实门槛：20,000 FE steps + 初始记录完成；原qualification仍 `INVALID/Wrong family`；首图 8.6760589s fail，完整 CSV 9.3348445s / 20,001 行 pass，核实进程树峰值 517,238,784 bytes fail。梁/板完整 20k GUI 资格未完成；全部 36 项仍 pending，不能报告产品交付完成。
+- 本次状态快照根 HEAD `9ea1d51545c52a0adc48c62bc1a65b68775c9ff3`，quota 文件记录于 2026-10-13 10:03:40 Asia/Singapore 为 8% remaining、0 cards；监控 PID 22236 在 10:05 仍存活。无正在执行的子 Agent。本轮未运行产品回归或改动冻结验收门槛。

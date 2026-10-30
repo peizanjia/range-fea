@@ -2,6 +2,8 @@
   "schema_version": 1,
   "required_test_groups": {
     "range-base-lib": [
+      "tst_hash_sha256",
+      "tst_hash_sha256_qt",
       "tst_rvector",
       "tst_r3vector",
       "tst_rmatrix",
@@ -15,7 +17,8 @@
       "tst_access_mode",
       "tst_access_owner",
       "tst_file_quota",
-      "tst_auth_token"
+      "tst_auth_token",
+      "tst_startup_http_completion"
     ],
     "range-model-lib": [
       "tst_node",
@@ -38,22 +41,48 @@
       "tst_structural_truss_dynamics_setup",
       "tst_element_group_io",
       "tst_model_physical_ids",
-      "tst_structural_native_control_model"
+      "tst_structural_native_control_model",
+      "tst_structural_piezo_readout_setup",
+      "tst_structural_piezo_layered_setup",
+      "tst_structural_piezo_axial_setup",
+      "tst_piezo_experiment_publication"
     ],
     "range-application-lib": [
       "tst_model_command_session",
       "tst_model_command_cli",
       "tst_project_catalog",
       "tst_agent_conversation_store",
+      "tst_agent_evaluation_capture_store",
+      "tst_trusted_holdout_pack_verifier",
+      "tst_trusted_mechanics_service",
+      "tst_trusted_verification_service",
+      "tst_trusted_experiment_service",
+      "tst_trusted_convergence_service",
       "tst_model_command_service",
       "tst_native_result_broker",
       "tst_geometry_candidate",
       "tst_mesh_candidate",
       "tst_mesh_job_service",
       "tst_mesh_rebind",
-      "tst_mesh_rebind_fe"
+      "tst_mesh_rebind_fe",
+      "tst_piezo_experiment_service",
+      "tst_piezo_solid_experiment",
+      "tst_piezo_experiment_commands",
+      "tst_piezo_artifact_service",
+      "tst_piezo_axial_backend_bridge",
+      "tst_piezo_axial_experiment_service",
+      "tst_piezo_result_series",
+      "tst_piezo_numeric_transport",
+      "tst_piezo_delivery_examples",
+      "tst_piezo_pzt_prestress",
+      "tst_piezo_local_directions",
+      "tst_piezo_spectrum",
+      "tst_piezo_accepted_trace",
+      "tst_piezo_certification_batch_cache"
     ],
     "range-solver-lib": [
+      "tst_structural_piezo_axial_operators",
+      "tst_structural_truss_damped_forcing",
       "tst_scales",
       "tst_local_rotation",
       "tst_iteration_info_value",
@@ -108,7 +137,20 @@
       "tst_structural_thermo_monolithic_1d",
       "tst_structural_thermo_monolithic_1d_fe_adapter",
       "tst_native_result_frame_observer",
-      "tst_structural_native_control"
+      "tst_structural_native_control",
+      "tst_structural_piezo_material_ops",
+      "tst_structural_piezo_beam_layer_kernel",
+      "tst_structural_piezo_plate_mitc4_kernel",
+      "tst_structural_piezo_electrical_system",
+      "tst_structural_piezo_native_readout",
+      "tst_structural_piezo_layered_mesh",
+      "tst_structural_piezo_layered_model_adapter",
+      "tst_structural_piezo_layered_dynamics",
+      "tst_structural_piezo_layered_native_run",
+      "tst_structural_piezo_layered_beam_oracle",
+      "tst_structural_piezo_layered_plate_oracle",
+      "tst_structural_piezo_axial_native_run",
+      "tst_structural_piezo_solid"
     ],
     "fea-solver": [
       "tst_runtime_parameter_gate",
@@ -128,8 +170,13 @@
       "tst_native_progress_journal",
       "tst_native_result_journal",
       "tst_native_accepted_checkpoint",
+      "tst_native_piezo_accepted_trace",
       "tst_native_mixed_run",
-      "tst_native_control_run"
+      "tst_native_control_run",
+      "tst_native_layered_run",
+      "tst_piezo_native_backend_bridge",
+      "tst_stage9_runtime_startup",
+      "tst_native_axial_run"
     ],
     "gui-contract": [
       "tst_modal_command_widget",
@@ -141,6 +188,8 @@
       "tst_geometry_command_widget",
       "tst_mesh_job_controller",
       "tst_mesh_binding_widget",
+      "tst_piezo_experiment_history",
+      "tst_piezo_workbench_widget",
       "tst_scientific_provider",
       "tst_workflow_transport",
       "tst_gui_host_context",
@@ -158,7 +207,8 @@
       "tst_model_commit_recovery",
       "tst_gui_model_operations",
       "tst_native_results_widget",
-      "tst_current_model_workflow"
+      "tst_current_model_workflow",
+      "tst_piezo_solver_recovery"
     ],
     "range-workflow": [
       "tst_workflow_native",
@@ -202,7 +252,14 @@
       "tst_native_document_sdk",
       "tst_workflow_source_reference",
       "tst_workflow_imported_runtime",
-      "tst_workflow_native_results"
+      "tst_workflow_native_results",
+      "tst_piezo_design",
+      "tst_piezo_control_design",
+      "tst_piezo_excitation",
+      "tst_piezo_native_backend",
+      "tst_piezo_external_time",
+      "tst_piezo_external_io",
+      "tst_piezo_external_integration"
     ],
     "range-ai-lib": [
       "tst_agent_tool_turn",

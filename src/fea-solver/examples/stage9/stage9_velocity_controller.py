@@ -32,9 +32,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, TextIO
 
-import numpy as np
-from scipy import linalg
-
 
 PROTOCOL_VERSION = 1
 GAIN_FORMAT = "range-fea-stage9-velocity-gain-v1"
@@ -99,6 +96,8 @@ def _finite_number(value: Any, name: str) -> float:
 
 
 def _numeric_tree(value: Any) -> bool:
+    import numpy as np
+
     if isinstance(value, bool):
         return False
     if isinstance(value, np.ndarray):
@@ -114,6 +113,8 @@ def _numeric_tree(value: Any) -> bool:
 
 
 def _matrix(model: dict[str, Any], name: str, shape: tuple[int, int]) -> np.ndarray:
+    import numpy as np
+
     source = model.get(name)
     if not _numeric_tree(source):
         raise ControllerError(f"{name} must contain only finite JSON numbers")
@@ -127,15 +128,22 @@ def _matrix(model: dict[str, Any], name: str, shape: tuple[int, int]) -> np.ndar
 
 
 def _zero_vector(vector: np.ndarray) -> bool:
+    import numpy as np
+
     return float(np.linalg.norm(vector, ord=np.inf)) <= ZERO_TOL
 
 
 def _check_symmetric(matrix: np.ndarray, name: str) -> None:
+    import numpy as np
+
     if not np.allclose(matrix, matrix.T, rtol=1.0e-9, atol=1.0e-12):
         raise ControllerError(f"{name} must be symmetric")
 
 
 def _check_positive_definite(matrix: np.ndarray, name: str) -> None:
+    import numpy as np
+    from scipy import linalg
+
     diagonal = np.diag(matrix)
     if not np.isfinite(diagonal).all() or np.any(diagonal <= 0.0):
         raise ControllerError(f"{name} must be positive definite")
@@ -148,6 +156,8 @@ def _check_positive_definite(matrix: np.ndarray, name: str) -> None:
 
 
 def _check_positive_semidefinite(matrix: np.ndarray, name: str) -> None:
+    import numpy as np
+
     diagonal = np.diag(matrix)
     magnitude = max(float(np.max(np.abs(matrix))), np.finfo(np.float64).tiny)
     tolerance = 1.0e-12 * magnitude
@@ -200,6 +210,8 @@ def _catalog(model: dict[str, Any], key: str) -> list[dict[str, Any]]:
 
 
 def _validate_metadata(model: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    import numpy as np
+
     version = model.get("version")
     if (model.get("schema") != "range-fea-linear-model" or
             isinstance(version, bool) or not isinstance(version, int) or version != 1):
@@ -312,6 +324,9 @@ def _complex_pairs(values: np.ndarray) -> list[list[float]]:
 def design_gain(model_path: str | os.PathLike[str], *, mode: int, target_damping: float,
                 sensor_id: str, actuator_id: str) -> dict[str, Any]:
     """Design a collocated velocity gain and verify the exact linear full-order poles."""
+    import numpy as np
+    from scipy import linalg
+
     model, raw = _load_json_bytes(model_path, MAX_MODEL_BYTES)
     inputs, outputs, n = _validate_metadata(model)
     if isinstance(mode, bool) or not isinstance(mode, int) or mode < 0:
@@ -510,6 +525,9 @@ def _trajectory(model: dict[str, Any], q_initial: np.ndarray, v_initial: np.ndar
                 dt: float, steps: int, feedback: bool,
                 force_minimum: float | None = None, force_maximum: float | None = None) -> dict[str, Any]:
     """Average-acceleration Newmark with accepted-state sampled, held force."""
+    import numpy as np
+    from scipy import linalg
+
     n = len(q_initial)
     m_matrix = np.asarray(model["M"], dtype=np.float64)
     c_matrix = np.asarray(model["C"], dtype=np.float64)
@@ -583,6 +601,8 @@ def _trajectory(model: dict[str, Any], q_initial: np.ndarray, v_initial: np.ndar
 
 
 def _energy(model: dict[str, Any], q: np.ndarray, v: np.ndarray) -> float:
+    import numpy as np
+
     m_matrix = np.asarray(model["M"], dtype=np.float64)
     k_matrix = np.asarray(model["K"], dtype=np.float64)
     value = 0.5 * float(v @ m_matrix @ v + q @ k_matrix @ q)
@@ -596,6 +616,9 @@ def replay(model_path: str | os.PathLike[str], gains_path: str | os.PathLike[str
            initial_v: list[float] | np.ndarray | None = None,
            force_minimum: float | None = None, force_maximum: float | None = None) -> dict[str, Any]:
     """Compare sampled/held full-order Newmark feedback with a single-mode ROM."""
+    import numpy as np
+    from scipy import linalg
+
     dt = _finite_number(dt, "dt")
     if dt <= 0.0:
         raise ControllerError("dt must be positive")
@@ -1026,6 +1049,8 @@ def _nonnegative_int(value: str) -> int:
 
 
 def _initial_q_json(value: str) -> list[float]:
+    import numpy as np
+
     if len(value.encode("utf-8")) > 65536:
         raise argparse.ArgumentTypeError("initial q JSON exceeds 64 KiB")
     try:
@@ -1041,6 +1066,8 @@ def _initial_q_json(value: str) -> list[float]:
 
 
 def _initial_v_json(value: str) -> list[float]:
+    import numpy as np
+
     if len(value.encode("utf-8")) > 65536:
         raise argparse.ArgumentTypeError("initial v JSON exceeds 64 KiB")
     try:

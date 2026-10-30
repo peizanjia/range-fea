@@ -297,8 +297,38 @@ class Tests(unittest.TestCase):
             summary = json.loads((root / "output/summary.json").read_text())
             self.assertEqual(status, 1)
             self.assertEqual(summary["status"], "UNMEASURED")
-            self.assertFalse(summary["withinMemoryLimit"])
+            self.assertNotIn("withinMemoryLimit", summary)
+            self.assertNotIn("maximumBytes", summary)
             self.assertIsNone(summary["maximumWorkingSetBytes"])
+
+    def test_working_set_above_legacy_budget_is_informational(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); stop = root / "stop"; output = root / "output"
+            expected = root / "gui.exe"; allowed = root / "compute"; allowed.mkdir()
+            api = Fake()
+            api.identities = {1: (10, pc11.canonical(expected)),
+                              2: (11, pc11.canonical(allowed / "worker.exe")),
+                              3: (12, pc11.canonical(allowed / "python.exe"))}
+            api.working_set = lambda handle: 250_000_000
+            original_sleep = pc11.time.sleep
+            sleeps = [0]
+            def stop_after_minimum_samples(seconds):
+                sleeps[0] += 1
+                original_sleep(seconds)
+                if sleeps[0] >= 10:
+                    stop.write_text("stop")
+            with patch.object(pc11, "WindowsProcesses", return_value=api), \
+                 patch.object(pc11.time, "sleep", side_effect=stop_after_minimum_samples), \
+                 patch("builtins.print"):
+                status = pc11.main(["--root-pid", "1", "--expected-root-image", str(expected),
+                                    "--allowed-root", str(allowed), "--output", str(output),
+                                    "--stop-file", str(stop)])
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(summary["status"], "MEASURED")
+            self.assertEqual(summary["maximumWorkingSetBytes"], 750_000_000)
+            self.assertNotIn("withinMemoryLimit", summary)
+            self.assertNotIn("maximumBytes", summary)
 
     @unittest.skipUnless(os.name == "nt" and os.environ.get("PC11_SELF_PROBE") == "1", "opt-in Windows probe")
     def test_real_windows_self_pid(self):

@@ -10,3 +10,14 @@ __pycache__/
 *.py[cod]
 /.env.local
 .range-runs/
+
+# Local planning, generated test output, audits, and app-profile state.
+# Keep portable acceptance summaries under docs/acceptance/ instead.
+/.planning/
+/artifacts/
+/audit/
+/newaudit/
+/Testing/
+/.codex/
+/.agents/
+/.pytest_cache/

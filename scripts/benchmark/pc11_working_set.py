@@ -1,8 +1,9 @@
-"""Read-only Windows PC-11 sampler. MEASURED is evidence, not GUI acceptance.
+"""Read-only Windows PC-11 working-set diagnostic sampler.
 
 Run manually with the installed GUI PID, exact executable, allowed descendant
 image directories, an absolute fresh output directory and an absolute stop file.
-No process is launched, terminated, or modified by this helper.
+This process-tree metric is informational; physical RAM acceptance is measured
+separately. No process is launched, terminated, or modified by this helper.
 """
 import argparse
 import csv
@@ -15,7 +16,6 @@ from pathlib import Path
 import time
 
 
-LIMIT_BYTES = 512000000
 EXIT_WAIT_BUDGET_MS = 5
 
 
@@ -342,7 +342,7 @@ def main(argv=None):
         events.append(value)
         log.write(json.dumps(value, allow_nan=False) + "\n"); log.flush()
     summary = {"schema": "range.pc11-working-set/v1", "status": "UNMEASURED",
-               "maximumBytes": LIMIT_BYTES, "samplingIntervalMilliseconds": 50,
+               "samplingIntervalMilliseconds": 50,
                "includeBaseline": True, "subtractSharedLibraries": False,
                "rootPid": args.root_pid, "expectedRootImage": canonical(args.expected_root_image),
                "startedMonotonicNs": start, "guiAcceptanceVerified": False}
@@ -374,14 +374,13 @@ def main(argv=None):
                            firstSampleMonotonicNs=samples[0][0] if samples else None,
                            lastSampleMonotonicNs=samples[-1][0] if samples else None,
                            maximumSampleGapMilliseconds=max(((b[0]-a[0])/1e6 for a,b in zip(samples,samples[1:])), default=None))
-            summary["withinMemoryLimit"] = summary["status"] == "MEASURED" and summary["maximumWorkingSetBytes"] <= LIMIT_BYTES
             proof = sampler.proof() if sampler else []
             if sampler:
                 sampler.close()
             (args.output / "ownership-proof.json").write_text(json.dumps(proof, indent=2, allow_nan=False), encoding="utf-8")
             (args.output / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8")
     print(json.dumps(summary, allow_nan=False))
-    return 0 if summary["status"] == "MEASURED" and summary["withinMemoryLimit"] else 1
+    return 0 if summary["status"] == "MEASURED" else 1
 
 
 if __name__ == "__main__":

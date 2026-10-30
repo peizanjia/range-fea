@@ -1,9 +1,11 @@
 #include "runtime_control_widget.h"
 #include "workflow_process.h"
+#if RANGE_ENABLE_AGENT
 #include "agent_task_runner.h"
 #include "application.h"
-#include "control_monitor_widget.h"
 #include <rai_agent.h>
+#endif
+#include "control_monitor_widget.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -155,6 +157,7 @@ private slots:
         process.stop(); QTRY_VERIFY(process.isStopped());
     }
 
+#if RANGE_ENABLE_AGENT
     void actualNativeAgentPreviewAndVisibleApprovalApplyAtAcceptedBoundary()
     {
 #if defined(RANGE_RUNTIME_PACKAGE) && defined(RANGE_RUNTIME_SOLVER) && defined(RANGE_RUNTIME_NATIVE) && defined(RANGE_RUNTIME_EXAMPLES)
@@ -269,6 +272,7 @@ private slots:
         QFAIL("Actual native runtime paths must be configured by CMake");
 #endif
     }
+#endif
 };
 
 int runRuntimeControlWidgetTests(int argc, char **argv)

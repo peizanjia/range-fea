@@ -296,5 +296,66 @@ class SeriesAnalysisTest(unittest.TestCase):
             metadata_copy.assert_not_called()
 
 
+class NativeGridRegressionTest(unittest.TestCase):
+    def test_native_record_holes_are_not_an_fft_grid(self):
+        source = make_series([0, 1, 0, -1, 0, 1, 0, -1])
+        for index, sample in enumerate(source["samples"]):
+            sample["recordNo"] = 2 * (index + 1)
+        with self.assertRaisesRegex(SeriesAnalysisError, "continuous accepted FE"):
+            spectrum(source)
+
+    def test_tiny_nonuniform_intervals_rejected_and_uniform_passes(self):
+        source = make_series([0, 1, 0, -1], sample_rate=1e13)
+        self.assertEqual(spectrum(source)["sampleIntervalS"], 1e-13)
+        source["samples"][2]["time"] = 3e-13
+        source["samples"][3]["time"] = 4e-13
+        with self.assertRaisesRegex(SeriesAnalysisError, "uniform time grid"):
+            spectrum(source)
+
+    def test_authoritative_nominal_grid_and_representable_offset(self):
+        source = make_series([0, 1, 0, -1], sample_rate=1e13)
+        source["origin"] = {"nativeAcceptedGrid": {"dtS": 1e-13, "initialTimeS": 1e-9, "targetSteps": 4}}
+        for sample in source["samples"]:
+            sample["time"] = 1e-9 + sample["recordNo"] * 1e-13
+        self.assertEqual(spectrum(source)["sampleIntervalS"], 1e-13)
+        for sample in source["samples"]:
+            sample["time"] = 1e-9 + sample["recordNo"] * 2e-13
+        with self.assertRaisesRegex(SeriesAnalysisError, "uniform time grid"):
+            spectrum(source)
+
+    def test_coarse_large_origin_cannot_mask_alternating_intervals(self):
+        source = make_series([0, 1, 0, -1, 0, 1, 0, -1])
+        for sample in source["samples"]:
+            record = sample["recordNo"]
+            sample["time"] = 1e16 + record * 8 + (2 if record % 2 == 0 else 0)
+        self.assertEqual([b["time"] - a["time"] for a, b in zip(source["samples"], source["samples"][1:])],
+                         [10, 6, 10, 6, 10, 6, 10])
+        for authority in (False, True):
+            with self.subTest(authority=authority):
+                chosen = copy.deepcopy(source)
+                if authority:
+                    chosen["origin"] = {"nativeAcceptedGrid": {"dtS": 8., "initialTimeS": 1e16, "targetSteps": 8}}
+                with self.assertRaisesRegex(SeriesAnalysisError, "timestamps precise enough"):
+                    spectrum(chosen)
+
+    def test_large_origin_well_resolved_uniform_grid_passes(self):
+        source = make_series([0, 1, 0, -1])
+        for sample in source["samples"]:
+            sample["time"] = 1e16 + sample["recordNo"] * 1e12
+        for authority in (False, True):
+            with self.subTest(authority=authority):
+                chosen = copy.deepcopy(source)
+                if authority:
+                    chosen["origin"] = {"nativeAcceptedGrid": {"dtS": 1e12, "initialTimeS": 1e16, "targetSteps": 4}}
+                self.assertEqual(spectrum(chosen)["sampleIntervalS"], 1e12)
+
+    def test_percent_encoding_is_confined_to_actual_piezo_channels(self):
+        source = make_series([0, 1, 0, -1], channel_id="piezo:port:sense%20one:readout:absolute", unit="V")
+        self.assertEqual(validate_series(source)["channelId"], source["channelId"])
+        for channel in ("piezo:port:sense%2fone:readout:absolute", "piezo:port:sense%ZZ:readout:absolute",
+                        "piezo:port:sense%41:readout:absolute", "job%20one", "piezo:port:sense:unknown:absolute"):
+            with self.subTest(channel=channel), self.assertRaises(SeriesAnalysisError):
+                validate_series({**source, "channelId": channel})
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -323,7 +323,7 @@ void TestModelCommandSession::staticRebindJournalPreviewAcceptUndoRedoAndRollbac
     QCOMPARE(reopened.getPoint(3).getPhysicalId(), pointId);
     QVector<RInteractionRecordV1> records; QString error;
     QVERIFY2(journalRecords(options.path, records, error), qPrintable(error));
-    for (const auto &record : records) QCOMPARE(record.selectionSnapshot["stateHashScopeVersion"].toInt(), 3);
+    for (const auto &record : records) QCOMPARE(record.selectionSnapshot["stateHashScopeVersion"].toInt(), 4);
     bool sawBinding = false, sawUndo = false, sawRedo = false;
     for (const auto &record : records)
     {
@@ -382,7 +382,7 @@ void TestModelCommandSession::staticRebindLargeNullableAuditChunksRoundTrip()
     QVERIFY(record.parameters["chunks"].toArray().size() > 1);
     QVERIFY(record.parameters["chunks"].toArray().size() <= 32);
     QCOMPARE(record.selectionSnapshot["sourcePath"].toString(), options.sourcePath);
-    QCOMPARE(record.selectionSnapshot["stateHashScopeVersion"].toInt(), 3);
+    QCOMPARE(record.selectionSnapshot["stateHashScopeVersion"].toInt(), 4);
     QJsonObject decoded; QVERIFY(decodeStaticBindingAudit(record, decoded));
     QCOMPARE(decoded, accepted["normalizedParameters"].toObject()); QCOMPARE(decoded, parameters);
     QVERIFY(decoded["constraints"].toArray()[1].toObject()["values"].toArray()[0].isNull());
@@ -463,7 +463,7 @@ void TestModelCommandSession::geometryJournalAtomicityAndNoOpHistory()
     QString error;
     QVERIFY2(journalRecords(options.path, records, error), qPrintable(error));
     for (const auto &record : records)
-        QCOMPARE(record.selectionSnapshot["stateHashScopeVersion"].toInt(), 3);
+        QCOMPARE(record.selectionSnapshot["stateHashScopeVersion"].toInt(), 4);
     const auto &first = records.first();
     QCOMPARE(first.commandId, QStringLiteral("geometry.node_coordinates.set"));
     QVERIFY(first.preStateHash != first.postStateHash);
@@ -761,7 +761,7 @@ void TestModelCommandSession::durableRecordsPreserveRevisionsAndSanitizeRejectio
     QCOMPARE(records[1].preStateHash, v2Hash);
     QCOMPARE(records[1].postStateHash, v2Hash);
     QCOMPARE(records[2].selectionSnapshot["stateHashScope"].toString(), QStringLiteral("supported_model_state"));
-    QCOMPARE(records[2].selectionSnapshot["stateHashScopeVersion"].toInt(), 3);
+    QCOMPARE(records[2].selectionSnapshot["stateHashScopeVersion"].toInt(), 4);
     QCOMPARE(records[2].parameters, command["parameters"].toObject());
     QCOMPARE(records[3].resultStatus, QStringLiteral("running"));
     QVERIFY(!records[3].runId.isNull());

@@ -22,6 +22,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "examples"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from range_workflow import WorkflowClient, WorkflowError, WorkflowService
 from range_workflow.task_runtime import TaskManager
 from parameter_scan import run_scan, scan_plan

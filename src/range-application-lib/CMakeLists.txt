@@ -7,6 +7,8 @@ qt_add_library(range-application-lib STATIC
     include/rproject_catalog.h
     src/ragent_conversation_store.cpp
     include/ragent_conversation_store.h
+    src/ragent_evaluation_capture_store.cpp
+    include/ragent_evaluation_capture_store.h
     src/rnative_result_broker.cpp
     include/rnative_result_broker.h
     src/rgeometry_candidate_service.cpp
@@ -14,12 +16,64 @@ qt_add_library(range-application-lib STATIC
 target_sources(range-application-lib PRIVATE src/rmesh_candidate_service.cpp include/rmesh_candidate_service.h)
 target_sources(range-application-lib PRIVATE src/rmesh_job_service.cpp include/rmesh_job_service.h)
 target_sources(range-application-lib PRIVATE src/rmesh_rebind_service.cpp include/rmesh_rebind_service.h)
+target_sources(range-application-lib PRIVATE src/rtrusted_mechanics_service.cpp include/rtrusted_mechanics_service.h)
+target_sources(range-application-lib PRIVATE src/rtrusted_verification_service.cpp include/rtrusted_verification_service.h)
+target_sources(range-application-lib PRIVATE src/rtrusted_experiment_service.cpp include/rtrusted_experiment_service.h)
+target_sources(range-application-lib PRIVATE src/rtrusted_convergence_service.cpp include/rtrusted_convergence_service.h)
 qt_add_executable(range-mesh-worker tools/mesh_worker_cli.cpp)
 target_link_libraries(range-mesh-worker PRIVATE range-application-lib Qt6::Core)
 set_target_properties(range-mesh-worker PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
 install(TARGETS range-mesh-worker RUNTIME DESTINATION bin COMPONENT Application)
 target_include_directories(range-application-lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(range-application-lib PUBLIC range-model-lib Qt6::Core)
+
+if(RANGE_ENABLE_AGENT)
+    # Public holdout signature verification requires OpenSSL 3 Crypto only.
+    # OPENSSL_ROOT is the existing user-selected runtime/development prefix.
+    if(OPENSSL_ROOT AND NOT OPENSSL_ROOT_DIR)
+        set(OPENSSL_ROOT_DIR "${OPENSSL_ROOT}")
+    endif()
+    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+    # Qt finalizes executables in sibling directories and walks static-library
+    # dependencies there, so make this imported dependency visible to them.
+    set_property(TARGET OpenSSL::Crypto PROPERTY IMPORTED_GLOBAL TRUE)
+    target_sources(range-application-lib PRIVATE
+        src/rtrusted_holdout_pack_verifier.cpp include/rtrusted_holdout_pack_verifier.h)
+    target_link_libraries(range-application-lib PRIVATE OpenSSL::Crypto)
+    if(RANGE_BUILD_TESTS)
+        qt_add_executable(tst_trusted_holdout_pack_verifier tests/tst_trusted_holdout_pack_verifier.cpp)
+        set_target_properties(tst_trusted_holdout_pack_verifier PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
+        target_link_libraries(tst_trusted_holdout_pack_verifier PRIVATE range-application-lib Qt6::Test OpenSSL::Crypto)
+        add_test(NAME tst_trusted_holdout_pack_verifier COMMAND tst_trusted_holdout_pack_verifier
+            -o "${CMAKE_CURRENT_BINARY_DIR}/tst_trusted_holdout_pack_verifier-detail.txt,txt" -o -,txt)
+        set_tests_properties(tst_trusted_holdout_pack_verifier PROPERTIES TIMEOUT 120)
+        if(WIN32)
+            set_tests_properties(tst_trusted_holdout_pack_verifier PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+            if(OPENSSL_ROOT)
+                set_property(TEST tst_trusted_holdout_pack_verifier APPEND PROPERTY
+                    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OPENSSL_ROOT}/bin")
+            endif()
+        endif()
+    endif()
+endif()
+target_sources(range-application-lib PRIVATE src/rpiezo_experiment_service.cpp include/rpiezo_experiment_service.h
+    src/rpiezo_solid_recipe.cpp include/rpiezo_solid_recipe.h)
+target_sources(range-application-lib PRIVATE src/piezo_native_backend_bridge.cpp include/piezo_native_backend_bridge.h)
+target_sources(range-application-lib PRIVATE
+    src/piezo_numeric_transport.cpp include/piezo_numeric_transport.h
+    src/piezo_axial_backend_bridge.cpp include/piezo_axial_backend_bridge.h
+    src/rpiezo_axial_experiment_service.cpp include/rpiezo_axial_experiment_service.h
+    src/piezo_runtime_identity.cpp include/piezo_runtime_identity.h)
+target_sources(range-application-lib PRIVATE src/rpiezo_artifact_service.cpp include/rpiezo_artifact_service.h)
+target_sources(range-application-lib PRIVATE src/piezo_result_series.cpp include/piezo_result_series.h)
+target_sources(range-application-lib PRIVATE src/piezo_spectrum.cpp include/piezo_spectrum.h)
+target_sources(range-application-lib PRIVATE src/piezo_accepted_trace.cpp include/piezo_accepted_trace.h)
+target_sources(range-application-lib PRIVATE src/native_checkpoint_recovery.cpp include/native_checkpoint_recovery.h)
+target_sources(range-application-lib PRIVATE src/piezo_certification_batch_cache.cpp include/piezo_certification_batch_cache.h)
+target_compile_definitions(range-application-lib PRIVATE
+    RANGE_PIEZO_BACKEND_PYTHON="${RANGE_PRIVATE_PYTHON_DIRECTORY_CMAKE}/python.exe"
+    RANGE_PIEZO_BACKEND_MODULE_ROOT="${CMAKE_SOURCE_DIR}/range-workflow/python")
+target_link_libraries(range-application-lib PUBLIC range-model-lib range-solver-lib Qt6::Core)
 
 qt_add_executable(range-model-command tools/model_command_cli.cpp)
 target_link_libraries(range-model-command PRIVATE range-application-lib)
@@ -38,6 +92,43 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/PROJECT_CATALOG.md DESTINAT
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/NATIVE_MODEL_OPERATIONS.md DESTINATION doc COMPONENT Application)
 
   if(RANGE_BUILD_TESTS)
+    target_compile_definitions(range-application-lib PRIVATE RANGE_APPLICATION_TEST_HOOKS=1)
+    foreach(_axial_test IN ITEMS tst_piezo_solid_experiment tst_piezo_axial_backend_bridge tst_piezo_axial_experiment_service tst_piezo_result_series tst_piezo_numeric_transport tst_piezo_delivery_examples tst_piezo_pzt_prestress tst_piezo_local_directions tst_piezo_spectrum tst_piezo_accepted_trace tst_piezo_certification_batch_cache)
+        qt_add_executable(${_axial_test} tests/${_axial_test}.cpp)
+        target_link_libraries(${_axial_test} PRIVATE range-application-lib Qt6::Test)
+        target_compile_definitions(${_axial_test} PRIVATE
+            RANGE_PIEZO_BACKEND_PYTHON="${RANGE_PRIVATE_PYTHON_DIRECTORY_CMAKE}/python.exe"
+            RANGE_PIEZO_BACKEND_MODULE_ROOT="${CMAKE_SOURCE_DIR}/range-workflow/python")
+        add_test(NAME ${_axial_test} COMMAND ${_axial_test} -o "${CMAKE_CURRENT_BINARY_DIR}/${_axial_test}-detail.txt,txt" -o -,txt)
+        set_tests_properties(${_axial_test} PROPERTIES TIMEOUT 300)
+        if(WIN32)
+            set_tests_properties(${_axial_test} PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
+    # Includes sensor-only LQR/MPC, RAM/RBM and every multirate restart phase.
+    set_tests_properties(tst_piezo_axial_backend_bridge PROPERTIES TIMEOUT 900)
+    # The complete native trace suite includes a 260-step layered provider
+    # recovery case and exceeded the former 300-second aggregate limit on
+    # Windows Release under concurrent build load. Keep all cases enabled.
+    set_tests_properties(tst_piezo_result_series PROPERTIES TIMEOUT 900)
+    set_tests_properties(tst_piezo_delivery_examples tst_piezo_pzt_prestress PROPERTIES TIMEOUT 21600 ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=5400000")
+    set_tests_properties(tst_piezo_local_directions PROPERTIES TIMEOUT 600)
+    foreach(_piezo_test IN ITEMS tst_piezo_experiment_commands tst_piezo_artifact_service)
+        qt_add_executable(${_piezo_test} tests/${_piezo_test}.cpp)
+        target_link_libraries(${_piezo_test} PRIVATE range-application-lib Qt6::Test)
+        add_test(NAME ${_piezo_test} COMMAND ${_piezo_test} -o "${CMAKE_CURRENT_BINARY_DIR}/${_piezo_test}-detail.txt,txt" -o -,txt)
+        set_tests_properties(${_piezo_test} PROPERTIES TIMEOUT 180)
+        if(WIN32)
+            set_tests_properties(${_piezo_test} PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+    endforeach()
+    qt_add_executable(tst_piezo_experiment_service tests/tst_piezo_experiment_service.cpp)
+    target_link_libraries(tst_piezo_experiment_service PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_piezo_experiment_service COMMAND tst_piezo_experiment_service -o -,txt)
+    if(WIN32)
+        set_tests_properties(tst_piezo_experiment_service PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     qt_add_executable(generate_mesh_source tests/generate_mesh_source.cpp)
     target_link_libraries(generate_mesh_source PRIVATE range-application-lib Qt6::Core)
     set_target_properties(generate_mesh_source PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
@@ -92,10 +183,20 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/NATIVE_MODEL_OPERATIONS.md 
         set_tests_properties(tst_agent_conversation_store PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
+    qt_add_executable(tst_agent_evaluation_capture_store tests/tst_agent_evaluation_capture_store.cpp)
+    target_link_libraries(tst_agent_evaluation_capture_store PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_agent_evaluation_capture_store COMMAND tst_agent_evaluation_capture_store -o -,txt)
+    set_tests_properties(tst_agent_evaluation_capture_store PROPERTIES TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(tst_agent_evaluation_capture_store PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     qt_add_executable(tst_native_result_broker tests/tst_native_result_broker.cpp)
     target_link_libraries(tst_native_result_broker PRIVATE range-application-lib Qt6::Test)
+    target_compile_definitions(tst_native_result_broker PRIVATE RANGE_APPLICATION_TEST_HOOKS=1)
     add_dependencies(tst_native_result_broker range-native-results)
-    add_test(NAME tst_native_result_broker COMMAND tst_native_result_broker -o -,txt)
+    add_test(NAME tst_native_result_broker COMMAND tst_native_result_broker -o "${CMAKE_CURRENT_BINARY_DIR}/tst_native_result_broker-detail.txt,txt" -o -,txt)
+    set_tests_properties(tst_native_result_broker PROPERTIES TIMEOUT 600)
     if(WIN32)
         set_tests_properties(tst_native_result_broker PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -128,6 +229,39 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../docs/NATIVE_MODEL_OPERATIONS.md 
     add_test(NAME tst_model_command_service COMMAND tst_model_command_service -o -,txt)
     if(WIN32)
         set_tests_properties(tst_model_command_service PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    qt_add_executable(tst_trusted_mechanics_service tests/tst_trusted_mechanics_service.cpp)
+    target_link_libraries(tst_trusted_mechanics_service PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_trusted_mechanics_service COMMAND tst_trusted_mechanics_service -o -,txt)
+    set_tests_properties(tst_trusted_mechanics_service PROPERTIES TIMEOUT 180)
+    if(WIN32)
+        set_tests_properties(tst_trusted_mechanics_service PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    qt_add_executable(tst_trusted_verification_service tests/tst_trusted_verification_service.cpp)
+    target_link_libraries(tst_trusted_verification_service PRIVATE range-application-lib Qt6::Test)
+    add_dependencies(tst_trusted_verification_service range-native-results)
+    add_test(NAME tst_trusted_verification_service COMMAND tst_trusted_verification_service -o -,txt)
+    set_tests_properties(tst_trusted_verification_service PROPERTIES TIMEOUT 300)
+    if(WIN32)
+        set_tests_properties(tst_trusted_verification_service PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    qt_add_executable(tst_trusted_experiment_service tests/tst_trusted_experiment_service.cpp)
+    target_link_libraries(tst_trusted_experiment_service PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_trusted_experiment_service COMMAND tst_trusted_experiment_service -o -,txt)
+    set_tests_properties(tst_trusted_experiment_service PROPERTIES TIMEOUT 300)
+    if(WIN32)
+        set_tests_properties(tst_trusted_experiment_service PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    qt_add_executable(tst_trusted_convergence_service tests/tst_trusted_convergence_service.cpp)
+    target_link_libraries(tst_trusted_convergence_service PRIVATE range-application-lib Qt6::Test)
+    add_test(NAME tst_trusted_convergence_service COMMAND tst_trusted_convergence_service -o -,txt)
+    set_tests_properties(tst_trusted_convergence_service PROPERTIES TIMEOUT 180)
+    if(WIN32)
+        set_tests_properties(tst_trusted_convergence_service PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 endif()
