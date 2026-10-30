@@ -496,13 +496,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     except PlanValidationError as exc:
         report = {"ok": False, "errors": [{"code": exc.code, "message": exc.message}]}
         if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2))
+            # Keep machine-readable output ASCII-safe on Windows runners whose
+            # redirected stdout may use a legacy code page such as cp1252.
+            print(json.dumps(report, ensure_ascii=True, indent=2))
         else:
             print(f"error[{exc.code}]: {exc.message}", file=sys.stderr)
         return 1
 
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print(json.dumps(report, ensure_ascii=True, indent=2))
     elif args.next:
         suggestions = report["next"]
         if suggestions["resumeFirst"]:
