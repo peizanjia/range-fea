@@ -1,6 +1,6 @@
 # Project continuation
 
-**Snapshot:** 2026-10-30 (Asia/Singapore). This file is the portable entry point for a fresh checkout. The dated [phase checkpoint](acceptance/phase-checkpoint-20261030.md) records the source, build, CI, and course-stage status for this snapshot.
+**Snapshot:** 2026-10-30 (Asia/Singapore). This file is the portable entry point for a fresh checkout. The source freeze is `ad9dbda685fa1a6dec08b9aecd6ec48ef0ac2a1d` on `feature/structural-profile`; the dated [phase checkpoint](acceptance/phase-checkpoint-20261030.md) records the source, build, CI, and course-stage status. Clone the branch tip after publication to include this follow-up handoff.
 
 ## Resume order
 

@@ -4,7 +4,7 @@ This checkpoint records what is being published for the current phase. It separa
 
 ## Repository and change scope
 
-- Root repository: `peizanjia/range-fea`, branch `feature/structural-profile`; this checkpoint is paired with the root commit that adds it.
+- Root repository: `peizanjia/range-fea`, branch `feature/structural-profile`. The source freeze commit for this checkpoint is `ad9dbda685fa1a6dec08b9aecd6ec48ef0ac2a1d`; this document follow-up records its exact cross-device handoff identity.
 - The phase includes concurrent changes in six submodules. Publish each submodule commit first, then publish the root commit with the updated gitlinks.
 - The root/submodule changes cover trusted mechanics and verification services, agent evidence capture, bounded tool/provider diagnostics, native axial/layered/solid piezo solver paths and persistence, external excitation/control integration, GUI and cloud lifecycle handling, and the corresponding tests and CI registration.
 - `origin` is the personal `peizanjia` repository. `upstream` is `Range-Software`; this phase targets only `origin` and does not rewrite history or publish to upstream.
