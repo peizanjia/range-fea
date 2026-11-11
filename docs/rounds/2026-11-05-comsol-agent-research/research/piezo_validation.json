@@ -1,0 +1,428 @@
+{
+  "schema": "range.piezo-current-validation-report/v1",
+  "date": "2026-11-05",
+  "checkout": "/home/erwin/Projects/range-fea",
+  "status": "STOPPED_AT_USER_REQUEST_PARTIAL_NATIVE_VALIDATION",
+  "fullRepresentativeChainQualified": false,
+  "stop": {
+    "reason": "User requested no further modification, compilation or execution while Claude runs in parallel; research reports only.",
+    "activeTaskProcessesAfterCheck": [],
+    "observedSignalSenderPid": 104311,
+    "interruptedTestPids": [
+      99890,
+      101774
+    ],
+    "terminationSignal": "SIGTERM",
+    "noAutomaticRevert": true
+  },
+  "scope": {
+    "executed": "application-lib native runs and direct Qt bridge tests with actual Python numeric provider",
+    "CLI": false,
+    "GUI": false,
+    "installedPackage": false,
+    "fullPztOnOffIndependentReferenceAndRecovery": false,
+    "feedback": "full-state feedback in completed controller cases; electrical readouts present; sensor-only recovery not completed"
+  },
+  "passedCases": [
+    {
+      "case": "TestPiezoNativeBackendBridge::realControllerKinds(LQR)",
+      "acceptedFESteps": 8,
+      "completeStandaloneRunExitCode": 0,
+      "standaloneLog": "artifacts/piezo-current-20261105/logs/run-bridge-profile.log",
+      "checks": [
+        "native accepted residual <1e-7",
+        "FE/control counters",
+        "LQR Riccati relative residual <1e-8",
+        "gain matrix exists"
+      ]
+    },
+    {
+      "case": "TestPiezoNativeBackendBridge::realControllerKinds(MPC)",
+      "acceptedFESteps": 8,
+      "completeStandaloneRunExitCode": null,
+      "casePassInInterruptedCombinedRun": true,
+      "log": "artifacts/piezo-current-20261105/logs/run-bridge-controllers-observer.log",
+      "checks": [
+        "native accepted residual <1e-7",
+        "FE/control counters",
+        "nonempty MPC warm start",
+        "MPC diagnostics object exists"
+      ],
+      "doesNotEstablish": "full numerical KKT tolerance qualification"
+    }
+  ],
+  "pztPartial": {
+    "case": "PZT-prestress-LQR-forced",
+    "qualificationStatus": "ACCEPTED_FE_TRACE_NUMERICAL_CHECKS_PENDING",
+    "qualified": false,
+    "acceptedFESteps": 66,
+    "retainedSamples": 67,
+    "dt": 3.767118003536818e-06,
+    "firstModeCycles": 1.0013000676596893,
+    "rawRecipeAndTrace": "artifacts/piezo-current-20261105/evidence/PZT-prestress-LQR-forced.json",
+    "metrics": {
+      "actualNativeFEOn": {
+        "amplitudeOrRateLimitedFESteps": 0,
+        "appliedVoltagePeakV": 12.203629080555366,
+        "completedFESteps": 66,
+        "energyNormRMS": 4.676655857413907e-07,
+        "finalMechanicalEnergyJ": 9.382366965590708e-14,
+        "initialMechanicalEnergyJ": 8.313924926523718e-14,
+        "integratedMechanicalEnergyJs": 2.716892251324e-17,
+        "outsideFirstClusterFinalEnergyJ": 1.799390787284889e-15,
+        "outsideFirstClusterPeakEnergyJ": 2.8854661998694082e-15,
+        "outsideFirstClusterPeakOverInitialEnergy": 0.03470642597053016,
+        "peakMechanicalEnergyJ": 2.0661265593556752e-13,
+        "tipDisplacementPeakM": 6.291262302313957e-10,
+        "tipDisplacementRMSM": 3.794751299166429e-10
+      },
+      "independentPztPrestressPhysics": {
+        "fixedChargeTangentRelativeError": 3.575398310259569e-15,
+        "forceResidualN": 1.0741085019148343e-14,
+        "forceToleranceN": 4.34419111668991e-09,
+        "geometricTangentRelativeError": 7.800510797231158e-16,
+        "independentSupportReactionMaxErrorN": 1.0658141036401503e-14,
+        "independentSupportReactionNormN": 11.118805372810574,
+        "materialTangentRelativeError": 6.38917663593804e-16,
+        "minimumTensileForceN": 5.294117742298171,
+        "nativeDQdqRelativeFDerror": 6.8193064207847035e-09,
+        "nativeDfdVRelativeFDerror": 6.427095563830628e-12,
+        "nativeDfdqRelativeFDerror": 5.502817654499294e-13,
+        "qualificationScope": "typical-material / numerical FE only",
+        "reducedKgOverKmaterial": 0.00010257921697957125,
+        "supplierPdfSha256": "b8c70bbc4c3dd44de306bdefa0188b7807bded155d9c4b059dc4b2f462bdbe3b",
+        "supplierSource": "https://info.piezo.com/hubfs/Data-Sheets/piezo-material-properties-data-sheet-20201112.pdf",
+        "supportForceBalanceResidualN": 1.0741085019148343e-14,
+        "supportReactions": [
+          {
+            "physicalDofIndex": 0,
+            "reactionN": -5.486387123650434
+          },
+          {
+            "physicalDofIndex": 1,
+            "reactionN": 5.485827569238371e-06
+          },
+          {
+            "physicalDofIndex": 2,
+            "reactionN": 0
+          },
+          {
+            "physicalDofIndex": 3,
+            "reactionN": -1.0199091190377044e-05
+          },
+          {
+            "physicalDofIndex": 4,
+            "reactionN": 6.1200717592432445
+          },
+          {
+            "physicalDofIndex": 5,
+            "reactionN": 0
+          },
+          {
+            "physicalDofIndex": 6,
+            "reactionN": 4.736612473633915
+          },
+          {
+            "physicalDofIndex": 7,
+            "reactionN": 2.368318077193705
+          },
+          {
+            "physicalDofIndex": 8,
+            "reactionN": 0
+          },
+          {
+            "physicalDofIndex": 9,
+            "reactionN": 1.1484456584457376
+          },
+          {
+            "physicalDofIndex": 10,
+            "reactionN": -5.168051396698125
+          },
+          {
+            "physicalDofIndex": 11,
+            "reactionN": 0
+          },
+          {
+            "physicalDofIndex": 14,
+            "reactionN": 0
+          }
+        ],
+        "totalMassKg": 0.003193023401199718
+      }
+    },
+    "riccatiRelativeResidual": 1.8523670034880576e-13,
+    "maximumClosedPoleModulus": 0.9971578619796975,
+    "missing": [
+      "off/on comparison",
+      "complete same-input FE/RK4/ROM numerical qualification",
+      "independent closed-loop ROM qualification",
+      "RAM/RBM recovery cases",
+      "CSV export"
+    ]
+  },
+  "performance": {
+    "diagnosis": "POSIX source/executable SHA guards dominate sampled runtime; no safety guard was weakened. Bounded separate GDB diagnostic was stopped after 9 seconds.",
+    "profileCase": "beam LQR, 8 accepted FE steps",
+    "operationCalls": 121,
+    "guardSeconds": 18.755944807,
+    "operationSeconds": 18.980414166,
+    "guardFraction": 0.9881736321959667,
+    "profile": {
+      "operations": {
+        "force": {
+          "calls": 59,
+          "failures": 0,
+          "pipeNs": 49296507,
+          "postGuardNs": 4624576634,
+          "preGuardNs": 4661293503,
+          "serializationNs": 783762,
+          "totalNs": 9335950406
+        },
+        "initialize": {
+          "calls": 1,
+          "failures": 0,
+          "pipeNs": 117708826,
+          "postGuardNs": 68876096,
+          "preGuardNs": 79357949,
+          "serializationNs": 152508,
+          "totalNs": 266095379
+        },
+        "postFE": {
+          "calls": 8,
+          "failures": 0,
+          "pipeNs": 8007123,
+          "postGuardNs": 599770731,
+          "preGuardNs": 592144839,
+          "serializationNs": 181492,
+          "totalNs": 1200104185
+        },
+        "propose": {
+          "calls": 3,
+          "failures": 0,
+          "pipeNs": 4567348,
+          "postGuardNs": 227604055,
+          "preGuardNs": 231041055,
+          "serializationNs": 126398,
+          "totalNs": 463338856
+        },
+        "validate": {
+          "calls": 50,
+          "failures": 0,
+          "pipeNs": 42309474,
+          "postGuardNs": 3858903822,
+          "preGuardNs": 3812376123,
+          "serializationNs": 1335921,
+          "totalNs": 7714925340
+        }
+      },
+      "startupNs": 374205902
+    },
+    "log": "artifacts/piezo-current-20261105/logs/pzt-gdb-bounded-diagnostic.log"
+  },
+  "runtime": {
+    "executable": "/home/erwin/Projects/range-fea/artifacts/piezo-current-20261105/python/bin/python3",
+    "moduleRoot": "/home/erwin/Projects/range-fea/src/range-workflow/python",
+    "numpy": "2.5.4",
+    "packageAndExecutableSha256": "d6a02747f1c5af1b816f7a80d6bdb3545129e276762d3507e3c19800d5fb6116",
+    "python": "3.14.4",
+    "pythonBuild": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+    "pythonExecutable": "/home/erwin/Projects/range-fea/artifacts/piezo-current-20261105/python/bin/python3",
+    "scipy": "1.18.1"
+  },
+  "buildReceipts": {
+    "configure-final": {
+      "command": [
+        "cmake",
+        "-S",
+        "/home/erwin/Projects/range-fea/src",
+        "-B",
+        "/home/erwin/Projects/range-fea/build/linux-review",
+        "-DRANGE_BUILD_TESTS=ON",
+        "-DRANGE_REQUIRE_NUMERIC_TESTS=ON",
+        "-DPython3_EXECUTABLE=/home/erwin/Projects/range-fea/artifacts/piezo-current-20261105/python/bin/python3"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859516.875168,
+      "elapsedSeconds": 5.8331568241119385,
+      "exitCode": 0,
+      "log": "artifacts/piezo-current-20261105/logs/configure-final.log"
+    },
+    "build-pzt-initial": {
+      "command": [
+        "cmake",
+        "--build",
+        "build/linux-review",
+        "--target",
+        "tst_piezo_pzt_prestress",
+        "-j2"
+      ],
+      "exit_code": 2,
+      "elapsed_seconds": 131.66521167755127
+    },
+    "build-pzt-fixed": {
+      "command": [
+        "cmake",
+        "--build",
+        "/home/erwin/Projects/range-fea/build/linux-review",
+        "--target",
+        "tst_piezo_pzt_prestress",
+        "-j2"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859196.1580079,
+      "elapsedSeconds": 19.532286643981934,
+      "exitCode": 2,
+      "log": "artifacts/piezo-current-20261105/logs/build-pzt-fixed.log"
+    },
+    "build-pzt-finite-fixes": {
+      "command": [
+        "cmake",
+        "--build",
+        "/home/erwin/Projects/range-fea/build/linux-review",
+        "--target",
+        "tst_piezo_pzt_prestress",
+        "-j2"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859254.8090074,
+      "elapsedSeconds": 227.0808985233307,
+      "exitCode": 2,
+      "log": "artifacts/piezo-current-20261105/logs/build-pzt-finite-fixes.log"
+    },
+    "build-pzt-openssl-fix": {
+      "command": [
+        "cmake",
+        "--build",
+        "/home/erwin/Projects/range-fea/build/linux-review",
+        "--target",
+        "tst_piezo_pzt_prestress",
+        "-j2"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859523.2048101,
+      "elapsedSeconds": 62.06598234176636,
+      "exitCode": 0,
+      "log": "artifacts/piezo-current-20261105/logs/build-pzt-openssl-fix.log"
+    },
+    "build-bridge": {
+      "command": [
+        "cmake",
+        "--build",
+        "/home/erwin/Projects/range-fea/build/linux-review",
+        "--target",
+        "tst_piezo_native_backend_bridge",
+        "-j2"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859603.0076883,
+      "elapsedSeconds": 16.304054975509644,
+      "exitCode": 0,
+      "log": "artifacts/piezo-current-20261105/logs/build-bridge.log"
+    },
+    "run-pzt-lqr": {
+      "command": [
+        "/home/erwin/Projects/range-fea/build/linux-review/range-application-lib/tst_piezo_pzt_prestress",
+        "sameSourceScientificEvidence:PZT-prestress-LQR-forced",
+        "savedExperimentControllerPhases:PZT-prestress-LQR-ram-N3",
+        "savedExperimentControllerPhases:PZT-prestress-LQR-rbm-N3",
+        "-o",
+        "-,txt"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859594.2472346,
+      "elapsedSeconds": 244.9012508392334,
+      "exitCode": -15,
+      "log": "artifacts/piezo-current-20261105/logs/run-pzt-lqr.log"
+    },
+    "run-bridge-controllers-observer": {
+      "command": [
+        "/home/erwin/Projects/range-fea/build/linux-review/fea-solver/tests/tst_piezo_native_backend_bridge",
+        "realControllerKinds:LQR",
+        "realControllerKinds:MPC",
+        "forceAwareObserverAndMPCRestart:beam-LQR-N3",
+        "forceAwareObserverAndMPCRestart:plate-LQR-N3",
+        "-o",
+        "-,txt"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859671.942028,
+      "elapsedSeconds": 167.29173874855042,
+      "exitCode": -15,
+      "log": "artifacts/piezo-current-20261105/logs/run-bridge-controllers-observer.log"
+    },
+    "run-bridge-profile": {
+      "command": [
+        "/home/erwin/Projects/range-fea/build/linux-review/fea-solver/tests/tst_piezo_native_backend_bridge",
+        "realControllerKinds:LQR",
+        "-o",
+        "-,txt"
+      ],
+      "cwd": "/home/erwin/Projects/range-fea",
+      "startedEpoch": 1793859768.154461,
+      "elapsedSeconds": 19.423670768737793,
+      "exitCode": 0,
+      "log": "artifacts/piezo-current-20261105/logs/run-bridge-profile.log"
+    }
+  },
+  "modifiedFiles": [
+    {
+      "path": "src/CMakeLists.txt",
+      "change": "统一Unix所选Python路径，并对symlink解释器提供venv --copies诊断；保留Windows private/python.exe分支"
+    },
+    {
+      "path": "src/fea-solver/CMakeLists.txt",
+      "change": "使用统一桥接Python变量"
+    },
+    {
+      "path": "src/fea-solver/tests/CMakeLists.txt",
+      "change": "使用统一桥接Python变量"
+    },
+    {
+      "path": "src/range-application-lib/CMakeLists.txt",
+      "change": "应用库及压电测试使用统一桥接Python变量"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_truss_dynamics.cpp",
+      "change": "局部finite helper及调用机械重命名checkedFinite"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_native_readout.cpp",
+      "change": "同类局部finite重命名"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_operators.cpp",
+      "change": "同类局部finite重命名"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_native_backend_bridge.cpp",
+      "change": "同类局部finite重命名"
+    },
+    {
+      "path": "src/range-application-lib/src/piezo_axial_backend_bridge.cpp",
+      "change": "同类局部finite重命名"
+    },
+    {
+      "path": "src/range-application-lib/src/rtrusted_holdout_pack_verifier.cpp",
+      "change": "仅将BN_ULONG函数式转换改为static_cast<BN_ULONG>"
+    },
+    {
+      "path": "src/range-application-lib/tests/tst_piezo_pzt_prestress.cpp",
+      "change": "增加恢复逐相位JSON凭据、原生保存文件留存；本次未执行到这些新增路径"
+    },
+    {
+      "path": "scripts/benchmark/validate_piezo_current_20261105.py",
+      "change": "新增定向构建/选定测试/CSV导出runner；CSV导出尚未执行"
+    }
+  ],
+  "evidenceIdentity": [
+    "artifacts/piezo-current-20261105/source-before.json",
+    "artifacts/piezo-current-20261105/source-current.json",
+    "artifacts/piezo-current-20261105/numeric-dependencies.json",
+    "artifacts/piezo-current-20261105/tested-binary-identity.json",
+    "artifacts/piezo-current-20261105/configured-python-path.json",
+    "artifacts/piezo-current-20261105/finite-rename-verification.json",
+    "artifacts/piezo-current-20261105/finite-rename-additional.json",
+    "artifacts/piezo-current-20261105/openssl-cast-verification.json"
+  ],
+  "remainingDecisions": "Further build/test/run activity requires renewed user direction after the parallel Claude work. Existing source/build/artifacts are retained; no rollback performed."
+}

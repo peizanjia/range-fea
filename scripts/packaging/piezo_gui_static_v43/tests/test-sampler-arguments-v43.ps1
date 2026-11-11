@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Sampler argument fixture requires Windows PowerShell 5.1.' }
 $prepRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $builderPath = Join-Path $prepRoot 'runtime\sampler-arguments-v43.ps1'
-$samplerPath = [IO.Path]::GetFullPath((Join-Path $prepRoot '..\..\..\scripts\benchmark\pc11_working_set.py'))
+$samplerPath = [IO.Path]::GetFullPath((Join-Path $prepRoot '..\..\..\scripts\benchmark\pc11-gui\pc11_working_set.py'))
 if (-not $AuditRoot) { $AuditRoot = Join-Path $prepRoot '..\..\..\build\audit-20261014\piezo-delivery\gui-fresh-run-v43-output-audit' }
 $AuditRoot = [IO.Path]::GetFullPath($AuditRoot)
 if (-not [IO.File]::Exists($builderPath) -or -not [IO.File]::Exists($samplerPath)) { throw 'Sampler argument source is missing.' }

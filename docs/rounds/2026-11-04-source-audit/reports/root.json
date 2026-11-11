@@ -1,0 +1,2159 @@
+[
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/external_io/README.md",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文逐段核对stdio/TCP、physical port映射、独立excitation/controller state、candidate提交职责、TCP自报身份限制及实际安装路径；并与SDK serve/client和三个示例逐项对照。未将文字当运行证据。",
+    "findings": [],
+    "requiredRuntimeValidation": "获授权后在源码树和实际安装prefix核对示例路径、握手/关闭/重连；运行例程不作为FE或硬实时认证。",
+    "currentSha256": "0bcc63c2eceae14d9f312849acc42df1b05181cc51259509478d01094bfc1604",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/external_io/cpp_provider.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文审查bounded stdio读写、JSON握手、algorithm/run/requestId绑定、按role输出、velocity积分显式state、sample计数、非有限输出拒绝及close退出；对照schema和SDK host端exact outputs/identity检查。该示例不是完整SDK严格解析器。",
+    "findings": [],
+    "requiredRuntimeValidation": "获授权构建后跑stdio handshake→重复同state evaluate→accepted state推进→close；正例力/力矩/velocity，负例身份/端口/unit/非有限/超长frame。当前requestId限制18位而schema容许4096字符；Qt parser不独立拒duplicate keys，验证合同与host层职责需明确。",
+    "currentSha256": "0960a32312e59286b84a1a0eae165756aedc0fcbff11a6a8ab7ad9333902a289",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/external_io/matlab_provider.m",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文追踪Java accept/readLine/jsondecode/write/close生命周期、requestId十进制字符串比较、role过滤、显式积分/计数与候选状态；与schema、C++/Python示例对照。MATLAB/Java行为未执行。",
+    "findings": [],
+    "requiredRuntimeValidation": "需真实MATLAB+Java：正常close后第二client握手、畸形JSON/掉线后listener行为、单port JSON数组形状、decimal大计数及非有限计算。当前readLine无line bound、catch rethrow会终止listener、samples经double转换；未验证是否属于受支持host场景，不能宣称与Python严格SDK完全等价。",
+    "currentSha256": "75fbf36bebad18ae56655131988e713c963a97a1fa1c3a9f1ad271d01b7393fc",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/external_io/protocol.schema.json",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文核对五种frame oneOf、required/additionalProperties、单位-quantity配对、role/direction条件、有限double边界及identity/state/counter字段；与实际SDK动态精确port集合、hash和时间关系校验对照。另JSON解析通过，不等于schema验证器运行。",
+    "findings": [],
+    "requiredRuntimeValidation": "用合格draft-2020-12验证器对真实wire正负样本校验；dynamic exact port/role set、digest与validUntil关系还必须执行SDK校验，不由JSON Schema独立证明。",
+    "currentSha256": "9173dc7ddd67c6fceedb6e8b20e8e5edd651965d30370eec31e1ef22157d6df4",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/external_io/pure_provider.py",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文审查session-local ports、请求内state不被就地提交、确定性时间激励/PI候选、stdio与可持续TCP循环、socket/stream清理及异常边界；追踪range_external_sdk→piezo_external_io.serve的deepcopy、state_digest与输出集合校验。未运行provider。",
+    "findings": [],
+    "requiredRuntimeValidation": "获授权后实际stdio/TCP双role、多rate、重复同state候选一致、malformed/state-shape负例与重连；不得把本次AST算provider通过。",
+    "currentSha256": "a4d9722983773edfa414f79e14e4915cdd3af7bdc0363dfc17de512ad0c3ae8c",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/external_io/range_external_sdk.py",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文核对source-tree parents[3]=src 与已安装examples/control/external_io的parents[3]=prefix，分别定位range-workflow/python或share/range-workflow；追踪所重导出SDK函数。无provider启动。",
+    "findings": [],
+    "requiredRuntimeValidation": "在源码与完整安装layout用冻结Python验证import来源及连接dependency hash，防误取ambient range_workflow；本次未安装或启动。",
+    "currentSha256": "94f5bedadab572dbf280d1785d9a8967841fb6f5b7778437511a3e839273f283",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/examples/stage9/stage9_velocity_controller.py",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文审查JSON边界、SI/catalog、SPD/PSD/模态增益/连续极点、Newmark采样保持与ROM回放、gain/source身份、acceptedControllerState纯计算及CLI原子输出；历史diff主要为NumPy/SciPy懒加载，所有实际np/linalg使用位于离线路径局部import或延期annotation。未执行科学路径/控制器。",
+    "findings": [],
+    "requiredRuntimeValidation": "先经授权运行startup stdlib blocker，再在冻结CPython/NumPy/SciPy执行原Stage9 design/replay/velocity suites与原生对照；连续极点稳定不等于采样保持闭环任意dt稳定。",
+    "currentSha256": "c1b2221d3e91541f7e252a8c2cf05b716b009d2cbc419c6219f69218fd256a9d",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/main_task.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文及历史diff审查新增预算严格decimal/互斥、trace/context与linear/thermal/typed门控、gate初始化、QThread worker销毁和finished(int)主线程queued exit code传播；追踪SolverInput→SolverTask及NativeExecutionGate pause绑定。",
+    "findings": [],
+    "requiredRuntimeValidation": "授权Qt构建后验证正确/非法预算、trace缺context、跨模式组合均按预期exit，成功0/失败1传到主线程且无QThread销毁警告；pause-resume保持原target。",
+    "currentSha256": "9adf4d32e8ad57f2f9cdcd9d1fabad3a9dbf8fefbcc6183ed6a1626f065fe136",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/native_accepted_checkpoint.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "完整1643行基线及865行历史diff审查：context→lease→pending recovery admission；v1 due/不可变MODEL与pointer pair；v2 baseline/迁移/codec证书/periodic MODEL/append/cold prefix；publish最后决策→noexcept commit及故障rollback/poison。追加补丁和新增Qt回归逐行复核。",
+    "findings": [
+      {
+        "id": "NCLI-01",
+        "certainty": "confirmed_source_bug",
+        "status": "patched_not_compiled",
+        "location": "src/fea-solver/src/native_accepted_checkpoint.cpp:874-889,1544-1570 (current); historical verifyStagedTrace:1561",
+        "condition": "最后一次certifyPayload返回合法state view，但回调期间追加trace尾部、修改envelope或替换latest指针。此前这些磁盘校验已完成，回调之后只检查MODEL pins。",
+        "impact": "publish可移除PENDING并commit与实际磁盘不一致的恢复authority；随后readLatest才拒绝或退回旧pointer。",
+        "evidence": "沿stageTrace→Publication::publish→verifyStagedTrace→removeMarker→commit/readLatest追踪；旧代码certify位于trace/envelope检查之后，latest末次读取也在certify之前。新增C++故障源精确在stage结束后arm回调。",
+        "patch": "先认证不可变staged payload，再做无回调的envelope/header/record/size/MODEL检查；最终latest字节检查移到所有certifier之后。",
+        "compatibilityRisk": "不改格式、hash、clock、物理阈值或正常pure certifier输出；改变损坏/副作用回调的拒绝时机与诊断顺序。没有每步全前缀扫描。",
+        "actualChecks": [
+          "完整源码与历史差异逻辑审查",
+          "新增四行Qt回归源码及同序号重试断言",
+          "git diff --check通过"
+        ],
+        "runtimeValidation": "未编译/运行。获授权后在Qt6/C++受控构建中运行tst_native_accepted_checkpoint的traceCertifierLateFileMutation四行：unchanged应提交seq2；trace-tail/envelope/latest-pointer三负例必须拒绝、还原latest/lastvalid/trace与receipt、清PENDING并允许相同seq重试。"
+      },
+      {
+        "id": "NCLI-X01",
+        "certainty": "confirmed_cross_domain_bug",
+        "status": "reported_to_parent_regression_added",
+        "location": "src/range-application-lib/src/native_checkpoint_recovery.cpp:626-627 (reviewed version); src/fea-solver/src/native_accepted_checkpoint.cpp:1099-1106",
+        "condition": "v1 periodic持久指针从seq10到seq20（或强制pause的10到15），发布/回滚中断留PENDING。共享恢复helper无条件要求oldLatest+1==candidate。",
+        "impact": "完整且上下文/hash有效的旧恢复态被误拒绝，自动reopen失败；常见checkpoint策略不等于v2每FE发布。",
+        "evidence": "已追踪v1 due调度、rollback manifest生成、Plan::inspect/restore/finish及constructor admission；标准库独立调度[10,20]也展示与+1条件矛盾，但不是C++执行。",
+        "patch": "本域增加periodicRecoveryAcrossPublicationGap正例、错误context负例和恢复后继续到20；helper修复由应用域/主代理负责，本代理未修改。",
+        "compatibilityRisk": "跨域修补必须保留v2紧邻规则和v1严格递增、上下文、事务token、pointer/envelope/MODEL哈希验证，不得一概放松sequence合同。",
+        "actualChecks": [
+          "源码调用链确认",
+          "已向主代理发消息",
+          "独立标准库调度检查通过",
+          "新增回归源静态审查"
+        ],
+        "runtimeValidation": "运行新增periodicRecoveryAcrossPublicationGap：v1于10发布、20失败且rollback中断；错误source context拒绝且不改PENDING/指针，正确context恢复10并重算至20。依赖应用域native_checkpoint_recovery修补；本代理未改该helper。"
+      },
+      {
+        "id": "NCLI-X02",
+        "certainty": "confirmed_integrity_limit_production_incidence_unproven",
+        "status": "open_cross_domain_design_validation",
+        "location": "src/fea-solver/src/native_accepted_checkpoint.cpp:1421-1428,1544-1570; src/range-application-lib/src/piezo_accepted_trace.cpp:111-122",
+        "condition": "活跃writer期间，非合作外部写者同尺寸修改早于旧terminal的历史record，保持header、terminal、新record和指针不变。MODEL有pin，trace没有跨事务文件pin。",
+        "impact": "hot append/verify只校验旧terminal和新record，不能证明旧prefix字节仍完整；可能继续发布到下一seq，冷readLatest完整prefix校验才拒绝。尚未证明正常生产写入路径或历史事故曾触发。",
+        "evidence": "已阅读共享append/frame/readRecord/verifyPrefix实现及Store热/冷路径。独立标准库按96-byte overhead和SHA链构造4帧，翻转seq1 payload后seq3 terminal检查仍成功，全prefix拒绝；不冒充真实C++repro。",
+        "patch": "未做侵入式跨域writer/pin重构。已报告主代理；NCLI-01只修回调后当前authority校验顺序，不宣称解决任意历史prefix原位破坏。",
+        "compatibilityRisk": "简单每FE verifyPrefix会引入长trace O(n²)读/hash成本；应协调Store与共享codec的owned handle/文件身份或等价prefix见证策略，并核对Windows共享/rename和Linux metadata语义。",
+        "actualChecks": [
+          "hot/cold完整调用链静态确认",
+          "独立标准库binary/hash实验通过",
+          "已向主代理发送跨域开放项"
+        ],
+        "runtimeValidation": "获授权后用真实axial/layered seq0..5 trace，在seq5/6之间及AfterTraceAppend/BeforeMarkerRemove阶段同长度破坏seq1字节。要求热发布拒绝、不错误前移receipt；若旧authority本身损坏，保留PENDING/诊断、禁止假称可恢复。同时运行20,001记录性能检查，不能以全量每步重扫满足功能而忽略复杂度。"
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "未编译/运行。获授权后在Qt6/C++受控构建中运行tst_native_accepted_checkpoint的traceCertifierLateFileMutation四行：unchanged应提交seq2；trace-tail/envelope/latest-pointer三负例必须拒绝、还原latest/lastvalid/trace与receipt、清PENDING并允许相同seq重试。",
+      "运行新增periodicRecoveryAcrossPublicationGap：v1于10发布、20失败且rollback中断；错误source context拒绝且不改PENDING/指针，正确context恢复10并重算至20。依赖应用域native_checkpoint_recovery修补；本代理未改该helper。",
+      "Windows/NTFS及Linux分别验证共享冲突、长路径、pin拒写/metadata检测、trace truncate故障与冷恢复；真实axial/layered runtime字节及物理阈值不变。"
+    ],
+    "currentSha256": "0250de9f93c7e8e429a9a4273257678d5bd06f3098bbff6f003a9c41b8e8127c",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/native_accepted_checkpoint.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文及历史diff审查TraceOptions回调合同、VerifiedCheckpoint旧full MODEL与terminal accepted state区分、独占lease、active publication及failed rollback所有权/寿命、final publication与noexcept promotion约束；与实现及RSolver调用对照。",
+    "findings": [
+      {
+        "ref": "NCLI-01",
+        "scope": "Store调用/合同或真实runtime回归关联；完整发现见native_accepted_checkpoint.cpp记录"
+      },
+      {
+        "ref": "NCLI-X01"
+      },
+      {
+        "ref": "NCLI-X02"
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "未编译/运行。获授权后在Qt6/C++受控构建中运行tst_native_accepted_checkpoint的traceCertifierLateFileMutation四行：unchanged应提交seq2；trace-tail/envelope/latest-pointer三负例必须拒绝、还原latest/lastvalid/trace与receipt、清PENDING并允许相同seq重试。",
+      "运行新增periodicRecoveryAcrossPublicationGap：v1于10发布、20失败且rollback中断；错误source context拒绝且不改PENDING/指针，正确context恢复10并重算至20。依赖应用域native_checkpoint_recovery修补；本代理未改该helper。",
+      "Windows/NTFS及Linux分别验证共享冲突、长路径、pin拒写/metadata检测、trace truncate故障与冷恢复；真实axial/layered runtime字节及物理阈值不变。"
+    ],
+    "currentSha256": "64016ef8b081a3fd5a2ff66039e7aa2c29bf3df8aee28d294be260acbe54c50a",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/solver_input.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文及历史diff审查copy/assignment完整传播nativeAcceptedTrace、三个optional预算、context、gate与restart；setter与主入口/worker对应，无遗漏新增字段。",
+    "findings": [],
+    "requiredRuntimeValidation": "获授权Qt构建后运行tst_solver_input及实际main_task→SolverTask预算/trace/context/restart组合回归；检查拷贝/赋值后的行为。",
+    "currentSha256": "5b652f546db178ce69ec6cf9dd4eebb54e5ccc84488b498982278e74b24f0b92",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/solver_input.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文核对新增字段默认值、optional预算0与absent的区别、trace/context与gate持有方式、公共setter及SolverTask友元复制；对照cpp和构造使用。",
+    "findings": [],
+    "requiredRuntimeValidation": "获授权Qt构建后运行tst_solver_input及实际main_task→SolverTask预算/trace/context/restart组合回归；检查拷贝/赋值后的行为。",
+    "currentSha256": "19537b9cd710f1117049991d47fe316af0c286410cfe858990a709e5d2d37082",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/solver_task.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文1705行及618行历史diff：input LINK/target双hash→模式preflight→同一source/backend callback冻结→checkpoint创建与terminal MODEL恢复→RSolver participant/trace输出→postcommit receipt/gate→failure/final audit；同时检查取消/observer不误回滚已接受态及reserved run-results源拒绝。",
+    "findings": [
+      {
+        "ref": "NCLI-01",
+        "scope": "Store调用/合同或真实runtime回归关联；完整发现见native_accepted_checkpoint.cpp记录"
+      },
+      {
+        "ref": "NCLI-X01"
+      },
+      {
+        "ref": "NCLI-X02"
+      }
+    ],
+    "requiredRuntimeValidation": "授权后先run tst_native_axial_run/tst_native_layered_run/tst_native_mixed_run和tst_native_piezo_accepted_trace，校验真实hash绑定恢复、reserved input保留、后提交失败诊断及受控取消；Windows安装Python和Linux支持矩阵分别记录。",
+    "currentSha256": "0d34087cd4bd1a4ec5aac95b3efa246e51982a7506dc3efb1c2bcd3bc126c903",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/src/solver_task.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文及历史diff：构造签名从持有app转为finished(int)，核对所有新trace/预算成员复制和runtimeBridge借用的主线程生命周期；未在worker直接调用application exit。",
+    "findings": [],
+    "requiredRuntimeValidation": "获授权Qt构建后运行tst_solver_input及实际main_task→SolverTask预算/trace/context/restart组合回归；检查拷贝/赋值后的行为。",
+    "currentSha256": "5f0f6ac171c5979386c9f62280811278ea8aa492d1971e3de9918c0238573854",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/test_stage9_runtime_startup.py",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文审查科学依赖import blocker、独立一DOF gain夹具、子进程stdout身份/force/state断言与source digest负例、离线按需import四子例。此测试会启动真实控制器，因此本轮不运行；AST仅语法附加检查。",
+    "findings": [],
+    "requiredRuntimeValidation": "需授权真实控制器子进程后执行3测试/4离线subtests；子命令当前-I -S不显式-B，运行时应加-B并隔离HOME/TMP/XDG，不以外层-B假设可继承到-I子进程。",
+    "currentSha256": "1efdcdb05a138faee396b872b21aabaf2a33bdcbdb18fc6b115c1b800c607b33",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_native_accepted_checkpoint.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文704行基线及所有新增源：protocol-only state fixture、stage/publish/rollback/commit窗口、v1周期和v2逐步输出、pointer/evidence篡改、lease/rename/longpath、cold prefix与重建副作用。新增late certifier四行及periodic gap正负回归，未编译执行。",
+    "findings": [
+      {
+        "id": "NCLI-01",
+        "certainty": "confirmed_source_bug",
+        "status": "patched_not_compiled",
+        "location": "src/fea-solver/src/native_accepted_checkpoint.cpp:874-889,1544-1570 (current); historical verifyStagedTrace:1561",
+        "condition": "最后一次certifyPayload返回合法state view，但回调期间追加trace尾部、修改envelope或替换latest指针。此前这些磁盘校验已完成，回调之后只检查MODEL pins。",
+        "impact": "publish可移除PENDING并commit与实际磁盘不一致的恢复authority；随后readLatest才拒绝或退回旧pointer。",
+        "evidence": "沿stageTrace→Publication::publish→verifyStagedTrace→removeMarker→commit/readLatest追踪；旧代码certify位于trace/envelope检查之后，latest末次读取也在certify之前。新增C++故障源精确在stage结束后arm回调。",
+        "patch": "先认证不可变staged payload，再做无回调的envelope/header/record/size/MODEL检查；最终latest字节检查移到所有certifier之后。",
+        "compatibilityRisk": "不改格式、hash、clock、物理阈值或正常pure certifier输出；改变损坏/副作用回调的拒绝时机与诊断顺序。没有每步全前缀扫描。",
+        "actualChecks": [
+          "完整源码与历史差异逻辑审查",
+          "新增四行Qt回归源码及同序号重试断言",
+          "git diff --check通过"
+        ],
+        "runtimeValidation": "未编译/运行。获授权后在Qt6/C++受控构建中运行tst_native_accepted_checkpoint的traceCertifierLateFileMutation四行：unchanged应提交seq2；trace-tail/envelope/latest-pointer三负例必须拒绝、还原latest/lastvalid/trace与receipt、清PENDING并允许相同seq重试。"
+      },
+      {
+        "id": "NCLI-X01",
+        "certainty": "confirmed_cross_domain_bug",
+        "status": "reported_to_parent_regression_added",
+        "location": "src/range-application-lib/src/native_checkpoint_recovery.cpp:626-627 (reviewed version); src/fea-solver/src/native_accepted_checkpoint.cpp:1099-1106",
+        "condition": "v1 periodic持久指针从seq10到seq20（或强制pause的10到15），发布/回滚中断留PENDING。共享恢复helper无条件要求oldLatest+1==candidate。",
+        "impact": "完整且上下文/hash有效的旧恢复态被误拒绝，自动reopen失败；常见checkpoint策略不等于v2每FE发布。",
+        "evidence": "已追踪v1 due调度、rollback manifest生成、Plan::inspect/restore/finish及constructor admission；标准库独立调度[10,20]也展示与+1条件矛盾，但不是C++执行。",
+        "patch": "本域增加periodicRecoveryAcrossPublicationGap正例、错误context负例和恢复后继续到20；helper修复由应用域/主代理负责，本代理未修改。",
+        "compatibilityRisk": "跨域修补必须保留v2紧邻规则和v1严格递增、上下文、事务token、pointer/envelope/MODEL哈希验证，不得一概放松sequence合同。",
+        "actualChecks": [
+          "源码调用链确认",
+          "已向主代理发消息",
+          "独立标准库调度检查通过",
+          "新增回归源静态审查"
+        ],
+        "runtimeValidation": "运行新增periodicRecoveryAcrossPublicationGap：v1于10发布、20失败且rollback中断；错误source context拒绝且不改PENDING/指针，正确context恢复10并重算至20。依赖应用域native_checkpoint_recovery修补；本代理未改该helper。"
+      },
+      {
+        "id": "NCLI-X02",
+        "certainty": "confirmed_integrity_limit_production_incidence_unproven",
+        "status": "open_cross_domain_design_validation",
+        "location": "src/fea-solver/src/native_accepted_checkpoint.cpp:1421-1428,1544-1570; src/range-application-lib/src/piezo_accepted_trace.cpp:111-122",
+        "condition": "活跃writer期间，非合作外部写者同尺寸修改早于旧terminal的历史record，保持header、terminal、新record和指针不变。MODEL有pin，trace没有跨事务文件pin。",
+        "impact": "hot append/verify只校验旧terminal和新record，不能证明旧prefix字节仍完整；可能继续发布到下一seq，冷readLatest完整prefix校验才拒绝。尚未证明正常生产写入路径或历史事故曾触发。",
+        "evidence": "已阅读共享append/frame/readRecord/verifyPrefix实现及Store热/冷路径。独立标准库按96-byte overhead和SHA链构造4帧，翻转seq1 payload后seq3 terminal检查仍成功，全prefix拒绝；不冒充真实C++repro。",
+        "patch": "未做侵入式跨域writer/pin重构。已报告主代理；NCLI-01只修回调后当前authority校验顺序，不宣称解决任意历史prefix原位破坏。",
+        "compatibilityRisk": "简单每FE verifyPrefix会引入长trace O(n²)读/hash成本；应协调Store与共享codec的owned handle/文件身份或等价prefix见证策略，并核对Windows共享/rename和Linux metadata语义。",
+        "actualChecks": [
+          "hot/cold完整调用链静态确认",
+          "独立标准库binary/hash实验通过",
+          "已向主代理发送跨域开放项"
+        ],
+        "runtimeValidation": "获授权后用真实axial/layered seq0..5 trace，在seq5/6之间及AfterTraceAppend/BeforeMarkerRemove阶段同长度破坏seq1字节。要求热发布拒绝、不错误前移receipt；若旧authority本身损坏，保留PENDING/诊断、禁止假称可恢复。同时运行20,001记录性能检查，不能以全量每步重扫满足功能而忽略复杂度。"
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "未编译/运行。获授权后在Qt6/C++受控构建中运行tst_native_accepted_checkpoint的traceCertifierLateFileMutation四行：unchanged应提交seq2；trace-tail/envelope/latest-pointer三负例必须拒绝、还原latest/lastvalid/trace与receipt、清PENDING并允许相同seq重试。",
+      "运行新增periodicRecoveryAcrossPublicationGap：v1于10发布、20失败且rollback中断；错误source context拒绝且不改PENDING/指针，正确context恢复10并重算至20。依赖应用域native_checkpoint_recovery修补；本代理未改该helper。",
+      "Windows/NTFS及Linux分别验证共享冲突、长路径、pin拒写/metadata检测、trace truncate故障与冷恢复；真实axial/layered runtime字节及物理阈值不变。"
+    ],
+    "currentSha256": "882eaafb7a8aaa1c16752566065fb38bd8b02bd75089f756246a191671369af7",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_native_axial_run.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文547行：实际axial native runtime、三杆/电读出夹具、完整codec字节split/restart、publication最后顺序/回滚poison、CLI预算/源身份/暂停恢复/完整trace、外部采样candidate事务；区分同实现continuation比较与独立电荷电压公式。未运行。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/运行。获授权后在Qt6及冻结private Python/NumPy/SciPy环境运行该测试目标及所调用真实CLI；所有QTemporaryDir、QSettings、socket/temp及backend状态先重定向并验证在本native-cli产物目录。对照源码列明的正负断言，Linux/Windows分别记录，不能把源码阅读计为PASS。",
+    "currentSha256": "a1c60dfd6ae92f16f7206ecabf9721b4dc678ae6921e0fce5e590282502cddfd",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_native_layered_run.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文297行：梁/平板已绑定source、legacy环境项移除、full codec所有split、publication各故障phase、输出失败/postcommit重试、真实CLI源保留与不兼容模式反例；reference路径复用Run仅证明重启等价，不能充当独立物理精度证明。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/运行。获授权后在Qt6及冻结private Python/NumPy/SciPy环境运行该测试目标及所调用真实CLI；所有QTemporaryDir、QSettings、socket/temp及backend状态先重定向并验证在本native-cli产物目录。对照源码列明的正负断言，Linux/Windows分别记录，不能把源码阅读计为PASS。",
+    "currentSha256": "214b02f86ca6bf6c78e7a3c86f443d57009da3c81ffb014d1c4153dccabaf1cd",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_native_mixed_run.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文593行并核对历史恢复hunk：混合主动杆/索、独立单自由度Newmark和移动锚点功账、prepared候选篡改、model/output/checkpoint联合回滚、monitoring和真实CLI source/restart保留；恢复helper旧版本+1规则对periodic gap的缺口另列NCLI-X01。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/运行。获授权后在Qt6及冻结private Python/NumPy/SciPy环境运行该测试目标及所调用真实CLI；所有QTemporaryDir、QSettings、socket/temp及backend状态先重定向并验证在本native-cli产物目录。对照源码列明的正负断言，Linux/Windows分别记录，不能把源码阅读计为PASS。",
+    "currentSha256": "05f80e6a996e15dc6f6ab72c54b2bd3d54f74e6221c8845c34f622a51cb57262",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_native_piezo_accepted_trace.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文127行：真实axial/layered PI callback与codec，baseline→每FE payload→seq5从旧periodic MODEL及terminal MODEL分别reopen→seq12连续字节比较，model pin平台差异负例；该真实物理测试与protocol-only Store夹具证据明确分开。",
+    "findings": [
+      {
+        "ref": "NCLI-01",
+        "scope": "Store调用/合同或真实runtime回归关联；完整发现见native_accepted_checkpoint.cpp记录"
+      },
+      {
+        "ref": "NCLI-X01"
+      },
+      {
+        "ref": "NCLI-X02"
+      }
+    ],
+    "requiredRuntimeValidation": "未编译/运行。获授权后在Qt6及冻结private Python/NumPy/SciPy环境运行该测试目标及所调用真实CLI；所有QTemporaryDir、QSettings、socket/temp及backend状态先重定向并验证在本native-cli产物目录。对照源码列明的正负断言，Linux/Windows分别记录，不能把源码阅读计为PASS。",
+    "currentSha256": "b49c9af6f55d50553399da05e414d96bcee8c722004c164f7c17741ccad00316",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_piezo_native_backend_bridge.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文751行：矩阵/port/readout导出、物理已知力和affine bias、sensor_only隐藏态隔离、每控制phase restart、opaque rollback/observer/MPC候选、确定性线程恢复、冻结文件负例、独立质量求解/Newmark与非零workpoint方程、外部multirate采样无重复evaluate。依赖主体由其他代理审查，未借测试源码声称数值通过。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/运行。获授权后在Qt6及冻结private Python/NumPy/SciPy环境运行该测试目标及所调用真实CLI；所有QTemporaryDir、QSettings、socket/temp及backend状态先重定向并验证在本native-cli产物目录。对照源码列明的正负断言，Linux/Windows分别记录，不能把源码阅读计为PASS。",
+    "currentSha256": "6cdb6ff83eed4a57deabdcf504d31fd05b2f6b138c08331c20bbb8622cb76041",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea-solver/tests/tst_solver_audit_cli.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "历史13行变动、两个完整变更pause测试及相关helper/checkpoint/cancel上下文审查：已读1-440和810-1499，核对seq15暂停必须实际发布15、state hash对应envelope、错误task/破损帧不resume、外部state替换保留原文件。未声称穷尽其余旧thermal/static/typed测试。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/运行。获授权后在Qt6及冻结private Python/NumPy/SciPy环境运行该测试目标及所调用真实CLI；所有QTemporaryDir、QSettings、socket/temp及backend状态先重定向并验证在本native-cli产物目录。对照源码列明的正负断言，Linux/Windows分别记录，不能把源码阅读计为PASS。",
+    "currentSha256": "d397aa132d16a7d25481658cc6ca8b2e4b15483e3127d2647c5e30293a795849",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/agent_task_runner.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "完整历史变更与当前授权/预算/retire/observe/Host和workflow调用链；read-only固定快照与one-shot批准边界；原生查询channel增加封闭canonical QUrl编码语法；未声称未改schema助手全部重审。",
+    "findings": [
+      "ROOT-RESUME-005",
+      "ROOT-RESUME-007"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "ee8571583bc904b17d6d8a247c67221ec687aa3628b506b5b2b7018a9589de4b",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/agent_task_runner.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文接口、task/generation、observer和授权成员及新共用信号边界与实现对照。",
+    "findings": [
+      "ROOT-RESUME-005"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "62e353eab99898aa786f084883218deac366d30b07512dbd799bc38e39a4fd10",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/agent_widget.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "完整历史变更、授权诊断/可见确认、capture/telemetry白名单及Provider请求世代；重点复核host observation同步回调。未穷尽既有conversation store代码。",
+    "findings": [
+      "ROOT-RESUME-005"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "592a8eedfada6a1ccb2b3cb20e54721322194a4f7206e73198728a269bd87194",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/agent_widget.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文构造/只读sidecar/可信recorder合同、QPointer和callback-depth/failure latch成员对照。",
+    "findings": [
+      "ROOT-RESUME-005"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "9f094ad1a4c9eac262db58ac46dd1045cc323cd6888dc88d3e17e3abc50bf805",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/application.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文：headless成员初始化、arm/capture all-or-none、签名slot绑定与环境请求分离、noninteractive initialize、原生命周期；不执行签名Verifier或GUI。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "f754822d8512ae9f0d305d29bf3aef3827cd5e48bf8423b242b67b699f4737a2",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/application.h",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部历史新增声明/默认值/Agent条件编译与application.cpp实现对照。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "82670473f0cffde716c3687fd2d69bdac5f81e5e5cc6b557e0c484911ba3cfd3",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/application_settings_widget.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Agent ON/OFF include and settings-page gates",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "99ee7a6f088b499281917ebcea79e72983de11d707314560806b3a1b7ae59b80",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/central_tab_widget.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Bounded text suffix/block trimming, CRLF/surrogate boundary and logger-lock reentry constraints",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "83ef1d3c5dfcd36a5667851230d87fd60fa5172a3fe470587b1d4dfa80d816b3",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/central_tab_widget.h",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Declarations match bounded-output methods",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "d0fb585e95ba8b1346afd4820e3e0b5ca03010e969deafdc71a3c08239efc011",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/document_generator.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "PDF printer format selected before page size derivation",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "2de255005dc9158da45f583236d0ffafb805f42ad4cf80fe55a7b7bea5052a90",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/main.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文：portable profile树/路径前置检查，8MiB输入/输出、严格reopen单项和batch请求、唯一slot/artifact绑定、非交互初始化与exit语义；未启动应用。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "e30f3fff3fc425846d85133e7d47340a97edb39396adfdcef31197fc4608a948",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/main_window.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部批次差异：单task评估capture状态机、arm/slot pin、Agent ON/OFF、scroll ownership与布局恢复、closeEvent退役/退出；未全审旧窗口功能。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "b035740ecd43c3f0cdabc5a27d8968b54f0796b20478c944ac38fbad0efae7e5",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/main_window.h",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部批次构造签名/包含与ON/OFF默认参数对照，非全文件旧接口审计。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "5ba4e1e6eb1bc283c4e332633f809d0fbfcfbab1a54289bbd0318e94472db9e0",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/model.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Typed piezo history staging/fingerprint/UndoRedo and normalization changes",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "4aeb9df5828ca3599b436ee9768c66a9d8c2bda940a75bc8e635c231c90ef7f7",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/model.h",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Verified-file read and typed history declarations",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "3d8f7a78b20069374f9adb18f356522b81c7112ec7c3008a5e939e8d024c96a3",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/model_command_host.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "完整本批次变更及context/preview/approve/execute/finalize调用链；物理/结果安全投影、诊断私有快照、修复授权、评估证据重新验证、typed history；保留原诊断持久化修补。未全审无关旧命令。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "36937442e94cd4d7138bd475e21f8d97f4a245a3ec06f4a2b0f695988c4534ab",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/model_command_host.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文Host独占线程、可信C++批准与模型可调用读接口、证据snapshot和durable session声明对照。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "deb3062c34b76fe9535a6ccb0d03372985628443fe572681fcf2ae2aaaf70f12",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/model_records_selector.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Playback generations, pending loads, frame capture timeout and stop/record controls",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "232e1f8be594922aec1491f08fd85287948c12a75f076d58ab0545a84337eb6f",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/model_records_selector.h",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Generation/capture helper declarations",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "11872442c8c2c23cae4bb4547426b8acc7981920df9bcdaf58d76a0e061d256a",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/piezo_workbench_widget.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "分段通读全文件：物理recipe/UI映射、preview/confirm、草稿与源版本、external identity与异步请求、typed结果/trace authority、缓存watch/谱与CSV、性能证据边界；在相关源码明确修补两处问题。",
+    "findings": [
+      "ROOT-RESUME-003",
+      "ROOT-RESUME-004"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "ba4658c404be4871ddb70abb83fd8eac69a3858928c059414f52c8fb55f253d7",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/piezo_workbench_widget.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文成员生命周期、QPointer session、完整草稿/文档快照、异步/结果watch代次与私有guard声明对照。",
+    "findings": [
+      "ROOT-RESUME-003",
+      "ROOT-RESUME-004"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "e7d27707c64f3c0cd967ab1689f003464f0ab6c4f8293e21b9839be5882c788b",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/series_plot_widget.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Generation-bound actual paint observer and dataset lifetime",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "efa3a90e030c77e6f644de27466c0441fc0ef9561d4957cd82e824dea6bf71b3",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/series_plot_widget.h",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Paint observer generation API",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "5ed1c5212f163b414b31bd23668e20e73cbac86d69af35c8889984a58ce05795",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/session.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Single revision advance followed by audit at accepted revision",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "cda2fe4261956df379a491a4f22776c4b0a78c33046f8a84604e04d38925d34b",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/solver_manager.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部本批次变更及原生注册/持久化/终态/取消/重开/恢复限定调用链；包含queued通知重入、lease保留、v1/v2资格、checkpoint seed、frozen input、trusted reopen。未全审历史registry parser等未改实现。",
+    "findings": [
+      "ROOT-RESUME-001",
+      "ROOT-RESUME-006"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "9e7ce000172d2f49bc85cf0fae423e7d6910d89b6920399cf145b14a2ad1ac1f",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/solver_manager.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文manager owner-thread API、缓存/持久hash/逻辑lease、结果与恢复身份合同，声明与实现对照。",
+    "findings": [
+      "ROOT-RESUME-001",
+      "ROOT-RESUME-006"
+    ],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "55cf9aa3c4d19a617be057b8cf6de8143bbcfcfdd9296e81032e1adbb664f142",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/solver_setup_checker.cpp",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Line model and modal load-warning handling",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "d8181d7a281dc5cbfa4da6a2019bd666162b5250a4787f4977dd8bc9c81f4c38",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/solver_task.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "完整826行历史diff与相关capture/freeze/prepare/seed/perform调用链：detached不发布源、canonical clock/trace ancestry、monotone取消与queued completion共享生命周期、Windows启动flag；未完整审查所有旧journal解析代码。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "ea11fefb8a35d35c58765370b17dcddf5db08f54381db92b0967aed857454883",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/solver_task.h",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部历史声明/CompletionIntent shared ownership/atomic、trusted detached来源、trace context与构造传播对照。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "a49e5988b41c0dc941babf0e534388348c6d12074beb9886cba07f9e77aaa3a3",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/trusted_artifact_paths.h",
+    "reviewStatus": "reviewed_diff",
+    "checks": "Handle identity/no-follow/share semantics and explicit Windows long path fix",
+    "findings": [],
+    "requiredRuntimeValidation": "Changed C++: compile then affected GUI/CLI tests under isolated profile; numerical Python: frozen CPython/NumPy/SciPy environment",
+    "inheritedReview": true,
+    "reviewProvenance": "2026-11-04 prior explicitly stated scope",
+    "currentSha256": "371ffcbc657d35995e228f92bf8af9946ef4d905a1561b62469aaa29f7af2791",
+    "reviewReport": "docs/audit_20261104/root.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/workflow_widget.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部历史diff：原模块对象导航、QPointer tab、piezo信号绑定、按确切jobId轮询而非分页选择、busy retry上限、失败终态不接受结果。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "1229af4dbaa62fd41f8e40045ec9fe638b4cdb50e73fecb651d72bf4be473821",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/src/workflow_widget.h",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "新增piezo成员/等待job集合与失败计数声明与实现一致。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "73ea325ab2aa4daa47f69ccf6e37ea731e9564db364a11dc959f75730a746ffc",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/trusted_solver_diagnostics.h",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文test-only诊断复制、输入hash/输出缺失证据、jobId路径限制及重构命令的明确scope；不将test记录器称生产安全边界。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "c509f13f890270b0241d3ea3265ac2e7d2dd562ff8a7a2929d30a0b1754b5525",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_agent_conversation_history_widget.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": [
+      "Trusted rod/beam ProblemSpec fixtures, experiment_run adaptation, approval/reject flow, task and source identities, persisted capture joins, disclosure boundaries and immutable-source assertions reviewed in historical hunks.",
+      "Cancellation/verification facts are distinct from assistant claims; injected display fixtures are not physical evidence.",
+      "changedOrClosedSourceAndProjectSwitchRejectLateReadOnlyAnswer now observes finished before removeModel/setModelChanged can emit synchronously.",
+      "boundedHistoryPagesExposeOldFactsToTheNextQuestion observes finished before send->click and any QTRY event pump, with both 0 ms and 1 ms reply rows.",
+      "Paused-native independent read-only test observes finished before waiting for request count; native execution itself was not run.",
+      "git diff --check and static ordering assertions passed."
+    ],
+    "findings": [
+      "GUI-T03"
+    ],
+    "requiredRuntimeValidation": [
+      "GUI-R01",
+      "GUI-R04"
+    ],
+    "status": "reviewed_changed_hunks",
+    "base_sha256": "10eadfc9db2eafc9423fa02c336e0c69dae7fd3a68f5dee77b434683532305e0",
+    "head_sha256": "bd250940c34a3605e3afbc07b8a2a149ec49ce5e80577220ad0ebc05b5dc534c",
+    "final_sha256": "c17bb9e182c9af49ca94cf0c51189eb7d69ecb890e24a9d36b94cb4d414453c2",
+    "final_line_count": 2123,
+    "historical_diff_lines_inclusive": [
+      1,
+      845
+    ],
+    "historical_hunk_count": 9,
+    "historical_head_hunks_start_count": [
+      [
+        46,
+        3
+      ],
+      [
+        114,
+        76
+      ],
+      [
+        326,
+        4
+      ],
+      [
+        333,
+        3
+      ],
+      [
+        339,
+        3
+      ],
+      [
+        345,
+        22
+      ],
+      [
+        369,
+        3
+      ],
+      [
+        375,
+        3
+      ],
+      [
+        709,
+        709
+      ]
+    ],
+    "direct_current_reads_inclusive": [
+      [
+        1,
+        460
+      ],
+      [
+        540,
+        719
+      ],
+      [
+        1500,
+        1609
+      ],
+      [
+        1830,
+        2123
+      ]
+    ],
+    "current_working_patch": "Read completely, including all three QSignalSpy relocations and the 0/1 ms history rows.",
+    "not_read": "Unchanged source outside the listed direct reads and history/working-diff contexts was not read in full. No unread historical changed hunk remains; this is not a whole-file attestation.",
+    "changes_made_this_review": false,
+    "pending_verification": [
+      "GUI-R01",
+      "GUI-R04"
+    ],
+    "currentSha256": "c17bb9e182c9af49ca94cf0c51189eb7d69ecb890e24a9d36b94cb4d414453c2",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/gui-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_agent_conversation_widget.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": [
+      "Authorization diagnostics malformed/error branches, visible warning acknowledgement, convergence value formatting and 24 KiB UTF-8 display bound reviewed without changing thresholds.",
+      "FixtureReply delivery is context-bound and asynchronous; teardown fixture leaves a 10000 ms fake reply pending without waiting for it.",
+      "dialogCallbacks is declared after stack witnesses; both 0 ms and 1500 ms timers use that context, which dies before the borrowed stack witnesses on normal and QtTest early return paths.",
+      "Capture event lists, booleans, counters, stores and error strings used by teardown-capable recorder lambdas outlive the corresponding AgentWidget/MainWindow. The MainWindow child-widget pointer is captured by value rather than borrowing its later-declared local pointer variable.",
+      "Teardown regression expects dispatch_intent then REQUEST_RETIRED provider_interruption carrying the same taskId.",
+      "Seven-row reentry matrix covers unchanged/cancel/steer, recorder success/failure and intentionally missing Host evidence. Observation identity remains original task/tool-1/experiment_query; no host_evidence is permitted.",
+      "Steer failure branch checks replacement remains active immediately after observation, later fails closed with capture incomplete, and explicit recorder replacement enables a new task with three reset events carrying only its taskId.",
+      "Historical telemetry/capture privacy sentinels, request hashes, slot-binding mismatch network denial, stored-conversation isolation and failure receipts reviewed as fixture contracts only.",
+      "git diff --check and static timer/reentry/reset invariants passed."
+    ],
+    "findings": [
+      "GUI-T01",
+      "GUI-T02",
+      "GUI-T04"
+    ],
+    "requiredRuntimeValidation": [
+      "GUI-R02"
+    ],
+    "status": "reviewed_changed_hunks",
+    "base_sha256": "315969808900cc636884e7154db4fe1b0c5338b86b77f4ea3db6d7a9838cd036",
+    "head_sha256": "82b1809e9cd4c11e628ecd9e08fcf63ea9668d7c44a5971a0acc569146f70030",
+    "final_sha256": "49d34dd23210b84c375f025b65fba9ef68b2e31cf410674ff4465d4a805d0aa6",
+    "final_line_count": 2188,
+    "historical_diff_lines_inclusive": [
+      846,
+      2119
+    ],
+    "historical_hunk_count": 15,
+    "historical_head_hunks_start_count": [
+      [
+        3,
+        8
+      ],
+      [
+        12,
+        5
+      ],
+      [
+        20,
+        3
+      ],
+      [
+        24,
+        3
+      ],
+      [
+        28,
+        3
+      ],
+      [
+        33,
+        8
+      ],
+      [
+        42,
+        4
+      ],
+      [
+        48,
+        3
+      ],
+      [
+        58,
+        13
+      ],
+      [
+        297,
+        4
+      ],
+      [
+        302,
+        3
+      ],
+      [
+        306,
+        4
+      ],
+      [
+        313,
+        26
+      ],
+      [
+        360,
+        259
+      ],
+      [
+        1085,
+        902
+      ]
+    ],
+    "direct_current_reads_inclusive": [
+      [
+        1,
+        365
+      ]
+    ],
+    "current_working_patch": "Read completely: scoped timers, recorder-witness declaration order, MainWindow widget pointer captured by value, teardown regression, all seven reentry rows, explicit recorder reset and failure-path capture fixtures.",
+    "not_read": "Unchanged source outside the direct read and history/working-diff contexts was not read in full. No unread historical changed hunk remains; this is not a whole-file attestation.",
+    "changes_made_this_review": false,
+    "pending_verification": [
+      "GUI-R02"
+    ],
+    "currentSha256": "49d34dd23210b84c375f025b65fba9ef68b2e31cf410674ff4465d4a805d0aa6",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/gui-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_agent_readonly_runner.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部历史diff：只读禁experiment工具、允许inspect/diagnose，响应计数平移，异步GUI更新QTRY断言；未全审旧workflow测试。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "8560d091f8bb2f082bc14d79e9d5f7699d89adec4b50a7518c7140d74f4d394c",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_agent_task_runner.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": [
+      "Read all 2001 lines of historical diff and both complete current uncommitted hunks; unchanged file contents were not reviewed exhaustively.",
+      "The new experiment observation fixture starts a runner, explicitly binds the current call, and invokes the actual production publish helper. Its unchanged-task positive control requires both signals with the original task/call/summary; synchronous cancel and steering controls retire that identity after the first signal and require no second evidence signal. This isolates the signal boundary, not a real Host experiment or recorder process.",
+      "Encoded channel rows exercise both native_result_query and workflow_native_result through production validateTurn. Canonical space/UTF-8/tilde/action separators and electricalWork are positive controls; noncanonical unreserved/hex, invalid UTF-8, malformed escapes, raw separators/newlines, unknown quantity/reference, empty name, and over-bound inputs are negative controls. Invalid jobId and manifestPath checks remain strict on accepted channel rows.",
+      "Reviewed rawProviderCall versus the intentional historical document_propose-to-experiment_run adapter; explicit obsolete generic-command rejection uses rawProviderCall and is not silently normalized.",
+      "Reviewed budget pause/resume and dispatched-turn counts, manual/auto authorization, evaluation tool fences, source identity evidence, task-owned experiment cancellation and polling retirement. Large solve size was not treated as an asynchronous barrier."
+    ],
+    "findings": [
+      {
+        "id": "ROOT-TESTS-004",
+        "severity": "medium",
+        "status": "open_fixture_race_reported_to_main",
+        "selectors": [
+          "steeringRetiresExperimentWaitTimerBeforeItCanAdvanceAnotherTask",
+          "stoppingTaskCancelsOnlyItsAcceptedExperimentAndReportsBoundSource"
+        ],
+        "locations": [
+          "src/fea/tests/tst_agent_task_runner.cpp:1799",
+          "src/fea/tests/tst_agent_task_runner.cpp:1854",
+          "src/fea/src/agent_task_runner.cpp:3684"
+        ],
+        "description": "The historical steering test assumes the first experiment_wait schedules a live poll rather than observing a completed child. The retirement test uses 10000 segments as a timing heuristic, schedules singleShot(0), then expects synchronous cancel to have pumped that timer. Production only pumps events while child evidence remains cancelling; an already-terminal or immediately-cancelled child can avoid that loop. These tests need controllable pending/terminal boundaries to prove the intended asynchronous reentry rather than relying on solve duration. The newly added direct signal-reentry helper test is independent of this weakness and was not weakened."
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "Compile and execute all three experimentObservationReentryCannotPublishEvidenceForAnotherTask data rows with Qt direct connections; verify signal count and identity, and replacement-task continued activity.",
+      "Execute every encodedNativeResultChannelValidation row for both tools in the supported Qt versions; percent-encoding and QVariant/QJsonObject signal representations have not been runtime-validated here.",
+      "Introduce explicit pending-worker/poll and cancellation-completion fixtures for the historical retirement tests, then run fast and delayed terminal schedules. Do not use greater segment counts, extra sleeps, skips, or weakened assertions as a barrier replacement.",
+      "Run budget/authorization/evaluation-arm selectors with frozen supported runtime dependencies. No Provider or real solver was invoked by this review."
+    ],
+    "priorReviewStatus": "partial_static_review",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "0df7c208f54d8215817a28cf361d444d091598340e6d3715366838cb1f7d3caa",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/numerical/root-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_gui_host_context.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部8新增/2删除diff：结果存在时history失败应比较含结果fingerprint，clearResults后再比原hash，保持Undo/Redo失败无发布断言。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "1e3f5ad541b2ed903767e4cf66a97caa5b55aafdf9211060249015266dad5601",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_gui_model_lifecycle.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": [
+      "Frame-recording ordering fixtures, stale screenshot removal assertions, timeout/save-failure stop assertions and saved-video displacement export reviewed. The image writer is deliberately fake; installed framebuffer behavior remains unverified.",
+      "Missing-log-directory child timeout/termination, logger restoration, full log versus bounded visible output, surrogate boundaries and solver-output selection preservation reviewed as source only.",
+      "Saved/fresh dock layouts, responsive controls, module-menu keyboard/Escape behavior and composer tab order reviewed with their existing bounds unchanged.",
+      "menuObservationScope disconnects application-owned QMenu::aboutToShow before popupAboutToShow's stack lifetime ends. The other two callbacks have test-local QTimer senders whose destruction disconnects them.",
+      "exactTrustedRodPreview incorrectly accepted wrong-type ranges through QJsonValue::toArray fallback. Fixed to accept only omission or a genuine empty array; added missing-field positive case and null/object/string/bool/number/nonempty-array negatives.",
+      "Opt-in DeepSeek exact-preview approval, source fingerprint preservation, Host/model metric matching and redacted export reviewed only; no credentials read and no Provider contacted.",
+      "RANGE_ENABLE_AGENT guarded declarations/dispatch and shared test-runtime/failed-solver entry points reviewed. Other dispatched suites were not opened or audited.",
+      "git diff --check and static strict-range gate source assertions passed."
+    ],
+    "findings": [
+      "GUI-T05",
+      "GUI-T06"
+    ],
+    "requiredRuntimeValidation": [
+      "GUI-R03",
+      "GUI-R05"
+    ],
+    "status": "reviewed_changed_hunks",
+    "base_sha256": "f974a3881bdc52a652e21c9530e3f450909937166ba5872f8a1608d32048d68c",
+    "head_sha256": "18b159262db52714a5d0448fe3a063456f4d2d4cf2017568005a2c6425c1683c",
+    "initial_working_sha256": "d7f77a0e8f30f7925b291f6b0250313572196db315189fd597d0a1001dfec160",
+    "final_sha256": "ca243f1fd2241922520923ef81a2d716bbab99c7bf1b8e4b18980575f5a08789",
+    "final_line_count": 2431,
+    "historical_diff_lines_inclusive": [
+      2120,
+      3749
+    ],
+    "historical_hunk_count": 35,
+    "historical_head_hunks_start_count": [
+      [
+        2,
+        3
+      ],
+      [
+        8,
+        4
+      ],
+      [
+        14,
+        23
+      ],
+      [
+        44,
+        5
+      ],
+      [
+        55,
+        10
+      ],
+      [
+        66,
+        14
+      ],
+      [
+        83,
+        5
+      ],
+      [
+        89,
+        5
+      ],
+      [
+        107,
+        5
+      ],
+      [
+        134,
+        26
+      ],
+      [
+        168,
+        59
+      ],
+      [
+        234,
+        12
+      ],
+      [
+        250,
+        423
+      ],
+      [
+        689,
+        7
+      ],
+      [
+        715,
+        483
+      ],
+      [
+        1209,
+        68
+      ],
+      [
+        1299,
+        3
+      ],
+      [
+        1375,
+        273
+      ],
+      [
+        1762,
+        3
+      ],
+      [
+        1921,
+        5
+      ],
+      [
+        1939,
+        5
+      ],
+      [
+        2208,
+        3
+      ],
+      [
+        2213,
+        3
+      ],
+      [
+        2220,
+        11
+      ],
+      [
+        2236,
+        45
+      ],
+      [
+        2282,
+        20
+      ],
+      [
+        2312,
+        8
+      ],
+      [
+        2322,
+        3
+      ],
+      [
+        2327,
+        3
+      ],
+      [
+        2334,
+        11
+      ],
+      [
+        2350,
+        14
+      ],
+      [
+        2367,
+        3
+      ],
+      [
+        2372,
+        3
+      ],
+      [
+        2379,
+        11
+      ],
+      [
+        2394,
+        6
+      ]
+    ],
+    "direct_initial_working_reads_inclusive": [
+      [
+        1,
+        250
+      ],
+      [
+        1210,
+        1287
+      ],
+      [
+        1880,
+        2408
+      ]
+    ],
+    "current_working_patch": "Read completely before and after this review's strict test-helper patch. Initial direct-read line numbers precede the final 23-line growth.",
+    "not_read": "Unchanged source outside listed direct reads and history/working-diff contexts was not read in full. No unread historical changed hunk remains; no production/API implementation was audited.",
+    "changes_made_this_review": true,
+    "pending_verification": [
+      "GUI-R03",
+      "GUI-R05"
+    ],
+    "currentSha256": "ca243f1fd2241922520923ef81a2d716bbab99c7bf1b8e4b18980575f5a08789",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/native-cli/gui-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_gui_model_operations.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": [
+      "Read all 2086 lines of historical diff and the complete current Windows long-path regression hunk; unchanged portions were read only as needed.",
+      "Reviewed explicit approval, bounded solve/convergence budgets, source fingerprint/revision preservation, exact capture/report identities, tamper restoration guards, malformed verified-model read controls, diagnostic retention, and convergence field assertions.",
+      "The Windows long-path regression covers native binary and ASCII snapshots, retained file-handle reads, model parsing, and delete-sharing protection. The non-Windows QSKIP was already present on entry and was not added or changed by this review; no Windows result is inferred from it.",
+      "Followed the model-operations suite to its shared executable entry point and found the headless CLI subtest condition is cleared before dispatch.",
+      "Traced processStarted through nativeProcessStarted and terminal record publication: it is durable historical evidence, not an active-child synchronization barrier."
+    ],
+    "findings": [
+      {
+        "id": "ROOT-TESTS-002",
+        "severity": "medium",
+        "status": "open_test_coverage_gap_reported_to_main",
+        "selector": "trustedExperimentPreviewApprovalRunQueryAndCancelStayBounded",
+        "location": "src/fea/tests/tst_gui_model_operations.cpp:1233",
+        "relatedLocations": [
+          "src/fea/tests/tst_gui_model_lifecycle.cpp:2344",
+          "src/fea/tests/tst_gui_model_lifecycle.cpp:2417",
+          "src/fea/tests/tst_gui_model_operations.cpp:1236"
+        ],
+        "description": "The headless verifier success/missing-job/duplicate-artifact checks are conditional on RANGE_APPLICATION_PROFILE_DIR being set. The shared test entry point unconditionally removes that variable before constructing the application and dispatching --model-operations, and no intervening code resets it. Consequently the standard suite never executes those checks. The dormant branch also hardcodes fea.exe although the target is platform-native. A dedicated explicit CLI fixture/runtime contract is needed; no guard removal or new runtime dependency was imposed by this test-only review."
+      },
+      {
+        "id": "ROOT-TESTS-003",
+        "severity": "medium",
+        "status": "open_fixture_race_reported_to_main",
+        "selector": "trustedExperimentPreviewApprovalRunQueryAndCancelStayBounded",
+        "location": "src/fea/tests/tst_gui_model_operations.cpp:1536",
+        "description": "QTRY(processStarted) can finish after its event pump also processes the tiny static child's terminal event. processStarted stays true in terminal records, so the subsequent experiment==solving/activeAttempt==running assertions and final child==cancelled requirement have no deterministic active-worker barrier. This is a false-failure path in the fixture, not evidence of a production cancellation defect. Preserve the process/cancellation assertions but supply a bounded worker/start/terminal synchronization fixture before treating the selector as deterministic."
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "Compile/run trustedArtifactReopensWindowsLongPathSnapshot on Windows for both native formats, with actual paths beyond MAX_PATH and sharing-protection assertions unchanged.",
+      "Make the headless verifier fixture explicitly reachable with a valid isolated runtime/profile contract and a platform-correct executable; then run success, missing-job, and duplicate-artifact CLI controls. Standard suite success currently does not cover those controls.",
+      "Provide a deterministic active-child barrier for the cancellation section, then repeat under fast completion and loaded event loops without replacing assertions with skips or accepting terminal success as cancellation.",
+      "Run the unchanged trusted experiment/convergence/diagnostic selectors in the authorized frozen solver environment; no numerical or CLI result was established here."
+    ],
+    "priorReviewStatus": "partial_static_review",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "01c2533f905fc2af019599bbf106a94598a65e0da2aeae353ecbe606fbda47bf",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/numerical/root-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_native_job_registry.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": [
+      "Read all 1075 lines of historical diff and all current uncommitted hunks; current final diff has 13 hunks. Did not read unchanged file contents exhaustively.",
+      "Orphan interruption fixture registers a captured real SolverTask without submitting a worker. nativeTasks uses QPointer, so task destruction before writer destruction does not leave a raw task reference. Writer owner lock is released before reopened manager loads the queued record.",
+      "Orphan negative control holds the actual .job-record.lock, checks durable queued bytes/hash and unchanged live record, rejects a self-generated registry conflict, and requires INTERRUPTION_PERSIST_FAILED. Explicit recovery query after unlock checks interrupted, revision +1, matching durable hash, and a cold reopen.",
+      "Oversized acceptedSeq cases mutate a genuine completed v1 checkpoint envelope, reserialize compact JSON, and recompute the authoritative pointer hash. The production readPointer noncompact branch checks accepted-state fields before casts. UINT_MAX+1 and DBL_MAX must hit the exact accepted-state diagnostic rather than a stale hash gate. Original authority and reconcile_required qualification are restored as positive controls.",
+      "Terminal persistence rejection retains cancelling in both memory and disk, while the successful control requires failed and released lineage lease. Existing accepted-prefix, cancellation reentry, process exit, tampered-result, and two-stage recovery changed assertions were reviewed without reducing thresholds.",
+      "Found and fixed three receiver-context lifetime problems; inspected destruction order relative to capture variables and the deleted-sender cleanup guard."
+    ],
+    "findings": [
+      {
+        "id": "ROOT-TESTS-001",
+        "severity": "medium",
+        "status": "fixed_test_only_uncompiled",
+        "selectors": [
+          "gracefulStopWinsAlreadyReportedSuccessRace",
+          "gracefulStopCannotHideChangedResult",
+          "gracefulDeletedSenderCannotBypassTerminalEvidence"
+        ],
+        "locations": [
+          "src/fea/tests/tst_native_job_registry.cpp:1993",
+          "src/fea/tests/tst_native_job_registry.cpp:2033",
+          "src/fea/tests/tst_native_job_registry.cpp:2111"
+        ],
+        "description": "Two real-worker BlockingQueuedConnection callbacks used the singleton manager as receiver context while capturing local test state. A QTRY timeout could retire the stack before later delivery. The deleted-sender DirectConnection similarly outlived captured local state during the existing cleanup event pump on an early failure. Local QObject contexts now retire callbacks before those captures; queued events to the retired receiver are removed by QObject destruction."
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After explicit authorization and in checkout-contained profile/temp directories, compile the Qt target and execute orphanInterruptionCommitFailurePreservesDurableState on Linux and Windows.",
+      "Execute persistentJobRecordReopensAndExternalReplacementIsIsolated with UINT_MAX+1 and DBL_MAX cases, including a UBSan-capable build where supported. Confirm the exact diagnostic, untouched tampered evidence, and original authority restoration.",
+      "Execute both gracefulDeletedSenderCannotBypassTerminalEvidence rows and the two real-worker race/tamper selectors; exercise deliberate timeout or late-delivery behavior under an address/lifetime sanitizer to verify observer destruction and worker cleanup."
+    ],
+    "priorReviewStatus": "partial_static_review",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "e22e99ade023f2de4e832a4f66d09865a55a89b0047b124ad049f23ee9154144",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/numerical/root-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_piezo_experiment_history.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文177行：typed whole experiment history、源/候选指纹、stale approval与validateStage失败原子性、生成身份高水位、axial分组与Undo/Redo；fixture以任意opaque配置隔离history合同，不冒称backend资格。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "a3ac08832d79e40ff40765a3e6a0d28b98a8e0ec5cc72b4ad92fb32805744f58",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_piezo_solver_recovery.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": "全文944行：生产task register/快照/12步原始target、v2完整trace与周期MODEL、v1 mixed、真实暂停与精确owned child中断、lease销毁前后与持久化失败、pending只读资格/批准恢复/基线拒绝；Windows限定fixture未执行。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_static",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "fbf4c1886956329fc29f649ead717f653021a77acbd57017f5ed6a918cd33189",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_piezo_workbench_widget.cpp",
+    "reviewStatus": "reviewed_static",
+    "checks": [
+      "The historical diff adds this complete 1220-line file without deletions. Read all 1281 current lines including both current regression additions; full-file static status is justified only for this test.",
+      "Invalid external initial-state text goes through the actual QPlainTextEdit signal and production setValue callback. A valid object is first stored; malformed object/array/null/scalar inputs must set JSON null, retire preview/run, prevent submission, and preserve source revision. An explicit rebuild must still display null, then correction must restore the object and recipe.",
+      "The savedRecipe assignment is an intentional isolated UI draft-state control. It does not create a valid frozen external executable or prove a real saved external experiment can run. The decisive stale-value regression assertion is JSON-null replacement; disabled Run alone would not prove this because external identity is otherwise incomplete.",
+      "The external connection gate is checked positively against the actual current selected document and whole draft, then negatively for generation, draft steps, source selection before and after refresh, same connection/different seed, and different initial state. Traced all five production document identity comparisons. No delayed QProcess success/error callback was executed.",
+      "Reviewed all remaining source/template/material/controller/editor-rebuild, preview/apply, accepted-history/trace, CSV/spectrum, tamper/watcher, plotting-generation, and responsive-layout test logic and local QObject ownership. Source certification is kept distinct from installed/runtime qualification."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "Compile/run invalidExternalInitialStateCannotReuseThePreviousObject and externalConnectionRepliesAreBoundToDocumentAndWholeDraft on Linux and Windows Qt.",
+      "Use a separately authorized controlled delayed helper to execute actual external freeze/handshake success and FailedToStart/finished callbacks across document A-to-B changes with identical connections, source revision change, seed/port/state change, and widget destruction. Direct gate checks are not a QProcess lifetime test.",
+      "Run the complete workbench selector with supported frozen Python/SciPy/native solver dependencies and checkout-contained profile/temp paths. Verify accepted-trace/CSV/spectrum and real GUI focus/watcher/layout behavior without substituting static inspection for runtime acceptance."
+    ],
+    "priorReviewStatus": "partial_static_review",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "f15e05767df0bcda3b7a5eafdea991fb16a620788312ad231166e5d14a770a5e",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/numerical/root-tests-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_project_session.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部4新增/2删除diff：-I -B后显式插入受控源码包；sys.argv.pop(1)后workspace/solver/native/example索引对齐。尚不能归因历史Hosted失败。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "5a8969f58529609ff2e5d2516b6e1ee709ac88978194609fd1dba93685fd91a2",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_runtime_control_widget.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "全部Agent ON/OFF新增include与单测试条件编译守门；未重审其完整runtime场景或运行。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "702a4468c8d1f4a2fe1f77624dc03da0cd86b400988fcec6a1f880787fedad50",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/fea/tests/tst_solver_snapshot.cpp",
+    "reviewStatus": "reviewed_changed_hunks",
+    "checks": "批次唯一新增断言：成功acceptSolverResult后源revision恰加1，与Session接受语义对照。",
+    "findings": [],
+    "requiredRuntimeValidation": "未编译/未运行；先在用户允许的Qt构建中执行本文件相关新selector和既有正负回归，隔离profile/tmp。外部科学/Provider路径需冻结CPython3.13.5/NumPy2.2.6/SciPy1.15.3；Win32行为另在Windows验证。具体条件和预期见docs/audit_20261104/root.md。",
+    "priorReviewStatus": "reviewed_changed_hunks",
+    "reviewDate": "2026-11-05",
+    "currentSha256": "fe4c7a585401b9b7fac9b5af699a9139e004fd688f4214515191f99b02bd7cc8",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/root-review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/piezo_control_design.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Full new implementation and all test source: discrete system/source matching, PBH/DARE LQR, convex MPC condensing with variable/row/objective scaling, amplitude/per-sample constraints, nonnegative multipliers and independent physical/action KKT checks, warm-start purity, selected-sensor Kalman correction and accepted-input prediction.",
+      "Checked observer DARE/correction convention and independent scalar/active-set/varying-transition tests. Frozen SciPy execution remains pending; no thresholds changed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "6c497665253d117220d412bab11c473698a746bb08eb9bcdd58b0f877271f34f",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/piezo_design.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Full new implementation and all test source: componentwise symmetry, equilibrated PSD/SPD, bounded Galerkin antisymmetry, generalized modes/rigid-zero certification/cluster selection, physical damping, source/basis mapping, acceleration/direct terms, state projection and augmented exact ZOH.",
+      "Checked mathematical conventions and independent analytical/negative test oracles; no physical equations, numerical tolerances or dependency identity changed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "3503266aee7b9716e935b5e24742e0b76fccb9c1cd6dd244c8071501dddc306f",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/piezo_excitation.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Full 526-line new implementation: actual DOF/unit catalog, closed AST grammar, all term shapes/endpoint policies, exact binary64 identity, frozen external revisions/cache, sampled ownership and bounded framework batching.",
+      "Confirmed finite interval subtraction overflow in table interpolation; scaled only overflowing intervals, preserving ordinary interpolation and policy/physics.",
+      "New pure-standard-library table positive/negative regression failed on original code and passed after patch.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-01",
+        "status": "fixed",
+        "certainty": "confirmed-by-stdlib-reproducer",
+        "location": "src/range-workflow/python/range_workflow/piezo_excitation.py:247-262",
+        "trigger": "Valid finite table times [-1e308, 1e308], values [2,6], evaluate at 0 (or right endpoint).",
+        "impact": "The interval subtraction overflowed to infinity; t=0 returned finite but wrong force 2 instead of 4, and the right endpoint formed NaN. This is not merely an invalid-input rejection.",
+        "evidence": [
+          "table-before.log: original regression failed",
+          "final-targeted-regressions.log: repaired table test passed with positive interpolation/endpoints and negative range/order/nonfinite cases"
+        ],
+        "patchRisk": "Low localized arithmetic change: ordinary finite width path unchanged; overflow path divides numerator and denominator by the same power of two. Original CRLF bytes preserved. Runtime source identity intentionally changes.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "Run full test_piezo_excitation.py under frozen runtime and native endpoint force/accepted-state integration on Windows; expected correct finite table interpolation, unchanged ordinary policies and stale old runtime identity rejection."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "d547a4050251d6f090101353f030265433af37511e468e69cc58648533879119",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/piezo_external_io.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Full new implementation: strict finite/unique-key NDJSON, offline connection identity, process argument handling, loopback-only TCP, port roles/units/state envelope, timeout/cancellation, reader/writer limits and state candidates.",
+      "Reviewed Windows atomic Job List / inherited Handle List setup and owned-resource teardown; no platform contract relaxed.",
+      "Confirmed exception-path resource leak and repeated disposal of closed handles; cleanup attempts every owned stream/handle, reports ExternalIOError and is idempotent.",
+      "Three in-memory fake-transport regressions cover successful cleanup, wait timeout/error, termination failure, stream-close failure and repeated disposal; no endpoint launched.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-02",
+        "status": "fixed",
+        "certainty": "confirmed-by-stdlib-fault-injection",
+        "location": "src/range-workflow/python/range_workflow/piezo_external_io.py:485,689-737",
+        "trigger": "Windows owned process wait times out/errors after Job close, or termination fails; repeated _dispose can also follow a close-exchange failure.",
+        "impact": "Original cleanup skipped pipes/Windows process handles on wait/termination exceptions and _closed stopped later public close attempts. Repeated _dispose attempted wait/cleanup again after the handle was already closed.",
+        "evidence": [
+          "disposal-before.log: original 3 test methods produced 2 failures/3 subtest errors",
+          "final-targeted-regressions.log: successful cleanup, timeout/error, terminate failure, stream close failure and idempotence all pass with no launches"
+        ],
+        "patchRisk": "Moderate lifecycle change, limited to cleanup. Every resource gets one attempt; failures remain explicit ExternalIOError and cannot be reported as successful cleanup. Windows atomic Job membership, kill-on-close ownership and bounded wait limits unchanged. Fake tests do not establish actual OS handle semantics.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "On Windows run actual Job containment, abrupt backend kill, delayed termination, CRT/provider pipe shutdown, handle-count/no-leak, close-exchange failure and retry tests. Expected owned tree termination and no leaked handles/duplicate invalid-handle waits; user-owned TCP listener remains untouched."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "d037d5f4dad502865b66489db81c549289cfb22fda887a5e353e35d23fd24031",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/piezo_external_time.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Full new implementation: dynamic CRT discovery, paired backup publication, handle alias detach/restore and fatal restoration policy; frozen sibling imports/cycles, temporary sys.modules registration, recursive loaded-function checks, source/dependency/environment identity and quarantined output.",
+      "Read all associated Windows fault/CRT/output/retry regression source. No execution on Linux can establish Windows restoration or frozen scientific runtime acceptance.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "9b6f8fe4a212854e0e6cc8e894a3747afd72f4120200b3833aad7bf22744841c",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/piezo_native_backend.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Full 1340-line new implementation and 1408-line tests: transactional reinitialize, physical source/frame/direction mappings, controller/readout contracts, modal projection and retained full-FE direct terms, force operators and FOH known forcing, canonical clock qualification, caller-owned state/phase/counters and exact held/applied checks.",
+      "Traced offline sampled-source registration through lazy external handshake, pure candidate state/retry cache, per-source multirate ZOH ledger, admission bounds and offline certificationBatch.",
+      "Reviewed certificationBatch preflight/late-failure atomicity, opaque replay and frozen dependency checks; no provider, stdio backend or FE process executed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "07534a7a26b5feb0f18f0715c55eaf39a32fc3ff132761f943d76304a8084d18",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/series_analysis.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed complete module around historical deltas: canonical native piezo channels, bounded DTO/metadata, actual-record continuity, nominal clock identity, ULP precision bound and unchanged 1e-9 uniform-grid requirement before FFT.",
+      "Shared exact canonical channel grammar with published capabilities; retained strict UTF-8 unquote/quote roundtrip and all existing numerical analysis requirements.",
+      "Independent stdlib URL oracle checked every Unicode scalar and every one/two-byte percent token. No FFT/numerical routine executed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-03",
+        "status": "fixed",
+        "certainty": "confirmed-public-schema-vs-runtime-contract",
+        "location": "src/range-workflow/python/range_workflow/service.py:37-54,1536-1547,1627; src/range-workflow/python/range_workflow/series_analysis.py:56-62",
+        "trigger": "Catalog emits canonical native channel such as piezo:port:sense%20one:readout:absolute (or unreserved '~'/UTF-8 name).",
+        "impact": "Published capabilities excluded '%'/'~' even though actual native producer and series selector support those names; schema-aware consumers reject legitimate plot/raw/export/result queries before the actual source lookup.",
+        "evidence": [
+          "C++ producer read-only trace: piezo_result_series.cpp:63,104,117 uses QUrl::toPercentEncoding",
+          "Call trace: service._read_parameters -> workbench._source_list -> series_sources.selector -> native_piezo_channel -> native_results query",
+          "channel-grammar-independent.json: HEAD capabilities rejection reproduced; current schema accepts; all 1,112,064 Unicode scalar canonical encodings and 65,792 one/two-byte tokens match independent UTF-8/quote oracle",
+          "final-targeted-regressions.log: positive actual selector/preflight and negative schema/identifier tests passed"
+        ],
+        "patchRisk": "Moderate public-schema compatibility change bounded to native channel fields; shared closed piezo vocabulary, strict canonical UTF-8 uppercase encoding and 128-character ASCII-wire bound. Generic job/artifact/reference identifiers and path checks unchanged; raw control characters remain rejected. No broad '%' identifier allowance, no change to numerical thresholds.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "Run same-source installed capabilities->catalog->native series/plot/raw/export with actual Windows broker and encoded port/action IDs; reject malformed/noncanonical encodings, stale identities and generic identifier/path injection. GUI runner compatibility is reported to coordinator and not edited here."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "c5d7af4902e6c7789ca2c168f961a5f7a46b35dd20460113d953f667e81d0fd6",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/series_service.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed historical linked project projection change and _model_hash call context: closed project/instance fields, lowercase model digest, canonical UUIDs and revisions; kept unlinked input-snapshot vs linked model authority distinct.",
+      "Existing ProjectProjectionTest positive and malformed UUID/revision/hash/path-field negatives passed as object-only targeted checks.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "b64595ca7ed94291d39589b6baacb8ee304d6dc54d1ce03b4500717e5034948a",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/series_sources.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed full current source and historical deltas: closed selectors and capability/producer path, native catalog pin/identity fields, actual channel units/targets, exact accepted coverage, ordered source frames and before/after catalog pin, compact provenance, reference/energy isolation.",
+      "Traced accepted native piezo channel handling to C++ QUrl producer and actual broker matching; generic job/artifact/reference/path validators unchanged.",
+      "New actual selector/_read_parameters tests exercise canonical encoded names and reject noncanonical UTF-8/escaping, unsupported suffixes, raw controls and generic encoded identifiers.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "88fffbbbee9947cae428cdebb25b83fb51cdde8fb617c9b73d9ce6d01e8a44b7",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/series_workbench.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed historical work-view branch with resolve_many and export metadata: resolve held selected source before choosing correct control-work vs piezo electrical-work ledger; retain active-mode gating, actual units, source hashes and explicit unavailable states.",
+      "Reviewed fake-producer metadata/coverage/FFT-negative tests as source-level adapter tests, not evidence of accepted FE output.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "7daa9b8dc5af82e62cced0d0d37430d123428091c04a5fae911d4b5f78e38262",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/python/range_workflow/service.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed historical extension-writer release changes through accepted job reservation, _run_job success/error commit and finally under owner lock; old-worker release is guarded by job identity.",
+      "Traced public capabilities through _read_parameters, series_workbench, series_sources.selector and native_results.query_registered; confirmed encoded native channel rejected by old public schema although actual selector and producer support it.",
+      "Shared stdlib-only exact canonical UTF-8/percent-encoding piezo pattern between schema and runtime decoder, limiting change to native channel fields; generic job/artifact/reference/path contracts unchanged.",
+      "New scalar-schema/selector tests passed; independent stdlib oracle and baseline capability method reproduction passed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-03",
+        "status": "fixed",
+        "certainty": "confirmed-public-schema-vs-runtime-contract",
+        "location": "src/range-workflow/python/range_workflow/service.py:37-54,1536-1547,1627; src/range-workflow/python/range_workflow/series_analysis.py:56-62",
+        "trigger": "Catalog emits canonical native channel such as piezo:port:sense%20one:readout:absolute (or unreserved '~'/UTF-8 name).",
+        "impact": "Published capabilities excluded '%'/'~' even though actual native producer and series selector support those names; schema-aware consumers reject legitimate plot/raw/export/result queries before the actual source lookup.",
+        "evidence": [
+          "C++ producer read-only trace: piezo_result_series.cpp:63,104,117 uses QUrl::toPercentEncoding",
+          "Call trace: service._read_parameters -> workbench._source_list -> series_sources.selector -> native_piezo_channel -> native_results query",
+          "channel-grammar-independent.json: HEAD capabilities rejection reproduced; current schema accepts; all 1,112,064 Unicode scalar canonical encodings and 65,792 one/two-byte tokens match independent UTF-8/quote oracle",
+          "final-targeted-regressions.log: positive actual selector/preflight and negative schema/identifier tests passed"
+        ],
+        "patchRisk": "Moderate public-schema compatibility change bounded to native channel fields; shared closed piezo vocabulary, strict canonical UTF-8 uppercase encoding and 128-character ASCII-wire bound. Generic job/artifact/reference identifiers and path checks unchanged; raw control characters remain rejected. No broad '%' identifier allowance, no change to numerical thresholds.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "Run same-source installed capabilities->catalog->native series/plot/raw/export with actual Windows broker and encoded port/action IDs; reject malformed/noncanonical encodings, stale identities and generic identifier/path injection. GUI runner compatibility is reported to coordinator and not edited here."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "cc201f63f11233233e416856ccdad5b86397a02392b1318e656e7f139ace4072",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/task_widget_bootstrap.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed complete historical bootstrap delta: disable bytecode before sibling/project imports; explicit absolute checkout python/tests insertion precedes test_imported_workflow import; no private runtime environment contract relaxed.",
+      "GUI/bootstrap script not run.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "c03b25cb9263f423f5f34c7a840e3d4bacec6f3cae67fc1a1fbbd2b297833648",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_extensions.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed historical wait/cleanup changes and complete new writer-release fixture against _run_job; reservation remains busy while running, terminal release is under owner lock and late old worker cannot remove another writer.",
+      "Timeout increase is test waiting budget only, not execution/numerical acceptance threshold. Mock waits are released in finally; full private-runtime extension suite not executed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "a7adfc725c58030405ade97e4763c886b5ddcc29b9f93cac1c375204da235c88",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_imported_workflow.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "6c1226ad8621099b730e26d7bc36e203bce40ea4f2a61cd3eea593753a2c7391",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_native_document_client.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed all historical expected RAM format changes 1.3.21 to 1.3.24; cross-checked current model I/O guards and corresponding model/CLI test source.",
+      "No native document CLI or model serialization execution performed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "befdafd0ca9981651a0979ee3815b8274b1b8e23d14a52bff847ca2a3e7a961e",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_control_design.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete 428-line new regression suite and cross-checked production control implementation: analytical scalar/multi-actuator DARE, independent active-set QP, varying affine transitions, scaling/false-success faults, warm history and selected-sensor observer checks.",
+      "Exact NumPy 2.2.6/SciPy 1.15.3 assertions retained; no scientific tests executed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "ece6da42d2b4e9e14479fc22106dc3f9ac9061cc5b39a9d975c95be559d3d9a2",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_design.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete 404-line new regression suite: independent modal/PSD/symmetry/cluster/damping/ZOH/direct-term/projection/congruence oracles, injected over-bound faults and source immutability.",
+      "No scientific tests executed or expectations relaxed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "b29f557cd3c743f65bb15db4c2dcaf8f30f15729367521a2b654ed6bf703013b",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_excitation.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete original suite and additions: catalog/coordinate units, framework batch scope/cross-thread isolation, term and expression goldens, frozen callable identity/nondeterminism and atomic failed output.",
+      "Added and ran standalone table interpolation regression without importing SciPy or invoking external functions; original failed, patched passed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-01",
+        "status": "fixed",
+        "certainty": "confirmed-by-stdlib-reproducer",
+        "location": "src/range-workflow/python/range_workflow/piezo_excitation.py:247-262",
+        "trigger": "Valid finite table times [-1e308, 1e308], values [2,6], evaluate at 0 (or right endpoint).",
+        "impact": "The interval subtraction overflowed to infinity; t=0 returned finite but wrong force 2 instead of 4, and the right endpoint formed NaN. This is not merely an invalid-input rejection.",
+        "evidence": [
+          "table-before.log: original regression failed",
+          "final-targeted-regressions.log: repaired table test passed with positive interpolation/endpoints and negative range/order/nonfinite cases"
+        ],
+        "patchRisk": "Low localized arithmetic change: ordinary finite width path unchanged; overflow path divides numerator and denominator by the same power of two. Original CRLF bytes preserved. Runtime source identity intentionally changes.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "Run full test_piezo_excitation.py under frozen runtime and native endpoint force/accepted-state integration on Windows; expected correct finite table interpolation, unchanged ordinary policies and stale old runtime identity rejection."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "eed1bab71e9a3003fd2964482bc70a183509080844564d13b82c225e827869dc",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_external_integration.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete 308-line new tests with production call chain: actual process fixture, namespaced readout/actuator ports, accepted-input feedback, shared-role retry/multirate ledger, offline replay/restart, capacity admission and Qt numeric digest roundtrip.",
+      "Provider process tests not run under the current prohibition.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "93944062e8aac433621fa6dacad143be0be1634b53c07164cc3cc4f898e60e5a",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_external_io.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete original real-process/TCP/Windows test source, separating forbidden provider integration from pure offline checks.",
+      "Added three pure fake-transport cleanup tests; ran them plus existing offline configuration/identity and malformed in-memory SDK tests with all process launch/endpoint connection entry points blocked.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-02",
+        "status": "fixed",
+        "certainty": "confirmed-by-stdlib-fault-injection",
+        "location": "src/range-workflow/python/range_workflow/piezo_external_io.py:485,689-737",
+        "trigger": "Windows owned process wait times out/errors after Job close, or termination fails; repeated _dispose can also follow a close-exchange failure.",
+        "impact": "Original cleanup skipped pipes/Windows process handles on wait/termination exceptions and _closed stopped later public close attempts. Repeated _dispose attempted wait/cleanup again after the handle was already closed.",
+        "evidence": [
+          "disposal-before.log: original 3 test methods produced 2 failures/3 subtest errors",
+          "final-targeted-regressions.log: successful cleanup, timeout/error, terminate failure, stream close failure and idempotence all pass with no launches"
+        ],
+        "patchRisk": "Moderate lifecycle change, limited to cleanup. Every resource gets one attempt; failures remain explicit ExternalIOError and cannot be reported as successful cleanup. Windows atomic Job membership, kill-on-close ownership and bounded wait limits unchanged. Fake tests do not establish actual OS handle semantics.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "On Windows run actual Job containment, abrupt backend kill, delayed termination, CRT/provider pipe shutdown, handle-count/no-leak, close-exchange failure and retry tests. Expected owned tree termination and no leaked handles/duplicate invalid-handle waits; user-owned TCP listener remains untouched."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "f3f5ab538ae370cb372df2cc8251953a414edd32b4e4f45b31c1abc25be3ff13",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_external_time.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete 596-line new tests: source/dependency/env/loaded-code identity, sibling/dataclass imports, Windows CRT backup/adoption rollback/fatal failure, output quarantine, bounded retry cache and native force-aware integration.",
+      "Did not import or run this SciPy-dependent/provider-related suite.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "94b4b6a18f36290b29aa4f2e06dd6bf0a05b16180af457f1ce420aae5f55462c",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_piezo_native_backend.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Read complete 1408-line new tests against production bridge: bounded certification and source mutation, signed binary64 clocks/voltages, mapped local/global forces, physical/direct-term/FOH/model-control oracles, accepted state/phase and split restart.",
+      "Source/test review only; scientific backend stdio or native product not run.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run the complete corresponding Python test suite and relevant native/Windows integration on frozen installed runtime; current SciPy is absent and no scientific/provider execution was attempted."
+    ],
+    "currentSha256": "3d705110299e94312cf75b23b4c34d3b5f8a9ff6976c92c3e98e6170c31be0ee",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_read_query_lane.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "1dd3d53a43b2c460df076b0edf376cd2c1beb256e344122de9cae3161880c2bc",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_recovery_runtime.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed complete historical bootstrap changes: explicit checkout path argument removed before runtime argparse, -I/-B startup, Windows CreateFileW read sharing including FILE_SHARE_DELETE and transfer of HANDLE ownership to msvcrt/file wrapper.",
+      "No recovery runtime, solver or injected process-kill test executed; real Windows atomic checkpoint replacement remains a runtime gate.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "c513e381c16723846ed904ce120b5dbce30b8a28b9fd60ff874b2744e0f9365f",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_runtime_control_integration.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "4b5d43be2d91461f19423490d8a6ebc92c069750d0b44d05ec3a9acb1424c486",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_runtime_failure.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "8f939cc2255b7cd641bb7ff0a1d0cfc5a41a8c90b66fb1e75bc14e4be071565b",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_runtime_final_receipt.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "deaa04e4edfab0896e86393feae98297c207c6511bcad7e9c9f04bab5b00fe3a",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_runtime_interrupt.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "1162df48db0c91c5c60470c982c718934590f8fed1f4f0f9b78c13e996baf946",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_scientific_extensions.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "326ca19ababb3fdfb1e6d647780a4c3b8d0fad642924be9b4b8c7cc2d0fa423a",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_series_analysis.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed all historical additions and matching analysis branches: sparse native records, tiny nonuniform grids, independently resolvable/ambiguous large clock origins, canonical percent-encoded channels and malformed aliases.",
+      "No FFT computations run with the nonfrozen NumPy installation.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "4c3d678ee9d38d829c2ede9e27977cda5b3304f79fa9a862da2272e672b48ad2",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_series_service.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed historical linked-project projection regression and new public channel-schema/selector tests.",
+      "Added three standard-library assertion tests using a capabilities-only fake context (no service/process start); existing projection test also passed. Module import brings in system NumPy 2.3.5, but no numerical function is called.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [
+      {
+        "id": "WF-20261105-03",
+        "status": "fixed",
+        "certainty": "confirmed-public-schema-vs-runtime-contract",
+        "location": "src/range-workflow/python/range_workflow/service.py:37-54,1536-1547,1627; src/range-workflow/python/range_workflow/series_analysis.py:56-62",
+        "trigger": "Catalog emits canonical native channel such as piezo:port:sense%20one:readout:absolute (or unreserved '~'/UTF-8 name).",
+        "impact": "Published capabilities excluded '%'/'~' even though actual native producer and series selector support those names; schema-aware consumers reject legitimate plot/raw/export/result queries before the actual source lookup.",
+        "evidence": [
+          "C++ producer read-only trace: piezo_result_series.cpp:63,104,117 uses QUrl::toPercentEncoding",
+          "Call trace: service._read_parameters -> workbench._source_list -> series_sources.selector -> native_piezo_channel -> native_results query",
+          "channel-grammar-independent.json: HEAD capabilities rejection reproduced; current schema accepts; all 1,112,064 Unicode scalar canonical encodings and 65,792 one/two-byte tokens match independent UTF-8/quote oracle",
+          "final-targeted-regressions.log: positive actual selector/preflight and negative schema/identifier tests passed"
+        ],
+        "patchRisk": "Moderate public-schema compatibility change bounded to native channel fields; shared closed piezo vocabulary, strict canonical UTF-8 uppercase encoding and 128-character ASCII-wire bound. Generic job/artifact/reference identifiers and path checks unchanged; raw control characters remain rejected. No broad '%' identifier allowance, no change to numerical thresholds.",
+        "requiredRuntimeValidation": [
+          "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+          "Run same-source installed capabilities->catalog->native series/plot/raw/export with actual Windows broker and encoded port/action IDs; reject malformed/noncanonical encodings, stale identities and generic identifier/path injection. GUI runner compatibility is reported to coordinator and not edited here."
+        ]
+      }
+    ],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "ad82c480c3817e9c74931fb380672afe9680ed4effe6370e6c668b0dc85a479c",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_series_workbench.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed all historical ProducerSnapshots/ProducerCompatibilityTest additions and their actual C++ producer shapes, channel units/targets, work ledger selection, sparse coverage and malformed channel/coverage negatives.",
+      "Fake broker is explicitly not FE evidence; numerical/plot test suite not executed.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "8d4f6e4b9e7631b474e8fee6969ab7a09e958f1fdc793c42036d842b0151e624",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_series_workbench_integration.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run full series/service suites in the frozen environment and same-source native broker GUI/CLI integration, including encoded channels, projections, sparse-grid rejection and source identities. Current object/string tests are not FFT or product acceptance."
+    ],
+    "currentSha256": "df21e56d367718f0da241b9724ecb7eaab10e35c7174140e09647f12ece2b863",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_task_runtime.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "607630ed608b48ed14c3acc81abebeaabaaffc684e612a5b1d013090704de1dc",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  },
+  {
+    "repository": ".",
+    "path": "src/range-workflow/tests/test_task_scheduler.py",
+    "reviewStatus": "reviewed_diff",
+    "checks": [
+      "Reviewed the entire historical logical delta: add explicit absolute sibling tests directory to sys.path after checkout package path so -I/private-runtime bootstrap resolves local fixture modules.",
+      "Checked actual checkout/test directory layout and affected imports; no ordinary execution behavior, product contract or numerical threshold changed. Full test body is not newly requalified by this bootstrap-only review.",
+      "Historical baseline 9ea1d51..ad9dbda inspected ignoring line-ending-only changes; syntax AST check additionally passed, not used as a substitute for logic review."
+    ],
+    "findings": [],
+    "requiredRuntimeValidation": [
+      "After permission is restored, rebuild/package these actual changed source bytes with frozen CPython 3.13.5 / NumPy 2.2.6 / SciPy 1.15.3, then rerun affected suites. Existing package/source identities and acceptance evidence do NOT validate these edits; do not refresh old evidence hashes.",
+      "Run this affected bootstrap/extension/recovery/task test in the private installed Windows runtime with its declared executables and isolated profiles; only changed source logic was reviewed here."
+    ],
+    "currentSha256": "49d286cf10286f251c733ad5cada8f8d4cc712b46ffc3931cf6fc6249f4bc9de",
+    "reviewReport": "artifacts/bugfix-audit-20261104/resume-20261105/workflow/review.json"
+  }
+]

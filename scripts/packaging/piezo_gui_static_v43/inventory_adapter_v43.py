@@ -110,12 +110,20 @@ class InstallTreeReview:
         }
 
 
-def _canonical_windows_path(value: object, field: str) -> str:
+def _inventory_path_module(expected_root: object):
+    # Real filesystem checks on POSIX use native paths. Windows inventory
+    # metadata can still be checked without opening a Windows install tree.
+    if os.name != "nt" and isinstance(expected_root, str) and os.path.isabs(expected_root):
+        return os.path
+    return ntpath
+
+
+def _canonical_root_path(value: object, field: str, path_module) -> str:
     if not isinstance(value, str) or not value or "\x00" in value:
-        raise InventoryError("{} must be a non-empty Windows path".format(field))
-    if not ntpath.isabs(value):
+        raise InventoryError("{} must be a non-empty path".format(field))
+    if not path_module.isabs(value):
         raise InventoryError("{} must be absolute".format(field))
-    return ntpath.normcase(ntpath.normpath(value))
+    return path_module.normcase(path_module.normpath(value))
 
 
 def _validate_relative_path(value: object, field: str = "file path") -> str:
@@ -204,8 +212,9 @@ def adapt_inventory_report(
     if report.get("variant") != expected_variant or expected_variant != "OFF":
         raise InventoryError("inventory variant must match the required OFF variant")
 
-    expected_root = _canonical_windows_path(expected_install_root, "expected install root")
-    report_root = _canonical_windows_path(report.get("installRoot"), "installRoot")
+    path_module = _inventory_path_module(expected_install_root)
+    expected_root = _canonical_root_path(expected_install_root, "expected install root", path_module)
+    report_root = _canonical_root_path(report.get("installRoot"), "installRoot", path_module)
     if report_root != expected_root:
         raise InventoryError("inventory installRoot does not match the candidate install root")
 
@@ -315,10 +324,11 @@ def load_inventory_v43(
     if digest != expected_report_sha256.lower():
         raise InventoryError("inventory report SHA256 differs from the external pin")
 
-    expected_root = _canonical_windows_path(expected_install_root, "expected install root")
-    report_path_key = ntpath.normcase(ntpath.normpath(os.path.abspath(os.fspath(path))))
+    path_module = _inventory_path_module(expected_install_root)
+    expected_root = _canonical_root_path(expected_install_root, "expected install root", path_module)
+    report_path_key = _canonical_root_path(os.path.abspath(os.fspath(path)), "report path", os.path)
     try:
-        inside_install = ntpath.commonpath([report_path_key, expected_root]) == expected_root
+        inside_install = path_module.commonpath([report_path_key, expected_root]) == expected_root
     except ValueError:
         inside_install = False
     if inside_install:
@@ -356,10 +366,10 @@ def _same_enumerated_file_state(left: os.stat_result, right: os.stat_result) -> 
 
 
 def _assert_child_within_root(path: Path, root: Path) -> None:
-    path_key = ntpath.normcase(ntpath.normpath(os.path.abspath(os.fspath(path))))
-    root_key = ntpath.normcase(ntpath.normpath(os.path.abspath(os.fspath(root))))
+    path_key = os.path.normcase(os.path.abspath(os.fspath(path)))
+    root_key = os.path.normcase(os.path.abspath(os.fspath(root)))
     try:
-        common = ntpath.commonpath((path_key, root_key))
+        common = os.path.commonpath((path_key, root_key))
     except ValueError as exc:
         raise InventoryError("install tree entry is on a different volume: {}".format(path)) from exc
     if common != root_key:
@@ -506,7 +516,7 @@ def _review_snapshot_install_tree(snapshot: InventorySnapshot) -> InstallTreeRev
         raise InventoryError("install-tree review requires a report loaded with an external SHA256 pin")
 
     root = Path(snapshot.install_root)
-    root_key = _canonical_windows_path(str(root), "install root")
+    root_key = _canonical_root_path(str(root), "install root", os.path)
     if root_key != snapshot.install_root:
         raise InventoryError("inventory snapshot installRoot is not canonical")
 

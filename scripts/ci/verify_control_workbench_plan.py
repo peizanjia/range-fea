@@ -156,7 +156,7 @@ def main():
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
-    path = args.plan or root / "docs/control_workbench_plan.json"
+    path = args.plan or root / "docs/rounds/2026-10-11-control-workbench/plans/control_workbench_plan.json"
     try:
         plan = json.loads(path.read_text(encoding="utf-8"))
         errors, unfinished = inspect(plan, root)

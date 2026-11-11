@@ -86,15 +86,15 @@
           "status": "pass",
           "evidence": [
             {
-              "path": "docs/acceptance/PC-00-A01-freeze-20261020.md",
+              "path": "docs/rounds/2026-10-12-piezo-delivery/acceptance/PC-00-A01-freeze-20261020.md",
               "sha256": "493b3332a038ca21b142e892d23c06c41c8328c88fff2393a12088a60df1d965"
             },
             {
-              "path": "docs/acceptance/PC-00-A01-git-status-20261020.txt",
+              "path": "docs/rounds/2026-10-12-piezo-delivery/acceptance/PC-00-A01-git-status-20261020.txt",
               "sha256": "e7ab0ad2e62765ac0151ed3ba0626d56404941b6f7799cc4ed8fce91505efdbc"
             },
             {
-              "path": "docs/acceptance/PC-00-A01-independent-review-20261020.md",
+              "path": "docs/rounds/2026-10-12-piezo-delivery/acceptance/PC-00-A01-independent-review-20261020.md",
               "sha256": "45b00cc29629d9b51a18b334dfb652ea1fb3bbc1ff4c8747109f35de7f4a1acc"
             }
           ]
@@ -105,7 +105,7 @@
           "status": "pass",
           "evidence": [
             {
-              "path": "docs/acceptance/PC-00-A02-A03-independent-review-20261020.md",
+              "path": "docs/rounds/2026-10-12-piezo-delivery/acceptance/PC-00-A02-A03-independent-review-20261020.md",
               "sha256": "9a976cfbce203620baee517e442f749ce44e079902ae78dddb04aa730b525ccc"
             }
           ]
@@ -116,7 +116,7 @@
           "status": "pass",
           "evidence": [
             {
-              "path": "docs/acceptance/PC-00-A02-A03-independent-review-20261020.md",
+              "path": "docs/rounds/2026-10-12-piezo-delivery/acceptance/PC-00-A02-A03-independent-review-20261020.md",
               "sha256": "9a976cfbce203620baee517e442f749ce44e079902ae78dddb04aa730b525ccc"
             }
           ]

@@ -1,0 +1,1268 @@
+{
+  "schemaVersion": 1,
+  "project": "range-fea",
+  "updatedAt": "2026-10-10",
+  "baseline": {
+    "rootCommit": "15297a966da27e501fb66fb6b37d13e3c1df3af3",
+    "submodules": [
+      {
+        "path": "src/range-ai-lib",
+        "sha": "21bbdc14ce1f8c4ba1a47194085895a0b99f4d42"
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "WF-01",
+      "title": "Project identity and contracts",
+      "status": "done",
+      "statusReason": "WF-01 七项验收完成：共享目录/来源租约/快照/草稿与跨入口身份；完整110/110、原生窗口和安装私有SDK通过，Sol high实质问题闭合。",
+      "priority": "P0",
+      "effort": "S",
+      "dependsOn": [],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-01-A01",
+        "WF-01-A02",
+        "WF-01-A03",
+        "WF-01-A04",
+        "WF-01-A05",
+        "WF-01-A06",
+        "WF-01-A07"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/session.cpp",
+        "src/fea/src/session.h",
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/model_command_host.h",
+        "src/fea/src/workflow_process.cpp",
+        "src/fea/src/workflow_process.h",
+        "src/range-workflow/python/range_workflow/service.py"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A01",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A02",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A03",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A04",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A05",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A06",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-01.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-01-A07",
+          "commit": "9ecad58254706a31ddaa1ceeebf0f790e5578005",
+          "notes": "见逐条验收、最终完整回归与原生窗口/安装证据。"
+        }
+      ]
+    },
+    {
+      "id": "WF-02",
+      "title": "Native context, commands, and solve",
+      "status": "done",
+      "statusReason": "WF-02 八项受限验收完成：共享模型命令/控制上下文、持久群组ID、冻结原生作业/进度/取消/独立结果、焦点和审计保护；115/115、Windows14/14、安装SDK及知识查询通过，Sol high实质问题闭合。",
+      "priority": "P0",
+      "effort": "L",
+      "dependsOn": [
+        "WF-01"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-02-A01",
+        "WF-02-A02",
+        "WF-02-A03",
+        "WF-02-A04",
+        "WF-02-A05",
+        "WF-02-A06",
+        "WF-02-A07",
+        "WF-02-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/model_command_host.h",
+        "src/fea/src/session.cpp",
+        "src/fea/src/session.h",
+        "src/fea/src/solver_task.cpp",
+        "src/fea/src/solver_task.h",
+        "src/fea/src/solver_manager.cpp",
+        "src/fea/src/solver_manager.h",
+        "src/fea/src/modal_setup_widget.cpp",
+        "src/fea/src/time_solver_setup_widget.cpp",
+        "src/range-application-lib/src/rmodel_command_session.cpp"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A01",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A02",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A03",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A04",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A05",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A06",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A07",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-02.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-02-A08",
+          "commit": "1ca3cd08bb1f39ccb6ad5932f571ddf1cb07255d",
+          "notes": "见逐条验收、完整回归、实际Windows窗口和安装SDK/知识查询证据。"
+        }
+      ]
+    },
+    {
+      "id": "WF-03",
+      "title": "Open-model bounded control bridge",
+      "status": "done",
+      "statusReason": "冻结实现ae2cd80已完成逐条验收、独立审查、Release/125完整回归与本机安装私有SDK/Windows真实窗口；外部全交付门槛仍按WF13记录。",
+      "priority": "P0",
+      "effort": "L",
+      "dependsOn": [
+        "WF-02"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-03-A01",
+        "WF-03-A02",
+        "WF-03-A03",
+        "WF-03-A04",
+        "WF-03-A05",
+        "WF-03-A06",
+        "WF-03-A07",
+        "WF-03-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/workflow_widget.cpp",
+        "src/fea/src/workflow_process.cpp",
+        "src/range-workflow/python/range_workflow/jobs.py",
+        "src/range-workflow/python/range_workflow/templates.py",
+        "src/range-workflow/native/main.cpp"
+      ],
+      "evidence": [
+        {
+          "acceptanceId": "WF-03-A01",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A02",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A03",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A04",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A05",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A06",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A07",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-03-A08",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-03.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        }
+      ]
+    },
+    {
+      "id": "WF-04",
+      "title": "Native result broker",
+      "status": "done",
+      "statusReason": "冻结实现ae2cd80已完成逐条验收、独立审查、Release/125完整回归与本机安装私有SDK/Windows真实窗口；外部全交付门槛仍按WF13记录。",
+      "priority": "P0",
+      "effort": "M",
+      "dependsOn": [
+        "WF-02"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-04-A01",
+        "WF-04-A02",
+        "WF-04-A03",
+        "WF-04-A04",
+        "WF-04-A05",
+        "WF-04-A06",
+        "WF-04-A07",
+        "WF-04-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/workflow_widget.cpp",
+        "src/range-workflow/python/range_workflow/telemetry.py",
+        "src/range-workflow/python/range_workflow/extensions.py"
+      ],
+      "evidence": [
+        {
+          "acceptanceId": "WF-04-A01",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A02",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A03",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A04",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A05",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A06",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A07",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        },
+        {
+          "acceptanceId": "WF-04-A08",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-04.md",
+          "commit": "ae2cd809615dcdfff86c146ba15f089f661c9c4b",
+          "notes": "逐条证据见验收文件；125/125 655.46s，installed SDK/24实际幀/统计/比较与Windows3/3无跳过；原始失败历史保留。"
+        }
+      ]
+    },
+    {
+      "id": "WF-05",
+      "title": "Durable operations and checkpoint recovery",
+      "status": "done",
+      "statusReason": "冻结实现ed57d60完成十项受限验收：持久操作/保存关闭/周期接受检查点/独立恢复；完整132/132、Windows4/4、安装私有SDK5/5和独立终审通过，旧失败及细分覆盖边界完整记录。",
+      "priority": "P0",
+      "effort": "XL",
+      "dependsOn": [
+        "WF-02",
+        "WF-04"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-05-A01",
+        "WF-05-A02",
+        "WF-05-A03",
+        "WF-05-A04",
+        "WF-05-A05",
+        "WF-05-A06",
+        "WF-05-A07",
+        "WF-05-A08",
+        "WF-05-A09",
+        "WF-05-A10"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/session.cpp",
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/solver_task.cpp",
+        "src/range-application-lib/src/rmodel_command_session.cpp",
+        "src/range-workflow/python/range_workflow/service.py",
+        "src/range-workflow/python/range_workflow/runtime.py",
+        "src/range-workflow/python/range_workflow/jobs.py",
+        "src/range-workflow/tests/test_workflow_runtime.py"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A01",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A02",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A03",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A04",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A05",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A06",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A07",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A08",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A09",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-05.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-05-A10",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        }
+      ]
+    },
+    {
+      "id": "WF-06",
+      "title": "SSE and activity feed",
+      "status": "done",
+      "statusReason": "冻结实现ed57d60完成八项受限验收：有界SSE/代次隔离/增量Markdown/可信活动；完整132/132、Windows4/4、DeepSeek真实流式编辑/宿主核对/追问3/3及独立终审通过。",
+      "priority": "P1",
+      "effort": "M",
+      "dependsOn": [
+        "WF-01"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-06-A01",
+        "WF-06-A02",
+        "WF-06-A03",
+        "WF-06-A04",
+        "WF-06-A05",
+        "WF-06-A06",
+        "WF-06-A07",
+        "WF-06-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/agent_widget.cpp",
+        "src/fea/src/agent_task_runner.cpp",
+        "src/range-ai-lib/src/rai_agent.cpp",
+        "src/range-ai-lib/src/rai_agent_file_store.cpp",
+        "src/range-workflow/python/range_workflow/process.py"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A01",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A02",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A03",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A04",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A05",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A06",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A07",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-06.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-06-A08",
+          "commit": "ed57d6025ee5f1316ca172a4c635e32dcf14a7e6",
+          "notes": "见冻结后完整132项、逐条支持范围、真实窗口/安装/供应商与独立审查证据。"
+        }
+      ]
+    },
+    {
+      "id": "WF-07",
+      "title": "Persistent conversations and parallel read-only questions",
+      "status": "done",
+      "statusReason": "八项验收完成：冻结6294aee完整136/136、持久历史/分支/只读及观察容量反例、Windows真实native并行故事、实际DeepSeek只读/安装私有SDK和独立终审通过；完整产品发布仍按WF13。",
+      "priority": "P1",
+      "effort": "L",
+      "dependsOn": [
+        "WF-05",
+        "WF-06"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-07-A01",
+        "WF-07-A02",
+        "WF-07-A03",
+        "WF-07-A04",
+        "WF-07-A05",
+        "WF-07-A06",
+        "WF-07-A07",
+        "WF-07-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/agent_widget.cpp",
+        "src/fea/src/agent_task_runner.cpp",
+        "src/range-ai-lib/src/rai_agent.cpp",
+        "src/range-ai-lib/src/rai_agent_file_store.cpp",
+        "src/range-ai-lib/src/rai_agent_settings_manager.cpp",
+        "src/range-ai-lib/tests/tst_agent_tool_turn.cpp",
+        "src/range-workflow/python/range_workflow/service.py"
+      ],
+      "evidence": [
+        {
+          "acceptanceId": "WF-07-A05",
+          "outcome": "fail",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "首轮boundary4/5，fixture误以为工具失败自动终结对话；保留observation-boundaries-first.txt，修为核对STALE_PREVIEW后明确final回答。"
+        },
+        {
+          "acceptanceId": "WF-07-A08",
+          "outcome": "fail",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "Windows第一轮6/7、零skip274.162s，仅OS保存对话框自动化失败；日志保留，scopeQt对话框修复3/3通过。"
+        },
+        {
+          "acceptanceId": "WF-07-A01",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A02",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A03",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A04",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A05",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A06",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A07",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        },
+        {
+          "acceptanceId": "WF-07-A08",
+          "outcome": "pass",
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-07.md",
+          "commit": "6294aee42448133f72ea8f713f21340c5da95e40",
+          "notes": "冻结完整136/136零失败1578.11s；byte容量/观察边界、Windows真实native并行故事、DeepSeek实际只读和安装私有SDK分别验证，独立终审无剩余P1/P2。"
+        }
+      ]
+    },
+    {
+      "id": "WF-08",
+      "title": "Durable recipes and knowledge",
+      "status": "done",
+      "statusReason": "A01-A08已接受：产品实现c83bf5a完整179/179、补充测试664ea7b受影响3/3、真实Windows任务树/持久恢复与安装私有SDK两点扫描通过。证据清单区分本机与WF13发布汇合。",
+      "priority": "P1",
+      "effort": "L",
+      "dependsOn": [
+        "WF-04",
+        "WF-05",
+        "WF-07"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-08-A01",
+        "WF-08-A02",
+        "WF-08-A03",
+        "WF-08-A04",
+        "WF-08-A05",
+        "WF-08-A06",
+        "WF-08-A07",
+        "WF-08-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/workflow_widget.cpp",
+        "src/fea/src/agent_task_runner.cpp",
+        "src/range-workflow/python/range_workflow/runtime.py",
+        "src/range-workflow/python/range_workflow/service.py",
+        "src/range-workflow/python/range_workflow/templates.py",
+        "src/range-workflow/python/range_workflow/extensions.py",
+        "docs/reference/WORKFLOW_SDK.md"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A01",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A02",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A03",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A04",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A05",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A06",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A07",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-08.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-08-A08",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        }
+      ]
+    },
+    {
+      "id": "WF-09",
+      "title": "Accepted-step live tuning and pause",
+      "status": "done",
+      "statusReason": "A01-A10已接受：接受事务/回滚/暂停/真实中断恢复，GUI Hold/单独批准、运行中真实文档下一版及安装私有调参通过；完整179/179与补充3/3通过。",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": [
+        "WF-03",
+        "WF-05"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-09-A01",
+        "WF-09-A02",
+        "WF-09-A03",
+        "WF-09-A04",
+        "WF-09-A05",
+        "WF-09-A06",
+        "WF-09-A07",
+        "WF-09-A08",
+        "WF-09-A09",
+        "WF-09-A10"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/control_monitor_widget.cpp",
+        "src/fea/src/workflow_process.cpp",
+        "src/fea/src/agent_widget.cpp",
+        "src/range-workflow/python/range_workflow/controller_host.py",
+        "src/range-workflow/python/range_workflow/telemetry.py",
+        "src/range-ai-lib/src/rai_agent.cpp"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A01",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A02",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A03",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A04",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A05",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A06",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A07",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A08",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A09",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-09.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-09-A10",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        }
+      ]
+    },
+    {
+      "id": "WF-10",
+      "title": "Comparison and long plots",
+      "status": "blocked",
+      "statusReason": "A01-A07已验证；A08原20k首图5秒门槛未通过，SDK30秒截止，完整导出/峰值未验。high及唯一xhigh后按用户授权完整记录并跳过硬项，不降低阈值或登记done。",
+      "priority": "P1",
+      "effort": "L",
+      "dependsOn": [
+        "WF-03",
+        "WF-04"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-10-A01",
+        "WF-10-A02",
+        "WF-10-A03",
+        "WF-10-A04",
+        "WF-10-A05",
+        "WF-10-A06",
+        "WF-10-A07",
+        "WF-10-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/control_monitor_widget.cpp",
+        "src/fea/src/workflow_widget.cpp",
+        "src/fea/src/graph_widget.cpp",
+        "src/range-workflow/python/range_workflow/telemetry.py",
+        "src/range-workflow/python/range_workflow/service.py",
+        "src/range-workflow/tests/test_telemetry.py"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A01",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A02",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A03",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A04",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A05",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A06",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-10-A07",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-10.md",
+          "outcome": "fail",
+          "acceptanceId": "WF-10-A08",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        }
+      ]
+    },
+    {
+      "id": "WF-11",
+      "title": "Scientific extension v2 and declarative GUI",
+      "status": "blocked",
+      "statusReason": "受信科学v2核心、完整原生来源/独立验证/六视图/回退及安装私有故事通过；A02真实DeepSeek高effort生成71.714秒失败、stage/approval=0。按用户授权记录后跳过该硬项，普通生成执行关闭。",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": [
+        "WF-04",
+        "WF-08"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-11-A01",
+        "WF-11-A02",
+        "WF-11-A03",
+        "WF-11-A04",
+        "WF-11-A05",
+        "WF-11-A06",
+        "WF-11-A07",
+        "WF-11-A08",
+        "WF-11-A09"
+      ],
+      "existingCodePaths": [
+        "src/range-workflow/python/range_workflow/extensions.py",
+        "src/range-workflow/python/range_workflow/extension_child.py",
+        "src/range-workflow/tests/test_extensions.py",
+        "src/fea/src/extension_widget.cpp",
+        "scripts/packaging/python-runtime/build_private_python.py",
+        "scripts/packaging/python-runtime/test_private_python.py"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A01",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "fail",
+          "acceptanceId": "WF-11-A02",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A03",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A04",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A05",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A06",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A07",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A08",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-11.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-11-A09",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        }
+      ]
+    },
+    {
+      "id": "WF-12",
+      "title": "Proven OS isolation and environment lifecycle",
+      "status": "blocked",
+      "statusReason": "A01实际LPAC class46读回Win32 87未通过，worker未Resume；A02-A09完整权限反例/隔离运行/外部干净Windows等未验证。high及唯一xhigh后记录跳过，ordinary OFF，无未隔离回退。",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": [
+        "WF-05",
+        "WF-11"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-12-A01",
+        "WF-12-A02",
+        "WF-12-A03",
+        "WF-12-A04",
+        "WF-12-A05",
+        "WF-12-A06",
+        "WF-12-A07",
+        "WF-12-A08",
+        "WF-12-A09"
+      ],
+      "existingCodePaths": [
+        "src/range-workflow/python/range_workflow/extensions.py",
+        "src/range-workflow/python/range_workflow/extension_child.py",
+        "src/range-workflow/python/range_workflow/process.py",
+        "scripts/packaging/python-runtime/build_private_python.py",
+        "scripts/packaging/python-runtime/test_private_python.py",
+        "src/packaging/windows"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "fail",
+          "acceptanceId": "WF-12-A01",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A02",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A03",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A04",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A05",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A06",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A07",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A08",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-12.md",
+          "outcome": "unverified",
+          "acceptanceId": "WF-12-A09",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        }
+      ]
+    },
+    {
+      "id": "WF-13",
+      "title": "Commercial quality and release gates",
+      "status": "planned",
+      "statusReason": "",
+      "priority": "release",
+      "effort": "L",
+      "dependsOn": [
+        "WF-02",
+        "WF-03",
+        "WF-04",
+        "WF-05",
+        "WF-06",
+        "WF-07",
+        "WF-08",
+        "WF-09",
+        "WF-10",
+        "WF-11",
+        "WF-12",
+        "WF-14"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-13-A01",
+        "WF-13-A02",
+        "WF-13-A03",
+        "WF-13-A04",
+        "WF-13-A05",
+        "WF-13-A06",
+        "WF-13-A07",
+        "WF-13-A08",
+        "WF-13-A09",
+        "WF-13-A10"
+      ],
+      "existingCodePaths": [
+        "scripts/ci/verify_required_ctest.py",
+        "scripts/ci/required-ctest-tests.json",
+        "scripts/packaging/python-runtime/build_private_python.py",
+        "docs/development/CI_VALIDATION.md"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WF-14",
+      "title": "Geometry and mesh command migration",
+      "status": "done",
+      "statusReason": "A01-A08按首批支持矩阵接受：几何/原子历史/凸TRI到TET/显式静态重绑、真实原生结果视口与安装MeshSDK通过；同GUI会话两份支持文档联合故事及修改后梁控制验证通过，完整179/179+补充3/3。",
+      "priority": "P1",
+      "effort": "XL",
+      "dependsOn": [
+        "WF-02",
+        "WF-05"
+      ],
+      "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
+      "acceptanceIds": [
+        "WF-14-A01",
+        "WF-14-A02",
+        "WF-14-A03",
+        "WF-14-A04",
+        "WF-14-A05",
+        "WF-14-A06",
+        "WF-14-A07",
+        "WF-14-A08"
+      ],
+      "existingCodePaths": [
+        "src/fea/src/geometry_transform_widget.cpp",
+        "src/fea/src/mesh_setup_widget.cpp",
+        "src/fea/src/mesh_generator.cpp",
+        "src/fea/src/model_command_host.cpp",
+        "src/fea/src/session.cpp"
+      ],
+      "evidence": [
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A01",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A02",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A03",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A04",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A05",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A06",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A07",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        },
+        {
+          "artifactPath": "docs/rounds/2026-10-08-workflow-delivery/acceptance/WF-14.md",
+          "outcome": "pass",
+          "acceptanceId": "WF-14-A08",
+          "commit": "664ea7b43dcebad5f423e85a877f0e12211267e2",
+          "notes": "逐条结论及边界见验收表；实现冻结c83bf5a、完整179/179；测试补充冻结664ea7b、受影响3/3。原始工件SHA及安装二进制一致性见docs/acceptance/integrated-20261010.json。未通过/未验证项不由总测试数替代。"
+        }
+      ]
+    }
+  ]
+}

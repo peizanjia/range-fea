@@ -1,0 +1,30 @@
+{
+  "report": "COMSOL_FULL_WORKFLOW_AGENT_REPORT.md",
+  "structure_validation": "passed",
+  "review": "independent read-only reviewer; 3 wording/precision suggestions resolved",
+  "strict_head_validation": {
+    "passed": 23,
+    "total": 25,
+    "timed_out": [
+      1,
+      20
+    ],
+    "log": "fullflow_citation_validation.log"
+  },
+  "manual_body_verification": [
+    {
+      "display_number": 1,
+      "url": "https://www.comsol.com/blogs/using-agentic-workflows-with-comsol-multiphysics/",
+      "result": "successfully read official full body; title/date and mechanism checked",
+      "locator": "Agentic Loop / Understanding Interactions / Heat Sink / Considerations"
+    },
+    {
+      "display_number": 20,
+      "url": "https://doc.comsol.com/6.4/doc/com.comsol.help.comsol/application_programming_guide.15.30.html",
+      "result": "successfully read official full body; API model/solver/result sections checked",
+      "locator": "Working with Model Objects / A Complete Example in 1D"
+    }
+  ],
+  "citation_authenticity": "All 25 sources grounded in official bodies; HEAD timeouts retained, not a full strict-check PASS",
+  "execution_mode": "research_only; no product modifications/builds/tests after user narrowed scope"
+}

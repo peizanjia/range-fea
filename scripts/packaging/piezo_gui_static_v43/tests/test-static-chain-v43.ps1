@@ -763,7 +763,7 @@ try {
     $controlArgs = @('-CandidateManifestPath',$CandidateManifestPath,'-CandidateManifestSha256',$manifestSha,'-AuditRoot',$AuditRoot)
     foreach ($component in @(
         [pscustomobject]@{ id='save_predicate'; pathParam='SavePredicateReceiptPath'; shaParam='SavePredicateReceiptSha256'; runner='test-save-predicate-v43.ps1'; discover=$false; sources=@('tools/save-predicate-v43.ps1','tests/test-save-predicate-v43.ps1') },
-        [pscustomobject]@{ id='sampler_arguments'; pathParam='SamplerArgumentsReceiptPath'; shaParam='SamplerArgumentsReceiptSha256'; runner='test-sampler-arguments-v43.ps1'; discover=$true; sources=@('runtime/sampler-arguments-v43.ps1','../../../scripts/benchmark/pc11_working_set.py','tests/test-sampler-arguments-v43.ps1') },
+        [pscustomobject]@{ id='sampler_arguments'; pathParam='SamplerArgumentsReceiptPath'; shaParam='SamplerArgumentsReceiptSha256'; runner='test-sampler-arguments-v43.ps1'; discover=$true; sources=@('runtime/sampler-arguments-v43.ps1','../../../scripts/benchmark/pc11-gui/pc11_working_set.py','tests/test-sampler-arguments-v43.ps1') },
         [pscustomobject]@{ id='watchdog_contract'; pathParam='SupervisorWorkerReceiptPath'; shaParam='SupervisorWorkerReceiptSha256'; runner='test-supervisor-worker-contract-v43.ps1'; discover=$false; sources=@('runtime/contract-common-v43.ps1','runtime/supervisor-core-v43.ps1','runtime/worker-handshake-v43.ps1','runtime/watchdog-contract-v43.ps1','runtime/native-launch-boundary-v43.ps1','tests/fixtures/worker-fixture-v43.ps1','tests/test-supervisor-worker-contract-v43.ps1','finalize-v43.ps1') }
     )) {
         $pathValue = Get-Variable -Name $component.pathParam -ValueOnly

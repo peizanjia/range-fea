@@ -1,0 +1,3437 @@
+{
+  "schemaVersion": 1,
+  "owner": "packaging",
+  "date": "2026-11-05",
+  "repositoryRoot": "/home/erwin/Projects/range-fea",
+  "baselineRoot": "9ea1d51",
+  "implementationCheckpoint": "ad9dbda",
+  "inventoryHead": "e3d5277",
+  "modelAttribution": "Unverifiable: commit batch contains earlier uncommitted work; no attribution to Luna or an exact October 15 start.",
+  "status": "OWNED_REMAINING_PACKAGING_STATIC_SOURCE_READ_COMPLETE_WITH_OPEN_CONTRACT_AND_WINDOWS_ITEMS",
+  "constraints": {
+    "compiled": false,
+    "cmakeConfigured": false,
+    "ctestExecuted": false,
+    "productStarted": false,
+    "productionFixesMade": true,
+    "profilesAndTemporaryOutputs": "artifacts/bugfix-audit-20261104/resume-20261105/packaging",
+    "powerShellExecuted": false,
+    "csharpCompiled": false,
+    "providerCalled": false,
+    "installed": false,
+    "acceptanceIdentityChanged": false,
+    "productStatusUpgraded": false,
+    "submodulesEditedByThisReview": false,
+    "scope": "Only scripts/benchmark, scripts/packaging, scripts/ci tests, packaging audit ledger and packaging artifacts changed. No AGENTS policy applied; no delegation, build, CMake, CTest, product, install, Provider, git reset/clean/stash/commit/push or gitlink change."
+  },
+  "coverageCounts": {
+    "reviewed_static": 108,
+    "partial": 2,
+    "reviewed_changed_hunks": 4
+  },
+  "checks": {
+    "syntaxParsed": [
+      "scripts/benchmark/pc11_gui_registry.py",
+      "scripts/benchmark/pc11_gui_terminal.py",
+      "scripts/benchmark/pc11_gui_terminal_tests.py",
+      "scripts/benchmark/pc11_gui_verify.py",
+      "scripts/benchmark/pc11_gui_verify_tests.py",
+      "scripts/benchmark/pc11_working_set.py",
+      "scripts/benchmark/test_installed_profile.py",
+      "scripts/benchmark/test_pc11_gui_uia_static.py",
+      "scripts/benchmark/test_pc11_working_set.py",
+      "scripts/packaging/inventory_v43.py",
+      "scripts/packaging/piezo_gui_static_v43/admission_v43.py",
+      "scripts/packaging/piezo_gui_static_v43/inventory_adapter_v43.py",
+      "scripts/packaging/piezo_gui_static_v43/tests/__init__.py",
+      "scripts/packaging/piezo_gui_static_v43/tests/admission-source-scope-probe-v43.py",
+      "scripts/packaging/piezo_gui_static_v43/tests/test_admission_v43.py",
+      "scripts/packaging/piezo_gui_static_v43/tests/test_install_tree_review_v43.py",
+      "scripts/packaging/piezo_gui_static_v43/tests/test_inventory_adapter_v43.py",
+      "scripts/packaging/test_inventory_v43.py",
+      "scripts/packaging/test_verify_off_link_map_v44.py",
+      "scripts/packaging/verify_off_link_map_v44.py"
+    ],
+    "tests": [
+      {
+        "path": "scripts/benchmark/pc11_gui_terminal_tests.py",
+        "exitCode": 0,
+        "seconds": 0.114,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/pc11_gui_terminal_tests.log"
+      },
+      {
+        "path": "scripts/benchmark/pc11_gui_verify_tests.py",
+        "exitCode": 0,
+        "seconds": 0.916,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/pc11_gui_verify_tests.log"
+      },
+      {
+        "path": "scripts/benchmark/test_installed_profile.py",
+        "exitCode": 5,
+        "seconds": 0.064,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_installed_profile.log"
+      },
+      {
+        "path": "scripts/benchmark/test_pc11_gui_uia_static.py",
+        "exitCode": 0,
+        "seconds": 0.064,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_pc11_gui_uia_static.log"
+      },
+      {
+        "path": "scripts/benchmark/test_pc11_working_set.py",
+        "exitCode": 0,
+        "seconds": 0.665,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_pc11_working_set.log"
+      },
+      {
+        "path": "scripts/packaging/piezo_gui_static_v43/tests/test_admission_v43.py",
+        "exitCode": 1,
+        "seconds": 0.716,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_admission_v43.log"
+      },
+      {
+        "path": "scripts/packaging/piezo_gui_static_v43/tests/test_install_tree_review_v43.py",
+        "exitCode": 1,
+        "seconds": 0.164,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_install_tree_review_v43.log"
+      },
+      {
+        "path": "scripts/packaging/piezo_gui_static_v43/tests/test_inventory_adapter_v43.py",
+        "exitCode": 1,
+        "seconds": 0.165,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_inventory_adapter_v43.log"
+      },
+      {
+        "path": "scripts/packaging/test_inventory_v43.py",
+        "exitCode": 0,
+        "seconds": 1.366,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_inventory_v43.log"
+      },
+      {
+        "path": "scripts/packaging/test_verify_off_link_map_v44.py",
+        "exitCode": 0,
+        "seconds": 0.165,
+        "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_verify_off_link_map_v44.log"
+      }
+    ],
+    "resume20261105": {
+      "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "environment": {
+        "TMP": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+        "TEMP": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+        "TMPDIR": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+        "HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/home",
+        "USERPROFILE": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/home",
+        "APPDATA": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/appdata",
+        "LOCALAPPDATA": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/localappdata",
+        "XDG_CONFIG_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/config",
+        "XDG_CACHE_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/cache",
+        "XDG_DATA_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/data",
+        "XDG_STATE_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/state",
+        "XDG_RUNTIME_DIR": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/runtime"
+      },
+      "tempfile": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+      "tests": [
+        {
+          "name": "workflow-plan-tests",
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "-I",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "/home/erwin/Projects/range-fea/scripts/ci",
+            "-p",
+            "test_workflow_plan.py",
+            "-v"
+          ],
+          "exitCode": 0,
+          "seconds": 0.134,
+          "log": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/logs/workflow-plan-tests.log"
+        },
+        {
+          "name": "required-ctest-metadata-tests-mocked",
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "-I",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "/home/erwin/Projects/range-fea/scripts/ci",
+            "-p",
+            "test_verify_required_ctest.py",
+            "-v"
+          ],
+          "exitCode": 0,
+          "seconds": 0.081,
+          "log": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/logs/required-ctest-metadata-tests-mocked.log"
+        },
+        {
+          "name": "gui-uia-source-guards",
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "-I",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "/home/erwin/Projects/range-fea/scripts/benchmark",
+            "-p",
+            "test_pc11_gui_uia_static.py",
+            "-v"
+          ],
+          "exitCode": 0,
+          "seconds": 0.053,
+          "log": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/logs/gui-uia-source-guards.log"
+        },
+        {
+          "name": "workflow-plan-readonly",
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "-I",
+            "/home/erwin/Projects/range-fea/scripts/ci/verify_workflow_plan.py",
+            "--next",
+            "--json"
+          ],
+          "exitCode": 0,
+          "seconds": 0.068,
+          "log": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/logs/workflow-plan-readonly.log"
+        },
+        {
+          "name": "terminal-metadata-tests",
+          "command": [
+            "/usr/bin/python3",
+            "-B",
+            "-I",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "/home/erwin/Projects/range-fea/scripts/benchmark",
+            "-p",
+            "pc11_gui_terminal_tests.py",
+            "-v"
+          ],
+          "exitCode": 0,
+          "seconds": 0.066,
+          "log": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/logs/terminal-metadata-tests.log"
+        }
+      ],
+      "syntaxOnly": [
+        "scripts/ci/verify_workflow_plan.py",
+        "scripts/ci/test_workflow_plan.py",
+        "scripts/ci/verify_required_ctest.py",
+        "scripts/ci/test_verify_required_ctest.py",
+        "scripts/benchmark/test_pc11_gui_uia_static.py"
+      ],
+      "negativeBaseline": {
+        "kind": "source guards against HEAD text only, not Windows execution",
+        "expectedFailures": 2,
+        "actualFailures": 2,
+        "errors": 0,
+        "log": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/logs/gui-guards-negative-baseline.log"
+      },
+      "requiredCTestManifest": {
+        "groupCount": 9,
+        "requiredCount": 246,
+        "generatedCTestInventoryExecuted": false
+      },
+      "unittestTotal": 35,
+      "unittestPassed": 35,
+      "powerShellTests": "NOT_EXECUTED: Windows PowerShell 5.1 not installed; no tool installation attempted.",
+      "csharpTests": "NOT_EXECUTED: compilation is prohibited in this audit.",
+      "diffCheck": "PASS for owned scripts and packaging audit files after final changes.",
+      "finalIntegrity": "PASS: 114 unique inventory rows, counts 62/17/35, 4 supplemental files and all current SHA256 values matched after separating the external cloud CMake change. Evidence: artifacts/bugfix-audit-20261104/resume-20261105/packaging/audit-integrity.json.",
+      "explorationNotes": [
+        "An early wc glob scripts/packaging/*ps1 matched no file and returned nonzero; corrected to nested v43 paths.",
+        "An initial lookup guessed src/range-workflow/tests/CMakeLists.txt; file absent. Actual six-hour settings located in src/range-application-lib/CMakeLists.txt:114.",
+        "App task-list call was unavailable to this subagent; no further task-list/wrap-up calls made; shared root plan files not edited."
+      ],
+      "finalIntegrityFirstAttempt": "Detected SHA drift only in reserved src/range-cloud-lib/tests/CMakeLists.txt. Preserved history, recorded external provenance, downgraded current review to partial; no source edit."
+    },
+    "continuationAfterApiInterruption20261105": {
+      "startingCoverageCounts": {
+        "reviewed_static": 62,
+        "partial": 17,
+        "pending": 35
+      },
+      "newFullFileReads": [
+        "scripts/packaging/README-off-link-map-v44.md",
+        "scripts/packaging/inventory_v43.py",
+        "scripts/packaging/piezo_gui_static_v43/README-v43-static-chain.md",
+        "scripts/packaging/piezo_gui_static_v43/admission_v43.py",
+        "scripts/packaging/piezo_gui_static_v43/candidate-manifest-v43.admission-template.json",
+        "scripts/packaging/piezo_gui_static_v43/freeze-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/inventory_adapter_v43.py",
+        "scripts/packaging/piezo_gui_static_v43/package-tree-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/release-build-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/runtime/root-bootstrap-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/source-preflight-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/__init__.py",
+        "scripts/packaging/piezo_gui_static_v43/tests/admission-source-scope-probe-v43.py",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-build-off-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-fixture-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-gate-aggregate-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-path-root-snapshot-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-path-root-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-final-readiness-candidate-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-fixture-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-harness-path-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-negative-static-chain-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-package-tree-scalar-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-path-shadow-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-preflight-gates-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-producer-module-boundary-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-relative-create-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43-fixture.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-save-environment-preflight-v43-fixture.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-save-environment-preflight-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-save-predicate-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-source-scope-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-static-chain-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-static-gates-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test_admission_v43.py",
+        "scripts/packaging/piezo_gui_static_v43/tests/test_install_tree_review_v43.py",
+        "scripts/packaging/piezo_gui_static_v43/tests/test_inventory_adapter_v43.py",
+        "scripts/packaging/piezo_gui_static_v43/tools/save-predicate-v43.ps1",
+        "scripts/packaging/test_inventory_v43.py",
+        "scripts/packaging/test_verify_off_link_map_v44.py",
+        "scripts/packaging/verify_off_link_map_v44.py"
+      ],
+      "completeHistoricalChangedHunkReads": [
+        "src/CMakeLists.txt",
+        "src/fea-solver/tests/CMakeLists.txt",
+        "src/fea/CMakeLists.txt",
+        "src/range-workflow/CMakeLists.txt"
+      ],
+      "retainedPartial": [
+        {
+          "repository": ".",
+          "path": "scripts/benchmark/pc11_gui_uia.ps1"
+        },
+        {
+          "repository": ".",
+          "path": "scripts/ci/required-ctest-tests.json"
+        },
+        {
+          "repository": "src/range-cloud-lib",
+          "path": "tests/CMakeLists.txt"
+        }
+      ],
+      "prior35TestsRerun": false,
+      "newUnittestTotal": 3,
+      "newUnittestPassed": 3,
+      "sourceChecks": {
+        "command": [
+          "python3",
+          "-I",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/home/erwin/Projects/range-fea/scripts/packaging/piezo_gui_static_v43/tests",
+          "-p",
+          "test_producer_single_use_source_v43.py",
+          "-v"
+        ],
+        "exitCode": 0,
+        "seconds": 0.05544693499996356,
+        "environment": {
+          "TMP": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+          "TEMP": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+          "TMPDIR": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+          "HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/home",
+          "USERPROFILE": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/home",
+          "APPDATA": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/appdata",
+          "LOCALAPPDATA": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/localappdata",
+          "XDG_CONFIG_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/config",
+          "XDG_CACHE_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/cache",
+          "XDG_DATA_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/data",
+          "XDG_STATE_HOME": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/state",
+          "XDG_RUNTIME_DIR": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/runtime"
+        },
+        "tempfile": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/tmp",
+        "home": "/home/erwin/Projects/range-fea/artifacts/bugfix-audit-20261104/resume-20261105/packaging/home",
+        "scope": "3 source-only guards; no PowerShell executed; previous 35 tests not rerun"
+      },
+      "negativeControls": {
+        "oldHeadSourceNegativeControls": [
+          {
+            "path": "scripts/packaging/piezo_gui_static_v43/source-preflight-v43.ps1",
+            "result": "EXPECTED_GUARD_REJECTION"
+          },
+          {
+            "path": "scripts/packaging/piezo_gui_static_v43/freeze-v43.ps1",
+            "result": "EXPECTED_GUARD_REJECTION"
+          },
+          {
+            "path": "scripts/packaging/piezo_gui_static_v43/package-tree-v43.ps1",
+            "result": "EXPECTED_GUARD_REJECTION"
+          }
+        ],
+        "canonicalSourceVector": {
+          "paths": [
+            "src/A.cpp",
+            "src/a-b.cpp",
+            "src/a.cpp",
+            "src/a_b.cpp",
+            "src/café.cpp",
+            "src/o'neil.cpp",
+            "src/éclair.cpp"
+          ],
+          "pythonCanonicalSha256": "24dd324578beec04d429e638c5b410bf63a98e1fc51d3065cd58c17b34482f13",
+          "documentedPS51ApostropheEscapedSha256": "4a8f4b687fd7f0d3e5bd8c9577898fa9cc4065c2f918033f5baf05857fabed55",
+          "existingPSGoldenSha256": "4a8f4b687fd7f0d3e5bd8c9577898fa9cc4065c2f918033f5baf05857fabed55",
+          "sameRowsDifferentDigest": true,
+          "powerShellExecuted": false,
+          "scope": "Python standard-library calculation and existing PS source golden vector only; PS escaping at runtime still requires Windows confirmation"
+        }
+      },
+      "powerShellExecuted": false,
+      "compiled": false,
+      "cmakeConfigured": false,
+      "ctestExecuted": false,
+      "productStarted": false,
+      "providerCalled": false,
+      "protocolNotes": [
+        "The app task-list tool was unavailable to this subagent; no further app plan/wrap-up call. No delegation.",
+        "Commands ran with cwd verified as the repository, but Bash calls in this continuation omitted the user-requested explicit cd prefix. This procedural deviation is not represented as full command-policy compliance.",
+        "One initial standard-library negative-control calculation had a quoting SyntaxError, wrote no record, and was corrected; the succeeding record is retained."
+      ],
+      "integrity": "114 unique inventory rows, 6 supplemental files; current SHA256 matches every row; original 62 reviewed rows unchanged."
+    }
+  },
+  "findings": [
+    {
+      "id": "PKG-PLATFORM-01",
+      "classification": "observed_platform_limit",
+      "path": "scripts/packaging/piezo_gui_static_v43/inventory_adapter_v43.py",
+      "line": 113,
+      "detail": "Windows inventory adapter canonicalizes with ntpath.isabs/normcase/normpath. Current Linux/Python 3.14 POSIX temporary roots are rejected; three synthetic test suites fail before intended validation. Windows-only contract was not relaxed and failures were not converted to passes or skips.",
+      "status": "requires_windows_fixture_validation"
+    },
+    {
+      "id": "PKG-REVIEW-01",
+      "classification": "confirmed_source_bug",
+      "path": "scripts/benchmark/pc11_gui_native.cs",
+      "line": 70,
+      "relatedLocations": [
+        "scripts/benchmark/pc11_gui_uia.ps1:341-347,573-608",
+        "scripts/benchmark/pc11_gui_uia.cs:127-135,141-180",
+        "scripts/benchmark/test_pc11_gui_uia_static.py:141",
+        "scripts/benchmark/test_pc11_gui_exposure_classifier.ps1:33"
+      ],
+      "trigger": "mainHandle == workbenchHandle while the actual main window extends outside the monitor work area; Qt minimum size or a changed/replaced native window can invalidate an earlier FitWindow request.",
+      "impact": "The old branch unconditionally emitted WithinWorkArea/LayoutValid=true and bypassed the layout failure gate. This is an audit-tool evidence bug; no past product acceptance is proven false by this review.",
+      "evidence": "Full native method, NativeWindowFor, UIA arrangement/exposure call chain and tests read. Five interior exposure samples are not a full rectangle-containment proof. New source guard fails against HEAD and passes against patched source.",
+      "certainty": "Control-flow defect confirmed statically. No Windows window geometry/reproduction executed; prevalence and past-run impact remain unknown.",
+      "fix": "Read the actual monitor work area and compute containment in the single-window branch; return that measured value in both fields.",
+      "compatibilityRisk": "Previously tolerated clipped/maximized-border geometry can now fail closed; Windows DPI/negative monitor/taskbar cases require runtime validation. Separate-window width thresholds and all frozen acceptance limits unchanged.",
+      "actualChecks": [
+        "UIA source guards: 14 PASS",
+        "Old HEAD negative source control: intended failure",
+        "git diff --check: PASS"
+      ],
+      "requiredPlatformSteps": [
+        "Windows only, after separate compilation authorization: test_pc11_gui_exposure_classifier.ps1; expect 4 exposure and 6 containment cases pass.",
+        "Separately authorized Windows installed GUI test: same handle contained -> valid; same handle off-work-area -> invalid; distinct windows retain existing checks."
+      ],
+      "status": "fixed_source_windows_validation_pending"
+    },
+    {
+      "id": "PKG-FIX-02",
+      "classification": "confirmed_source_bug",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/contract-common-v43.ps1",
+      "line": 43,
+      "relatedLocations": [
+        "scripts/packaging/piezo_gui_static_v43/runtime/contract-common-v43.ps1:192-234",
+        "scripts/packaging/piezo_gui_static_v43/runtime/worker-handshake-v43.ps1:42",
+        "scripts/packaging/piezo_gui_static_v43/runtime/supervisor-core-v43.ps1:154",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-supervisor-worker-contract-v43.ps1:213",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-worker-receipt-types-v43.ps1:30"
+      ],
+      "trigger": "JSON identity pins as singleton arrays; handshake string fields as empty/repeated equal arrays; go/action flags as numeric 0; terminal fixtureOnly as 1; PID strings or fractional numbers coerced by [int].",
+      "impact": "Malformed data could be accepted as a bound worker handshake/terminal or normalized candidate identity. PowerShell collection comparisons filter members and casts erase original JSON types. No hostile process or actual GO was observed.",
+      "evidence": "Read common manifest helper, supervisor, worker, fixture and watchdog plus complete existing suite. Existing manifest/watchdog Boolean guards were stricter than worker/terminal checks; candidate pin casts occurred before type checks.",
+      "certainty": "Language-level type/coercion paths confirmed by source analysis; PS 5.1 runtime regression not available on this host.",
+      "fix": "Require object pin containers/string scalar pins and schemas; centralized handshake/terminal checks enforce typed strings, integer PIDs and Boolean no-GO/actions before acceptance. Added six manifest shape mutations and independent pure PS receipt tests.",
+      "compatibilityRisk": "Malformed hand-authored fixtures formerly coerced to valid values now fail. Canonical serialization and hashes of valid manifests are unchanged; no frozen identity or candidate state edited. New pure PS test is standalone, not added to frozen source-set receipts.",
+      "actualChecks": [
+        "Complete control-flow/source review",
+        "git diff --check: PASS",
+        "PS regressions NOT_EXECUTED; not represented as Python test passes"
+      ],
+      "requiredPlatformSteps": [
+        "Windows PowerShell 5.1: test-worker-receipt-types-v43.ps1 (pure functions, no compile/process/product); expect valid ready/terminal accepted and all malformed scalar/action/PID variants rejected.",
+        "Windows after separate native/compilation authorization: test-supervisor-worker-contract-v43.ps1; expect existing Job/assignment/drain cases and new manifest mutations pass, productReadiness stays PENDING/goPermitted=false."
+      ],
+      "status": "fixed_source_windows_validation_pending"
+    },
+    {
+      "id": "PKG-FIX-03",
+      "classification": "confirmed_source_bug",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/sampler-arguments-v43.ps1",
+      "line": 92,
+      "relatedLocations": [
+        "scripts/packaging/piezo_gui_static_v43/runtime/sampler-arguments-v43.ps1:120",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-sampler-arguments-v43.ps1:70",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-v43.ps1:284-348"
+      ],
+      "trigger": "Plan candidateManifestSha256, candidateManifestIdentitySha256 or commandLine is an empty array or repeated array of the expected value.",
+      "impact": "PowerShell -cne returns no unmatched elements and its condition is false, accepting a plan without the required scalar pin/exact command string. Builder itself emits valid strings and does not launch a process.",
+      "evidence": "Full builder/validator and test source read; candidate-control consumer exact case and argv shape traced to avoid breaking its existing 13/19 contract.",
+      "certainty": "Statically confirmed collection-comparison defect; no Windows execution.",
+      "fix": "Add scalar string checks for both pins, program and commandLine; add six collection-negative assertions without changing case rows, path/quoting/argv contracts.",
+      "compatibilityRisk": "Malformed collection-valued plans are rejected; valid Windows absolute path and 50ms/10 samples/0.5s minimum contracts remain unchanged.",
+      "actualChecks": [
+        "Complete source/callee review",
+        "git diff --check: PASS"
+      ],
+      "requiredPlatformSteps": [
+        "Windows PowerShell 5.1: test-sampler-arguments-v43.ps1 -AuditRoot <fresh checkout artifact directory>; expect all assertions pass and receipt still contains exactly 13 cases/19 argv entries, status PENDING, goPermitted=false."
+      ],
+      "status": "fixed_source_windows_validation_pending"
+    },
+    {
+      "id": "PKG-FIX-04",
+      "classification": "confirmed_source_bug",
+      "path": "scripts/benchmark/pc11_gui_diagnostic_read.ps1",
+      "line": 49,
+      "relatedLocations": [
+        "scripts/benchmark/pc11_gui_diagnostic_read.ps1:78",
+        "scripts/benchmark/pc11_gui_uia.ps1:325-339,231-240,371-375",
+        "scripts/benchmark/test_pc11_gui_uia_static.py:130"
+      ],
+      "trigger": "Diagnostic runner imports shared Capture, reaches its first Capture before opening the reader, but Assert-WindowExposure was absent from imported function names.",
+      "impact": "A fresh diagnostic PowerShell scope fails with command-not-found before first reader capture. Catch path also invokes the same broken Capture. Imported Action had a second transitive dependency omitted for its Run/Confirm branch.",
+      "evidence": "Complete diagnostic source and all selected function bodies read. Python regression uses current source plus HEAD negative control; both expected omission/hardcoded-layout assertions reject old source.",
+      "certainty": "Deterministic missing-function dependency confirmed; actual installed diagnostic not executed.",
+      "fix": "Include Assert-WindowExposure and Observe-BaselineMemory in the explicitly imported definitions. Main harness launch/run body is still not executed by import.",
+      "compatibilityRisk": "Restores existing exposure and sampler checks; does not turn functional diagnosis into qualification. Windows UIA timing remains unverified.",
+      "actualChecks": [
+        "14 UIA source guard tests PASS",
+        "HEAD diagnostic-import negative control fails as expected"
+      ],
+      "requiredPlatformSteps": [
+        "Fresh Windows PowerShell scope, separately authorized owned-GUI diagnostic: first Capture resolves exposure guard and either captures a verified exposed window or fails on geometry, never command-not-found. No product run performed in this audit."
+      ],
+      "status": "fixed_source_windows_validation_pending"
+    },
+    {
+      "id": "PKG-FIX-05",
+      "classification": "confirmed_source_bug",
+      "path": "scripts/packaging/piezo_gui_static_v43/finalize-v43.ps1",
+      "line": 56,
+      "relatedLocations": [
+        "scripts/packaging/piezo_gui_static_v43/finalize-v43.ps1:149,178,187,211",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-scalar-v43.ps1:79-111",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-manifest-single-read-v43.ps1:62-90"
+      ],
+      "trigger": "Candidate manifest, source-freeze, package-tree or aggregate static receipt changes after old Assert-Hash closes its stream and before Read-Json reopens the path.",
+      "impact": "Finalizer could parse bytes not covered by the supplied SHA and emit a misleading static receipt (still no-GO). Common manifest helper already used one buffer, but finalizer did not.",
+      "evidence": "All four top-level reads and finalizer status/output flow read. Reused established deterministic post-hash mutation-test technique in the exact finalizer helper regression source.",
+      "certainty": "TOCTOU window confirmed statically; simultaneous replacement is the trigger assumption, not an observed compromised receipt.",
+      "fix": "Read-PinnedJson reads once, hashes that buffer, then parses exactly that buffer for all four authorities. Add post-hash path replacement positive control and wrong-pin/malformed JSON negatives.",
+      "compatibilityRisk": "Identity format, required test IDs and output statuses unchanged. Existing freeze/source hashes intentionally not regenerated; old evidence cannot attest to modified source. PS test execution still required.",
+      "actualChecks": [
+        "Full finalizer/common/test source review",
+        "git diff --check: PASS"
+      ],
+      "requiredPlatformSteps": [
+        "Windows PowerShell 5.1, no product/compile needed: test-finalize-scalar-v43.ps1 -ReceiptPath <fresh artifact file>; expect pinned snapshot survives deterministic path replacement, subsequent wrong pin and malformed pinned JSON rejected.",
+        "Separately authorized existing supervisor/finalizer-integrity suites should retain STATIC_INCOMPLETE/FINALIZE_FAIL/no-GO semantics."
+      ],
+      "status": "fixed_source_windows_validation_pending"
+    },
+    {
+      "id": "PKG-CI-01",
+      "classification": "unconfirmed_runtime_budget_risk",
+      "path": ".github/workflows/windows-regression.yml",
+      "line": 15,
+      "relatedLocations": [
+        ".github/workflows/windows-regression.yml:18,23-121",
+        "src/range-application-lib/CMakeLists.txt:94-114",
+        "scripts/ci/required-ctest-tests.json:76-77",
+        "docs/acceptance/deletion-handoff-20261030.md:25-37"
+      ],
+      "trigger": "A six-hour-capped test approaches its cap after setup/build and other scheduling work within the same 360-minute hosted job.",
+      "impact": "Job-level time may expire before a per-test six-hour budget; -j2 cannot remove setup/build elapsed time and --timeout 180 does not remove explicit test properties.",
+      "evidence": "Workflow read in full; both tst_piezo_delivery_examples and tst_piezo_pzt_prestress explicitly have TIMEOUT 21600 and are required. Handoff documents prior CTest elapsed 12659.93s and seven other failures, not a confirmed total-budget failure.",
+      "certainty": "Budget arithmetic is confirmed; realized job cancellation/performance regression is NOT proven. The comment claiming aligned ceilings is not an assurance of usable test time.",
+      "fix": "None. No timeout thresholds or test selection were changed.",
+      "compatibilityRisk": "Blindly reducing per-test timeout or skipping tests could change qualification coverage; no such change made.",
+      "actualChecks": [
+        "Read-only workflow/CMake property/manifest/handoff comparison",
+        "9 CI workflow tests + 7 mocked CTest metadata tests PASS",
+        "246 required names parsed in 9 groups; no CTest process run"
+      ],
+      "requiredPlatformSteps": [
+        "On separately authorized Windows CI run, measure setup/build/test scheduling and both long test durations; distinguish total-job cancellation from test TIMEOUT. Consider job separation only with complete intended inventory preserved."
+      ],
+      "status": "risk_retained_not_confirmed_bug"
+    },
+    {
+      "id": "PKG-REVIEW-02",
+      "classification": "unresolved_acceptance_route_question",
+      "path": "scripts/benchmark/pc11_gui_uia.ps1",
+      "line": 598,
+      "relatedLocations": [
+        "scripts/benchmark/pc11_gui_uia.ps1:412-494,601-620,706-709,764-766",
+        "scripts/benchmark/pc11_gui_verify.py:225,230,235"
+      ],
+      "trigger": "Profile reuse can leave one model root, so the current run does not log a new source picker. Measure also does not produce the Full-only terminal/automatic-binding events.",
+      "impact": "qualify() still requires current source-picker and automatic native-result binding evidence. Intended support/qualification semantics of reused-profile Full and Measure routes need reconciliation; current gates fail closed.",
+      "evidence": "Read complete harness and verifier; traced source-root skip path and required evidence events. Existing frozen semantics and route expectations not resolved in this batch.",
+      "certainty": "Control-flow difference observed; whether those routes are intended to qualify is unresolved. Not recorded as a confirmed acceptance bypass or product defect.",
+      "fix": "None; did not weaken qualification evidence to make a run green.",
+      "compatibilityRisk": "Accepting profile reuse without independently proving exact saved source/identity could weaken frozen production acceptance; requires follow-up contract review.",
+      "actualChecks": [
+        "Source-only call-chain review; no product execution"
+      ],
+      "requiredPlatformSteps": [
+        "Complete source/identity authority review first, then separately authorized Windows route tests; expected qualifier remains fail-closed unless full frozen evidence is present."
+      ],
+      "status": "pending_contract_review_harness_remains_partial"
+    },
+    {
+      "id": "PKG-FIX-06",
+      "classification": "confirmed_source_bug",
+      "path": "scripts/packaging/piezo_gui_static_v43/source-preflight-v43.ps1",
+      "relatedLocations": [
+        "source-preflight-v43.ps1:362-371",
+        "freeze-v43.ps1:247,359-369",
+        "package-tree-v43.ps1:240,415-425",
+        "tests/test-producer-single-use-v43.ps1",
+        "tests/test_producer_single_use_source_v43.py"
+      ],
+      "trigger": "A second writer creates the selected receipt after File.Exists returns false but before WriteAllText opens the path. Serialization provides a deterministic injection point.",
+      "impact": "A receipt advertised as single-use can overwrite competing audit evidence, including on failure paths. No actual concurrent overwrite or product GO observed.",
+      "fix": "Three production writers use FileMode.CreateNew and dispose the output stream. Normal UTF-8/no-BOM JSON/newline and no-GO schema remain unchanged. No frozen hashes, thresholds, required IDs, or existing receipt case sets regenerated.",
+      "actualChecks": [
+        "3 newly added Python source guards PASS",
+        "3 old e3d5277 production sources rejected by guard",
+        "PowerShell deterministic competing-writer regression added but NOT_EXECUTED"
+      ],
+      "requiredPlatformSteps": [
+        "Windows PS5.1 standalone test-producer-single-use-v43.ps1 with all artifacts under the authorized checkout root: controls=9, valid serialization unchanged, existing and post-check competing receipts preserved.",
+        "Broader fixture writers listed in PKG-EVIDENCE-05 are NOT covered by this fix."
+      ],
+      "status": "fixed_three_production_writers_windows_validation_pending"
+    },
+    {
+      "id": "PKG-CONTRACT-03",
+      "classification": "cross_language_identity_contract_mismatch",
+      "path": "scripts/packaging/piezo_gui_static_v43/source-preflight-v43.ps1",
+      "relatedLocations": [
+        "source-preflight-v43.ps1:56-81",
+        "admission_v43.py:332-347,681-685,899-919",
+        "tests/test-root-seal-boundary-v43.ps1:68-92"
+      ],
+      "trigger": "An allowed source filename or identity path contains an apostrophe. Existing PS5.1 golden vector explicitly uses apostrophe escaping, whereas Python canonical JSON emits the literal apostrophe.",
+      "impact": "The same seven source rows have Python SHA 24dd324578beec04d429e638c5b410bf63a98e1fc51d3065cd58c17b34482f13 versus existing PS golden SHA 4a8f4b687fd7f0d3e5bd8c9577898fa9cc4065c2f918033f5baf05857fabed55. Cross-language admission can fail closed despite unchanged bytes. No acceptance bypass claimed.",
+      "evidence": "Standard-library computation reproduced the exact existing PS golden SHA when replacing apostrophes with the documented escape. No PowerShell executed. See continuation-negative-controls.json.",
+      "fix": "None: changing canonical serialization or golden pins affects frozen identity contract; retained for explicit cross-language contract decision rather than silently re-signing.",
+      "requiredPlatformSteps": [
+        "Separately authorized Windows PS5.1: compare exact source-preflight, root-seal golden vector and Python digest bytes with apostrophe, HTML-sensitive characters and supplementary Unicode ordering. Expected current apostrophe vector mismatch must be retained until a coherent identity contract is approved."
+      ],
+      "status": "open_identity_contract_decision_windows_confirmation_pending"
+    },
+    {
+      "id": "PKG-POLICY-04",
+      "classification": "execution_policy_incompatibility",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-relative-create-v43.ps1",
+      "relatedLocations": [
+        "tests/test-root-bootstrap-relative-create-v43.ps1:17-34",
+        "tests/test-final-readiness-candidate-v43.ps1:44-47,701-712",
+        "tests/test-static-chain-v43.ps1:720-727,830-837"
+      ],
+      "detail": "Relative-create fixture requires temp outside the checkout and receipts under a fixed build/audit path; final-readiness invokes it. The present policy permits only the designated artifacts directory. This remains blocked even if Windows becomes available; do not advertise these as runnable merely by redirecting TEMP.",
+      "fix": "None. No path rule or reparse expected status relaxed.",
+      "status": "blocked_by_current_artifact_policy_separate_resolution_required"
+    },
+    {
+      "id": "PKG-EVIDENCE-05",
+      "classification": "unfixed_fixture_output_concurrency_risk",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-static-chain-v43.ps1",
+      "relatedLocations": [
+        "tests/test-static-chain-v43.ps1:925-928",
+        "tests/test-root-seal-boundary-v43.ps1:421-423",
+        "tests/test-finalize-integrity-candidate-v43.ps1:228",
+        "tests/test-preflight-gates-v43.ps1:348-350",
+        "tests/test-static-gates-v43.ps1:339-341",
+        "tests/test-source-scope-v43.ps1:186-189",
+        "tests/test-negative-static-chain-v43.ps1:168-171"
+      ],
+      "detail": "Same check-then-WriteAllText output pattern remains in fixture/aggregate scripts. PKG-FIX-06 is deliberately limited to three production producers and does not prove all evidence writers are atomic or reparse-race safe.",
+      "fix": "None in this continuation; no concurrent fixture execution authorized.",
+      "status": "open_fixture_writer_scope_not_fixed",
+      "coordinatorDisposition": "Seven final OutputPath writers fixed by PKG-FIX-07; intermediate synthetic fixture writers remain outside this claim."
+    },
+    {
+      "id": "PKG-FIX-07",
+      "status": "fixed_source_windows_pending",
+      "title": "Seven final fixture/aggregate receipts still used check-then-overwrite",
+      "files": [
+        "scripts/packaging/piezo_gui_static_v43/tests/test-static-chain-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-preflight-gates-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-static-gates-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-source-scope-v43.ps1",
+        "scripts/packaging/piezo_gui_static_v43/tests/test-negative-static-chain-v43.ps1"
+      ],
+      "trigger": "另一个writer在早期File.Exists后、最终写入前创建OutputPath（包括ConvertTo-Json序列化期间）。",
+      "confirmedCause": "最终WriteAllText会截断已创建的凭据；静态源码窗口确定，没有真实Windows覆盖事故证据。",
+      "impact": "既有single-use最终审计证据可被覆盖，no-GO边界本身并未因此变成GO。",
+      "fix": "仅七处最终OutputPath使用局部Write-V43FinalReceiptNoOverwrite/CreateNew；序列化表达式、深度、UTF-8无BOM、尾换行和case/ID/status/pin保持。",
+      "compatibilityRisk": "竞争创建现在报错并保留已有文件；仍不是crash-safe完整原子发布，也不声称覆盖全部中间fixture文件或reparse race。修改后的脚本须新source freeze/新收据。",
+      "actualChecks": {
+        "sourceGuardMethods": 3,
+        "oldHeadNegativeControls": 7,
+        "evidence": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/final-receipt-checks/checks.json",
+        "powerShellExecuted": false
+      },
+      "requiredRuntimeValidation": "Windows PowerShell5.1，在新仓内artifacts根执行独立21控制，再按新同源冻结跑受影响聚合；不得重钉旧黄金pin追认原PASS。"
+    }
+  ],
+  "unchangedSubmodule": {
+    "repository": "src/range-build-tools",
+    "baselineAndHead": "ec4cdb2bba0a3cd7424ac85027f8c300f18d369f",
+    "changeCount": 0
+  },
+  "files": [
+    {
+      "repository": ".",
+      "path": ".github/workflows/windows-regression.yml",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "445d0118720b029e2a4b1d2b745395364e227fb88cbcfa279eb9cde1e025bce6",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness."
+      ],
+      "findings": [
+        "PKG-CI-01"
+      ],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_cancel.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "69dcd436c13e63304a9078ac86f89f937c122ef4cff784be1484c8cf1fe59af0",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete script and registry->terminal->verification dependencies; followed sole owned solver check, normal Stop confirmation, terminal proof and normal Close. No UI/process action executed."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "69dcd436c13e63304a9078ac86f89f937c122ef4cff784be1484c8cf1fe59af0",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_cancel_picker.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "3c93a7e549cf772baab4faf61128e9cec6ca2e8d285a6ea810324a6d04880bfd",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete script and CancelNativePicker implementation; checked executable/hash, exact title/class/PID and posted WM_CLOSE. Windows cancellation receipt remains unexecuted."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "3c93a7e549cf772baab4faf61128e9cec6ca2e8d285a6ea810324a6d04880bfd",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_close.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "07c5ca0ab24030c38adb7b872fbb6b268d0a9d4d50f26478396abae037266336",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete script and UIA CloseWindow/CheckDialog/PostControl; followed launch lifetime, normal Quit and sole remaining dock handling."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "07c5ca0ab24030c38adb7b872fbb6b268d0a9d4d50f26478396abae037266336",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_diagnostic_read.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "76661d18b4d66aa6312b3e1d10dc5d05929712e79dc9d41d3e246d3b647bbad3",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete script and all imported function bodies; repaired missing transitive Capture/Action imports before first reader; diagnostic-only status retained."
+      ],
+      "findings": [
+        "PKG-FIX-04"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "76661d18b4d66aa6312b3e1d10dc5d05929712e79dc9d41d3e246d3b647bbad3",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_native.cs",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "b04c07d12ce6a829aa890bc63b1383cf2aee3f9f795e0bfc4834a9d9e5cffd40",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete native helper and all measurement-layout call sites, UIA NativeWindowFor/FullyVisible/WindowExposure and source guards; fixed unmeasured single-window work-area success."
+      ],
+      "findings": [
+        "PKG-REVIEW-01"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "b04c07d12ce6a829aa890bc63b1383cf2aee3f9f795e0bfc4834a9d9e5cffd40",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_registry.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "d58df4d82411e1d7f3a71a67d7096f8662dc919b1af2a4aaac63b8fff309c8bf",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05: Full source re-read as a direct dependency of GUI cancellation/diagnosis/layout review. Python terminal metadata tests: 5 passed; UIA source-only guards: 14 passed. No verifier was run on real product evidence."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "reviewedAtSha256": "d58df4d82411e1d7f3a71a67d7096f8662dc919b1af2a4aaac63b8fff309c8bf",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_resize.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "bf4f94d4916b5c90f7d59cce62a97fe4f1a11bf9dcdffa979e6a632ff8efe4c2",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete diagnostic script, native FitWindow/Details and process snapshot loop; this remains diagnostic-only and no GUI was started or resized."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "bf4f94d4916b5c90f7d59cce62a97fe4f1a11bf9dcdffa979e6a632ff8efe4c2",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_terminal.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "31315b5145a37c79a7de357ba481d1e644069ca676b4aebb911c9313dc7b7e23",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05: Full source re-read as a direct dependency of GUI cancellation/diagnosis/layout review. Python terminal metadata tests: 5 passed; UIA source-only guards: 14 passed. No verifier was run on real product evidence."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "reviewedAtSha256": "31315b5145a37c79a7de357ba481d1e644069ca676b4aebb911c9313dc7b7e23",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_terminal_tests.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "9d9e1f6bf73c3619079aab774874d62eb263b596d063fdd3b204692fe3676fae",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/benchmark/pc11_gui_terminal_tests.py",
+          "exitCode": 0,
+          "seconds": 0.114,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/pc11_gui_terminal_tests.log",
+          "testsRun": 5,
+          "interpretation": "Lightweight unit/static suite passed; Windows opt-in skips remain skips."
+        },
+        "2026-11-05: Full source re-read as a direct dependency of GUI cancellation/diagnosis/layout review. Python terminal metadata tests: 5 passed; UIA source-only guards: 14 passed. No verifier was run on real product evidence."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "reviewedAtSha256": "9d9e1f6bf73c3619079aab774874d62eb263b596d063fdd3b204692fe3676fae",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_uia.cs",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4e7d1dc31b7152b2c173ffe803b859f7213f70334bfd15fa156ff5696ba1fe7e",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete UIA helper, traversal, exposure classification, ownership/modal checks, posted controls and normal Close; traced script callers and existing/new source tests."
+      ],
+      "findings": [
+        "PKG-REVIEW-01"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "4e7d1dc31b7152b2c173ffe803b859f7213f70334bfd15fa156ff5696ba1fe7e",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_uia.ps1",
+      "reviewStatus": "partial",
+      "currentSha256": "c343c1a05f2d667f0981db6cc4c8fa4263bcf321f5dd65b8343594bb4540c6c7",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Complete body read and key dependencies followed; layout/diagnostic dependency review complete. Keep partial: profile-reuse/Measure versus qualify() source-picker and auto-bound evidence semantics still require contract reconciliation; no acceptance gate relaxed."
+      ],
+      "findings": [
+        "PKG-REVIEW-01",
+        "PKG-FIX-04",
+        "PKG-REVIEW-02"
+      ],
+      "requiredRuntimeValidation": [
+        "Complete the explicitly outstanding source/call-chain review before claiming full coverage.",
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_verify.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "9aa96a611ed5350341585437a19ab57004808861076684672e30ad144b9c9954",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05: Full source re-read as a direct dependency of GUI cancellation/diagnosis/layout review. Python terminal metadata tests: 5 passed; UIA source-only guards: 14 passed. No verifier was run on real product evidence."
+      ],
+      "findings": [
+        "PKG-REVIEW-02"
+      ],
+      "requiredRuntimeValidation": [],
+      "reviewedAtSha256": "9aa96a611ed5350341585437a19ab57004808861076684672e30ad144b9c9954",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_verify_tests.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "97d5ff8c054c55d3fafc00765264d7cdb4f5d3dfca0aca0e3c2a58d5cae3d0ed",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/benchmark/pc11_gui_verify_tests.py",
+          "exitCode": 0,
+          "seconds": 0.916,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/pc11_gui_verify_tests.log",
+          "testsRun": 34,
+          "interpretation": "Lightweight unit/static suite passed; Windows opt-in skips remain skips."
+        }
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_gui_windows.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "6b3ebab8ba755fa7958e94248b3ee475c5b718e841a424d2978d5944c926bd53",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete PID-filtered EnumWindows diagnostic and P/Invoke declarations; no mutation route or runtime execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "6b3ebab8ba755fa7958e94248b3ee475c5b718e841a424d2978d5944c926bd53",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/pc11_working_set.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "7d5ff88ce30ec17753ce461d057c36d940cf9d068c4c695125050d134ffff579",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/test_installed_profile.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "70961ea18cf5f50066fe9b58630cd30b0781048b2eefa88f82c8640918015a60",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/benchmark/test_installed_profile.py",
+          "exitCode": 5,
+          "seconds": 0.064,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_installed_profile.log",
+          "testsRun": 0,
+          "interpretation": "NOT_EXECUTED: product-launch CLI has no unittest tests; no product started."
+        }
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/test_pc11_gui_exposure_classifier.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "9ed960f43dfa68acd1941aea1ccba4948a3275b76beb2f76153029d81351be5f",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete pure classifier fixture; added exact production Inside predicate cases for fit, exact boundary and all four overflow directions. Add-Type is compilation and was NOT executed."
+      ],
+      "findings": [
+        "PKG-REVIEW-01"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "9ed960f43dfa68acd1941aea1ccba4948a3275b76beb2f76153029d81351be5f",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/test_pc11_gui_uia_static.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "f54fe39fbe2566e5a53b562c3a26fa4ef9a4d4cb44585b58ef646f69e738bfaa",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/benchmark/test_pc11_gui_uia_static.py",
+          "exitCode": 0,
+          "seconds": 0.064,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_pc11_gui_uia_static.log",
+          "testsRun": 12,
+          "interpretation": "Lightweight unit/static suite passed; Windows opt-in skips remain skips."
+        },
+        "2026-11-05: Full source re-read as a direct dependency of GUI cancellation/diagnosis/layout review. Python terminal metadata tests: 5 passed; UIA source-only guards: 14 passed. No verifier was run on real product evidence."
+      ],
+      "findings": [
+        "PKG-REVIEW-01",
+        "PKG-FIX-04"
+      ],
+      "requiredRuntimeValidation": [],
+      "reviewedAtSha256": "f54fe39fbe2566e5a53b562c3a26fa4ef9a4d4cb44585b58ef646f69e738bfaa",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/benchmark/test_pc11_working_set.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "e93b643f483885218fc8959b1e2d6438dd03178c4e5f78453b7e25101831574d",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/benchmark/test_pc11_working_set.py",
+          "exitCode": 0,
+          "seconds": 0.665,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_pc11_working_set.log",
+          "testsRun": 28,
+          "interpretation": "Lightweight unit/static suite passed; Windows opt-in skips remain skips."
+        }
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/ci/required-ctest-tests.json",
+      "reviewStatus": "partial",
+      "currentSha256": "bfe48b0b6a098a826b2c0a7bc3a7f282e72f3b6d0d8146ce3e1e379097bbad49",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read all 246 names across 9 groups and complete parser/tests; parser passed and six-hour CMake overrides verified at src/range-application-lib/CMakeLists.txt:94-114. Generated inventory and every CMake registration not audited; no CTest run."
+      ],
+      "findings": [
+        "PKG-CI-01"
+      ],
+      "requiredRuntimeValidation": [
+        "Complete the explicitly outstanding source/call-chain review before claiming full coverage."
+      ],
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/ci/verify_workflow_plan.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "89238cf37f5a56a3b8e223bdd9d3832c76f26f704b107454b7f5b16fa03cf061",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read all validators, repository confinement, evidence/dependency rules and CLI; read full unit tests and ran 9 tests plus read-only current-plan CLI. Added cp1252 success/error JSON regression tests without changing verifier semantics."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "reviewedAtSha256": "89238cf37f5a56a3b8e223bdd9d3832c76f26f704b107454b7f5b16fa03cf061",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/README-off-link-map-v44.md",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "67398b882fa12450d9b561bd3b6b6f88b64b6160ed2c5492314c893c0476ebf2",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "67398b882fa12450d9b561bd3b6b6f88b64b6160ed2c5492314c893c0476ebf2",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 38,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "openItem": "DOCUMENT_OR_TEMPLATE_ONLY_NOT_RELEASE_EVIDENCE"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/README-piezo-inventory-v43.md",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "a2dff3a519ae57cfa05c968e32f6db14514b1ab7cb1fdcf688df5986a35a4dfa",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/inventory_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "c68b3d09068f1e2a5c01d0ce872fb290c456dfab78a51907d8a2999c096c32f2",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Source review only this continuation. Actual Windows PE/dumpbin/map/install bytes, if applicable, require separately authorized validation; existing synthetic results were not rerun."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "c68b3d09068f1e2a5c01d0ce872fb290c456dfab78a51907d8a2999c096c32f2",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 1286,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          1286
+        ]
+      ],
+      "openItem": "REAL_WINDOWS_INPUT_VALIDATION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/README-v43-static-chain.md",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "a257a59684b53e80836a61dbc2322d1a71ab0f4a88dad3b5cd585fbd50d260cb",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "a257a59684b53e80836a61dbc2322d1a71ab0f4a88dad3b5cd585fbd50d260cb",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 106,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          106
+        ]
+      ],
+      "openItem": "DOCUMENT_OR_TEMPLATE_ONLY_NOT_RELEASE_EVIDENCE"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/README-v43.md",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "a7d2b61578c11c2e66b3a16f067180ee98c381fc1756e8db04537583c25bbf75",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/admission_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "27d15d72b75921de6582181438539dc201574b74d07768d2425bd45f0057f5d0",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [
+        "PKG-CONTRACT-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Run original fixture on Windows after separate authorization and full temp/profile redirection; do not relax Windows absolute paths, relabel historical Linux failures, or change frozen receipt case sets."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "27d15d72b75921de6582181438539dc201574b74d07768d2425bd45f0057f5d0",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 1310,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          1310
+        ]
+      ],
+      "openItem": "WINDOWS_PATH_FIXTURE_VALIDATION_PENDING"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/candidate-manifest-v43.admission-template.json",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "105c3bccf7d3a8a376f1b0c2263848c734e68bd1aea3ddf6796212ffecb3e0d5",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "105c3bccf7d3a8a376f1b0c2263848c734e68bd1aea3ddf6796212ffecb3e0d5",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 104,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          104
+        ]
+      ],
+      "openItem": "DOCUMENT_OR_TEMPLATE_ONLY_NOT_RELEASE_EVIDENCE"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/finalize-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "899fe8cffc529cd2e46ae656b9f0cb4319447dafa776d70459b96593ed6d604c",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete system-module admission, candidate/source/package/aggregate pins, 19 required IDs, terminal status and output flow; replaced all four hash-then-reread paths with hash-and-parse of the same byte buffer."
+      ],
+      "findings": [
+        "PKG-FIX-05"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "899fe8cffc529cd2e46ae656b9f0cb4319447dafa776d70459b96593ed6d604c",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/freeze-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "087b4ab2a6cc4c062a0c7656d11fb74d71f1a0cff85ee4ee1f69f69b5786786f",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-FIX-06"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Standalone test-producer-single-use-v43.ps1 -AuditRoot <allowed checkout artifact root>: three producers must preserve exact positive serialization, reject an existing receipt, and preserve a competing receipt injected during serialization; expected controls=9, no producer body/process/build/product action."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "087b4ab2a6cc4c062a0c7656d11fb74d71f1a0cff85ee4ee1f69f69b5786786f",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 366,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          372
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/inventory_adapter_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4aefcc545924b97d8ec09e662aeaccfcdf712c62e030df71372f2e7c2b394911",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Run original fixture on Windows after separate authorization and full temp/profile redirection; do not relax Windows absolute paths, relabel historical Linux failures, or change frozen receipt case sets."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "4aefcc545924b97d8ec09e662aeaccfcdf712c62e030df71372f2e7c2b394911",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 623,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          623
+        ]
+      ],
+      "openItem": "WINDOWS_PATH_FIXTURE_VALIDATION_PENDING"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/package-tree-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "cff61db1e4a92a11421e04baad03a653037f7197919fde67d9c14b99f23f449f",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-FIX-06",
+        "PKG-CONTRACT-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Standalone test-producer-single-use-v43.ps1 -AuditRoot <allowed checkout artifact root>: three producers must preserve exact positive serialization, reject an existing receipt, and preserve a competing receipt injected during serialization; expected controls=9, no producer body/process/build/product action."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "cff61db1e4a92a11421e04baad03a653037f7197919fde67d9c14b99f23f449f",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 420,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          426
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/release-build-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "14054a3fdca0b9027cdf00aa421e4fbed5d607d3be4556d0d7c13fa01a1f3452",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "14054a3fdca0b9027cdf00aa421e4fbed5d607d3be4556d0d7c13fa01a1f3452",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 269,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          269
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/contract-common-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "d9596d532cd5345b3056436ccdb4bdf9203211650a663f27c9fb64b1b5342351",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read all hashing, manifest single-read, no-GO, quoting and write helpers; followed supervisor/worker/watchdog calls and manifest regression. Enforced scalar identity pins and extracted strict handshake/terminal validators; canonical identity serialization unchanged."
+      ],
+      "findings": [
+        "PKG-FIX-02"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "d9596d532cd5345b3056436ccdb4bdf9203211650a663f27c9fb64b1b5342351",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/native-launch-boundary-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "5bfb8a6d4007c36dc578aae01d1ddba58fd93d6011cae1182441e1b60b96cbe3",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05: Read complete C#/PowerShell wrapper, structures and 3 inert fixtures; followed suspended creation, exact Job assignment, one-process cap, resume, handle close and kill-on-close paths through supervisor and test suite."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "5bfb8a6d4007c36dc578aae01d1ddba58fd93d6011cae1182441e1b60b96cbe3",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/root-bootstrap-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "6b95286a90d604aa88c0bee694e3d0edb9dc3ea1dd253bdd11b1515cd4861f83",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-CONTRACT-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "6b95286a90d604aa88c0bee694e3d0edb9dc3ea1dd253bdd11b1515cd4861f83",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 901,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          901
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/sampler-arguments-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "8e8896333d1d347b44e7b0d329a3079159f2819159f1329650b8090c22e43cc5",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete path/quoting/argument builder and validator, all sampler fixture cases, and candidate-control consumer lines 180-370; scalar pin and commandLine checks added without changing Windows paths, argv or accepted 13-case receipt shape."
+      ],
+      "findings": [
+        "PKG-FIX-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "8e8896333d1d347b44e7b0d329a3079159f2819159f1329650b8090c22e43cc5",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/supervisor-core-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "44e4af009b5d1609b87d506e2be7ae6cd5e9a2a2a26fb9a2b7a1757060f0a0ff",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete launch/ready/terminal/exit/error-drain lifecycle and worker fixture; now validates terminal scalar types before terminalAccepted. Existing assignment-failure and native-boundary tests read, not run."
+      ],
+      "findings": [
+        "PKG-FIX-02"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "44e4af009b5d1609b87d506e2be7ae6cd5e9a2a2a26fb9a2b7a1757060f0a0ff",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/watchdog-contract-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "a51e15e6f6fafd8c70533d50d3c2025dc2b06797f4fe2d0d0d67656468c9d1b9",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete watchdog wrapper and success/no-GO type checks; followed full supervisor result path and malformed Boolean/collection tests. No change needed in this wrapper."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "a51e15e6f6fafd8c70533d50d3c2025dc2b06797f4fe2d0d0d67656468c9d1b9",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/runtime/worker-handshake-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "e584504cdb8a809b0fe62a84902f9a344ac36d9592d0385166ecf1cee1b5bf20",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete manifest admission, bounded wait, ready parsing and terminal publication; strict validation occurs before terminal receipt construction. New standalone PS scalar regression source covers positive and malformed envelopes."
+      ],
+      "findings": [
+        "PKG-FIX-02"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "e584504cdb8a809b0fe62a84902f9a344ac36d9592d0385166ecf1cee1b5bf20",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/source-preflight-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "22e1edc70ae54c44915ce630a3b132f2dfbdb3c92f1b42e773e57a1cd38d4ed7",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-FIX-06",
+        "PKG-CONTRACT-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Standalone test-producer-single-use-v43.ps1 -AuditRoot <allowed checkout artifact root>: three producers must preserve exact positive serialization, reject an existing receipt, and preserve a competing receipt injected during serialization; expected controls=9, no producer body/process/build/product action."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "22e1edc70ae54c44915ce630a3b132f2dfbdb3c92f1b42e773e57a1cd38d4ed7",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 473,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          476
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/__init__.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "b343085e82c2e418f7a143accfd37aad08c25e0042a68bf81ceb211311a286e6",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Source review only this continuation. Actual Windows PE/dumpbin/map/install bytes, if applicable, require separately authorized validation; existing synthetic results were not rerun."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "b343085e82c2e418f7a143accfd37aad08c25e0042a68bf81ceb211311a286e6",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 1,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          1
+        ]
+      ],
+      "openItem": "REAL_WINDOWS_INPUT_VALIDATION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/admission-source-scope-probe-v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "3bba31b619f93b89920f9deaff15d7e724200093b3b5960910f9d72a2dca6b52",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Source review only this continuation. Actual Windows PE/dumpbin/map/install bytes, if applicable, require separately authorized validation; existing synthetic results were not rerun."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "3bba31b619f93b89920f9deaff15d7e724200093b3b5960910f9d72a2dca6b52",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 38,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "openItem": "REAL_WINDOWS_INPUT_VALIDATION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/fixtures/worker-fixture-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "fc71a76ce940fbbbaf603f3bf7e4fe28cb8c61994e76f8d5e66d35ae86a8c944",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete pinned-source worker wrapper and its error/exit forwarding into handshake; no launch performed."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "fc71a76ce940fbbbaf603f3bf7e4fe28cb8c61994e76f8d5e66d35ae86a8c944",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-build-off-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "557ece9525e8522c0525fb7e54933ad4e9a4bebccf7b332958acaba1e95176a1",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "557ece9525e8522c0525fb7e54933ad4e9a4bebccf7b332958acaba1e95176a1",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 232,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          232
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-fixture-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "ed88054982ca441e3f69016862a497c048bf43dc7a1f296fa3c6f40d360a2f08",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "ed88054982ca441e3f69016862a497c048bf43dc7a1f296fa3c6f40d360a2f08",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 435,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          435
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-control-contract-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "241f1ef9f3d5c403177cc4d3202ab0998f012071209d035428704991f36e3ef0",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read lines 175-379 for component source sets and sampler/watchdog coverage consumers, including exact 13 sampler cases/19 argv slots. Remaining top-level candidate binding, execution and aggregation not reviewed.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-FIX-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "reviewDate": "2026-11-05",
+      "previousReviewStatus": "partial",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "241f1ef9f3d5c403177cc4d3202ab0998f012071209d035428704991f36e3ef0",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 672,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          672
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-gate-aggregate-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "d37c68e4486702368b4e030b9336a9715beb404452071439ad7a34604bb403c9",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "d37c68e4486702368b4e030b9336a9715beb404452071439ad7a34604bb403c9",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 342,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          342
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-path-root-snapshot-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "b7beb22cb4b8950461d246ed8a51fe162862228b56191e318df801e3006db104",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "b7beb22cb4b8950461d246ed8a51fe162862228b56191e318df801e3006db104",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 80,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          80
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-candidate-path-root-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "8b0b0177dc8a855971c31edba47fed5948a824c0cc63252b9e2c0a9a9f6959da",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "8b0b0177dc8a855971c31edba47fed5948a824c0cc63252b9e2c0a9a9f6959da",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 329,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          329
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-final-readiness-candidate-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "fae8dceb69771c5a3cfd17b0eab47c9482010b5f6edf4fa933b3fda024c65bcd",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-POLICY-04"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Relative-create fixture explicitly rejects repository-local temp paths. Current all-artifacts-in-checkout policy blocks that fixture and aggregators invoking it even on Windows; resolve policy/fixture design separately without loosening reparse expectations."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "fae8dceb69771c5a3cfd17b0eab47c9482010b5f6edf4fa933b3fda024c65bcd",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 842,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          842
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-fixture-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4367031d9e48bccab7c830850fe753d76aae0e21d7afc81fd747b10e70d5fa53",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "4367031d9e48bccab7c830850fe753d76aae0e21d7afc81fd747b10e70d5fa53",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 316,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          316
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-integrity-candidate-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "332c0ead9a101eedb32a07e70139abbd438b32a2e08127271cdf71b02d09c456",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-EVIDENCE-05",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "c85277389b817747585d85b5ebbf8342196b552832163b4338ab77f15fc83349",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 230,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          230
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "c85277389b817747585d85b5ebbf8342196b552832163b4338ab77f15fc83349"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-finalize-scalar-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4eeb5d6b889dc1e49722c1757b90ccde517be846eec19c3581fc0fd4101614ca",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete exact-function AST fixture; added deterministic finalizer post-hash path replacement, wrong-pin and malformed pinned JSON cases. No AST execution or PS runtime test performed here."
+      ],
+      "findings": [
+        "PKG-FIX-05"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "4eeb5d6b889dc1e49722c1757b90ccde517be846eec19c3581fc0fd4101614ca",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-harness-path-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "2cce7c810114bf6c63377cd9c9b2b041b7859c688263341adcb908a703cb9935",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "2cce7c810114bf6c63377cd9c9b2b041b7859c688263341adcb908a703cb9935",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 72,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          72
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-manifest-single-read-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4cc4d5e51d5d89033527d74ff0c6758d639e0b3740b913d5a7307990bebf23e9",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete deterministic post-hash replacement and oversized manifest test; followed actual common Assert-V43CandidateManifest implementation. Not run on Linux."
+      ],
+      "findings": [
+        "PKG-FIX-05"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "4cc4d5e51d5d89033527d74ff0c6758d639e0b3740b913d5a7307990bebf23e9",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-negative-static-chain-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "79c95ade59fc49a498506f56a2e911dbba6896b5b8891a048a673f5fff3bef1e",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-EVIDENCE-05",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "ea4b80be5d0c06c7497856f70fec319bbb44123208044d5f0098732be8302ef1",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 173,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          173
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "ea4b80be5d0c06c7497856f70fec319bbb44123208044d5f0098732be8302ef1"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-package-tree-scalar-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "11e4ac1778b904134e135d2a0998a91ec171686044d07dc8324b1f18f790e665",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "11e4ac1778b904134e135d2a0998a91ec171686044d07dc8324b1f18f790e665",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 100,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-path-shadow-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4fb06d7d4be4771f5c9333a423d9eab19e2c53fe0363fce871fba377aed59d47",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "4fb06d7d4be4771f5c9333a423d9eab19e2c53fe0363fce871fba377aed59d47",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 381,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          381
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-preflight-gates-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "2190dc7143ba65634bfc81f507dffbbe78b40b8816eb89cccb361e7036f29162",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-EVIDENCE-05",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "c6cb887d07aa5ac38492423b4715466a96840ac7ead37eddd28948811070e33b",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 351,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          351
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "c6cb887d07aa5ac38492423b4715466a96840ac7ead37eddd28948811070e33b"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-producer-module-boundary-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "0b1c3033a16049fc0b637a9d482d6b3b48f5c6b1d8a35d15445019fe897b6051",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Complete test body read; finalizer and module-boundary helper traced. Three other producer callees (source-preflight/freeze/package-tree) remain unaudited, so retain partial for full chain.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "reviewDate": "2026-11-05",
+      "previousReviewStatus": "partial",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "0b1c3033a16049fc0b637a9d482d6b3b48f5c6b1d8a35d15445019fe897b6051",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 262,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          262
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-relative-create-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "d71920719a6d1a47b726e119b79059539f705e126e06779647f255d0966d5be3",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-POLICY-04"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Relative-create fixture explicitly rejects repository-local temp paths. Current all-artifacts-in-checkout policy blocks that fixture and aggregators invoking it even on Windows; resolve policy/fixture design separately without loosening reparse expectations."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "d71920719a6d1a47b726e119b79059539f705e126e06779647f255d0966d5be3",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 442,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          442
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-root-bootstrap-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "6cdf9b0ba9e532e9fd32fc06c19eea7f4d47179f994456759857ec5a8e8f7854",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "6cdf9b0ba9e532e9fd32fc06c19eea7f4d47179f994456759857ec5a8e8f7854",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 886,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          886
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43-fixture.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "43b744248020092f66293fe3051959b8b0340aa477227645159467a1c78cf603",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [
+        "PKG-CONTRACT-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "43b744248020092f66293fe3051959b8b0340aa477227645159467a1c78cf603",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 297,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          297
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-root-seal-boundary-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "5d0c4d5bb5ca5ccb108ee93efd768ecaa8b4b268ac818c824ec0e284e42c9f66",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-EVIDENCE-05",
+        "PKG-CONTRACT-03",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "059e7272cf74821ea4431ccb41ef677f79190c438d8afbef923f6da6b75287ff",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 429,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          429
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "059e7272cf74821ea4431ccb41ef677f79190c438d8afbef923f6da6b75287ff"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-sampler-arguments-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "11d7e7144dacf6994bfc9d1a47805d1d65405a4bd4031656de5a1abf5c1dae47",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete fake-first PATH, exact argv, no-GO and source-hash fixture; added six collection rejections inside existing assertions. Kept 13 receipt case rows/19 argv slots required by candidate-control gate."
+      ],
+      "findings": [
+        "PKG-FIX-03"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "11d7e7144dacf6994bfc9d1a47805d1d65405a4bd4031656de5a1abf5c1dae47",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-save-environment-preflight-v43-fixture.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "543094272a7a5b07501d37e543c3c41e8169ec20ee73eb98a7e2c5ab030cac81",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "543094272a7a5b07501d37e543c3c41e8169ec20ee73eb98a7e2c5ab030cac81",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 222,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          222
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-save-environment-preflight-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "a3ae208b4e23cc81e39b1278434d32fd93e7c5a342a8c0b8c77fb5ce23c654d3",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "a3ae208b4e23cc81e39b1278434d32fd93e7c5a342a8c0b8c77fb5ce23c654d3",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 308,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          308
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-save-predicate-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "279fa2f71b705139296bae00d26aed172b7dbf2498813c0f2b1ee0bb9ab58571",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "279fa2f71b705139296bae00d26aed172b7dbf2498813c0f2b1ee0bb9ab58571",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 457,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          457
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-source-scope-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "039daf5dd7a61baa5a5299d386f084e7cbd0fef964517517a03430755276eafc",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-EVIDENCE-05",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "2ddbc9040f9e399b28403c6f10aa52273ffcfe369598955e680d0b50fd0a06fd",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 191,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          191
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "2ddbc9040f9e399b28403c6f10aa52273ffcfe369598955e680d0b50fd0a06fd"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-static-chain-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "7a1128e6149d0cc89868fe4522224b79944717b2c2ecec55eaf984c192dca177",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-POLICY-04",
+        "PKG-EVIDENCE-05",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Relative-create fixture explicitly rejects repository-local temp paths. Current all-artifacts-in-checkout policy blocks that fixture and aggregators invoking it even on Windows; resolve policy/fixture design separately without loosening reparse expectations.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "1ce3c2edb0784cd756e95daa372ee02509bafbd18d7d15b7f92a26d38ba015f0",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 930,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          930
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "1ce3c2edb0784cd756e95daa372ee02509bafbd18d7d15b7f92a26d38ba015f0"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-static-gates-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "7e9e04f5cfff60e2abb7877f155dd6c8311456289bd01d8d09c289f38366541f",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "协调器完整复核最终OutputPath writer差异：UTF-8无BOM、原JSON深度/尾换行/状态不变；改为CreateNew并finally Dispose，禁止竞争者已创建的最终凭据被覆盖。未重审未变正文，不把新hash当旧验收。"
+      ],
+      "findings": [
+        "PKG-EVIDENCE-05",
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy.",
+        "Windows PS5.1执行独立test-final-receipt-single-use-v43.ps1，共7脚本×有效字节/已存在拒绝/序列化期间竞争3控制；21项全部应保留原/竞争字节。未运行。"
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "aab129c9ab1e9db1dc4b0db2f4e14fcc0fc2b90f5384bb6a1c537d42fda5eace",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 343,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          343
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED",
+      "reviewSha256BeforeCoordinatorDelta": "aab129c9ab1e9db1dc4b0db2f4e14fcc0fc2b90f5384bb6a1c537d42fda5eace"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-supervisor-worker-contract-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "348e6e9033949fa4fb7a4d6770d532fa227cffef832cca38a480bf9d903c85b8",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete synthetic fixture/negative manifest/watchdog/native/finalizer tests and their runtime callees; added six malformed candidate pin/container mutations. Frozen required IDs and source set unchanged."
+      ],
+      "findings": [
+        "PKG-FIX-02"
+      ],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "348e6e9033949fa4fb7a4d6770d532fa227cffef832cca38a480bf9d903c85b8",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test_admission_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "25722a100eb5765e503f63523698009f1ca579b90ef740f56d46ca9209ea9f29",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/packaging/piezo_gui_static_v43/tests/test_admission_v43.py",
+          "exitCode": 1,
+          "seconds": 0.716,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_admission_v43.log",
+          "testsRun": 25,
+          "interpretation": "FAILED_ON_LINUX: Windows-only install-root path contract rejects POSIX TemporaryDirectory fixtures before intended assertions; not an accepted test pass."
+        },
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Run original fixture on Windows after separate authorization and full temp/profile redirection; do not relax Windows absolute paths, relabel historical Linux failures, or change frozen receipt case sets."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "25722a100eb5765e503f63523698009f1ca579b90ef740f56d46ca9209ea9f29",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 924,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          924
+        ]
+      ],
+      "openItem": "WINDOWS_PATH_FIXTURE_VALIDATION_PENDING"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test_install_tree_review_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "855499916fe74aef5f63077c99e901df5afa3b529ae53e2ae9cb5b19151dcb59",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/packaging/piezo_gui_static_v43/tests/test_install_tree_review_v43.py",
+          "exitCode": 1,
+          "seconds": 0.164,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_install_tree_review_v43.log",
+          "testsRun": 19,
+          "interpretation": "FAILED_ON_LINUX: Windows-only install-root path contract rejects POSIX TemporaryDirectory fixtures before intended assertions; not an accepted test pass."
+        },
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Run original fixture on Windows after separate authorization and full temp/profile redirection; do not relax Windows absolute paths, relabel historical Linux failures, or change frozen receipt case sets."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "855499916fe74aef5f63077c99e901df5afa3b529ae53e2ae9cb5b19151dcb59",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 406,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          406
+        ]
+      ],
+      "openItem": "WINDOWS_PATH_FIXTURE_VALIDATION_PENDING"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test_inventory_adapter_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "3cd56fe97e29b87b118904b6ae867010ca17afc422489d0ec428660607acb906",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/packaging/piezo_gui_static_v43/tests/test_inventory_adapter_v43.py",
+          "exitCode": 1,
+          "seconds": 0.165,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_inventory_adapter_v43.log",
+          "testsRun": 22,
+          "interpretation": "FAILED_ON_LINUX: Windows-only install-root path contract rejects POSIX TemporaryDirectory fixtures before intended assertions; not an accepted test pass."
+        },
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Run original fixture on Windows after separate authorization and full temp/profile redirection; do not relax Windows absolute paths, relabel historical Linux failures, or change frozen receipt case sets."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "3cd56fe97e29b87b118904b6ae867010ca17afc422489d0ec428660607acb906",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 305,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          305
+        ]
+      ],
+      "openItem": "WINDOWS_PATH_FIXTURE_VALIDATION_PENDING"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tools/save-predicate-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "70f157c79e89b3344246a1184943aa050304d4c9024a45d79ad4f7386568fe53",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1 validation NOT_EXECUTED. Before any separately authorized run, verify all output/temp/profile paths remain inside the allowed checkout artifact root; do not run fixed build-path or outside-repository-temp routes under the current policy."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "70f157c79e89b3344246a1184943aa050304d4c9024a45d79ad4f7386568fe53",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 255,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          255
+        ]
+      ],
+      "openItem": "WINDOWS_EXECUTION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/piezo_gui_static_v43/tools/system-module-boundary-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "ac8e8e7add1a1744850affb4310825a575622dff0bbd4895967ca4b1c2ab0608",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05: Read complete module-root, preloaded command, trusted import and shadow checks, and complete producer-boundary test source. Other producer implementations remain separately pending."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Windows PowerShell 5.1/.NET/UIA/Win32 validation still required; no PowerShell, C# compilation, native launch or desktop action was executed in this Linux review."
+      ],
+      "reviewedAtSha256": "ac8e8e7add1a1744850affb4310825a575622dff0bbd4895967ca4b1c2ab0608",
+      "reviewDate": "2026-11-05"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/test_inventory_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "c86263cfc5593f5437701f3666fbea1e8996ed0bfa1f87bc5b1309d8aca582da",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/packaging/test_inventory_v43.py",
+          "exitCode": 0,
+          "seconds": 1.366,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_inventory_v43.log",
+          "testsRun": 43,
+          "interpretation": "Lightweight unit/static suite passed; Windows opt-in skips remain skips."
+        },
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Source review only this continuation. Actual Windows PE/dumpbin/map/install bytes, if applicable, require separately authorized validation; existing synthetic results were not rerun."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "c86263cfc5593f5437701f3666fbea1e8996ed0bfa1f87bc5b1309d8aca582da",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 800,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          800
+        ]
+      ],
+      "openItem": "REAL_WINDOWS_INPUT_VALIDATION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/test_verify_off_link_map_v44.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "36f9fdec5974b50ceaad4bf4db599c508c8cbd7f9be56977acc20c30d8a63774",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        {
+          "path": "scripts/packaging/test_verify_off_link_map_v44.py",
+          "exitCode": 0,
+          "seconds": 0.165,
+          "log": "artifacts/bugfix-audit-20261104/packaging/logs/test_verify_off_link_map_v44.log",
+          "testsRun": 17,
+          "interpretation": "Lightweight unit/static suite passed; Windows opt-in skips remain skips."
+        },
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Source review only this continuation. Actual Windows PE/dumpbin/map/install bytes, if applicable, require separately authorized validation; existing synthetic results were not rerun."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "36f9fdec5974b50ceaad4bf4db599c508c8cbd7f9be56977acc20c30d8a63774",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 298,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          298
+        ]
+      ],
+      "openItem": "REAL_WINDOWS_INPUT_VALIDATION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "scripts/packaging/verify_off_link_map_v44.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "cbe79f16b0841eeb7c2ed899a855da5c45a114247b13e05471b167f11bd0c32c",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "Python AST parse passed without bytecode generation.",
+        "2026-11-05 continuation: Complete source read, including entry/exit, helper dependencies, source and external-byte pin bindings, typed no-GO boundary, receipt shape and output handling. Historical 9ea1d51..e3d5277 addition covered by full-file reading. Prior test results retained; not rerun.",
+        "Continuation AST parse completed without import, bytecode, subprocess, Provider, dumpbin, or product execution."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Source review only this continuation. Actual Windows PE/dumpbin/map/install bytes, if applicable, require separately authorized validation; existing synthetic results were not rerun."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "cbe79f16b0841eeb7c2ed899a855da5c45a114247b13e05471b167f11bd0c32c",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 625,
+        "deletedLines": 0
+      },
+      "reviewScope": "Complete current file read, not search/AST-only; historical range introduces the entire file. Related producers and candidate consumers traced statically; no platform qualification.",
+      "reviewedLineRanges": [
+        [
+          1,
+          625
+        ]
+      ],
+      "openItem": "REAL_WINDOWS_INPUT_VALIDATION_NOT_PERFORMED"
+    },
+    {
+      "repository": ".",
+      "path": "src/CMakeLists.txt",
+      "reviewStatus": "reviewed_changed_hunks",
+      "currentSha256": "67534d15c3bd55d279e81af48e9299a86f6cece00491716ef9f29cd4fdb9394c",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05 continuation: Read complete 9ea1d51..e3d5277 diff. Checked OFF Agent conditions, normalized interpreter definitions, added test/property blocks and installation provenance against packaging consumers. No CMake/configure/build/CTest invocation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Separate authorized Windows configure/build and generated CTest inventory needed; all intended ON/OFF registrations must be preserved. Packaging did not edit this CMake file."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "67534d15c3bd55d279e81af48e9299a86f6cece00491716ef9f29cd4fdb9394c",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 176,
+        "deletedLines": 27
+      },
+      "reviewScope": "Complete historical diff and its displayed unchanged context only; not the complete file or every transitive target/test registration."
+    },
+    {
+      "repository": ".",
+      "path": "src/fea-solver/CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "0712de5c839d83c55791b56b44a772e50afbaacf24048020b44812d4beee94c7",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": ".",
+      "path": "src/fea-solver/tests/CMakeLists.txt",
+      "reviewStatus": "reviewed_changed_hunks",
+      "currentSha256": "1f0ee8f68dcdd7057316fbdc284b0044e9e0f2d7d3226a455e4d0b55fcd0183c",
+      "checks": [
+        "Inventoried only; detailed source review remains pending.",
+        "2026-11-05 continuation: Read complete 9ea1d51..e3d5277 diff. Checked OFF Agent conditions, normalized interpreter definitions, added test/property blocks and installation provenance against packaging consumers. No CMake/configure/build/CTest invocation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Separate authorized Windows configure/build and generated CTest inventory needed; all intended ON/OFF registrations must be preserved. Packaging did not edit this CMake file."
+      ],
+      "previousReviewStatus": "pending",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "1f0ee8f68dcdd7057316fbdc284b0044e9e0f2d7d3226a455e4d0b55fcd0183c",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 70,
+        "deletedLines": 11
+      },
+      "reviewScope": "Complete historical diff and its displayed unchanged context only; not the complete file or every transitive target/test registration."
+    },
+    {
+      "repository": ".",
+      "path": "src/fea/CMakeLists.txt",
+      "reviewStatus": "reviewed_changed_hunks",
+      "currentSha256": "7932e6207f75c925e4d15c38b57fcb2cf4e21e61b4275410397b6c6e3158b960",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05 continuation: Read complete 9ea1d51..e3d5277 diff. Checked OFF Agent conditions, normalized interpreter definitions, added test/property blocks and installation provenance against packaging consumers. No CMake/configure/build/CTest invocation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Separate authorized Windows configure/build and generated CTest inventory needed; all intended ON/OFF registrations must be preserved. Packaging did not edit this CMake file."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "7932e6207f75c925e4d15c38b57fcb2cf4e21e61b4275410397b6c6e3158b960",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 117,
+        "deletedLines": 51
+      },
+      "reviewScope": "Complete historical diff and its displayed unchanged context only; not the complete file or every transitive target/test registration."
+    },
+    {
+      "repository": ".",
+      "path": "src/packaging/windows/setup.iss.in",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "dadfd911b7fe488c2951fb9a8626fcf29d9abf1b92cdb9a96b1b8de9861d4f3e",
+      "checks": [
+        "Read source or complete relevant diff; focused consistency review, not a proof of correctness."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": []
+    },
+    {
+      "repository": ".",
+      "path": "src/range-workflow/CMakeLists.txt",
+      "reviewStatus": "reviewed_changed_hunks",
+      "currentSha256": "3bf6cb918bfd560357b205d82a6491aac3eba4cd6c50caab08f911a44aa9e1a5",
+      "checks": [
+        "Read selected functions/diff; remaining code requires continuation.",
+        "2026-11-05 continuation: Read complete 9ea1d51..e3d5277 diff. Checked OFF Agent conditions, normalized interpreter definitions, added test/property blocks and installation provenance against packaging consumers. No CMake/configure/build/CTest invocation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Separate authorized Windows configure/build and generated CTest inventory needed; all intended ON/OFF registrations must be preserved. Packaging did not edit this CMake file."
+      ],
+      "previousReviewStatus": "partial",
+      "reviewDate": "2026-11-05",
+      "reviewBatch": "continuation-after-api-interruption",
+      "reviewedAtSha256": "3bf6cb918bfd560357b205d82a6491aac3eba4cd6c50caab08f911a44aa9e1a5",
+      "historicalDiff": {
+        "range": "9ea1d51..e3d5277",
+        "addedLines": 76,
+        "deletedLines": 36
+      },
+      "reviewScope": "Complete historical diff and its displayed unchanged context only; not the complete file or every transitive target/test registration."
+    },
+    {
+      "repository": "src/range-base-lib",
+      "path": "src/rbl_progress.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "bbe4ca0d2dfc399cdb51cb715624f46d38dc04813bc89bc14497dcd4791881b4",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "7d1722aa246e0358d77e0ad24e1b9697305021711fa9f858e9bdae0ad21a9fdc",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "include/rcl_ai_query.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "822f50b66b111ddcbc3eb742288e1ed7c7389a7248ec8230d160d7dd21abf5a8",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "include/rcl_cloud_action.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "1bbf69d404acd69f7fe7808651d31c32e34cb108dd7e12689499b7830e452bdc",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "include/rcl_cloud_ai_query_request.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "ff226d8c0b72520f748e477d12107bfc8a9bd89495e33b4c21fcc1e39c48f7a7",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "include/rcl_cloud_ai_query_response.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "2e8b6f06cb3d68ffbe0c4c9e3887bce535cfcee73c9e7f299e1aa56796146080",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "include/rcl_cloud_client.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "8d0d3cf775e446ffed70042d4fd2dc98fc412060b3a198b765c66e9f0ba6b228",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "include/rcl_cloud_tool_action.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "3d569a4399d4e2718f7753ac595f31e449adaccc6fa1b2f946576d8250235ab6",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "src/rcl_cloud_action.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "ffb67e49a8ebab40e4a5f48a70528f7337029a2b002017ef99d6b05a25dd42a7",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "src/rcl_cloud_client.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "46defeaaa90ce6e5d1bf8e26f34441bc2fcd37fbf1a2259536ab23ff23dd95dc",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "src/rcl_cloud_tool_action.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "f38fb25f0cb20743c3f836c2df887f7cdd9d3bc37d62abe1f275bbaccd02f99f",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "src/rcl_http_message.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "81b38cc6868539c2d074c2f8b544ef266caf308a27471b37748787410fa2f79d",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "tests/CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "b42c01db37e3716d92e3a1fb415285e2a38e16e00ecfd9c95d1783dc7b3ff08c",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation.",
+        "2026-11-05 final integrity check detected concurrent CMake compatibility edit after ledger generation. Historical review retained at historicallyReviewedSha256; current change not reviewed by packaging.",
+        "协调器在外部修补完成后通读当前49行：Qt6 Test/AUTOMOC、六目标source/link/add_test循环、Windows环境保护、Agent-OFF独立目标及45/90秒属性；新文件存在，未配置/编译。此前源码变更不再作为未读项，但不继承另一会话运行结论。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "获授权后配置/编译并在Qt6.10/6.11分别执行HTTP limit与原有cloud/Agent ON-OFF目标；本审计未执行。"
+      ],
+      "historicallyReviewedSha256": "04c28681ace234f644ebdd313fcedd78a864b68554ddc7449bcfe15a5ca76a0d",
+      "priorReviewStatusBeforeCoordinatorRead": "partial",
+      "reviewProvenance": "inherited baseline plus coordinator full current CMake read; external source writer separate"
+    },
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "tests/tst_agent_off_surface.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "b8cb6c6ac76c2406dd107a617d0cc7b2c7b6636e9d2e4ba4f144439fb2564b49",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-gui-lib",
+      "path": "CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "68d0d986cefa36638a9e8cdd21609dd47267c7525048f4261f95b817291c14a9",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-gui-lib",
+      "path": "include/rgl_application.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "5510bbd47d3baf719414f46a659afdff1e7c47f81d3e1f4c682b0b8cee193647",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-gui-lib",
+      "path": "include/rgl_application_settings.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "d5bd27699ad189c2e9b754346c48dc083a3355d4347d13a7c453592c56b589c3",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-gui-lib",
+      "path": "include/rgl_cloud_ai_query_widget.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "a2632e624ae6b3a7c8819ba5fb08913c35d7fa0a2153cf421243ccfa9842be24",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-gui-lib",
+      "path": "src/rgl_application.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "2e9a03fa9e30898c72797b82333da2d7b33780568601638c4e0f9d37751cc48d",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-gui-lib",
+      "path": "src/rgl_application_settings.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "5972bf1f659198010132d94e4d948c8a4ddb2c1ae0f35b77b2408dfa45eb9f87",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-ai-lib",
+      "path": "include/rai_agent.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "be260d2758201f04e9ca477b1a40684dbefcef0488ce0f691fab99cb9273da58",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-ai-lib",
+      "path": "include/rai_tool_stream.h",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "ab66d0447d6b58e5f8916a84547e4dddcfa4c0635c721cd80430c3c832f826c8",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-ai-lib",
+      "path": "src/rai_agent.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "95531606d64dc8b3fc8dbea47ff3c829fa0e8c2d91a6a42867378cb1e0b9b1d5",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-ai-lib",
+      "path": "src/rai_tool_stream.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "0494afc028887e98ca71b57e4b6167705978ae0b8555cb743609757dcf0588b0",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-ai-lib",
+      "path": "tests/tst_agent_tool_stream.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "09b8e8519c09683eee91cdc07febdf4350727a210230847fe972de7746fd8738",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    },
+    {
+      "repository": "src/range-ai-lib",
+      "path": "tests/tst_agent_tool_turn.cpp",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "09b47fb524d52f64f8d0a64766001bdb6a04c400185802856f94131ed981f371",
+      "checks": [
+        "Read complete small source/test/CMake diff against baseline gitlink; no compile/runtime validation."
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "Future configured build and affected tests; not run per user no-build instruction."
+      ]
+    }
+  ],
+  "concurrentSourceChanges": [
+    {
+      "repository": "src/range-cloud-lib",
+      "path": "tests/CMakeLists.txt",
+      "priorSha256": "04c28681ace234f644ebdd313fcedd78a864b68554ddc7449bcfe15a5ca76a0d",
+      "currentSha256": "b42c01db37e3716d92e3a1fb415285e2a38e16e00ecfd9c95d1783dc7b3ff08c",
+      "attribution": "External CMake compatibility session owns this path per coordinator notice; packaging did not edit it. Historical batch review does not cover this delta."
+    }
+  ],
+  "supplementalFiles": [
+    {
+      "path": "scripts/ci/test_workflow_plan.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "32b6353ff7e0303ce1ca08d6a8dc5ee09ed86fa3cfb87f17fbac7170a9ea27f7",
+      "checks": [
+        "Full test source read; 9 tests passed including new cp1252 success/error cases."
+      ]
+    },
+    {
+      "path": "scripts/ci/verify_required_ctest.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "45af94d3f265d462e6a627bd0bf2a7eb1654b542526fb86d307dd7f38f051fb4",
+      "checks": [
+        "Full source read as manifest/workflow consumer; real CTest command never called."
+      ]
+    },
+    {
+      "path": "scripts/ci/test_verify_required_ctest.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "19e84018123f6000ae0ed14105a3c746a0431de86e27d3ecc515f0663cb749e2",
+      "checks": [
+        "Full source read before running; 7 tests passed; inventory runners mocked."
+      ]
+    },
+    {
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-worker-receipt-types-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "3fc4c73b8a00d94769bd0852e1dd1ab2b1a4eac472b75fb0b1d5459e5fa628cb",
+      "checks": [
+        "New independent no-compile/no-process PS scalar regression source. NOT_EXECUTED; not added to frozen source-set or original 114-file inventory."
+      ]
+    },
+    {
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-producer-single-use-v43.ps1",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "10b8d3deb5fa39c4659977a7b987bcb12ff45e6462b46d2e3191ea053217e417",
+      "checks": [
+        "Standalone regression for PKG-FIX-06; excluded from original 114 rows and frozen source/receipt case lists. PowerShell fixture source only; NOT_EXECUTED, no compilation or child process."
+      ]
+    },
+    {
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test_producer_single_use_source_v43.py",
+      "reviewStatus": "reviewed_static",
+      "currentSha256": "4471c067e0842f81679a790c0976a722f3c3eb042a93f28a32c53be0db90975d",
+      "checks": [
+        "Standalone regression for PKG-FIX-06; excluded from original 114 rows and frozen source/receipt case lists. Three source-only tests PASS, including overwrite and detached-writer mutations; old HEAD sources rejected. Not PowerShell runtime proof."
+      ]
+    },
+    {
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test_final_receipt_single_use_v43.py",
+      "currentSha256": "5912f46b55f7abf64ca09c13630df37564b7004eff3b67e9e00941372f48a21e",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "协调器全文阅读新独立回归；Python只查源码，PS只抽生产writer函数，不执行聚合/产品主体。"
+      ],
+      "findings": [
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "PS5.1真实exclusive创建/竞争控制21项未执行；源码guard不代替平台行为。"
+      ]
+    },
+    {
+      "path": "scripts/packaging/piezo_gui_static_v43/tests/test-final-receipt-single-use-v43.ps1",
+      "currentSha256": "f89c67b5fa28d91372ffc950b8bf7e4f80d8406718eadd64a18891d6bf3559d8",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "协调器全文阅读新独立回归；Python只查源码，PS只抽生产writer函数，不执行聚合/产品主体。"
+      ],
+      "findings": [
+        "PKG-FIX-07"
+      ],
+      "requiredRuntimeValidation": [
+        "PS5.1真实exclusive创建/竞争控制21项未执行；源码guard不代替平台行为。"
+      ]
+    }
+  ],
+  "inventoryPolicy": "Original assigned inventory remains exactly 114 rows. Supplemental dependency/test sources are listed separately and excluded from coverageCounts. Syntax parsing/source guards are not complete review or platform execution. reviewed_changed_hunks denotes a complete historical diff only, not a full-file review. reviewed_static can retain explicit open source/contract/runtime items and is never acceptance.",
+  "remainingPriority": [
+    "GUI profile-reuse/Measure versus frozen qualification evidence semantics remain unresolved (PKG-REVIEW-02); harness stays partial.",
+    "Required CTest manifest stays partial: full generated ON/OFF inventory and every registration not reviewed; no CMake or CTest executed.",
+    "Reserved cloud tests/CMakeLists.txt stays partial for external-session delta; no cloud/model source edits or review takeover.",
+    "Four root CMake files are reviewed_changed_hunks only, not complete-file reviews; future integration belongs to separately authorized build verification.",
+    "PKG-CONTRACT-03 canonical JSON mismatch requires explicit frozen-identity decision and Windows confirmation; no pin regenerated.",
+    "PKG-POLICY-04 blocks root relative-create and final-readiness under current all-artifacts-in-checkout rule; resolve before any platform run.",
+    "Windows-specific and full-chain execution remain NOT_EXECUTED; three historical Linux fixture failures unchanged. Standalone PKG-FIX-06 PS regression pending; fixture/aggregate output writers remain open (PKG-EVIDENCE-05)."
+  ],
+  "coordinatorFinalWriterSupplement": {
+    "sourceFiles": 7,
+    "newRegressionFiles": 2,
+    "evidence": "artifacts/bugfix-audit-20261104/resume-20261105/packaging/final-receipt-checks/checks.json",
+    "scope": "Only complete seven final-writer changed hunks supplemented; prior whole-file review depth inherited. No acceptance IDs, golden hashes, pins or product flags changed."
+  },
+  "coordinatorCloudCMakeRead": "2026-11-05：完整读取外部修补后的49行，仅静态，未编辑该CMake/启动构建。"
+}

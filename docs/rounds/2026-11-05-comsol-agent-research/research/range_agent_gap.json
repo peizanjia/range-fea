@@ -1,0 +1,452 @@
+{
+  "schema": "range-agent-gap-handoff/v1",
+  "date": "2026-11-05",
+  "repository": "/home/erwin/Projects/range-fea",
+  "root_head": "e3d527781add4cd388276392f63a7c9ee9bd5ec2",
+  "scope": "Read-only source inspection; existing dirty worktree preserved. No configure/build/CTest/product/provider execution. Only these two report files written.",
+  "status_semantics": {
+    "implemented_current_tested": "Current inspected source has matching executed result evidence. No such numerical or GUI end-to-end PASS established in this task.",
+    "implemented_but_untested": "Implementation and test source exist; present dirty bytes have no matching execution evidence examined here. Historical passes stated separately.",
+    "unsupported": "Current specified interface rejects/does not expose capability; not a statement that every lower layer lacks it.",
+    "plan_only": "Desired deliverable or end-to-end acceptance remains open; components may exist.",
+    "waived": "Explicitly waived course acceptance requirement, unperformed; not passed and not a defect to silently reinstate."
+  },
+  "historical_and_current_evidence": [
+    {
+      "path": "docs/audit_20261104/RESUME_REVIEW_20261105.md",
+      "lines": "3-5",
+      "evidence_identity": "current_audit_record"
+    },
+    {
+      "path": "docs/audit_20261104/RESUME_REVIEW_20261105.md",
+      "lines": "42-49",
+      "evidence_identity": "current_audit_record"
+    },
+    {
+      "path": "docs/audit_20261104/RUNTIME_VALIDATION_20261105.md",
+      "lines": "3-10",
+      "evidence_identity": "unexecuted_validation_plan"
+    },
+    {
+      "path": "docs/acceptance/phase-checkpoint-20261030.md",
+      "lines": "30-52",
+      "evidence_identity": "historical_checkpoint"
+    }
+  ],
+  "waived": [
+    {
+      "item": "three-arm 180-slot solver case comparison and independent holdout",
+      "status": "waived",
+      "performed": false,
+      "evidence": {
+        "path": "docs/acceptance/phase-checkpoint-20261030.md",
+        "lines": "51-51",
+        "evidence_identity": "historical_explicit_waiver"
+      }
+    },
+    {
+      "item": "clean Windows-account first use",
+      "status": "waived",
+      "performed": false,
+      "evidence": {
+        "path": "docs/acceptance/phase-checkpoint-20261030.md",
+        "lines": "52-52",
+        "evidence_identity": "historical_explicit_waiver"
+      }
+    }
+  ],
+  "gaps": [
+    {
+      "id": "G01",
+      "feature": "自然语言到完整物理规格",
+      "status": "implemented_but_untested",
+      "current": "Agent已有ask_user、inspect、diagnose和完整ProblemSpec提案；物理规格限定axialRod/cantileverBeam。自然语言任意压电结构到完整可验证规格未交付。",
+      "recommended_surface": "先固定课程案例输入清单、单位、缺参澄清和来源；为压电建立闭合规格及确定性校验，再接入Agent。",
+      "evidence": [
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1096-1119",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "1232-1279",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G02",
+      "feature": "几何与材料建模",
+      "status": "implemented_but_untested",
+      "current": "支持现有节点坐标、刚体变换、常量材料编辑；当前Agent命令枚举没有任意新建CAD/拓扑/几何布尔/压电本构张量建模入口。不能把限定编辑等同完整建模。",
+      "recommended_surface": "课程首版使用有来源的固定几何或原生压电模板；补齐受限建模命令、物理ID及预览/撤销，不开放任意代码。",
+      "evidence": [
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1080-1083",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "1272-1279",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rmodel_command_service.cpp",
+          "lines": "913-933",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G03",
+      "feature": "网格生成与物理重绑定",
+      "status": "implemented_but_untested",
+      "current": "Host已交付mesh.generate/accept/cancel，均需fresh manual approval；accept新建未绑定文档。mesh.rebind.static限定静力、单连通线性TRI1/TETRA1等条件；压电重绑定不属于此入口。",
+      "recommended_surface": "明确课程网格路径；若采用此网格服务，补压电材料/电极/机械BC的显式重绑定和拒绝测试。",
+      "evidence": [
+        {
+          "path": "src/fea/src/model_command_host.cpp",
+          "lines": "2871-2888",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1867-1867",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rmesh_rebind_service.cpp",
+          "lines": "244-292",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rmesh_rebind_service.cpp",
+          "lines": "533-547",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G04",
+      "feature": "边界、载荷与初值",
+      "status": "implemented_but_untested",
+      "current": "Agent支持entity.boundary.set；trusted lane仅pointForce，轴杆只验证ux且横向输入必须零。压电电势/电荷/电极控制不在该通用边界命令闭环内。",
+      "recommended_surface": "为固定压电案例列清机械约束、外载、初始状态、电端口及单位；缺参先澄清，物理改变须新批准。",
+      "evidence": [
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1080-1083",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "1460-1484",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "1521-1553",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G05",
+      "feature": "压电器件与控制配置的Agent接入",
+      "status": "unsupported",
+      "current": "Core明确发布piezo.configure-experiment并调用RPiezoExperimentService，但Agent documentCommandSchema不含该命令，工具描述亦未暴露它；底层压电能力不能视为当前Agent可配置能力。",
+      "recommended_surface": "为piezo.configure-experiment提供严格窄适配，复用whole-experiment预览、源身份、批准、撤销及拒绝语义；增加真实Host集成回归。",
+      "evidence": [
+        {
+          "path": "src/range-application-lib/src/rmodel_command_service.cpp",
+          "lines": "920-923",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rmodel_command_service.cpp",
+          "lines": "1130-1172",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1080-1083",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1120-1121",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G06",
+      "feature": "求解与作业可靠性",
+      "status": "implemented_but_untested",
+      "current": "analysis.run/cancel/recover及真实job引用已实现。11/05持久化和checkpoint修补仍未编译运行；历史锁释放、Win32 error3和终态失败后的核对流程未关闭。",
+      "recommended_surface": "先完成当前源码目标测试和原生CLI回归，再跑固定课程案例；保存源/安装/作业/工件/授权身份及失败原始日志。",
+      "evidence": [
+        {
+          "path": "src/fea/src/model_command_host.cpp",
+          "lines": "2889-2907",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "docs/audit_20261104/RESUME_REVIEW_20261105.md",
+          "lines": "26-29",
+          "evidence_identity": "current_audit_record"
+        },
+        {
+          "path": "docs/audit_20261104/RUNTIME_VALIDATION_20261105.md",
+          "lines": "16-21",
+          "evidence_identity": "unexecuted_validation_plan"
+        },
+        {
+          "path": "docs/audit_20261104/RUNTIME_VALIDATION_20261105.md",
+          "lines": "36-38",
+          "evidence_identity": "open_issue_record"
+        }
+      ]
+    },
+    {
+      "id": "G07",
+      "feature": "错误诊断与故障归因",
+      "status": "implemented_but_untested",
+      "current": "确定性诊断覆盖缺支承、单位、材料、退化单元、来源陈旧；不可判定的求解失败返回SOLVER_FAILURE_UNCLASSIFIED并保存诊断包/停止。不是任意物理或求解器故障自动根因系统。",
+      "recommended_surface": "固定压电案例补故障分类及可复现负例；未分类时保留证据并停止，不通过乱改支承或材料修复。",
+      "evidence": [
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "2040-2059",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "2089-2092",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_mechanics_service.cpp",
+          "lines": "2245-2310",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G08",
+      "feature": "独立残差与物理可信性验证",
+      "status": "implemented_but_untested",
+      "current": "已实现独立静力K*u-f、模态K*phi-omega²*M*phi、瞬态M*a+C*v+K*u-f、运动学与能量检查；仅native-passive rod/beam，dense参考上限192总DOF。当前未实现通用压电机电耦合独立验证。",
+      "recommended_surface": "为课程压电模型建立机械/电荷平衡、电端口功和机电能量账本及独立参考。现有残差是离散代数/时间一致性检查，不是Galerkin空间后验误差估计。",
+      "evidence": [
+        {
+          "path": "src/range-application-lib/src/rtrusted_verification_service.cpp",
+          "lines": "247-264",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_verification_service.cpp",
+          "lines": "426-426",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_verification_service.cpp",
+          "lines": "467-467",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_verification_service.cpp",
+          "lines": "524-558",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_verification_service.cpp",
+          "lines": "728-732",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G09",
+      "feature": "保持物理的自动修复",
+      "status": "implemented_but_untested",
+      "current": "授权数值字段、物理摘要digest及预算守门已实现。当前自动mesh proposal仅当required失败全部为位移/频率精度失败时增segments；静力残差失败不会直接触发此自动加密。",
+      "recommended_surface": "先复验该边界，再为压电增加明确数值修复策略。保留阈值、材料、几何物理、BC/载荷和控制律；越权或物理变更进入needs_confirmation。",
+      "evidence": [
+        {
+          "path": "src/range-application-lib/src/rtrusted_experiment_service.cpp",
+          "lines": "921-923",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_experiment_service.cpp",
+          "lines": "1783-1838",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_experiment_service.cpp",
+          "lines": "1884-1900",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G10",
+      "feature": "网格/时间步收敛",
+      "status": "implemented_but_untested",
+      "current": "已实现uniform segments翻倍或dt减半且保持时长；固定1%相邻QoI变化、至少两次连续达标。适用位移、静力应变能、选定模态频率。应力/反力收敛、通用压电收敛、Richardson/GCI或解析真误差保证未由此实现。",
+      "recommended_surface": "课程明确QoI和观察位置，保留所有层级/误差/成本/曲线；压电单独实现及验证电端量/控制性能QoI，避免把相邻变化称绝对误差。",
+      "evidence": [
+        {
+          "path": "src/range-application-lib/src/rtrusted_convergence_service.cpp",
+          "lines": "387-416",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_convergence_service.cpp",
+          "lines": "480-528",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_convergence_service.cpp",
+          "lines": "563-624",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-application-lib/src/rtrusted_convergence_service.cpp",
+          "lines": "699-770",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "docs/acceptance/phase-checkpoint-20261030.md",
+          "lines": "49-49",
+          "evidence_identity": "historical_checkpoint"
+        }
+      ]
+    },
+    {
+      "id": "G11",
+      "feature": "原生后处理与图表",
+      "status": "implemented_but_untested",
+      "current": "Agent已有native catalog/channels/series/summary、open和display；压电编码通道语法已加入。Python runtime有plot/raw export schema，但Agent工具表未提供任意通用plot/export工具，不能把runtime可调用等同模型工具可用。",
+      "recommended_surface": "固定课程后处理图和物理量单位；把已验证的曲线/场显示/CSV导出接口按需要窄适配给Agent，保持native/reference/caller来源区分。",
+      "evidence": [
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "103-106",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1135-1143",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/fea/src/model_command_host.cpp",
+          "lines": "3080-3085",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/range-workflow/python/range_workflow/service.py",
+          "lines": "1530-1564",
+          "evidence_identity": "current_source"
+        }
+      ]
+    },
+    {
+      "id": "G12",
+      "feature": "可提交报告与安装版全流程",
+      "status": "plan_only",
+      "current": "Agent会报告Host验证事实，预算耗尽时追加Host证据快照；但完整当前安装版模型→求解→诊断→收敛→后处理→报告导出仍未完成验收。工具表不含专门的课程报告导出工具。",
+      "recommended_surface": "实现一个固定案例可回查工件的报告包（输入、来源、推导、独立验证、收敛、图表、限制），然后由安装版跑完整Provider/Host/solver闭环并保存收据。",
+      "evidence": [
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1858-1859",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "3924-3924",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "docs/acceptance/phase-checkpoint-20261030.md",
+          "lines": "50-52",
+          "evidence_identity": "historical_checkpoint"
+        },
+        {
+          "path": "docs/audit_20261104/RESUME_REVIEW_20261105.md",
+          "lines": "46-49",
+          "evidence_identity": "current_audit_record"
+        }
+      ]
+    },
+    {
+      "id": "G13",
+      "feature": "会话恢复与长期任务",
+      "status": "implemented_but_untested",
+      "current": "会话持久化、只读核对、job recovery入口已有；恢复不复制批准。普通GUI native恢复主要限未启用外部控制的Newmark结构动力学；Workflow杆/梁active/passive为另一域。热trace旧前缀同尺寸改写边界仍开放。",
+      "recommended_surface": "复验当前会话/任务/源身份及中断恢复；课程提供明确可恢复/需重算/待核对矩阵；压电恢复逐后端与控制器状态验证。",
+      "evidence": [
+        {
+          "path": "docs/CONVERSATIONS.md",
+          "lines": "15-28",
+          "evidence_identity": "current_contract"
+        },
+        {
+          "path": "docs/RECOVERY_OPERATIONS.md",
+          "lines": "7-19",
+          "evidence_identity": "current_contract"
+        },
+        {
+          "path": "src/fea/src/agent_task_runner.cpp",
+          "lines": "1131-1134",
+          "evidence_identity": "current_source"
+        },
+        {
+          "path": "docs/audit_20261104/RUNTIME_VALIDATION_20261105.md",
+          "lines": "36-37",
+          "evidence_identity": "open_issue_record"
+        }
+      ]
+    }
+  ],
+  "documentation_conflict": {
+    "stale": {
+      "path": "docs/AGENT_OPERATIONS.md",
+      "lines": "57-77",
+      "evidence_identity": "stale_contract_text"
+    },
+    "current": {
+      "path": "src/fea/src/agent_task_runner.cpp",
+      "lines": "1080-1143",
+      "evidence_identity": "current_source"
+    },
+    "finding": "Older manual lists only four Core commands and says registry memory-only/result channel unavailable; current source exposes geometry/mesh/recovery/result tools and audit records persistence changes. Runtime capabilities are the authority; do not downgrade implemented features based on stale prose."
+  },
+  "not_executed_commands": [
+    "host_capabilities {} -> range.host/v1 capabilities.query",
+    "workflow_capabilities {} -> range.workflow/v1 capabilities.query",
+    "ctest --test-dir <fresh-build> -R \"^(tst_trusted_mechanics_service|tst_trusted_verification_service|tst_trusted_experiment_service|tst_trusted_convergence_service|tst_agent_task_runner)$\" --output-on-failure",
+    "Use selectors and platform/identity/isolation requirements in docs/audit_20261104/RUNTIME_VALIDATION_20261105.md:14-21; CTest test names are not necessarily executable names (tst_agent_task_runner is hosted by tst_gui_model_lifecycle --agent-runner, src/fea/CMakeLists.txt:774)."
+  ],
+  "source_sha256": {
+    "docs/CONVERSATIONS.md": "7bba082d9045e29e69fb6e95a464028acfddf6e7752449f59dcc40eca63c37ea",
+    "docs/RECOVERY_OPERATIONS.md": "5d916bd60c5fb21dc8d987b9678d82ed865d64d710a52647928e4a37371147b3",
+    "docs/acceptance/phase-checkpoint-20261030.md": "6ac943f84256658ab6478647f825b641a1f885ccafdad6ee48132ea26c08286a",
+    "docs/audit_20261104/RESUME_REVIEW_20261105.md": "a325607c73683e2501a1bd9a2d211239e16f14a72831a9bf6dd0801f3fc49927",
+    "docs/audit_20261104/RUNTIME_VALIDATION_20261105.md": "e143529e1539a1cf261d25cf607b076b79e297635b7dbbbfb8dfcf63d669c37e",
+    "src/fea/src/agent_task_runner.cpp": "ee8571583bc904b17d6d8a247c67221ec687aa3628b506b5b2b7018a9589de4b",
+    "src/fea/src/model_command_host.cpp": "36937442e94cd4d7138bd475e21f8d97f4a245a3ec06f4a2b0f695988c4534ab",
+    "src/range-application-lib/src/rmesh_rebind_service.cpp": "92de169107dd6d2fc74aa082b10c405edf69bf7c72cce514409898436dede9d2",
+    "src/range-application-lib/src/rmodel_command_service.cpp": "e65ad16e5d18ed2607056e120b6ba6cf1b1ed67c7618e2adc599c6329066ab33",
+    "src/range-application-lib/src/rtrusted_convergence_service.cpp": "3385477e11f2f8d0593c186bde946373e700e148ffe29d3898c0c6b9b99cb523",
+    "src/range-application-lib/src/rtrusted_experiment_service.cpp": "c064f65f0c44f3b310afd74267e4229d322a6ee9055f1433dddd21324e0c834e",
+    "src/range-application-lib/src/rtrusted_mechanics_service.cpp": "f860e5bf1e799b1db9a05649b9a00c6f56dc4c15cc96b3aae3c9c814d7c53875",
+    "src/range-application-lib/src/rtrusted_verification_service.cpp": "9290f7204fa5fee51d5d422c202fcee1ed7a0e4079dcd14a2dac6ebc5f3643a6",
+    "src/range-workflow/python/range_workflow/service.py": "cc201f63f11233233e416856ccdad5b86397a02392b1318e656e7f139ace4072"
+  }
+}

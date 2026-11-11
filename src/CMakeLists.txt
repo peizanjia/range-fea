@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.21)
 project(RangeFea)
-set(RANGE_PRIVATE_PYTHON_DIRECTORY "" CACHE PATH "Verified private Python runtime assembled by scripts/packaging/build_private_python.py")
+set(RANGE_PRIVATE_PYTHON_DIRECTORY "" CACHE PATH "Verified private Python runtime assembled by scripts/packaging/python-runtime/build_private_python.py")
 file(TO_CMAKE_PATH "${RANGE_PRIVATE_PYTHON_DIRECTORY}" RANGE_PRIVATE_PYTHON_DIRECTORY_CMAKE)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(Config.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/PrepareDocumentation.cmake)
 
 set(DEBUG_EXT "")
 set(PROJECT_HUMAN_REL_NAME "${PROJECT_HUMAN_NAME}")

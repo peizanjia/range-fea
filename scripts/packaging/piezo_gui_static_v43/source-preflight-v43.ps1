@@ -448,7 +448,7 @@ $receipt = [ordered]@{
         pathOrder = 'UTF8_BYTE_LEXICOGRAPHIC'
         treeDigest = "SHA256(UTF8(JSON(sourceFiles, sort_keys=true, separators=(',',':'), ensure_ascii=false)))"
     }
-    sourceExclusions = @('build/** generated/configured output', '.git/** metadata', 'other narrative docs and evidence; docs/PIEZO_DEPENDENCY_PROVENANCE.md is pinned by install/release evidence')
+    sourceExclusions = @('build/** generated/configured output', '.git/** metadata', 'other narrative docs and evidence; docs/rounds/2026-10-12-piezo-delivery/design/PIEZO_DEPENDENCY_PROVENANCE.md is pinned by install/release evidence')
     requiredCTestManifestPath = $RequiredCTestManifestPath
     requiredCTestManifestSha256 = $manifestSha
     requiredCTestGroupCount = $manifestGroupCount

@@ -196,7 +196,7 @@ function Get-CcSourcePaths($Receipt, [string]$Kind) {
             Assert-CcString $Receipt.sourceHashes $name 'Sampler receipt.sourceHashes'
         }
         [void]$paths.Add('runtime/sampler-arguments-v43.ps1')
-        [void]$paths.Add('../../../scripts/benchmark/pc11_working_set.py')
+        [void]$paths.Add('../../../scripts/benchmark/pc11-gui/pc11_working_set.py')
         [void]$paths.Add('tests/test-sampler-arguments-v43.ps1')
     } elseif ($Kind -ceq 'watchdog_contract') {
         Assert-CcObject $Receipt.sourceSha256 'Supervisor receipt.sourceSha256'
@@ -215,7 +215,7 @@ function Get-CcReceiptSourceSha($Receipt, [string]$Kind, [string]$ProducerPath) 
     if ($Kind -ceq 'sampler_arguments') {
         switch -CaseSensitive ($ProducerPath) {
             'runtime/sampler-arguments-v43.ps1' { return [string]$Receipt.sourceHashes.samplerArguments }
-            '../../../scripts/benchmark/pc11_working_set.py' { return [string]$Receipt.sourceHashes.samplerCli }
+            '../../../scripts/benchmark/pc11-gui/pc11_working_set.py' { return [string]$Receipt.sourceHashes.samplerCli }
             'tests/test-sampler-arguments-v43.ps1' { return [string]$Receipt.sourceHashes.fixture }
         }
     }
@@ -321,7 +321,7 @@ function Test-CcComponentCoverage($Receipt, [string]$Kind) {
         }
         if ($observedCases.Count -ne $expectedCases.Count) { return $false }
         $arguments = $Receipt.arguments
-        $samplerCliPath = Get-CcSourcePathInRepo '../../../scripts/benchmark/pc11_working_set.py'
+        $samplerCliPath = Get-CcSourcePathInRepo '../../../scripts/benchmark/pc11-gui/pc11_working_set.py'
         if ([IO.Path]::GetFullPath([string]$arguments[0]) -cne $samplerCliPath -or
             $arguments[1] -cne '--root-pid' -or $arguments[2] -cne '4312' -or
             $arguments[3] -cne '--expected-root-image' -or

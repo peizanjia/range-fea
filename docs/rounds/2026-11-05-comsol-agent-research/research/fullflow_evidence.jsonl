@@ -1,0 +1,25 @@
+{"evidence_id": "FF-E01", "source_id": "354a6260b3373def", "observation": "外部Java API Agent官方实作，特定散热器实验；不是MCP实现、独立基准或通用恢复验收。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E02", "source_id": "01bb2a3da1752f62", "observation": "Agent按需查询与多步操作模型；与Chatbot附件方式区分。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E03", "source_id": "7f722f7e30d2cf05", "observation": "2027 MCP预告通过现有API形成建模运行结果迭代。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E04", "source_id": "87b1d0376ccffa0d", "observation": "程序入口共享UI底层类和数据结构，覆盖全流程。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E05", "source_id": "605c12c3c6a49545", "observation": "模型标签/载入/连接/进度及许可证管理API。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E06", "source_id": "266511ad671bdb7c", "observation": "busy handler、单一客户端操作、阻塞、变更回调与恢复目录。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E07", "source_id": "a61ee6c4101ab298", "observation": "单用户多连接共享计算引擎；同机有效许可、跨机FNL。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E08", "source_id": "7326e0b3f04bc94f", "observation": "Java编译及standalone/client-server执行模式。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E09", "source_id": "6c985dc9fcfcaf89", "observation": "几何输出命名选择及最终几何选择。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E10", "source_id": "bc84fd03aa1af139", "observation": "数值结果、单位与时间/参数数据提取。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E11", "source_id": "6132dd5bd6ae01e1", "observation": "方法与Java库安全限制；不能推导覆盖外部Agent。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E12", "source_id": "d306e641e41a0826", "observation": "Chatbot模型附件与用户执行Shell代码。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E13", "source_id": "6ff3fe8913b73e2a", "observation": "6.4累计补丁及Provider/文档示例变化。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E14", "source_id": "d102466c06c85b6a", "observation": "DWR空间后验估计，适用条件和不含代数误差。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E15", "source_id": "2631ad64996782bc", "observation": "10月13日Agent webinar公开简介；未观看登录录像。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E16", "source_id": "583a50f2244cb1d0", "observation": "6月16日COMSOL/Cosmon活动；合作伙伴Nexus与内置产品区分。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E17", "source_id": "4d61feb2db00f808", "observation": "本次公开发行历史最新条目6.4。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E18", "source_id": "d49cc7d631e64320", "observation": "本次公开下载页6.4.0.429。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E19", "source_id": "f8d07f89125e4bed", "observation": "会议议程有upcoming MCP及内部模型测试声明；非公开schema。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E20", "source_id": "d45dd55c85dc5398", "observation": "模型对象编程及求解/结果/载入。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E21", "source_id": "6bc35146e6f58555", "observation": "网格选择来源与几何依附条件。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E22", "source_id": "0f6397a709efbc76", "observation": "统计数值求值与数组排列。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E23", "source_id": "3659b1ed311fdc23", "observation": "6.4代码录制/复制与上下文功能。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E24", "source_id": "2d4885de3e0c1f93", "observation": "选择赋值受特征与维度限制。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}
+{"evidence_id": "FF-E25", "source_id": "40344183c8ab88de", "observation": "几何/质量量测、单位与结果方向。", "extraction": "bounded_paraphrase", "locator": "报告对应章节及文献条目；原始资料章节名称见报告", "independently_run": false}

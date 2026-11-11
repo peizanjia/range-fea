@@ -1,5 +1,7 @@
 build*
 !scripts/packaging/build_private_python.py
+!scripts/packaging/python-runtime/build_private_python.py
+/.idea/
 .vs/
 *.txt.user
 *~
@@ -12,7 +14,7 @@ __pycache__/
 .range-runs/
 
 # Local planning, generated test output, audits, and app-profile state.
-# Keep portable acceptance summaries under docs/acceptance/ instead.
+# Keep portable acceptance summaries under the owning docs/rounds/ directory.
 /.planning/
 /artifacts/
 /audit/

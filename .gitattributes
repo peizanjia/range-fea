@@ -4,3 +4,10 @@ src/fea-solver/examples/stage9/stage9_truss4_linear_model.json -text
 # The private numerical/runtime identity includes exact package source bytes.
 # Preserve verified LF/CRLF bytes across checkouts rather than applying autocrlf.
 src/range-workflow/python/range_workflow/** -text
+# The CW ledger pins the Windows CRLF working-tree bytes of these receipts.
+# Make that representation explicit on every platform without changing the
+# existing receipt content or its recorded SHA-256.
+docs/rounds/2026-10-11-control-workbench/acceptance/CW-01-tracking-report.json text eol=crlf
+docs/rounds/2026-10-11-control-workbench/acceptance/CW-foundation-20261011.json text eol=crlf
+docs/rounds/2026-10-11-control-workbench/acceptance/CW-dynamics-core-20261011.json text eol=crlf
+docs/rounds/2026-10-11-control-workbench/acceptance/CW-native-mixed-20261011.json text eol=crlf

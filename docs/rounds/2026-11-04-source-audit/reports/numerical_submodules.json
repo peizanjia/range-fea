@@ -1,0 +1,3114 @@
+{
+  "schemaVersion": 1,
+  "owner": "numerical_submodules",
+  "date": "2026-11-05",
+  "timezone": "Asia/Singapore",
+  "scope": {
+    "root": "9ea1d51..ad9dbda",
+    "range-model-lib": "30dba89..6a732d9",
+    "range-solver-lib": "60c05bb..880c5d1"
+  },
+  "limitations": [
+    "源码批次审查，不能归因特定模型或代理。AGENTS.md分工/技能/提交规则未沿用。",
+    "reviewed_static仅表示对应reviewDepth；reviewed_changed_hunks明确仅完整批次变更及调用链。原58项标inheritedReview，其中12项本轮有额外完整复核；46项不宣称本轮完整重审。",
+    "本轮原35 pending中32整文件静态合同审查、3变更段/调用链；额外12此前已审源码完整复核。静态状态与C++运行结果严格分开。",
+    "没有CMake配置、编译、构建、CTest、C++执行或产品启动；没有reset/clean/stash/checkout/commit/push/gitlink更新。",
+    "Python仅标准库独立公式/数值机制复核，不执行生产C++，不证明solver收敛/真实trace落盘。",
+    "OpenMP多核、Windows/MSVC long-double与文件handle、真实trace故障/恢复和外部激励provider仍需获准环境验收。"
+  ],
+  "summary": {
+    "fileCount": 93,
+    "reviewStatusCounts": {
+      "reviewed_static": 90,
+      "reviewed_changed_hunks": 3
+    },
+    "resumedPendingReviewedCount": 35,
+    "additionalProductionFilesRechecked": 12,
+    "inheritedOnlyCount": 46,
+    "runtimeTestsExecuted": 0,
+    "cppTestsExecuted": 0,
+    "independentPythonArithmeticChecks": 4,
+    "newRegressionSelectorsThisPass": 4,
+    "newConfirmedFindingsThisPass": 2,
+    "productionFilesModifiedThisPass": 2,
+    "testFilesModifiedThisPass": 2,
+    "totalSolverWorktreeModifiedFilesIncludingPreservedPatch": 5,
+    "currentPassCompleteFileReviewCount": 44,
+    "resumedCompleteFileReviewCount": 32,
+    "currentPassChangedHunksReviewCount": 3,
+    "inheritedReviewCount": 58,
+    "reviewDepthCounts": {
+      "inherited_prior_static_scope_not_reaudited_in_full": 46,
+      "complete_batch_diff_and_callchain": 3,
+      "complete_file_static_contract_review": 44
+    },
+    "completeBatchNotCompleteRepositoryAudit": true
+  },
+  "findings": [
+    {
+      "id": "N-SOLVER-TRACE-001",
+      "severity": "P1",
+      "status": "fixed_source_runtime_pending",
+      "path": "src/range-solver-lib/src/rsolver.cpp",
+      "trigger": "先注册participant并启用nativeAcceptedTraceOutput，再setAcceptedStepParticipant(nullptr)，原代码仍跳过传统结果发布而无完整trace发布者。",
+      "impact": "一次本可完成的原生压电计算可能没有持久化结果输出。",
+      "fix": "trace启用时拒绝清空publisher；每次run冻结traceOutput与participant，保留无publisher防御拒绝。",
+      "testSource": "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp::tracePublicationCannotLoseItsParticipant",
+      "validation": "仅静态核对，新增回归未编译/运行。",
+      "independentReviewDate": "2026-11-05",
+      "certainty": "confirmed_by_callchain_static_review",
+      "lines": {
+        "detachGuard": 1219,
+        "invocationFreeze": 1492
+      },
+      "evidence": [
+        "shared_ptr快照维持participant生命周期，bool快照使prepare快照与MODEL发布使用同一策略；stage改变下一次run设置不改当前分支。",
+        "stage后model再次验证，最后authority publish之后仅noexcept晋升；失败反向rollback，提交后通知不得撤销accepted。"
+      ],
+      "regressionSources": [
+        "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp::tracePublicationCannotLoseItsParticipant",
+        "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp::tracePolicyAndParticipantAreFrozenPerInvocation",
+        "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp::tracePublicationFailureRollsBackAndRetries"
+      ],
+      "compatibilityRisk": "开启trace时detach现在显式报错；关闭trace后允许切换，当前run仍持有冻结publisher。普通MODEL output频率不变，trace期间无MODEL frame通知是既定策略。",
+      "actualChecks": [
+        "静态调用链、回归源可达性检查",
+        "solver git diff --check exit 0"
+      ],
+      "requiredRuntimeValidation": [
+        "获授权后执行全部新trace selectors及轴向/分层两条模板实例；应见当前run固定publisher/策略、publish失败不晋升、同实例重试一致、关闭trace后MODEL持久化可读回。",
+        "真实NativeAcceptedCheckpointStore trace落盘/故障恢复另在fea-solver集成验证；测试double不证明磁盘trace成功。"
+      ]
+    },
+    {
+      "id": "N-LAYERED-RESTORE-002",
+      "severity": "P1",
+      "status": "fixed_source_runtime_pending",
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_native_run.cpp",
+      "lines": {
+        "initialVoltageGuard": 126,
+        "initialAndNoControlGuard": 138
+      },
+      "trigger": "持有相同源/driver/config身份，调用生产driver.initialize({不同电压})获得合法physical seal，再codec写回；或无控制器运行中用trialOnGrid产生不同held电压/伪造previousApplied。",
+      "impact": "同一源的cold restart可改变初始电边界/绝对能量基线，或在声明无控制器时引入执行器动作；运行与声明/历史不一致。",
+      "certainty": "confirmed_static_reachable_production_API_path",
+      "evidence": [
+        "driver.initialize(heldVa)明确允许任意有效初压并对initialEnergy重算/seal；driver.validate校验自洽而非facade声明初值。",
+        "旧facade.certifyRuntime只比lastApplied与physical.held、动作自身conditioner，未比源initialVa，也未限制no-control held与previous。",
+        "新回归先physical.restore证明seal有效、先构建有效原恢复，再仅变异目标合同；不靠损坏字节或哈希制造拒绝。",
+        "新恢复负例逐项精确匹配initial boundary、no-control held、previous voltage异常文本，不以任意异常代替守卫命中。"
+      ],
+      "fix": "保留driver通用能力；facade绑定initialActuatorVoltages到compiled源初值，零步/无控制held与首步/无控制previous必须保持源值，零步opaque/frame按现有回调合同认证。",
+      "testSource": "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp::restoredInitialAndUncontrolledVoltagesMatchSource",
+      "testLine": 565,
+      "compatibilityRisk": "正常源生成的restart字节/物理/阈值不变；此前可接受但不符源初值/无控制声明的自封印状态现在拒绝。显式工作点使用adapter实际编译初值，不误用ports原始输入。",
+      "actualChecks": [
+        "完整facade/driver/codec/adapter静态复核",
+        "solver差异格式检查；C++未编译运行"
+      ],
+      "requiredRuntimeValidation": [
+        "运行新增正/负恢复selector、原diskEverySplit全部beam/plate/stride/start组合及solid无执行器/多sensor恢复；正常cold restore bit等价，异初值/无控制动作明确拒绝。"
+      ]
+    },
+    {
+      "id": "N-DYNAMICS-FINITE-003",
+      "severity": "P1",
+      "status": "fixed_source_runtime_pending",
+      "path": "src/range-solver-lib/src/rstructural_dynamics_integrator.cpp",
+      "lines": {
+        "finiteState": 86,
+        "initialization": 370,
+        "candidateGate": 518,
+        "restoreGate": 612
+      },
+      "trigger": "有限初值/线性解经v^T M v或外功累积溢出；M=1,C=K=0,v0=1e200初能量Inf；v0=1e154,f=1e140,h=1e14使q/v/a有限而Kinetic/Work为Inf、balance为NaN。",
+      "impact": "通用积分器可发布带Inf/NaN能量账本的candidate/accepted/checkpoint；恢复亦可由有限q/v重算出非有限能量。分层外层证书可能再拒绝，不能据此证明通用接口安全。",
+      "certainty": "confirmed_static_plus_independent_binary64_arithmetic",
+      "evidence": [
+        "RRVector::dot逐项二进制乘加，quadraticEnergy先dot再乘0.5；原initialize/updateEnergy/restore无最终有限性门。",
+        "标准库binary64复核q1=1.5e168,v1=2e154,a1=1e140均有限，初能量5e307，后能量与功Inf、balance NaN。",
+        "新回归在异常后核对完整accepted bits，并有可表征大尺度正例与较小h重试。",
+        "新增C++回归精确匹配Dynamics state or energy ledger is non-finite，防止提前线性异常被误判为目标门覆盖。"
+      ],
+      "fix": "完整state发布前检查finite；initialize/restore局部完成推导与检查后赋值，trial未通过能量检查不置candidateReady。不修改方程、物理参数、算法或阈值。",
+      "testSource": "src/range-solver-lib/tests/tst_structural_dynamics_integrator.cpp::finiteInputsCannotPublishOverflowedEnergy",
+      "testLine": 577,
+      "compatibilityRisk": "此前返回非有限状态的输入现在抛std::runtime_error；可表征正常状态运算次序不变。初始化回调仍收到显式初始state，失败不再覆盖旧accepted。",
+      "actualChecks": [
+        "Python 3.14.4标准库4项独立算术见arithmetic-results.json",
+        "static RMatrixSolver入口/M=1零刚度原行可达性检查",
+        "solver git diff --check exit 0"
+      ],
+      "requiredRuntimeValidation": [
+        "运行新增finite-input selector和原integrator全suite（CG/GMRES、Newmark/alpha/CD、canonical/重启）。必须确认巨大有限RHS能到达能量门而不是提前在线性求解失败，正常较小h重试通过。",
+        "再运行layered/axial/truss accepted-step与真实应用验证器能量链；本次没有执行任何C++。"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "src/range-model-lib/CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增源/头文件或测试注册及版本/身份编译定义；未执行配置。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "重新配置/编译并核对必跑清单注册；本轮禁止执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "3f1de835557207ca94f1b3a1477f8e9f59b2a0694b917515b3f9831579c921c8",
+      "byteCount": 8783,
+      "lineCount": 241,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "3f1de835557207ca94f1b3a1477f8e9f59b2a0694b917515b3f9831579c921c8"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_acoustic_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "01093d5105ae63e81d2689fe8cafe373353d6f24f8958accfee7963807112fd4",
+      "byteCount": 4040,
+      "lineCount": 127,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "01093d5105ae63e81d2689fe8cafe373353d6f24f8958accfee7963807112fd4"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_file_io.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "0a6105938d58834fb39a4bb234c616a921fd3fe2fb2c4093c6810179d9aea1b2",
+      "byteCount": 53166,
+      "lineCount": 1169,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "0a6105938d58834fb39a4bb234c616a921fd3fe2fb2c4093c6810179d9aea1b2"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_mesh_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "203e151acc95b69563095af4bde0dcbe72821fd7baed71a20c0cf648a6cc1f43",
+      "byteCount": 1849,
+      "lineCount": 72,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "203e151acc95b69563095af4bde0dcbe72821fd7baed71a20c0cf648a6cc1f43"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_modal_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "0fe27a690d04b3ec8f038d719af804511419b0deb6782d138a09db1caf37a72b",
+      "byteCount": 3358,
+      "lineCount": 121,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "0fe27a690d04b3ec8f038d719af804511419b0deb6782d138a09db1caf37a72b"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_model.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "30cbb51a84d63eb687f19885ed6ea5cbe3fcba330cd06adaacaaa988c2155381",
+      "byteCount": 43480,
+      "lineCount": 1070,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "30cbb51a84d63eb687f19885ed6ea5cbe3fcba330cd06adaacaaa988c2155381"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_problem_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "55868324f294efaed63dce4b5693c5452f3ef48158636a9cde556344f0f30fbf",
+      "byteCount": 9464,
+      "lineCount": 218,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "55868324f294efaed63dce4b5693c5452f3ef48158636a9cde556344f0f30fbf"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_problem_task_item.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "c7e3da38a7da11d37c234fa856cf96c957edfbb5c016611f109086ac73ef3e05",
+      "byteCount": 2774,
+      "lineCount": 91,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "c7e3da38a7da11d37c234fa856cf96c957edfbb5c016611f109086ac73ef3e05"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_radiation_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "ccc374d11ce470113c5b2581bcc6c9215b86db284132a5c66f62509b0a50cca2",
+      "byteCount": 2023,
+      "lineCount": 71,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "ccc374d11ce470113c5b2581bcc6c9215b86db284132a5c66f62509b0a50cca2"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_native_control.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "5762838cc7acb9b1c36b9668b1fa1371dd7de3c6ab38cb5fa0e5d26abbf3f9d6",
+      "byteCount": 5080,
+      "lineCount": 154,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "5762838cc7acb9b1c36b9668b1fa1371dd7de3c6ab38cb5fa0e5d26abbf3f9d6"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_piezo_axial_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "c2bcc18643433411b4a7f816b23b68748350dae72f4fc484a45a009ff8d32ac3",
+      "byteCount": 1566,
+      "lineCount": 43,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "c2bcc18643433411b4a7f816b23b68748350dae72f4fc484a45a009ff8d32ac3"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_piezo_layered_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "aaa37dec9bea88085d3ec3293049e5d867ed6ca7dd0ca4347b30d9cf062818ab",
+      "byteCount": 4673,
+      "lineCount": 111,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "aaa37dec9bea88085d3ec3293049e5d867ed6ca7dd0ca4347b30d9cf062818ab"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_structural_piezo_readout_setup.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "2d041cc0191f409a27a57cce5c98aea200f1770f51a187c0483297c1e9a2e0ae",
+      "byteCount": 3062,
+      "lineCount": 77,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "2d041cc0191f409a27a57cce5c98aea200f1770f51a187c0483297c1e9a2e0ae"
+    },
+    {
+      "path": "src/range-model-lib/include/rml_time_solver.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "d7c6dede01d7420851da24aaf53d1895bb1dc08d903490754a67f911610815bd",
+      "byteCount": 5837,
+      "lineCount": 195,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "d7c6dede01d7420851da24aaf53d1895bb1dc08d903490754a67f911610815bd"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_condition_component.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "ea3114d17f3c3cb9aec2d1c438734b41eeba8650bb542e712866e381e013e7aa",
+      "byteCount": 2832,
+      "lineCount": 102,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "ea3114d17f3c3cb9aec2d1c438734b41eeba8650bb542e712866e381e013e7aa"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_file_io.cpp",
+      "reviewStatus": "reviewed_changed_hunks",
+      "checks": [
+        "逐项核对全部442行新增相关差异：基础二进制短读、1.3.22读出/1.3.23分层/1.3.24轴向门控，候选再赋值，严格布尔/枚举/UTF-8/hex及8/16/32MiB边界；补读truss/native底层读取，版本降级不静默丢弃新源。未全审既有8129行通用格式。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "1cd391b07777208e1975fcd3665d0a5f86f51fbf808f180d90b878a3aa56cb61",
+      "byteCount": 306804,
+      "lineCount": 8129,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_batch_diff_and_callchain",
+      "reviewedRanges": [
+        [
+          3,
+          29
+        ],
+        [
+          66,
+          72
+        ],
+        [
+          114,
+          120
+        ],
+        [
+          179,
+          185
+        ],
+        [
+          227,
+          233
+        ],
+        [
+          297,
+          303
+        ],
+        [
+          374,
+          380
+        ],
+        [
+          525,
+          538
+        ],
+        [
+          1855,
+          1861
+        ],
+        [
+          2528,
+          2534
+        ],
+        [
+          2866,
+          2873
+        ],
+        [
+          3958,
+          3964
+        ],
+        [
+          4008,
+          4014
+        ],
+        [
+          4058,
+          4064
+        ],
+        [
+          4622,
+          4636
+        ],
+        [
+          4718,
+          4752
+        ],
+        [
+          4825,
+          4859
+        ],
+        [
+          4888,
+          4898
+        ],
+        [
+          6525,
+          6531
+        ],
+        [
+          7754,
+          7760
+        ],
+        [
+          7770,
+          7798
+        ],
+        [
+          7804,
+          7810
+        ],
+        [
+          7814,
+          7820
+        ],
+        [
+          7844,
+          7850
+        ],
+        [
+          7854,
+          7860
+        ],
+        [
+          7878,
+          8129
+        ],
+        [
+          7018,
+          7115
+        ],
+        [
+          7640,
+          7799
+        ]
+      ],
+      "reviewedSha256": "1cd391b07777208e1975fcd3665d0a5f86f51fbf808f180d90b878a3aa56cb61",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_changed_hunks_and_callchain",
+      "currentSha256": "1cd391b07777208e1975fcd3665d0a5f86f51fbf808f180d90b878a3aa56cb61",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/src/rml_model.cpp",
+      "reviewStatus": "reviewed_changed_hunks",
+      "checks": [
+        "全部批次差异及949-1102入口：独立loadedModel后发布、verified descriptor复制及禁止LINK跟随、source/restart配对；applyPiezoExperimentCandidate的原拓扑/生成拓扑/轴向POINT例外、元数据保留、ID高水位及noexcept提交；ASCII高精度与native输出路径交叉核对。未全审9460行历史模型编辑算法。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "196f144014ca49b894bf18726868655bd33e770afa223925bccf5d3473de98a3",
+      "byteCount": 313563,
+      "lineCount": 9460,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_batch_diff_and_callchain",
+      "reviewedRanges": [
+        [
+          7,
+          33
+        ],
+        [
+          77,
+          87
+        ],
+        [
+          254,
+          430
+        ],
+        [
+          954,
+          1027
+        ],
+        [
+          1036,
+          1061
+        ],
+        [
+          1081,
+          1101
+        ],
+        [
+          8182,
+          8188
+        ],
+        [
+          8191,
+          8203
+        ],
+        [
+          8423,
+          8429
+        ],
+        [
+          8432,
+          8444
+        ],
+        [
+          8688,
+          8698
+        ],
+        [
+          8864,
+          8870
+        ],
+        [
+          9048,
+          9054
+        ],
+        [
+          949,
+          1102
+        ]
+      ],
+      "reviewedSha256": "196f144014ca49b894bf18726868655bd33e770afa223925bccf5d3473de98a3",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_changed_hunks_and_callchain",
+      "currentSha256": "196f144014ca49b894bf18726868655bd33e770afa223925bccf5d3473de98a3",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/src/rml_problem_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "dc214e97b1f0bd4dfac9a61595610fe91474c40ca7497850482525e4dcc3760e",
+      "byteCount": 12569,
+      "lineCount": 356,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "dc214e97b1f0bd4dfac9a61595610fe91474c40ca7497850482525e4dcc3760e"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_native_control.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "275e0674028c7e38361492bceb0b87c191665c15ae4cc386f4a5da0759d404fa",
+      "byteCount": 19580,
+      "lineCount": 241,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "externalCompatibilityChange": {
+        "owner": "separate_user_session_reserved_by_coordinator",
+        "writeByThisAudit": false,
+        "reviewSha256BeforeExternalChanges": "275e0674028c7e38361492bceb0b87c191665c15ae4cc386f4a5da0759d404fa",
+        "currentInventorySha256": "9b7d72b7427e2d20fcb7c3c213d9ad30b5ac7b36f43d7227985e062af76bba5c",
+        "changedSinceSnapshot": true,
+        "finalRecheck": "主协调代理最终重核；本轮hash不能覆盖独立发生的外部兼容改动。"
+      },
+      "currentSha256": "9b7d72b7427e2d20fcb7c3c213d9ad30b5ac7b36f43d7227985e062af76bba5c"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_axial_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "55aa5c606cbe28306d5c1c01b8a66be272de916b5996a772f6d19b2bfb38cbf6",
+      "byteCount": 14050,
+      "lineCount": 222,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "55aa5c606cbe28306d5c1c01b8a66be272de916b5996a772f6d19b2bfb38cbf6"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_layered_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整306行：材料/电端口/坐标框架、互斥旧控制与阻尼、拓扑物理ID、全主单元覆盖、层区间交叠、source identity字段、工作点与restart分离；从validate/bind跟踪至adapter物理证书。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "52dd02fb1e5fcf315d3c305ff8fd0c265a2d0fbe62b13512a5e576a6e21e3e77",
+      "byteCount": 30382,
+      "lineCount": 306,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          306
+        ]
+      ],
+      "reviewedSha256": "52dd02fb1e5fcf315d3c305ff8fd0c265a2d0fbe62b13512a5e576a6e21e3e77",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "externalCompatibilityChange": {
+        "owner": "separate_user_session_reserved_by_coordinator",
+        "writeByThisAudit": false,
+        "reviewSha256BeforeExternalChanges": "52dd02fb1e5fcf315d3c305ff8fd0c265a2d0fbe62b13512a5e576a6e21e3e77",
+        "currentInventorySha256": "b915b184f27fdae97e57e4c6296fb244dc108ca18faf027181f26d8aa03629a5",
+        "changedSinceSnapshot": true,
+        "finalRecheck": "主协调代理最终重核；本轮hash不能覆盖独立发生的外部兼容改动。"
+      },
+      "currentSha256": "b915b184f27fdae97e57e4c6296fb244dc108ca18faf027181f26d8aa03629a5",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_readout_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "0e00c1ebc1f37eb6e1f6c9959769e826f665071589b5d4fb4f1a04601a250ed8",
+      "byteCount": 9653,
+      "lineCount": 175,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "externalCompatibilityChange": {
+        "owner": "separate_user_session_reserved_by_coordinator",
+        "writeByThisAudit": false,
+        "reviewSha256BeforeExternalChanges": "0e00c1ebc1f37eb6e1f6c9959769e826f665071589b5d4fb4f1a04601a250ed8",
+        "currentInventorySha256": "dda735c6c1248ab1a9d1b3d90cc8d406a4764c98b5f4331ba26954efb52ae2a3",
+        "changedSinceSnapshot": true,
+        "finalRecheck": "主协调代理最终重核；本轮hash不能覆盖独立发生的外部兼容改动。"
+      },
+      "currentSha256": "dda735c6c1248ab1a9d1b3d90cc8d406a4764c98b5f4331ba26954efb52ae2a3"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_truss_dynamics_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "b6954bed3d1081fee3024ab5f612d54c38d025103dc9b315665b7bce182c1c6b",
+      "byteCount": 34461,
+      "lineCount": 667,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "b6954bed3d1081fee3024ab5f612d54c38d025103dc9b315665b7bce182c1c6b"
+    },
+    {
+      "path": "src/range-model-lib/tests/CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增源/头文件或测试注册及版本/身份编译定义；未执行配置。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "重新配置/编译并核对必跑清单注册；本轮禁止执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "3f7d56e6d10b415d7d75de667648bcfbdf35120766c821c4d5c648d0bd6bcab1",
+      "byteCount": 2455,
+      "lineCount": 76,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "3f7d56e6d10b415d7d75de667648bcfbdf35120766c821c4d5c648d0bd6bcab1"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_model_physical_ids.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整核对本批次小型变更（版本断言/注册）；未审计整个历史测试文件。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_model_physical_ids；尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "b42c60e9a85d3c7aada5ff302b9b119a34f7e1d48f57e0e688117cf045d9845d",
+      "byteCount": 30428,
+      "lineCount": 883,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "b42c60e9a85d3c7aada5ff302b9b119a34f7e1d48f57e0e688117cf045d9845d"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_piezo_experiment_publication.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整5组测试体：完整setup/task/time字节、子类文档身份/组显示保留、拒绝/抛异常后原值不变、生成/撤销拓扑及allocator高水位；validator替身返回true不等于求解有效性。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_piezo_experiment_publication；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "df957a530dc7348464efa77a9d665a52c0c59bccc93c8c3e0c530f0549472ba6",
+      "byteCount": 8447,
+      "lineCount": 172,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          172
+        ]
+      ],
+      "reviewedSha256": "df957a530dc7348464efa77a9d665a52c0c59bccc93c8c3e0c530f0549472ba6",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "df957a530dc7348464efa77a9d665a52c0c59bccc93c8c3e0c530f0549472ba6",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_problem_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整核对本批次小型变更（版本断言/注册）；未审计整个历史测试文件。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_problem_setup；尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "1be47ccab5b3afd6025a2be1782df551f48e4e7fc617a456c0379c804d06e0ec",
+      "byteCount": 70632,
+      "lineCount": 1622,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "1be47ccab5b3afd6025a2be1782df551f48e4e7fc617a456c0379c804d06e0ec"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_cable_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整核对本批次小型变更（版本断言/注册）；未审计整个历史测试文件。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_cable_setup；尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "12dca1250dffb95607a08d56865c25826e9533b4fe213be607ddc20d31fb5745",
+      "byteCount": 11456,
+      "lineCount": 306,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "12dca1250dffb95607a08d56865c25826e9533b4fe213be607ddc20d31fb5745"
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_axial_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部测试体和data行：canonical JSON原始字节/负零、父truss绑定、互斥状态、RAM/RBM与32MiB边界、旧版本拒写保持旧文件、有效语法但restart指纹错配；格式测试不声称runtime opaque的物理有效性。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_axial_setup；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "4763964695cef5087b7ecac1579a2850c146347cede40d5b0fbe31b51b610b1b",
+      "byteCount": 19418,
+      "lineCount": 243,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          243
+        ]
+      ],
+      "reviewedSha256": "4763964695cef5087b7ecac1579a2850c146347cede40d5b0fbe31b51b610b1b",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "4763964695cef5087b7ecac1579a2850c146347cede40d5b0fbe31b51b610b1b",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_layered_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部35种invalidSource与25种unsupported源变体、工作点/阻尼与located coverage、指纹变化、RAM/RBM负零/UTF-8、旧格式与截断；区分source合法与solver平衡/稳定合法。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_setup；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "4f699e76a20d00097a765ef9d38542e86e2b3afe13a51ece76243966f4dee62d",
+      "byteCount": 23682,
+      "lineCount": 340,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          340
+        ]
+      ],
+      "reviewedSha256": "4f699e76a20d00097a765ef9d38542e86e2b3afe13a51ece76243966f4dee62d",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "4f699e76a20d00097a765ef9d38542e86e2b3afe13a51ece76243966f4dee62d",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_readout_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部catalog/mode/source/workpoint/持久化测试；核对传感器固定V/Q、classified V/C单位、零偏增量、未配平工作点允许存源而由solver另验；畸形读入保持原目标。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_readout_setup；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "07b2e5f1fd23a2fea3c35a9e81f5a8e32de100e2dc4dfc9026ae28c8f10f8286",
+      "byteCount": 20752,
+      "lineCount": 349,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          349
+        ]
+      ],
+      "reviewedSha256": "07b2e5f1fd23a2fea3c35a9e81f5a8e32de100e2dc4dfc9026ae28c8f10f8286",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "07b2e5f1fd23a2fea3c35a9e81f5a8e32de100e2dc4dfc9026ae28c8f10f8286",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-model-lib/tests/tst_structural_piezo_setup.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整核对本批次小型变更（版本断言/注册）；未审计整个历史测试文件。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_setup；尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "2606c7f1ec481902994653e23e43e2532996e17dc2d4b67b0e68cb3dd5b737bf",
+      "byteCount": 34230,
+      "lineCount": 833,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "2606c7f1ec481902994653e23e43e2532996e17dc2d4b67b0e68cb3dd5b737bf"
+    },
+    {
+      "path": "src/range-solver-lib/CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增源/头文件或测试注册及版本/身份编译定义；未执行配置。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "重新配置/编译并核对必跑清单注册；本轮禁止执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "5e7039d0d18aef45dfb1769e544ebdf2593d38ec7d82ff8523d4f6dc188fcbf3",
+      "byteCount": 8830,
+      "lineCount": 196,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "5e7039d0d18aef45dfb1769e544ebdf2593d38ec7d82ff8523d4f6dc188fcbf3"
+    },
+    {
+      "path": "src/range-solver-lib/include/rsolver.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "456cab07a652d00b15926040711e29e41d9cd892d9c16d8e26cef0634f3abb8f",
+      "byteCount": 8510,
+      "lineCount": 186,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "456cab07a652d00b15926040711e29e41d9cd892d9c16d8e26cef0634f3abb8f"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_dynamics_integrator.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "266b6388583032f40946e4d5496577c6aa5d24b22b577ad64db3a2d45d901d13",
+      "byteCount": 5894,
+      "lineCount": 134,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "266b6388583032f40946e4d5496577c6aa5d24b22b577ad64db3a2d45d901d13"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_native_run.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整117行：PreparedStep所有权/base封印、纯值proposal/postFE、force ledger绑定、实际阻尼/初始电压列序、required accepted-boundary validator；对应实现prepare/commit/restore逐项核对。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "b08fce9b4be5c5030a8abaa045bf04f6c194525d9245c2c24b7b8864d8532096",
+      "byteCount": 6438,
+      "lineCount": 117,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          117
+        ]
+      ],
+      "reviewedSha256": "b08fce9b4be5c5030a8abaa045bf04f6c194525d9245c2c24b7b8864d8532096",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "b08fce9b4be5c5030a8abaa045bf04f6c194525d9245c2c24b7b8864d8532096",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_operators.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整78行与compile实现：全/自由DOF、G/Ce与B/L/D列序、机械/几何/固定电荷切线分解、几何预应力、SI量纲；C=0只描述设计导出，不冒充已安装运行阻尼。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "40d0de68db0442554af03c040ca1c6c899434a3eb2fb9fe1ce5af82070e3b945",
+      "byteCount": 3343,
+      "lineCount": 78,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          78
+        ]
+      ],
+      "reviewedSha256": "40d0de68db0442554af03c040ca1c6c899434a3eb2fb9fe1ce5af82070e3b945",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "40d0de68db0442554af03c040ca1c6c899434a3eb2fb9fe1ce5af82070e3b945",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_restart_codec.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整13行：codec结构/有界canonical二进制与facade语义认证职责分离；对照encode/decode调用和正负恢复测试。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "31028d6d0642154620c7a24cc772c610d3c3289dd75b15c107f248cb4da1c22b",
+      "byteCount": 602,
+      "lineCount": 13,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          13
+        ]
+      ],
+      "reviewedSha256": "31028d6d0642154620c7a24cc772c610d3c3289dd75b15c107f248cb4da1c22b",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "31028d6d0642154620c7a24cc772c610d3c3289dd75b15c107f248cb4da1c22b",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_axial_run_state.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "a59ba87e1c9c3ec7ff3a0c364a11e7000a785eafd8d564b208931647ffe34523",
+      "byteCount": 1147,
+      "lineCount": 28,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "a59ba87e1c9c3ec7ff3a0c364a11e7000a785eafd8d564b208931647ffe34523"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_electrical_system.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整93行及实现：F=Kq+GV、Q=CeV-G^Tq，只有开路端口凝聚，参考增量/放大器极性，无跨端口电容；evaluateInto最后swap发布。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "9ff51c9e6f33a9b24ecaec8e09b239e88d4dbdef74c5988a50ca295edb7ace61",
+      "byteCount": 4179,
+      "lineCount": 93,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          93
+        ]
+      ],
+      "reviewedSha256": "9ff51c9e6f33a9b24ecaec8e09b239e88d4dbdef74c5988a50ca295edb7ace61",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "9ff51c9e6f33a9b24ecaec8e09b239e88d4dbdef74c5988a50ca295edb7ace61",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_element_operators.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整95行及kernels：engineering Voigt、s/d/epsilonT转换，free-stress Schur、轴向替换质量一次、梁thetaY=-dw/dx、板RX/RY符号，矩阵尺寸及非电惯性。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "381c11bd089f46fe5df789adb9ab9b3f1a8fa864db5712f33bff764478fc89da",
+      "byteCount": 3841,
+      "lineCount": 95,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          95
+        ]
+      ],
+      "reviewedSha256": "381c11bd089f46fe5df789adb9ab9b3f1a8fa864db5712f33bff764478fc89da",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "381c11bd089f46fe5df789adb9ab9b3f1a8fa864db5712f33bff764478fc89da",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_dynamics.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整92行及实现：eta=z-z0、六全局分量、immutable sensor边界、名义dt与实际h、midpoint粘性功与trapezoid诊断分离，scratch积分器不消耗accepted。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "eb450b31be20f30249b89c4c712056fe3c9f5d443e8df942a11749b6b3238841",
+      "byteCount": 5311,
+      "lineCount": 92,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          92
+        ]
+      ],
+      "reviewedSha256": "eb450b31be20f30249b89c4c712056fe3c9f5d443e8df942a11749b6b3238841",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "eb450b31be20f30249b89c4c712056fe3c9f5d443e8df942a11749b6b3238841",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_mesh.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整56行及实现：稳定物理ID排序、P/PT虚功、平动/转动分块容差、梁/板/实体准入、连续隔离电极聚合与仿射HEX8限制。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "2d8a7e13ac929212cdc58d68734719ad16dbaa1cd1ac59ce9e8d5079e64125b2",
+      "byteCount": 2817,
+      "lineCount": 56,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          56
+        ]
+      ],
+      "reviewedSha256": "2d8a7e13ac929212cdc58d68734719ad16dbaa1cd1ac59ce9e8d5079e64125b2",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "2d8a7e13ac929212cdc58d68734719ad16dbaa1cd1ac59ce9e8d5079e64125b2",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_model_adapter.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "3f0cc5011b302194aca4ba058e4aec2a35a1367cd4a8649fe0c55b8690beb422",
+      "byteCount": 3152,
+      "lineCount": 56,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "3f0cc5011b302194aca4ba058e4aec2a35a1367cd4a8649fe0c55b8690beb422"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_native_run.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "1f1e67b33be052551f25cf70b0f7b36e1f22f93d9fd9af597702d0e327d59fde",
+      "byteCount": 6035,
+      "lineCount": 109,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "1f1e67b33be052551f25cf70b0f7b36e1f22f93d9fd9af597702d0e327d59fde"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_restart_codec.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "fff7dc4789a4aedd20b33d2e2cbef67f3fab90b604d0bcee62c762559d3717d5",
+      "byteCount": 716,
+      "lineCount": 14,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "fff7dc4789a4aedd20b33d2e2cbef67f3fab90b604d0bcee62c762559d3717d5"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_layered_run_state.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "2345b7fcb6f17a6efb351327cf658a137b01d583f0f58145ef0eacfdf14cc1f7",
+      "byteCount": 1098,
+      "lineCount": 27,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "2345b7fcb6f17a6efb351327cf658a137b01d583f0f58145ef0eacfdf14cc1f7"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_native_readout.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "8db1dd557fa7c63b68e0d6389a0ef780ec0b3ccf34882ae5ee807f778926d1f8",
+      "byteCount": 3406,
+      "lineCount": 71,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "8db1dd557fa7c63b68e0d6389a0ef780ec0b3ccf34882ae5ee807f778926d1f8"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_piezo_solid_kernel.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "844d805bcea8b03c4c0fd8cb8de8f3f6e978d9b2c0070c6fb601c8bb40faa12b",
+      "byteCount": 1655,
+      "lineCount": 36,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "844d805bcea8b03c4c0fd8cb8de8f3f6e978d9b2c0070c6fb601c8bb40faa12b"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_truss_dynamics.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "3fa6ddba1ac88633c2965dc41102092b155e19731cad4725858c017bd87fe417",
+      "byteCount": 5819,
+      "lineCount": 122,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "3fa6ddba1ac88633c2965dc41102092b155e19731cad4725858c017bd87fe417"
+    },
+    {
+      "path": "src/range-solver-lib/include/rstructural_truss_dynamics_model_adapter.h",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增接口/状态结构与对应实现的维度、单位、来源/恢复职责；部分大输出截断处未当作已读。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关实现与调用端编译/ABI验证及对应QtTest，尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "50ea8ac5173bed34fda3a51d3f9bc1572582a59009849e8ef62cd96af697e130",
+      "byteCount": 4527,
+      "lineCount": 101,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "50ea8ac5173bed34fda3a51d3f9bc1572582a59009849e8ef62cd96af697e130"
+    },
+    {
+      "path": "src/range-solver-lib/src/rparallel_execution_context.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "2302d1c29a04eda8cb06d2b519f2a3edd410801ace61ce2437aa4743cc64279b",
+      "byteCount": 3705,
+      "lineCount": 98,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "2302d1c29a04eda8cb06d2b519f2a3edd410801ace61ce2437aa4743cc64279b"
+    },
+    {
+      "path": "src/range-solver-lib/src/rsolver.cpp",
+      "reviewStatus": "reviewed_changed_hunks",
+      "checks": [
+        "全部批次变更及输出调用链：混合/分层/轴向分派、独立run冻结shared participant与trace bool、stage后再验model、普通结果/monitor先发布、恢复authority最后publish与noexcept晋升、逆序回滚/不可重试及observer提交后通知。已有trace补丁保留。历史通用Heat/Stress全路由不算完整重审。"
+      ],
+      "findings": [
+        "N-SOLVER-TRACE-001"
+      ],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "235700bd5ce3682819227cf51a94ff03e215e7cd7a84e2d606d99b1566875ef8",
+      "byteCount": 95744,
+      "lineCount": 2111,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "已写trace publisher生命周期修复/新增测试源；未编译。"
+      ],
+      "reviewDepth": "complete_batch_diff_and_callchain",
+      "reviewedRanges": [
+        [
+          42,
+          48
+        ],
+        [
+          800,
+          857
+        ],
+        [
+          1047,
+          1062
+        ],
+        [
+          1076,
+          1087
+        ],
+        [
+          1113,
+          1125
+        ],
+        [
+          1143,
+          1154
+        ],
+        [
+          1216,
+          1229
+        ],
+        [
+          1236,
+          1282
+        ],
+        [
+          1419,
+          1617
+        ],
+        [
+          352,
+          658
+        ],
+        [
+          1180,
+          1631
+        ]
+      ],
+      "reviewedSha256": "235700bd5ce3682819227cf51a94ff03e215e7cd7a84e2d606d99b1566875ef8",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_changed_hunks_and_callchain",
+      "currentSha256": "235700bd5ce3682819227cf51a94ff03e215e7cd7a84e2d606d99b1566875ef8",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/src/rsolvermesh.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "e05e28ebbe9f08ec54f3999b9c7fc405d22004fd07dbcf97eb1414e6d0c54679",
+      "byteCount": 3112,
+      "lineCount": 119,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "e05e28ebbe9f08ec54f3999b9c7fc405d22004fd07dbcf97eb1414e6d0c54679"
+    },
+    {
+      "path": "src/range-solver-lib/src/rsolverstress.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "c6ae9ef20b2e1fe980a4fdea30b01534b73d64574ac755566193ec9856a68a1e",
+      "byteCount": 337953,
+      "lineCount": 7328,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "c6ae9ef20b2e1fe980a4fdea30b01534b73d64574ac755566193ec9856a68a1e"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_dynamics_integrator.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整实现：原矩阵补偿残差/局部后向误差与有界修正、Newmark/alpha/CD公式、canonical clock、候选事务、checkpoint/功账本；确认有限q/v/线性解仍可二次能量溢出，新增发布前finite-state与局部initialize/restore。"
+      ],
+      "findings": [
+        "N-DYNAMICS-FINITE-003"
+      ],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "e1ec6df02129dc86b77c0f652b58c922bf1546c04f6906f5c86f799263759c9e",
+      "byteCount": 30098,
+      "lineCount": 619,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          619
+        ]
+      ],
+      "reviewedSha256": "e1ec6df02129dc86b77c0f652b58c922bf1546c04f6906f5c86f799263759c9e",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "e1ec6df02129dc86b77c0f652b58c922bf1546c04f6906f5c86f799263759c9e",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_native_control.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "f1603cf1ed1277a293488b926824efe750c35f999ecd308e61ffae7275e8f52e",
+      "byteCount": 27389,
+      "lineCount": 442,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "f1603cf1ed1277a293488b926824efe750c35f999ecd308e61ffae7275e8f52e"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_native_run.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整242行：真实阻尼安装与sourceDefinition独立副本、force左右端点/采样ledger、initial reference/输入/读出canonical证书、动作幅率与tick/phase、原target clock、候选封印与noexcept commit；与layered缺失不变量作对照。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "42df3bd88f17b463255796ee1f2aa4ceddbcd7c6d17f811f7cb18f1441cd2e1a",
+      "byteCount": 29104,
+      "lineCount": 242,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          242
+        ]
+      ],
+      "reviewedSha256": "42df3bd88f17b463255796ee1f2aa4ceddbcd7c6d17f811f7cb18f1441cd2e1a",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "42df3bd88f17b463255796ee1f2aa4ceddbcd7c6d17f811f7cb18f1441cd2e1a",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_operators.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整compile物理DOF/稳定性/切线分解、自由选择映射、按port ID直接项与增量单位，逐entry局部尺度拒绝而非全局大数遮蔽。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "2746e100c9b1bec1e184f3b9a9f71931307f36dbf9202f79e842075faf13c9b1",
+      "byteCount": 16435,
+      "lineCount": 262,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          262
+        ]
+      ],
+      "reviewedSha256": "2746e100c9b1bec1e184f3b9a9f71931307f36dbf9202f79e842075faf13c9b1",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "2746e100c9b1bec1e184f3b9a9f71931307f36dbf9202f79e842075faf13c9b1"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_axial_restart_codec.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "33ad281704bbdcd5e49c755ab3b94bcf15ad4b554fbceaf86653b21cd93c63a3",
+      "byteCount": 7942,
+      "lineCount": 117,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "33ad281704bbdcd5e49c755ab3b94bcf15ad4b554fbceaf86653b21cd93c63a3"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_beam_layer_kernel.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整Hermite/转角符号、4点x*2点z积分、一致偏心惯性、分区覆盖、电极G与Ce、缩放乘积边界。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "3920e2db49e238f500351214cf72cea4c5205d7efdb02c9c5893e8f7c3a3be00",
+      "byteCount": 8848,
+      "lineCount": 188,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          188
+        ]
+      ],
+      "reviewedSha256": "3920e2db49e238f500351214cf72cea4c5205d7efdb02c9c5893e8f7c3a3be00",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "3920e2db49e238f500351214cf72cea4c5205d7efdb02c9c5893e8f7c3a3be00"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_electrical_system.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整指数缩放算术、固定Q凝聚、分类port排序、独立参考增量与evaluateInto原子发布；核对F/Q与放大器符号。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "c1013cfd6851fa99b9d4f323a1eb189fd4785b13feb88328ae73ba414f5930fa",
+      "byteCount": 14096,
+      "lineCount": 321,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          321
+        ]
+      ],
+      "reviewedSha256": "c1013cfd6851fa99b9d4f323a1eb189fd4785b13feb88328ae73ba414f5930fa",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "c1013cfd6851fa99b9d4f323a1eb189fd4785b13feb88328ae73ba414f5930fa"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_element_operators.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整材料转换/自由应力Schur与轴向性质、SPD/对称/尺寸守卫；刚体导致K仅在kernel测试中证PSD，不把validate当完整谱证明。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "1bed8c24bd7140119aa01064322c3af96cc8ce679d389de727ae26b4c3da663e",
+      "byteCount": 13902,
+      "lineCount": 318,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          318
+        ]
+      ],
+      "reviewedSha256": "1bed8c24bd7140119aa01064322c3af96cc8ce679d389de727ae26b4c3da663e",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "1bed8c24bd7140119aa01064322c3af96cc8ce679d389de727ae26b4c3da663e"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_dynamics.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整derive/initialize/trial/restore与seal；源固定电极初值由facade而非通用driver约束，驱动器允许显式自选初值是有效API，缺口修在facade。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "5323e6020ad09b97e4aeb791dbbfbd05e45b139f8788e1f49fd71b674bdf137a",
+      "byteCount": 24828,
+      "lineCount": 322,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          322
+        ]
+      ],
+      "reviewedSha256": "5323e6020ad09b97e4aeb791dbbfbd05e45b139f8788e1f49fd71b674bdf137a",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "5323e6020ad09b97e4aeb791dbbfbd05e45b139f8788e1f49fd71b674bdf137a"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_mesh.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整框架/plane/overlap、稳定物理ID排序、element congruence/连续电极归并、P/PT及按平动/转动分块可表示性。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "20e0e5c14052369c56405c639a3129a8572b706728dac2846bb497bce1b388bb",
+      "byteCount": 13268,
+      "lineCount": 224,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          224
+        ]
+      ],
+      "reviewedSha256": "20e0e5c14052369c56405c639a3129a8572b706728dac2846bb497bce1b388bb",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "20e0e5c14052369c56405c639a3129a8572b706728dac2846bb497bce1b388bb"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_model_adapter.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整294行内仿射约束、T/p/q0分工、工作点覆盖、实际端口/阻尼权威、全质量初始加速度与物理量纲复核。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "c2d75c976cc5b1aedfe56c5b107cede9ab74469e46d603f52e353ea03fa501d3",
+      "byteCount": 22576,
+      "lineCount": 291,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          291
+        ]
+      ],
+      "reviewedSha256": "c2d75c976cc5b1aedfe56c5b107cede9ab74469e46d603f52e353ea03fa501d3",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "c2d75c976cc5b1aedfe56c5b107cede9ab74469e46d603f52e353ea03fa501d3"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_native_run.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整实现：初始化与cold restart、源/配置/driver seal三层身份、canonical clock、source初始电压及无控制器边界、first previousApplied与零步opaque约束、proposal/held/postFE顺序、八个机械display变量、模型/状态封印提交。"
+      ],
+      "findings": [
+        "N-LAYERED-RESTORE-002"
+      ],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "f6a6163a969ae2201defcb9f7cb3d39bb8f70d38954703dcc5d1e34781503c08",
+      "byteCount": 25006,
+      "lineCount": 188,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          188
+        ]
+      ],
+      "reviewedSha256": "f6a6163a969ae2201defcb9f7cb3d39bb8f70d38954703dcc5d1e34781503c08",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "f6a6163a969ae2201defcb9f7cb3d39bb8f70d38954703dcc5d1e34781503c08",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_layered_restart_codec.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整bounded encode/decode/canonicalEquals：LE binary64、负零、枚举/计数、最终hash/尾随字节；codec不代替facade物理/源语义认证。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "a4333447dccf09c652eaafb7cad57b5a46aafe7cb7f49f87872ec42f44288260",
+      "byteCount": 7772,
+      "lineCount": 111,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          111
+        ]
+      ],
+      "reviewedSha256": "a4333447dccf09c652eaafb7cad57b5a46aafe7cb7f49f87872ec42f44288260",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "a4333447dccf09c652eaafb7cad57b5a46aafe7cb7f49f87872ec42f44288260"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_native_readout.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整source/readout reference与approved damping系统、sensor边界、实际assembly重用、稳定长度差与大偏置增量、输出单位；承认observe(state,assembly)调用方负责已认证assembly。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "722ddd2cb75dfa72fe958d5b0238e64bd1353b47f36647d992dc198d235005b6",
+      "byteCount": 15450,
+      "lineCount": 260,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          260
+        ]
+      ],
+      "reviewedSha256": "722ddd2cb75dfa72fe958d5b0238e64bd1353b47f36647d992dc198d235005b6",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "722ddd2cb75dfa72fe958d5b0238e64bd1353b47f36647d992dc198d235005b6"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_plate_mitc4_kernel.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整凸CCW/角点Jacobian、协变MITC4 tying、面内/弯曲/剪切耦合及thickness积分、完整host局部coverage和一致M。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "ad0b3ec883e5aa0390d2a28f40dbe34916a24ec8d0723329ea521e34651ac421",
+      "byteCount": 10560,
+      "lineCount": 228,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          228
+        ]
+      ],
+      "reviewedSha256": "ad0b3ec883e5aa0390d2a28f40dbe34916a24ec8d0723329ea521e34651ac421",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "ad0b3ec883e5aa0390d2a28f40dbe34916a24ec8d0723329ea521e34651ac421"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_solid_kernel.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整TET4/仿射HEX8梯度J^-T、工程剪切B、4点/8点积分、一致M/机电/介电矩阵、Jacobian准入及有限性。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "3069f5bd1338414288b44e45f17964f36d5b1b11a5f011ab7e3db958ca27ab97",
+      "byteCount": 5231,
+      "lineCount": 88,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "reviewedSha256": "3069f5bd1338414288b44e45f17964f36d5b1b11a5f011ab7e3db958ca27ab97",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "3069f5bd1338414288b44e45f17964f36d5b1b11a5f011ab7e3db958ca27ab97"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_piezo_solid_mesh.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。",
+        "完整SAT交叠、连通电域双电极面、内部势Schur凝聚G/Ce/K、旋转congruence与roundoff对称检查。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "efec1c3d14fe7359cfca66c444d20c36b762e25378c961ea4733de8c9c60bf29",
+      "byteCount": 13508,
+      "lineCount": 148,
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          148
+        ]
+      ],
+      "reviewedSha256": "efec1c3d14fe7359cfca66c444d20c36b762e25378c961ea4733de8c9c60bf29",
+      "reviewedDate": "2026-11-05",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "efec1c3d14fe7359cfca66c444d20c36b762e25378c961ea4733de8c9c60bf29"
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_truss_dynamics.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整637行：阻尼局部PSD及对称冻结、自由/约束残差、Newmark加速度未知量、受限GMRES及OpenMP RAII、左右力与控制跳变能量、midpoint粘性耗散、端点支持功、恢复完整状态与有限检查；无阈值或物理变更。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "bf320aa342d12f0da22d3c2b51180cbcd908a92482690cea626ff1bc3962e2a7",
+      "byteCount": 33982,
+      "lineCount": 637,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          637
+        ]
+      ],
+      "reviewedSha256": "bf320aa342d12f0da22d3c2b51180cbcd908a92482690cea626ff1bc3962e2a7",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "bf320aa342d12f0da22d3c2b51180cbcd908a92482690cea626ff1bc3962e2a7",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/src/rstructural_truss_dynamics_model_adapter.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "静态核对本批次实现的物理/来源/持久化或事务边界，参见对应测试契约；未运行数值验收。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "相关单元/集成/恢复测试及数值参考比较；本轮未编译/运行。"
+      ],
+      "pendingReview": [],
+      "sha256": "14dd8f4610de7093971e690d766706198af2e7f3ee9892456122832143b93871",
+      "byteCount": 30431,
+      "lineCount": 538,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "14dd8f4610de7093971e690d766706198af2e7f3ee9892456122832143b93871"
+    },
+    {
+      "path": "src/range-solver-lib/tests/CMakeLists.txt",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "核对新增源/头文件或测试注册及版本/身份编译定义；未执行配置。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "重新配置/编译并核对必跑清单注册；本轮禁止执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "63eef2e43a1e795a9bcc2edf9f2fef0f620580497faa7e95127324f5c4440a24",
+      "byteCount": 4338,
+      "lineCount": 113,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "63eef2e43a1e795a9bcc2edf9f2fef0f620580497faa7e95127324f5c4440a24"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_parallel_execution_context.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_parallel_execution_context；尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "f6d4d4a0724b832a0d7a88b5795ab4cce05fbf6ead979ef30aeffe93b56e9dd8",
+      "byteCount": 4706,
+      "lineCount": 128,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "f6d4d4a0724b832a0d7a88b5795ab4cce05fbf6ead979ef30aeffe93b56e9dd8"
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_dynamics_integrator.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整测试体：独立scalar/2x2 Newmark、Neumaier/FMA原矩阵证书、40自由度未加载弱耦合、alpha/CD收敛与CFL、2万步canonical/split、force失败不消耗状态；新增有限输入能量溢出正/负与原accepted保持回归。"
+      ],
+      "findings": [
+        "N-DYNAMICS-FINITE-003"
+      ],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_dynamics_integrator；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "dc181f79c4b78e5b673a34bf1ce966ddfb22c4314cc83340153d193692669df6",
+      "byteCount": 38463,
+      "lineCount": 718,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          718
+        ]
+      ],
+      "reviewedSha256": "dc181f79c4b78e5b673a34bf1ce966ddfb22c4314cc83340153d193692669df6",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "dc181f79c4b78e5b673a34bf1ce966ddfb22c4314cc83340153d193692669df6",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_axial_native_run.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部测试体：全部切分/phase RAM/RBM恢复、实际C/force/读出、proposal/postFE/forcing/证书失败重试、别名变异可达、无控制previous、source/opaque/初始能量错配、千步时钟/多执行器顺序；未把fixture执行等同独立数值oracle。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_axial_native_run；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "4ec6c53e40d4966874c391a0914d23e14a18128158bf6df0753a45321f0e5201",
+      "byteCount": 28837,
+      "lineCount": 267,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          267
+        ]
+      ],
+      "reviewedSha256": "4ec6c53e40d4966874c391a0914d23e14a18128158bf6df0753a45321f0e5201",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "4ec6c53e40d4966874c391a0914d23e14a18128158bf6df0753a45321f0e5201",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_axial_operators.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部测试体：实际替换质量、150.32切线、几何预应力、非平行网络、独立force/Q差分互易性、D直接项、自由映射、cable kink/机制拒绝及极小非零耦合局部证书；正例先建立有效source。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_axial_operators；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "e7a2ab92e1a3a50b10497bcee95d516a47a6956c0be86182ed7b0b1f5870b75a",
+      "byteCount": 23725,
+      "lineCount": 365,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          365
+        ]
+      ],
+      "reviewedSha256": "e7a2ab92e1a3a50b10497bcee95d516a47a6956c0be86182ed7b0b1f5870b75a",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "e7a2ab92e1a3a50b10497bcee95d516a47a6956c0be86182ed7b0b1f5870b75a",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_beam_layer_kernel.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部测试体：独立Hermite多项式积分M/K及I0/I1/I2、刚体/偏心/贴片本身惯性、部分覆盖、电极极性/并联、enthalpy导数、悬臂解析柔度、极小/极大可表征边界与交叠拒绝。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_beam_layer_kernel；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "72b786bdbe1e811ae7b65e2d4443e21db25ca4632cba9b88bb0ec9f36b1bfbae",
+      "byteCount": 26210,
+      "lineCount": 547,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          547
+        ]
+      ],
+      "reviewedSha256": "72b786bdbe1e811ae7b65e2d4443e21db25ca4632cba9b88bb0ec9f36b1bfbae",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "72b786bdbe1e811ae7b65e2d4443e21db25ca4632cba9b88bb0ec9f36b1bfbae",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_electrical_system.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部测试体：混合4端口解析F/Q、PSD开短差、互易及D项、大偏置增量、指数极值/次正规数、invalid边界/失败workspace保持；标准库Fraction独立复核核心解析数值，非执行C++。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_electrical_system；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "68285a783db121e9848f5cd3f1d2db68ac52c3ecf61682727eb16cd909c7a261",
+      "byteCount": 20855,
+      "lineCount": 397,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          397
+        ]
+      ],
+      "reviewedSha256": "68285a783db121e9848f5cd3f1d2db68ac52c3ecf61682727eb16cd909c7a261",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "68285a783db121e9848f5cd3f1d2db68ac52c3ecf61682727eb16cd909c7a261",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_beam_oracle.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部440行：独立截面z矩与Hermite解析积分，不调用生产装配建立oracle；预载workpoint、支持反力、M=.165/Kopen=35266666.6667、125V真实accepted步与scalar Newmark/电荷读出对照。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_beam_oracle；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "a009d8b5de3e0ec8430ea55855a039fb2ba3a24c37139f602dc94859b85f11d9",
+      "byteCount": 22138,
+      "lineCount": 440,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          440
+        ]
+      ],
+      "reviewedSha256": "a009d8b5de3e0ec8430ea55855a039fb2ba3a24c37139f602dc94859b85f11d9",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "a009d8b5de3e0ec8430ea55855a039fb2ba3a24c37139f602dc94859b85f11d9",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_dynamics.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部462行：独立pivoted Newmark与mass residual修正oracle、薄板每自由行及roundoff界、左右激励和电压跳变、连续/离散耗散区别、完整能量/反力/读出、seal变异、回滚重试、canonical及OpenMP恢复；并行用例需至少2可用线程。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_dynamics；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "8ff464410ffb438e3db4ac8f8fd216d5ea8180cdcdfb0813f19aff10dd082c98",
+      "byteCount": 38592,
+      "lineCount": 462,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          462
+        ]
+      ],
+      "reviewedSha256": "8ff464410ffb438e3db4ac8f8fd216d5ea8180cdcdfb0813f19aff10dd082c98",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "8ff464410ffb438e3db4ac8f8fd216d5ea8180cdcdfb0813f19aff10dd082c98",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_mesh.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部604行：按element重复组装只证明连接/聚合；另有独立复合EB均布荷载内部点收敛及301/501阶Navier参考与固定32x32内点L2收敛，连续电极Ce/Q非零、P虚功、unsupported轴/重叠/ID负例。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_mesh；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "e74772d0f97b61578cac700446ede58fcfdb1f5cd5a3833929d1bd2cda828cba",
+      "byteCount": 35696,
+      "lineCount": 604,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          604
+        ]
+      ],
+      "reviewedSha256": "e74772d0f97b61578cac700446ede58fcfdb1f5cd5a3833929d1bd2cda828cba",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "e74772d0f97b61578cac700446ede58fcfdb1f5cd5a3833929d1bd2cda828cba",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_model_adapter.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部230行：实际源->kernel映射、部分覆盖、旋转仿射约束秩/冗余、工作点证书、机制/unsupported字段、Rayleigh/imported/modal唯一权威、旧条件明确诊断、连续电极短路/放大器及应变电荷转换。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_model_adapter；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "2e15d67c8f70fd6844f54509750c775bef18b552f8bfeb65da303c3ba60e69da",
+      "byteCount": 17466,
+      "lineCount": 230,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          230
+        ]
+      ],
+      "reviewedSha256": "2e15d67c8f70fd6844f54509750c775bef18b552f8bfeb65da303c3ba60e69da",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "2e15d67c8f70fd6844f54509750c775bef18b552f8bfeb65da303c3ba60e69da",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_native_run.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "完整原有测试及本轮4个新增/保留trace相关与恢复测试体：每split/phase与真实codec、controls限幅率、纯回调失败、物理seal重造后名义dt/初始电压/无控制held拒绝、连续梁板电极实际贡献；trace替身只证调度与回滚，另验证关闭trace后的真实MODEL读回。"
+      ],
+      "findings": [
+        "N-SOLVER-TRACE-001",
+        "N-LAYERED-RESTORE-002"
+      ],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_native_run；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "255536dba119ffa44564e943da795147be284f2e785a522fbc6bda029a680e88",
+      "byteCount": 49580,
+      "lineCount": 611,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。",
+        "已写trace publisher生命周期修复/新增测试源；未编译。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          611
+        ]
+      ],
+      "reviewedSha256": "255536dba119ffa44564e943da795147be284f2e785a522fbc6bda029a680e88",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "255536dba119ffa44564e943da795147be284f2e785a522fbc6bda029a680e88",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_layered_plate_oracle.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部478行：独立截面矩与MITC边中点tying/B矩阵、全20DOF M/K/G/Ce、非零workpoint及reaction、开短路GGt/Ce与虚功导数；不是网格收敛替代证据。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_layered_plate_oracle；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "fac5847d6ee61af7b77c6ab01dc0398b467f504128e73a56f8aabc8602bea142",
+      "byteCount": 20165,
+      "lineCount": 478,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          478
+        ]
+      ],
+      "reviewedSha256": "fac5847d6ee61af7b77c6ab01dc0398b467f504128e73a56f8aabc8602bea142",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "fac5847d6ee61af7b77c6ab01dc0398b467f504128e73a56f8aabc8602bea142",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_material_ops.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部404行：工程剪切Voigt、轴/平面应力Schur、anisotropic s/d/epsilonT等价与电轴选择、替换质量一次、极小/极大数值尺度、物理SPD与无效层/矩阵拒绝。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_material_ops；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "6b98a41e55adc4eb9bcbc0b95886a82e696bead557f182205b3ec9c166d97e6c",
+      "byteCount": 20582,
+      "lineCount": 404,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          404
+        ]
+      ],
+      "reviewedSha256": "6b98a41e55adc4eb9bcbc0b95886a82e696bead557f182205b3ec9c166d97e6c",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "6b98a41e55adc4eb9bcbc0b95886a82e696bead557f182205b3ec9c166d97e6c",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_native_readout.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部275行：classified目录不同顺序、native增量电荷/电压与放大器极性/单位、D直接项、preload自由力与电边界证书、sensor-only immutable、旋转/节点反序、大偏置小信号及split恢复。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_native_readout；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "c9788559be385cd5cce103c73ca262c693d1fabadda8ebdcff8cdf1d5669265f",
+      "byteCount": 16669,
+      "lineCount": 275,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          275
+        ]
+      ],
+      "reviewedSha256": "c9788559be385cd5cce103c73ca262c693d1fabadda8ebdcff8cdf1d5669265f",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "c9788559be385cd5cce103c73ca262c693d1fabadda8ebdcff8cdf1d5669265f",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_plate_mitc4_kernel.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部545行：完整一致惯性/偏心、畸变Q4膜/曲率patch、六刚体模与无额外零能模、anisotropic剪切修正、互易开短路/部分覆盖/旋转、Navier单傅里叶模式厚度-网格收敛，非法几何拒绝。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_plate_mitc4_kernel；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "2ec2aa9d71d1f58df555ea8f954a4c0fa437f90eb90a8c7ac6b892bcc19c7b6c",
+      "byteCount": 24740,
+      "lineCount": 545,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          545
+        ]
+      ],
+      "reviewedSha256": "2ec2aa9d71d1f58df555ea8f954a4c0fa437f90eb90a8c7ac6b892bcc19c7b6c",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "2ec2aa9d71d1f58df555ea8f954a4c0fa437f90eb90a8c7ac6b892bcc19c7b6c",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_piezo_solid.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部136行：TET4/仿射HEX8非对角Jacobian、恒应变/刚体/一致质量、势规范与互易、电内部自由度凝聚、网格准入、实际native读出/RAM-RBM恢复及旋转极性；仅代表性网格，不声称任意形状收敛。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_piezo_solid；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "2ac5acdc02e2ae3227954871f17f45e8592adf28e7fa828cc7e2bb703a68da6a",
+      "byteCount": 16930,
+      "lineCount": 136,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          136
+        ]
+      ],
+      "reviewedSha256": "2ac5acdc02e2ae3227954871f17f45e8592adf28e7fa828cc7e2bb703a68da6a",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "2ac5acdc02e2ae3227954871f17f45e8592adf28e7fa828cc7e2bb703a68da6a",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_truss_damped_forcing.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "全部303行：独立m=2,c=.8,k=40常/线性/正弦解析响应、cross-C+运动支座功、PSD局部尺度、非线性杆缆RK4双参考/步长收敛、2万步canonical及split、真正多自由度串行确定性与失败恢复调用方ICV。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_truss_damped_forcing；尚未执行。",
+        "预期：执行本项checks映射的全部正/负合同，正例进入目标调用、负例命中目标守卫且不破坏accepted；不改变阈值或用skip替代失败。运行前隔离并验证profile/tmp/log路径。"
+      ],
+      "pendingReview": [],
+      "sha256": "73642b9d77d87aa42e57b1d8fb0faf3a65c05e9c13dbf3234986319f263fc7f6",
+      "byteCount": 21162,
+      "lineCount": 303,
+      "priorReviewStatus": "pending",
+      "priorChecks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "reviewDepth": "complete_file_static_contract_review",
+      "reviewedRanges": [
+        [
+          1,
+          303
+        ]
+      ],
+      "reviewedSha256": "73642b9d77d87aa42e57b1d8fb0faf3a65c05e9c13dbf3234986319f263fc7f6",
+      "reviewedDate": "2026-11-05",
+      "runtimeStatus": "not_run_user_prohibited",
+      "inheritedReview": false,
+      "inheritedReviewNote": "原pending；本轮按reviewDepth和reviewedRanges补足。",
+      "currentPassReview": "complete_file_static",
+      "currentSha256": "73642b9d77d87aa42e57b1d8fb0faf3a65c05e9c13dbf3234986319f263fc7f6",
+      "platformDependencies": [
+        "获授权的Qt/C++构建运行环境",
+        "数值/恢复测试依OpenMP与目标编译器；Windows/MSVC及真实文件系统步骤未验证"
+      ]
+    },
+    {
+      "path": "src/range-solver-lib/tests/tst_structural_truss_dynamics.cpp",
+      "reviewStatus": "reviewed_static",
+      "checks": [
+        "查看变更、测试selectors及代表性正/负断言；未将测试名称或测试源存在记作运行通过。"
+      ],
+      "findings": [],
+      "requiredRuntimeValidation": [
+        "编译并运行tst_structural_truss_dynamics；尚未执行。"
+      ],
+      "pendingReview": [],
+      "sha256": "147ab60cd2d9535f76d756231a1971ec1b8dd5502efca4b2c2982b3a4e74c365",
+      "byteCount": 25845,
+      "lineCount": 517,
+      "reviewDepth": "inherited_prior_static_scope_not_reaudited_in_full",
+      "shaScope": "current_inventory_only_not_new_review_evidence",
+      "inheritedReview": true,
+      "inheritedReviewNote": "保留2026-11-04记录的原静态状态，不由本轮inventory hash自动升级成完整重审。",
+      "currentPassReview": "not_reaudited_in_full",
+      "currentSha256": "147ab60cd2d9535f76d756231a1971ec1b8dd5502efca4b2c2982b3a4e74c365"
+    }
+  ],
+  "overallStatus": "static_batch_scope_reviewed_runtime_validation_pending",
+  "actualValidation": [
+    {
+      "kind": "independent_standard_library_arithmetic",
+      "command": "python3 -I -B artifacts/bugfix-audit-20261104/resume-20261105/numerical/checks/check_arithmetic.py <repo> <numerical-output-root>",
+      "status": "exit_0",
+      "checks": 4,
+      "cppExecuted": false,
+      "evidence": "artifacts/bugfix-audit-20261104/resume-20261105/numerical/checks/arithmetic-results.json"
+    },
+    {
+      "kind": "whitespace_only",
+      "command": "git -C src/range-solver-lib diff --check",
+      "status": "exit_0"
+    },
+    {
+      "kind": "whitespace_only",
+      "command": "git -C src/range-model-lib diff --check",
+      "status": "exit_0"
+    },
+    {
+      "kind": "artifact_containment",
+      "status": "verified_before_python_checks",
+      "paths": "HOME/TMPDIR/TMP/TEMP/XDG_*均指向numerical；tempfile实际根也校验位于本目录；Python -I -B。"
+    }
+  ],
+  "crossDomainDependencies": [
+    {
+      "path": "src/fea-solver/src/solver_task.cpp",
+      "reviewedLines": [
+        1320,
+        1388
+      ],
+      "contract": "仅核对RSolver participant注册->trace启用->提交后receipt observer调用边界。NativeAcceptedCheckpointStore磁盘实现/真实故障测试归根CLI主线，不由本报告宣称完成。"
+    },
+    {
+      "path": "src/range-solver-lib/src/rsolvergeneric.cpp",
+      "reviewedLines": [
+        652,
+        800
+      ],
+      "contract": "普通MODEL output-frequency与frame pending/提交后通知；trace关闭后恢复普通MODEL写路径的回归源已补。"
+    },
+    {
+      "path": "src/range-base-lib/src/rbl_rvector.cpp",
+      "reviewedLines": [
+        198,
+        208
+      ],
+      "contract": "只读核对dot的乘加溢出机制；没有跨域修改。"
+    },
+    {
+      "area": "application excitation/control/design/postprocessing",
+      "contract": "回调纯值与ledger接口、物理单位、数值读出链已复核；应用provider/MPC/LQR/激励导入/频谱显示的完整实现与平台验收由主线接续。"
+    }
+  ],
+  "hypothesesNotPromotedToBugs": [
+    "未认证任意恶意回调：publication publish/commit依接口禁止修改candidate，value callbacks要求确定性；冻结participant本身不是外部I/O真实性认证。",
+    "未把large-origin或薄板条件数推测当根因；不改已有物理/容差/阈值。",
+    "测试中的production-element重复组装是映射/聚合核对，不是独立材料/核函数oracle；已与解析section/continuum参考分开记录。"
+  ],
+  "moduleHeads": {
+    "range-model-lib": "6a732d9039cf2e2f54f0e6e0fab636ef2c3a4129",
+    "range-solver-lib": "880c5d15ec28f74aeb0825462dfdb3563776d2fe"
+  },
+  "inventoryDigestSha256": "85d2435e6d05181558f5439fdfe9865d199a5bc28f1fd64b32fcd068b754a55e",
+  "externalFileReservations": [
+    {
+      "path": "src/range-model-lib/src/rml_structural_native_control.cpp",
+      "writeByThisAudit": false,
+      "note": "外部兼容改动独立发生；本报告review hash只是快照，协调代理最终重核。"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_layered_setup.cpp",
+      "writeByThisAudit": false,
+      "note": "外部兼容改动独立发生；本报告review hash只是快照，协调代理最终重核。"
+    },
+    {
+      "path": "src/range-model-lib/src/rml_structural_piezo_readout_setup.cpp",
+      "writeByThisAudit": false,
+      "note": "外部兼容改动独立发生；本报告review hash只是快照，协调代理最终重核。"
+    }
+  ]
+}

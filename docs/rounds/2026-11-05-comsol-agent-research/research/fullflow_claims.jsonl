@@ -1,0 +1,7 @@
+{"claim_id": "FF-K01", "claim": "现有API Agent路线已公开实作，与内置Chatbot及2027 MCP分开。", "evidence_ids": ["FF-E01", "FF-E02", "FF-E03", "FF-E04", "FF-E08"], "type": "official_demo_and_api"}
+{"claim_id": "FF-K02", "claim": "共享活模型和客户端协调有现成API基础。", "evidence_ids": ["FF-E05", "FF-E06", "FF-E07", "FF-E20"], "type": "official_api_contract"}
+{"claim_id": "FF-K03", "claim": "Agent可按需读取上下文，Chatbot手动附件不代表全模型自动访问。", "evidence_ids": ["FF-E02", "FF-E12", "FF-E23"], "type": "official_public_description"}
+{"claim_id": "FF-K04", "claim": "数据后处理必须保留物理索引与单位。", "evidence_ids": ["FF-E10", "FF-E22", "FF-E25"], "type": "api_plus_design_inference"}
+{"claim_id": "FF-K05", "claim": "2027已预告、公开正式发货未确认，MCP工具合同未知。", "evidence_ids": ["FF-E03", "FF-E17", "FF-E18", "FF-E19"], "type": "bounded_current_public_status"}
+{"claim_id": "FF-K06", "claim": "数值误差估计与Agent自然语言推理不同，API覆盖不证明通用正确。", "evidence_ids": ["FF-E14", "FF-E01", "FF-E04"], "type": "technical_boundary_analysis"}
+{"claim_id": "FF-K07", "claim": "六对象与候选工具合同是Range建议，不是COMSOL内部实现。", "evidence_ids": [], "type": "design_proposal"}

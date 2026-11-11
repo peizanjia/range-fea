@@ -1,0 +1,215 @@
+{
+  "research_date": "2026-11-05",
+  "scope": "仅COMSOL全流程agent联网调研；2027 MCP交付状态、公开机制、第三方区分",
+  "version_status_conclusion": "截至本次公开资料读取，2027和MCP已预告且有厂商内部测试声明，但公开首页/发布历史/下载入口仍指向待发布状态；未能确认正式公开交付。这个结论不否定现有COMSOL API可运行agent闭环，官方9/18已有实作演示。",
+  "sources": [
+    {
+      "id": "F01",
+      "kind": "official_preview",
+      "title": "System-Level Modeling and Agentic AI Take the Spotlight in COMSOL Multiphysics Version 2027",
+      "url": "https://www.comsol.com/press-release/system-level-modeling-and-agentic-ai-take-the-spotlight-in-comsol-multiphysics-version-2027-14722",
+      "version": "2027预告",
+      "date": "2026-09-16",
+      "locator": "Advancing AI-Assisted Simulation with Agentic Workflows；web turn8view1 L64–68",
+      "supports": [
+        "MCP标准化接口让外部agent经COMSOL API建改模型、运行、检查结果、据结果决定下一步；用户可在Desktop审阅和改进。"
+      ],
+      "does_not_support": [
+        "正式交付日期；工具名/schema；stdio或HTTP；认证/审批/回滚；跨平台/模块许可证细则。"
+      ],
+      "quote": "An agent can build and/or modify a model"
+    },
+    {
+      "id": "F02",
+      "kind": "official_current_status",
+      "title": "COMSOL - Software for Multiphysics Simulation",
+      "url": "https://www.comsol.com/",
+      "version": "动态首页，2027倒计时",
+      "date": "读取2026-11-05；页面无单独发布日期",
+      "locator": "v2027 banner；web turn19view4 L77–81",
+      "supports": [
+        "当前读取内容仍写倒计时与2027能力即将到来。"
+      ],
+      "does_not_support": [
+        "精确正式发布日期；私有测试版是否存在；任何MCP协议实现细节。"
+      ],
+      "quote": "more are coming in v2027"
+    },
+    {
+      "id": "F03",
+      "kind": "official_current_status",
+      "title": "Download COMSOL Multiphysics simulation software and COMSOL Server here",
+      "url": "https://www.comsol.com/product-download",
+      "version": "公开下载入口6.4.0.429",
+      "date": "页面版本日期2026-05-29；读取2026-11-05",
+      "locator": "标题与版本选择；web turn20view0 L44–48,L126–135",
+      "supports": [
+        "无需登录可见的当前下载版本仍为6.4.0.429；版本列表未列2027；实际下载要求有效订阅许可证或试用关联账号。"
+      ],
+      "does_not_support": [
+        "登录后特殊授权是否可见2027；MCP Server许可条款；2027已正式出货。"
+      ],
+      "quote": "Version 6.4.0.429, May 29, 2026"
+    },
+    {
+      "id": "F04",
+      "kind": "official_current_status",
+      "title": "Release History",
+      "url": "https://www.comsol.com/release-history",
+      "version": "官方发布历史",
+      "date": "读取2026-11-05",
+      "locator": "版本表首行；web turn16view1 L47–54",
+      "supports": [
+        "正式发布历史表首行仍6.4于2025-11-18，下一行为6.3于2024-11-19。"
+      ],
+      "does_not_support": [
+        "单页未列出并非逻辑上证明绝无新版本；须与首页/下载/预告合读。"
+      ],
+      "quote": "6.4"
+    },
+    {
+      "id": "F05",
+      "kind": "official_future_event",
+      "title": "Introducing COMSOL Multiphysics Version 2027",
+      "url": "https://www.comsol.com/events/webinar/introducing-comsol-multiphysics-version-2027-140322",
+      "version": "2027介绍webinar",
+      "date": "活动2026-12-10 11:00–12:00 EST（研究日期之后）",
+      "locator": "页面标题、首部介绍、Webinar Details；web turn16view2 L44–50,L123–129；turn15view3 L51",
+      "supports": [
+        "将介绍2027和MCP Server的webinar已公布，活动时间晚于研究日期。"
+      ],
+      "does_not_support": [
+        "已观看录像；已经完成演示；MCP已交付；工具参数或性能基准。"
+      ],
+      "quote": "December 10, 2026"
+    },
+    {
+      "id": "F06",
+      "kind": "official_conference_program",
+      "title": "Program for the COMSOL Conference 2026 Boston",
+      "url": "https://www.comsol.com/conference/program/boston",
+      "version": "2026会议；MCP仍称upcoming",
+      "date": "会议2026-10-07至09；页面无独立发布日期",
+      "locator": "Accelerating Semiconductor Simulation with NVIDIA CUDA-X Libraries and AI；Generative and Agentic AI with COMSOL；web turn22view2 L449–465",
+      "supports": [
+        "官方议程称MCP Server即将推出，并称COMSOL已用NVIDIA Nemotron Ultra成功测试AI辅助建模工作流。",
+        "同页短课描述Java API让agent创建、运行、检查、评估模型。"
+      ],
+      "does_not_support": [
+        "Nemotron测试可复现脚本/参数/结果；MCP只有该模型可用；已交付版本；已公开客户端配置。"
+      ],
+      "quote": "upcoming COMSOL MCP Server"
+    },
+    {
+      "id": "F07",
+      "kind": "official_mechanism_demo",
+      "title": "Using Agentic Workflows with COMSOL Multiphysics",
+      "url": "https://www.comsol.com/blogs/using-agentic-workflows-with-comsol-multiphysics/",
+      "version": "实际API agent路线；正文未明确锁定COMSOL版本build",
+      "date": "2026-09-18",
+      "locator": "Understanding Interactions / How to Connect / Heat Sink Model / Considerations；web turn22view1 L65–94,L110–162",
+      "supports": [
+        "示范Codex通过skill/wrapper编译Java程序连接共享的Multiphysics服务器模型，查询、修改、求解后断开，读取输出继续规划。",
+        "公开散热器求解器调参示例：9次实验；作者报告非线性迭代减少25%、作者称计算约快30%（未独立复现，未换算耗时降幅）。",
+        "展示另一组压缩性选项比较和报告；强调检查物理量、选择集及长作业恢复。"
+      ],
+      "does_not_support": [
+        "这是2027 MCP实现；精确6.4补丁；通用30%加速保证；严谨独立基准；完整生产级超时恢复。"
+      ],
+      "quote": "Running nine experiments"
+    },
+    {
+      "id": "F08",
+      "kind": "official_capability_overview",
+      "title": "Generative and Agentic AI Workflows in COMSOL Multiphysics",
+      "url": "https://www.comsol.com/technologies/generative-and-agentic-ai-workflows",
+      "version": "未绑定具体版本的技术概览",
+      "date": "未标发布日期；读取2026-11-05",
+      "locator": "首部 / The Chatbot Window / Creating Geometry Objects / Finding Modeling Mistakes；web turn22view0 L49–72",
+      "supports": [
+        "明确区分Chatbot生成/解释/调试代码与agent直接调用API完成多步骤；模型或局部可主动附到prompt。",
+        "agent可创建组合几何、查模型结构、改参数/物理场/研究并评估结果；修改应按物理假设审阅。"
+      ],
+      "does_not_support": [
+        "MCP传输或工具定义；所有工作流都已经自动可靠完成；Chatbot默认自动读取全模型。"
+      ],
+      "quote": "An entire model, or selected parts of one, can be attached"
+    },
+    {
+      "id": "F09",
+      "kind": "official_conference_program",
+      "title": "Program for the COMSOL Conference 2026 Cambridge",
+      "url": "https://www.comsol.com/conference/program/cambridge",
+      "version": "2026会议/2027预览",
+      "date": "会议2026-09-23至25",
+      "locator": "Introducing COMSOL Multiphysics Version 2027 / Generative and Agentic AI with COMSOL Multiphysics；web turn20view4 L165,L302–303,L675",
+      "supports": [
+        "官方会议已安排2027预览及生成式/智能体AI课程；可作为后续索取讲义和录像的具体线索。"
+      ],
+      "does_not_support": [
+        "本次实际观看课程或录像；MCP schema或正式交付。"
+      ],
+      "quote": "Introducing COMSOL"
+    },
+    {
+      "id": "F10",
+      "kind": "third_party_repository",
+      "title": "Ching-Chiang/comsol-mcp README",
+      "url": "https://github.com/Ching-Chiang/comsol-mcp/blob/main/README.md",
+      "version": "main可变分支；非COMSOL官方产品",
+      "date": "读取2026-11-05；未固定commit",
+      "locator": "README 主要特性/环境要求/MCP配置/推荐工作流/未来聚焦；web turn23view0 L173–216,L245–285",
+      "supports": [
+        "独立仓库声称共享服务器模型、50工具、主模型锁和快照；配置提供Python MCP host启动示例。",
+        "README仍将材料、网格配置、完整结果导出列作后续重点；可作为机制参考线索。"
+      ],
+      "does_not_support": [
+        "COMSOL官方MCP工具集合；已经独立验证；跨平台支持；覆盖全流程的成熟度保证。"
+      ],
+      "quote": "visible-main"
+    },
+    {
+      "id": "F11",
+      "kind": "third_party_repository",
+      "title": "Cai-aa/CAE-Agent-Hub MCP/COMSOL README",
+      "url": "https://github.com/Cai-aa/CAE-Agent-Hub/blob/main/MCP/COMSOL/README.md",
+      "version": "main可变分支；第三方",
+      "date": "读取2026-11-05；未固定commit",
+      "locator": "首部/Contents/Preferred MPh Workflow/Codex Configuration；web turn23view1 L174–195,L215–260",
+      "supports": [
+        "明确独立MPh会话与Desktop共享模式不同；MPh经JPype/Java API，另有Java bridge备选。",
+        "README明确FastMCP stdio和Codex配置，以及开模型/改参数/解算/评估/导出/保存工具。"
+      ],
+      "does_not_support": [
+        "这些stdio与工具名属于COMSOL2027官方接口；本次实际运行或验证可靠性；无COMSOL许可证即可仿真。"
+      ],
+      "quote": "FastMCP stdio server"
+    }
+  ],
+  "verified_distinctions": [
+    "6.4内置Chatbot仍是用户附上下文、生成代码、Shell手动执行；COMSOL API外部agent路线可以另外存在。",
+    "2027 MCP是标准化接入的新路线；现有API agent demo不是MCP实现。",
+    "官方宣称Desktop可审阅，不等于协议有逐次授权、事务回滚或权限隔离。"
+  ],
+  "unknowns": [
+    "官方2027 MCP可用工具schema、API映射粒度、resources/prompts、协议版本、stdio/HTTP/SSE、认证、会话生命周期、并发、取消/超时/失败恢复。",
+    "MCP是否内置基础许可、需额外模块或FNL、允许何种远程部署/平台/客户端，公开已读材料未给明确合同。",
+    "官方MCP是否自动全模型上下文、按需读取或截断，公开材料未说明。",
+    "正式发货日期：未找到公开确认；不能用未来webinar或营销口吻断言已上市。"
+  ],
+  "probes": [
+    {
+      "url": "https://www.comsol.com/release/2027",
+      "result": "web open无法访问；不能据此单独推断404或不存在"
+    },
+    {
+      "url": "https://doc.comsol.com/2027/doc/com.comsol.help.comsol/html_COMSOLMultiphysicsManual.html",
+      "result": "web open无法访问；未发现可读2027官方在线API/MCP手册"
+    }
+  ],
+  "research_handoff": [
+    "可操作现有路线以F07官方实作/API服务器为准；不依赖尚未证实交付的MCP。",
+    "后续核实2027时应复查F02/F03/F04，并取得正式release highlights、安装指南与MCP tool schema后再规划集成。",
+    "第三方仓库只能单列；需要另行固定commit、审查代码和实测，不能将其接口冒充官方。"
+  ]
+}

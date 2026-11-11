@@ -1,0 +1,189 @@
+{
+  "schema": "range.research-handoff/v1",
+  "date": "2026-11-05",
+  "repository": "/home/erwin/Projects/range-fea",
+  "branch": "feature/structural-profile",
+  "root_head": "e3d527781add4cd388276392f63a7c9ee9bd5ec2",
+  "working_tree": "dirty; includes preserved prior user/Claude changes and submodule changes; HEAD is not source identity",
+  "objective": "A native-FE piezoelectric-control course demonstrator operated by an evidence-bound full-workflow agent, from supported model specification to reproducible report.",
+  "read_first": [
+    "docs/research/comsol64_agent_20261105/COMSOL_FULL_WORKFLOW_AGENT_REPORT.md",
+    "docs/research/comsol64_agent_20261105/report.md",
+    "docs/research/comsol64_agent_20261105/piezo_validation.md",
+    "docs/research/comsol64_agent_20261105/range_agent_gap.json",
+    "docs/audit_20261104/RUNTIME_VALIDATION_20261105.md",
+    "docs/PIEZO_CONTROL_DELIVERY.md",
+    "docs/acceptance/phase-checkpoint-20261030.md"
+  ],
+  "facts_to_preserve": [
+    "COMSOL 6.4 public workflow uses user-triggered Java Shell execution; documented tool calling is documentation browsing.",
+    "COMSOL 2027 MCP agent loop is described in a 2026-09-16 announcement; that page alone is not proof of shipped release or complete MCP schema.",
+    "Core piezo.configure-experiment is not currently exposed by Agent document command enum.",
+    "Trusted verifier supports native-passive rod/beam with 192-total-DOF dense bound; piezo-specific coupled verification remains a separate integration task.",
+    "Automatic mesh repair is reference-displacement/frequency-failure driven; adjacent 1% QoI change is not an absolute error bound or DWR estimator.",
+    "414/416 audit coverage uses mixed review depth, with 2 partial; audit explicitly did not compile its new C++ tests.",
+    "Do not promote a scientific native application-library run into CLI, GUI, installed product, sensor-only feedback or real LLM Provider acceptance."
+  ],
+  "preservation": [
+    "Preserve all existing changes, .idea, and submodule working trees; do not reset, clean, stash, commit, push or update gitlinks implicitly.",
+    "Old AGENTS.md rules were revoked by the user; preserve actual user authorizations and physical contracts.",
+    "No real LLM API call, credentials mutation or paid API use was performed by this research task.",
+    "Keep all run profiles, caches, logs and artifacts isolated under task artifacts; verify source and executable identities before assigning PASS.",
+    "Do not reinterpret waived 180-slot/holdout and clean-Windows-account exercises as completed or silently make them blocking again."
+  ],
+  "tasks": [
+    {
+      "id": "D0",
+      "title": "Current representative piezo baseline",
+      "status": "consult piezo_validation.json for exact completed cases and remaining boundaries",
+      "depends_on": [],
+      "owners": [
+        "src/CMakeLists.txt",
+        "src/fea-solver/CMakeLists.txt",
+        "src/range-application-lib/CMakeLists.txt",
+        "src/range-application-lib/tests/tst_piezo_pzt_prestress.cpp"
+      ],
+      "acceptance": [
+        "Exact targeted build and run receipts",
+        "Actual native FE plant, unchanged off/on physics and disturbance",
+        "Numerical provider and Python environment identity",
+        "Time-series CSV and independent-reference scope",
+        "RAM/RBM recovery cases with persisted state evidence"
+      ],
+      "pitfalls": [
+        "Unix transport rejects symlink executable paths; use a verified copied venv interpreter, not REAL_PATH that loses venv semantics",
+        "Copied venv package references are local development evidence, not private-runtime packaging acceptance"
+      ]
+    },
+    {
+      "id": "D1",
+      "title": "Revalidate latest trusted-Agent fixes",
+      "status": "not performed by this research run",
+      "depends_on": [
+        "D0"
+      ],
+      "owners": [
+        "src/fea/tests/tst_agent_task_runner.cpp",
+        "src/fea/tests/tst_native_job_registry.cpp",
+        "src/fea-solver/tests/tst_native_accepted_checkpoint.cpp",
+        "src/range-application-lib/tests/tst_trusted_verification_service.cpp"
+      ],
+      "acceptance": [
+        "Follow exact selectors in RUNTIME_VALIDATION_20261105.md",
+        "Persistence failure does not publish RAM-only success",
+        "Task/source-bound asynchronous replies",
+        "Finite-number and component-scaled verification negatives",
+        "Post-certifier checkpoint mutation rejected",
+        "Record unavailable Windows checks explicitly"
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "Expose piezo whole-experiment transaction to Agent",
+      "status": "not implemented by this research run",
+      "depends_on": [
+        "D1"
+      ],
+      "owners": [
+        "src/fea/src/agent_task_runner.cpp",
+        "src/fea/src/model_command_host.cpp",
+        "src/range-application-lib/src/rmodel_command_service.cpp",
+        "src/range-application-lib/src/rpiezo_experiment_service.cpp"
+      ],
+      "acceptance": [
+        "Strict enum/schema and validator agree",
+        "Reuse Core preview and source/revision digest",
+        "One whole-experiment preview, Host approval and Undo",
+        "Reject stale source, wrong task, unapproved preview, invalid electrode roles and unsupported DOF",
+        "Actual Host integration test changes intended native model"
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "Piezo coupled trusted verification and authorized refinement",
+      "status": "proposal",
+      "depends_on": [
+        "D0",
+        "D2"
+      ],
+      "owners": [
+        "src/range-application-lib/src/rtrusted_verification_service.cpp",
+        "src/range-application-lib/src/rtrusted_experiment_service.cpp",
+        "src/range-application-lib/src/rtrusted_convergence_service.cpp"
+      ],
+      "acceptance": [
+        "Independently check operators/material/poling and DOF mapping",
+        "Mechanical free-DOF balance, electric charge relation, sensor electrical conditions",
+        "Energy and work follow one explicit sign/working-point convention",
+        "Independent integrator is not claimed independent assembly",
+        "Temporal refinement preserves duration, physical load and controller sample period",
+        "Intentional polarity, stale-source and wrong-frame errors are detected",
+        "Unsupported checks return notComputed, never pass"
+      ]
+    },
+    {
+      "id": "D4",
+      "title": "Native postprocessing and reproducible report package",
+      "status": "proposal",
+      "depends_on": [
+        "D3"
+      ],
+      "owners": [
+        "src/fea/src/model_command_host.cpp",
+        "src/range-workflow/python/range_workflow/service.py"
+      ],
+      "acceptance": [
+        "Display/export verified native off/on channels with units",
+        "RMS/peak/decay windows and voltage saturation documented",
+        "FE/ROM replay and separate closed-loop comparisons distinguished",
+        "Manifest binds model, source, job, artifact, datasets and figures",
+        "Report reopens and every reported number maps to recorded data"
+      ]
+    },
+    {
+      "id": "D5",
+      "title": "Current installed-product real-Provider workflow",
+      "status": "not executed",
+      "depends_on": [
+        "D4"
+      ],
+      "acceptance": [
+        "Freeze source, dependencies, build and installed files",
+        "Real user goal to model/configuration approval, solve, verify, display and report",
+        "One bounded refinement or evidence-based no-refinement decision",
+        "Cancellation and eligible recovery retain correct source/task identities",
+        "No inferred pass from mocks, screenshots, historic Windows receipts or service-only runs"
+      ]
+    },
+    {
+      "id": "D6",
+      "title": "Optional scientific estimator and MCP adapter",
+      "status": "proposal, not required before minimal D5",
+      "depends_on": [
+        "D5"
+      ],
+      "acceptance": [
+        "For a selected linear QoI, define weak form, dual, enriched space, local estimator and marking",
+        "Compare estimator to analytic/high-accuracy true error over refinement",
+        "MCP adapts existing strict tools without bypassing Host approval or creating a second state authority",
+        "Do not claim access to undisclosed COMSOL planner or MCP schemas"
+      ]
+    }
+  ],
+  "recommended_demo_cases": [
+    "Fixed PZT representative: same native FE plant off/on, independent numerical checks and report",
+    "Invalid physical input: explain and ask; never invent support/material/poling",
+    "Authorized numerical refinement: preserve physical digest and thresholds",
+    "Interrupt, reconcile and recover only supported backend; reopen final evidence package"
+  ],
+  "not_part_of_this_delivery": [
+    "Universal CAD or arbitrary 3D piezo solids",
+    "Real amplifier/electronics hardware qualification",
+    "Universal autonomous physics root-cause diagnosis",
+    "A proven performance advantage over COMSOL or classmates",
+    "Full D0-D6 implementation"
+  ],
+  "execution_mode": "research_only",
+  "latest_user_instruction": "只搜索调研COMSOL全流程Agent；禁止继续修改产品文件、编译或运行，避免与Claude并行工作冲突。",
+  "tasks_are": "Future proposals only, not authorization to implement."
+}

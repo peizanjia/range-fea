@@ -22,7 +22,7 @@ def make_plan() -> dict:
             "priority": "P0",
             "effort": "S",
             "dependsOn": [],
-            "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+            "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
             "acceptanceIds": ["WF-01-A01", "WF-01-A02"],
             "existingCodePaths": ["src/range-workflow"],
             "evidence": [],
@@ -35,7 +35,7 @@ def make_plan() -> dict:
             "priority": "P1",
             "effort": "L",
             "dependsOn": ["WF-01"],
-            "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+            "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
             "acceptanceIds": ["WF-02-A01"],
             "existingCodePaths": ["src/range-workflow"],
             "evidence": [],
@@ -48,7 +48,7 @@ def make_plan() -> dict:
             "priority": "release",
             "effort": "M",
             "dependsOn": ["WF-01"],
-            "detail": "docs/WORKFLOW_DELIVERY_PLAN.md",
+            "detail": "docs/rounds/2026-10-08-workflow-delivery/plans/WORKFLOW_DELIVERY_PLAN.md",
             "acceptanceIds": ["WF-03-A01"],
             "existingCodePaths": ["src/range-workflow"],
             "evidence": [],
@@ -72,8 +72,8 @@ class WorkflowPlanTests(unittest.TestCase):
         self.repo_root = Path(self.temporary_directory.name)
         (self.repo_root / "src" / "range-workflow").mkdir(parents=True)
         (self.repo_root / "src" / "range-ai-lib").mkdir(parents=True)
-        docs = self.repo_root / "docs"
-        docs.mkdir()
+        docs = self.repo_root / "docs/rounds/2026-10-08-workflow-delivery/plans"
+        docs.mkdir(parents=True)
         plan = make_plan()
         sections = []
         for task in plan["tasks"]:
@@ -89,10 +89,11 @@ class WorkflowPlanTests(unittest.TestCase):
         worktree = self.repo_root / ".codex" / "worktrees" / "planning"
         (worktree / "src" / "range-workflow").mkdir(parents=True)
         (worktree / "src" / "range-ai-lib").mkdir()
-        (worktree / "docs").mkdir()
-        (worktree / "docs" / "WORKFLOW_DELIVERY_PLAN.md").write_text(
+        documents = worktree / "docs/rounds/2026-10-08-workflow-delivery/plans"
+        documents.mkdir(parents=True)
+        (documents / "WORKFLOW_DELIVERY_PLAN.md").write_text(
             self.detail_file.read_text(encoding="utf-8"), encoding="utf-8")
-        (worktree / "docs" / "workflow_delivery_plan.json").write_text(
+        (documents / "workflow_delivery_plan.json").write_text(
             json.dumps(make_plan()), encoding="utf-8")
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -104,7 +105,7 @@ class WorkflowPlanTests(unittest.TestCase):
 
     def test_current_plan_matches_document_and_cli_is_readonly(self) -> None:
         checkout = Path(__file__).resolve().parents[2]
-        plan_file = checkout / "docs" / "workflow_delivery_plan.json"
+        plan_file = checkout / "docs/rounds/2026-10-08-workflow-delivery/plans/workflow_delivery_plan.json"
         plan = json.loads(plan_file.read_text(encoding="utf-8"))
         result = validate_plan_data(plan, checkout)
         self.assertEqual(result["taskCount"], len(plan["tasks"]))
@@ -122,6 +123,41 @@ class WorkflowPlanTests(unittest.TestCase):
             first = next(task for task in plan["tasks"] if task["id"] == expected_next["recommended"][0])
             self.assertEqual(report["next"]["recommendedDetail"], first["detail"] + "#" + first["id"].lower())
         self.assertEqual(plan_file.read_text(encoding="utf-8"), original)
+
+    def test_json_output_is_ascii_safe_on_legacy_windows_stdout(self) -> None:
+        plan = make_plan()
+        plan["tasks"][2]["status"] = "blocked"
+        plan["tasks"][2]["statusReason"] = "等待审查"
+        plan_file = self.repo_root / "docs/rounds/2026-10-08-workflow-delivery/plans/workflow_delivery_plan.json"
+        plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        buffer = io.BytesIO()
+        output = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+        with contextlib.redirect_stdout(output):
+            result = main(["--repo-root", str(self.repo_root), "--next", "--json"])
+        output.flush()
+        report = json.loads(buffer.getvalue().decode("ascii"))
+        self.assertEqual(result, 0)
+        self.assertEqual(report["next"]["blockedReasons"]["WF-03"], "等待审查")
+
+    def test_json_errors_are_ascii_safe_on_legacy_windows_stdout(self) -> None:
+        plan = make_plan()
+        for task in plan["tasks"]:
+            task["detail"] = "docs/审查.md"
+        (self.repo_root / "docs" / "审查.md").write_text(
+            self.detail_file.read_text(encoding="utf-8") + "\n## WF-04 Extra task\n",
+            encoding="utf-8",
+        )
+        plan_file = self.repo_root / "docs/rounds/2026-10-08-workflow-delivery/plans/workflow_delivery_plan.json"
+        plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        buffer = io.BytesIO()
+        output = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+        with contextlib.redirect_stdout(output):
+            result = main(["--repo-root", str(self.repo_root), "--json"])
+        output.flush()
+        report = json.loads(buffer.getvalue().decode("ascii"))
+        self.assertEqual(result, 1)
+        self.assertEqual(report["errors"][0]["code"], "DETAIL_SECTION_EXTRA")
+        self.assertIn("审查.md", report["errors"][0]["message"])
 
     def test_replan_uses_json_dependencies_and_priorities(self) -> None:
         plan = make_plan()

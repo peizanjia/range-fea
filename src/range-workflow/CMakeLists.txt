@@ -11,32 +11,32 @@ if(WIN32)
 endif()
 install(DIRECTORY python/ DESTINATION share/range-workflow COMPONENT Application
     FILES_MATCHING PATTERN "*.py" PATTERN "*.json" PATTERN "__pycache__" EXCLUDE)
-install(FILES ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_CONTRACT.md
-    ${CMAKE_SOURCE_DIR}/../docs/CONTROL_WORKFLOW.md
-    ${CMAKE_SOURCE_DIR}/../docs/WORKFLOW_SDK.md
-    ${CMAKE_SOURCE_DIR}/../docs/NATIVE_DOCUMENT_SDK.md
-    ${CMAKE_SOURCE_DIR}/../docs/NATIVE_RESULTS.md
-    ${CMAKE_SOURCE_DIR}/../docs/RECOVERY_OPERATIONS.md
-      ${CMAKE_SOURCE_DIR}/../docs/RECOVERY_CONTRACT.md
-      ${CMAKE_SOURCE_DIR}/../docs/CONVERSATIONS.md
-      ${CMAKE_SOURCE_DIR}/../docs/TASK_PLANS.md
-    ${CMAKE_SOURCE_DIR}/../docs/GUI_INTERACTION_DESIGN.md
-    ${CMAKE_SOURCE_DIR}/../docs/GUI_UX_ACCEPTANCE.md
-    ${CMAKE_SOURCE_DIR}/../docs/EXTENSION_SDK.md
-    ${CMAKE_SOURCE_DIR}/../docs/STAGE12_ACCEPTANCE.md DESTINATION doc COMPONENT Application)
+install(FILES ${RANGE_INSTALL_DOCUMENTATION_ROOT}/WORKFLOW_CONTRACT.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/CONTROL_WORKFLOW.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/WORKFLOW_SDK.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/NATIVE_DOCUMENT_SDK.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/NATIVE_RESULTS.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/RECOVERY_OPERATIONS.md
+      ${RANGE_INSTALL_DOCUMENTATION_ROOT}/RECOVERY_CONTRACT.md
+      ${RANGE_INSTALL_DOCUMENTATION_ROOT}/CONVERSATIONS.md
+      ${RANGE_INSTALL_DOCUMENTATION_ROOT}/TASK_PLANS.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/GUI_INTERACTION_DESIGN.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/GUI_UX_ACCEPTANCE.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/EXTENSION_SDK.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/STAGE12_ACCEPTANCE.md DESTINATION doc COMPONENT Application)
 if(RANGE_ENABLE_AGENT)
-    install(FILES ${CMAKE_SOURCE_DIR}/../docs/AGENT_OPERATIONS.md DESTINATION doc COMPONENT Application)
+    install(FILES ${RANGE_INSTALL_DOCUMENTATION_ROOT}/AGENT_OPERATIONS.md DESTINATION doc COMPONENT Application)
 endif()
-install(FILES ${CMAKE_SOURCE_DIR}/../docs/PIEZO_CONTROL_DELIVERY.md
-    ${CMAKE_SOURCE_DIR}/../docs/PIEZO_DEPENDENCY_PROVENANCE.md
-    ${CMAKE_SOURCE_DIR}/../docs/piezo_control_plan.json DESTINATION doc COMPONENT Application)
-install(FILES ${CMAKE_SOURCE_DIR}/../docs/evidence/piezo_dependency_provenance.json
-    ${CMAKE_SOURCE_DIR}/../docs/evidence/piezo_delivery_performance_contract.json
-    ${CMAKE_SOURCE_DIR}/../docs/evidence/piezo_representative_cases_spec.json
+install(FILES ${RANGE_INSTALL_DOCUMENTATION_ROOT}/PIEZO_CONTROL_DELIVERY.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/PIEZO_DEPENDENCY_PROVENANCE.md
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/piezo_control_plan.json DESTINATION doc COMPONENT Application)
+install(FILES ${RANGE_INSTALL_DOCUMENTATION_ROOT}/evidence/piezo_dependency_provenance.json
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/evidence/piezo_delivery_performance_contract.json
+    ${RANGE_INSTALL_DOCUMENTATION_ROOT}/evidence/piezo_representative_cases_spec.json
     DESTINATION doc/evidence COMPONENT Application)
 install(DIRECTORY examples/ DESTINATION share/range-workflow/examples COMPONENT Application FILES_MATCHING PATTERN "*.py")
 
-set(RANGE_PRIVATE_PYTHON_DIRECTORY "" CACHE PATH "Verified private Python runtime assembled by scripts/packaging/build_private_python.py")
+set(RANGE_PRIVATE_PYTHON_DIRECTORY "" CACHE PATH "Verified private Python runtime assembled by scripts/packaging/python-runtime/build_private_python.py")
 if(RANGE_PRIVATE_PYTHON_DIRECTORY)
     foreach(_runtime_file python.exe python313._pth runtime-lock.json runtime-files.json)
         if(NOT EXISTS "${RANGE_PRIVATE_PYTHON_DIRECTORY}/${_runtime_file}")
@@ -246,7 +246,7 @@ if(RANGE_BUILD_TESTS)
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
     add_test(NAME tst_private_python_packaging COMMAND "${Python3_EXECUTABLE}" -B
-        "${CMAKE_SOURCE_DIR}/../scripts/packaging/test_private_python.py" -v)
+        "${CMAKE_SOURCE_DIR}/../scripts/packaging/python-runtime/test_private_python.py" -v)
     add_test(NAME tst_native_document_sdk COMMAND "${Python3_EXECUTABLE}" -B
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_document_client.py"
         --cli "$<TARGET_FILE:range-model-command>"

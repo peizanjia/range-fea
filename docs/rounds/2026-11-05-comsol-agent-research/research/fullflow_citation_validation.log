@@ -1,0 +1,45 @@
+
+============================================================
+CITATION VERIFICATION: COMSOL_FULL_WORKFLOW_AGENT_REPORT.md
+============================================================
+
+Found 25 citations
+
+  [2] URL accessible ✓
+  [3] URL accessible ✓
+  [4] URL accessible ✓
+  [5] URL accessible ✓
+  [6] URL accessible ✓
+  [7] URL accessible ✓
+  [8] URL accessible ✓
+  [9] URL accessible ✓
+  [10] URL accessible ✓
+  [11] URL accessible ✓
+  [12] URL accessible ✓
+  [13] URL accessible ✓
+  [14] URL accessible ✓
+  [15] URL accessible ✓
+  [16] URL accessible ✓
+  [17] URL accessible ✓
+  [18] URL accessible ✓
+  [19] URL accessible ✓
+  [21] URL accessible ✓
+  [22] URL accessible ✓
+  [23] URL accessible ✓
+  [24] URL accessible ✓
+  [25] URL accessible ✓
+
+============================================================
+VERIFICATION SUMMARY
+============================================================
+
+DOI Verified: 0/25
+URL Verified: 23/25
+Suspicious: 0/25
+Unverified: 2/25
+
+UNVERIFIED CITATIONS (Could not check):
+  [1] URL check failed: URL error: timed out
+  [20] URL check failed: URL error: _ssl.c:1063: The handshake operation timed out
+
+STRICT MODE: Unverified citations found

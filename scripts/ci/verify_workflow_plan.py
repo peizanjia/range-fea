@@ -438,8 +438,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--plan",
         type=Path,
-        default=Path("docs/workflow_delivery_plan.json"),
-        help="plan JSON path, relative to the repository root (default: docs/workflow_delivery_plan.json)",
+        default=Path("docs/rounds/2026-10-08-workflow-delivery/plans/workflow_delivery_plan.json"),
+        help="plan JSON path, relative to the repository root (default: docs/rounds/2026-10-08-workflow-delivery/plans/workflow_delivery_plan.json)",
     )
     parser.add_argument(
         "--repo-root",

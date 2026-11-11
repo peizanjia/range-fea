@@ -150,7 +150,7 @@ try {
     )
     $sourcePaths = @(
         'tools/save-predicate-v43.ps1','tests/test-save-predicate-v43.ps1',
-        'runtime/sampler-arguments-v43.ps1','../../../scripts/benchmark/pc11_working_set.py','tests/test-sampler-arguments-v43.ps1',
+        'runtime/sampler-arguments-v43.ps1','../../../scripts/benchmark/pc11-gui/pc11_working_set.py','tests/test-sampler-arguments-v43.ps1',
         'runtime/contract-common-v43.ps1','runtime/supervisor-core-v43.ps1','runtime/worker-handshake-v43.ps1',
         'runtime/watchdog-contract-v43.ps1','runtime/native-launch-boundary-v43.ps1','tests/fixtures/worker-fixture-v43.ps1',
         'tests/test-supervisor-worker-contract-v43.ps1','finalize-v43.ps1',
@@ -252,7 +252,7 @@ try {
         }
 
         $saveEnvelope = New-FixtureExecutionEnvelope 'save_predicate' $saveReceiptPath $identity $sourceTree @('tools/save-predicate-v43.ps1','tests/test-save-predicate-v43.ps1')
-        $samplerEnvelope = New-FixtureExecutionEnvelope 'sampler_arguments' $samplerReceiptPath $identity $sourceTree @('runtime/sampler-arguments-v43.ps1','../../../scripts/benchmark/pc11_working_set.py','tests/test-sampler-arguments-v43.ps1')
+        $samplerEnvelope = New-FixtureExecutionEnvelope 'sampler_arguments' $samplerReceiptPath $identity $sourceTree @('runtime/sampler-arguments-v43.ps1','../../../scripts/benchmark/pc11-gui/pc11_working_set.py','tests/test-sampler-arguments-v43.ps1')
         $watchdogEnvelope = New-FixtureExecutionEnvelope 'watchdog_contract' $watchdogReceiptPath $identity $sourceTree @('runtime/contract-common-v43.ps1','runtime/supervisor-core-v43.ps1','runtime/worker-handshake-v43.ps1','runtime/watchdog-contract-v43.ps1','runtime/native-launch-boundary-v43.ps1','tests/fixtures/worker-fixture-v43.ps1','tests/test-supervisor-worker-contract-v43.ps1','finalize-v43.ps1')
         if ($Target -ceq 'envelope') {
             switch ($Field) {
