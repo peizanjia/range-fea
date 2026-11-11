@@ -110,7 +110,7 @@ void SolverSetupChecker::checkMaterials(QStringList &warnings, QStringList &erro
     }
     if (matErrors.size() > 0)
     {
-        errors = matErrors;
+        errors.append(matErrors);
         return;
     }
 

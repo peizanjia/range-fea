@@ -12,14 +12,12 @@ class ProblemTaskDialog : public QDialog
 
     protected:
 
-        //! Model ID.
-        uint modelID;
+        //! Identity and revision of the model shown in this editor.
+        QPair<QString, quint64> modelStamp;
         //! Problem task tree widget.
         ProblemTaskTree *taskTree;
         //! OK button.
         QPushButton *okButton;
-        //! Cancel button.
-        QPushButton *cancelButton;
 
     public:
 
@@ -30,12 +28,6 @@ class ProblemTaskDialog : public QDialog
         int exec();
 
     protected slots:
-
-        //! Handle close event.
-        void closeEvent(QCloseEvent *e);
-
-        //! Handle key press event.
-        void keyPressEvent(QKeyEvent *e);
 
         //! handle ProblemtaskTree::changed() signal.
         void onProblemTaskTreeChanged();

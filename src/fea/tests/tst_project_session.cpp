@@ -114,6 +114,22 @@ bool waitForJob(RJob *job)
     return !finished.isEmpty() && failed.isEmpty() && !ModelCommandHost::isBusy();
 }
 
+bool waitForUnconfiguredExport(RJob *job)
+{
+    QTimer modalCheck;
+    bool openedTaskDialog = false;
+    QObject::connect(&modalCheck, &QTimer::timeout, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (dialog && dialog->windowTitle() == QStringLiteral("Problem task flow"))
+        {
+            openedTaskDialog = true;
+            dialog->reject();
+        }
+    });
+    modalCheck.start(20);
+    return waitForJob(job) && !openedTaskDialog;
+}
+
 bool saveModelJob(Session *session, uint modelID, const QString &path)
 {
     auto *job = new ModelIO(MODEL_IO_SAVE, path, session->getModelPtr(modelID));
@@ -833,53 +849,9 @@ private slots:
         ModelActionInput exportAction(0);
         exportAction.setExportSliverElements();
         action->addAction(exportAction);
-        // The worker export creates a new none-task model. Drive its real task
-        // dialog so this test stays focused on Session publication and Save.
-        auto *mainWindow = Application::instance()->getMainWindow();
-        QTimer taskDialogResolver;
-        taskDialogResolver.setInterval(20);
-        bool taskDialogHandled = false;
-        const auto ensureStressTask = [](QDialog *dialog) {
-            auto *tree = dialog->findChild<QTreeWidget *>();
-            if (!tree || tree->topLevelItemCount() == 0) return false;
-            QTreeWidgetItem *root = tree->topLevelItem(0);
-            for (int i = 0; i < root->childCount(); ++i)
-                if (root->child(i)->data(0, Qt::UserRole).toInt() == int(R_PROBLEM_STRESS_MODAL))
-                    return true;
-            auto *item = new QTreeWidgetItem(root);
-            item->setText(0, QStringLiteral("Modal analysis"));
-            item->setData(0, Qt::UserRole, int(R_PROBLEM_STRESS_MODAL));
-            item->setData(1, Qt::UserRole, 1);
-            item->setFirstColumnSpanned(true);
-            return true;
-        };
-        QObject::connect(&taskDialogResolver, &QTimer::timeout, mainWindow, [&] {
-            const auto dialogs = mainWindow->findChildren<QDialog *>();
-            QDialog *taskDialog = nullptr;
-            for (QDialog *dialog : dialogs)
-                if (dialog->windowTitle() == QStringLiteral("Problem task flow"))
-                {
-                    taskDialog = dialog;
-                    break;
-            }
-            if (!taskDialog) return;
-            if (session->getNModels() == 0) return;
-            const uint exportedModel = session->getNModels() - 1;
-            session->getModel(exportedModel).setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS_MODAL));
-            if (ensureStressTask(taskDialog))
-            {
-                taskDialog->accept();
-                taskDialogHandled = true;
-                taskDialogResolver.stop();
-            }
-        });
-        taskDialogResolver.start();
-        const bool jobFinished = waitForJob(action);
-        QTRY_VERIFY_WITH_TIMEOUT(taskDialogHandled, 5000);
-        taskDialogResolver.stop();
-        QVERIFY(jobFinished);
-        QVERIFY(taskDialogHandled);
+        QVERIFY(waitForUnconfiguredExport(action));
         QTRY_COMPARE_WITH_TIMEOUT(session->getNModels(), 2u, 5000);
+        QCOMPARE(session->getModel(1).getProblemTaskTree().getProblemTypeMask(), R_PROBLEM_NONE);
         const QJsonObject exportedContext = session->documentProjectContext(1);
         const QString exportId = exportedContext.value(QStringLiteral("persistentDocumentId")).toString();
         QVERIFY(!exportId.isEmpty());
@@ -1312,53 +1284,9 @@ private slots:
         ModelActionInput exportInput(0);
         exportInput.setExportSliverElements();
         action->addAction(exportInput);
-        // The worker export creates a new none-task model. Drive its real task
-        // dialog so this test stays focused on Session publication and Save.
-        auto *mainWindow = Application::instance()->getMainWindow();
-        QTimer taskDialogResolver;
-        taskDialogResolver.setInterval(20);
-        bool taskDialogHandled = false;
-        const auto ensureStressTask = [](QDialog *dialog) {
-            auto *tree = dialog->findChild<QTreeWidget *>();
-            if (!tree || tree->topLevelItemCount() == 0) return false;
-            QTreeWidgetItem *root = tree->topLevelItem(0);
-            for (int i = 0; i < root->childCount(); ++i)
-                if (root->child(i)->data(0, Qt::UserRole).toInt() == int(R_PROBLEM_STRESS_MODAL))
-                    return true;
-            auto *item = new QTreeWidgetItem(root);
-            item->setText(0, QStringLiteral("Modal analysis"));
-            item->setData(0, Qt::UserRole, int(R_PROBLEM_STRESS_MODAL));
-            item->setData(1, Qt::UserRole, 1);
-            item->setFirstColumnSpanned(true);
-            return true;
-        };
-        QObject::connect(&taskDialogResolver, &QTimer::timeout, mainWindow, [&] {
-            const auto dialogs = mainWindow->findChildren<QDialog *>();
-            QDialog *taskDialog = nullptr;
-            for (QDialog *dialog : dialogs)
-                if (dialog->windowTitle() == QStringLiteral("Problem task flow"))
-                {
-                    taskDialog = dialog;
-                    break;
-                }
-            if (!taskDialog) return;
-            if (session->getNModels() == 0) return;
-            const uint exportedModel = session->getNModels() - 1;
-            session->getModel(exportedModel).setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS_MODAL));
-            if (ensureStressTask(taskDialog))
-            {
-                taskDialog->accept();
-                taskDialogHandled = true;
-                taskDialogResolver.stop();
-            }
-        });
-        taskDialogResolver.start();
-        const bool jobFinished = waitForJob(action);
-        QTRY_VERIFY_WITH_TIMEOUT(taskDialogHandled, 5000);
-        taskDialogResolver.stop();
-        QVERIFY(jobFinished);
-        QVERIFY(taskDialogHandled);
+        QVERIFY(waitForUnconfiguredExport(action));
         QTRY_COMPARE_WITH_TIMEOUT(session->getNModels(), 2u, 5000);
+        QCOMPARE(session->getModel(1).getProblemTaskTree().getProblemTypeMask(), R_PROBLEM_NONE);
 
         const QJsonObject exported = session->documentProjectContext(1);
         const QString persistentId = exported.value(QStringLiteral("persistentDocumentId")).toString();

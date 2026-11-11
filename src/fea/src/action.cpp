@@ -2031,6 +2031,17 @@ void Action::onSolverStart()
     for (int i=0;i<modelIDs.size();i++)
     {
         Model &rModel = Application::instance()->getSession()->getModel(modelIDs[i]);
+        if (rModel.getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
+        {
+            const QString message = modelIDs.size() > 1
+                ? tr("Select %1 on its own, then choose Set up analysis in the Problem panel.").arg(rModel.getName())
+                : tr("Set up analysis in the Problem panel before starting the solver.");
+            QMessageBox notice(QMessageBox::Information, tr("Analysis needed"), message,
+                               QMessageBox::Ok, Application::instance()->getMainWindow());
+            notice.setTextFormat(Qt::PlainText);
+            notice.exec();
+            continue;
+        }
         QString modelFileName = ModelIO::getModelSaveName(Application::instance()->getApplicationSettings(),Application::instance()->getMainWindow(),rModel);
         if (!modelFileName.isEmpty())
         {

@@ -3,6 +3,7 @@
 #include "application.h"
 #include "mesh_setup_widget.h"
 #include "modal_setup_widget.h"
+#include "problem_task_dialog.h"
 #include "radiation_setup_widget.h"
 #include "time_solver_setup_widget.h"
 #include "model_command_host.h"
@@ -239,6 +240,21 @@ void ProblemTree::populate()
     }
 
     const Model &rModel = Application::instance()->getSession()->getModel(modelIDs[0]);
+
+    if (rModel.getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
+    {
+        auto *open = new QPushButton(tr("Set up analysis…"), this);
+        open->setObjectName(QStringLiteral("configureAnalysisTasks"));
+        const QString documentId = session->modelCommandStamp(modelIDs[0]).first;
+        connect(open, &QPushButton::clicked, this, [this, session, documentId] {
+            const uint id = session->findModelByCommandIdentity(documentId);
+            if (id == RConstants::eod) return;
+            ProblemTaskDialog dialog(id, this->window());
+            dialog.exec();
+        });
+        this->setItemWidget(new QTreeWidgetItem(this), PROBLEM_TREE_COLUMN_1, open);
+        return;
+    }
 
     if (RProblem::getTimeSolverEnabled(rModel.getProblemTaskTree().getProblemTypeMask()))
     {

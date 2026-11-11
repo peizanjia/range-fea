@@ -38,7 +38,6 @@
 #include "model_entity_geometric_properties_tree.h"
 #include "model_records_selector.h"
 #include "problem_tree.h"
-#include "problem_task_dialog.h"
 #include "solver_manager.h"
 #include "results_variable_selector.h"
 #include "results_variable_tree.h"
@@ -1268,14 +1267,6 @@ void MainWindow::onModelAdded(uint position)
     if (!this->session->isModelSelected(position))
     {
         this->session->setModelSelected(position,true);
-    }
-    // An approved mesh candidate is published as an intentionally unbound
-    // document. Its problem task must be chosen later, outside publication.
-    if (!this->session->isVerifiedMeshPublication(position)
-        && this->session->getModel(position).getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
-    {
-        ProblemTaskDialog problemTaskDialog(position,this);
-        problemTaskDialog.exec();
     }
 }
 
