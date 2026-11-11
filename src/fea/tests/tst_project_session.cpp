@@ -11,6 +11,10 @@
 #include <QMetaObject>
 #include <QLockFile>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QSignalSpy>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -41,6 +45,7 @@
 #include "model_command_host.h"
 #include "model_io.h"
 #include "modal_setup_widget.h"
+#include "problem_selector_dialog.h"
 #include "problem_tree.h"
 #include "session.h"
 #include "value_line_edit.h"
@@ -246,6 +251,34 @@ class TestProjectSession : public QObject
 {
     Q_OBJECT
 private slots:
+    void analysisTypeDescriptionWrapsAndFollowsKeyboardFocus()
+    {
+        ProblemSelectorDialog dialog;
+        dialog.resize(360, 340);
+        dialog.show();
+        auto *list = dialog.findChild<ProblemSelectorTree *>();
+        auto *description = dialog.findChild<QPlainTextEdit *>("problemTypeDescription");
+        auto *ok = dialog.findChild<QPushButton *>("confirmProblemTypes");
+        QVERIFY(list && description && ok);
+        QVERIFY(!ok->isEnabled());
+
+        const auto matches = list->findItems(RProblem::getName(R_PROBLEM_STRESS), Qt::MatchExactly);
+        QCOMPARE(matches.size(), 1);
+        list->setCurrentItem(matches.first());
+        QCOMPARE(description->toPlainText(), RProblem::getDesc(R_PROBLEM_STRESS));
+        QTRY_VERIFY(description->document()->firstBlock().layout()->lineCount() > 1);
+        QCOMPARE(description->horizontalScrollBar()->maximum(), 0);
+        QCOMPARE(list->horizontalScrollBar()->maximum(), 0);
+        QTest::keyClick(list, Qt::Key_Down);
+        QCOMPARE(description->toPlainText(), RProblem::getDesc(R_PROBLEM_STRESS_MODAL));
+        QVERIFY(!ok->isEnabled());
+        QTest::keyClick(list, Qt::Key_Space);
+        QCOMPARE(list->findProblemTypeMask(), R_PROBLEM_STRESS_MODAL);
+        QVERIFY(ok->isEnabled());
+        QTest::mouseClick(ok, Qt::LeftButton);
+        QCOMPARE(dialog.result(), QDialog::Accepted);
+    }
+
     void cleanup()
     {
         auto *session = Application::instance()->getSession();

@@ -1,5 +1,6 @@
 #include <QVBoxLayout>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QDialogButtonBox>
 
@@ -12,6 +13,8 @@ ProblemSelectorDialog::ProblemSelectorDialog(QWidget *parent) :
 {
     R_LOG_TRACE_IN;
     this->setWindowTitle(tr("Problem type selector"));
+    this->resize(560, 420);
+    this->setSizeGripEnabled(true);
 
     QIcon cancelIcon(":/icons/action/pixmaps/range-cancel.svg");
     QIcon okIcon(":/icons/action/pixmaps/range-ok.svg");
@@ -19,13 +22,30 @@ ProblemSelectorDialog::ProblemSelectorDialog(QWidget *parent) :
     QVBoxLayout *mainLayout = new QVBoxLayout;
     this->setLayout (mainLayout);
 
-    QLabel *messageLabel = new QLabel(tr("Select problem types"));
+    QLabel *messageLabel = new QLabel(tr("Check the analysis types to add"));
     mainLayout->addWidget(messageLabel);
 
     this->problemTree = new ProblemSelectorTree(this);
-    this->problemTree->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-    this->problemTree->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::MinimumExpanding);
-    mainLayout->addWidget(this->problemTree);
+    this->problemTree->setAccessibleName(tr("Analysis types"));
+    mainLayout->addWidget(this->problemTree, 1);
+
+    auto *descriptionLabel = new QLabel(tr("&Description"), this);
+    auto *description = new QPlainTextEdit(this);
+    description->setObjectName(QStringLiteral("problemTypeDescription"));
+    description->setAccessibleName(tr("Description of the highlighted analysis type"));
+    description->setReadOnly(true);
+    description->setTabChangesFocus(true);
+    description->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    description->setMaximumHeight(6 * description->fontMetrics().lineSpacing() + 2 * description->frameWidth());
+    descriptionLabel->setBuddy(description);
+    mainLayout->addWidget(descriptionLabel);
+    mainLayout->addWidget(description);
+
+    connect(this->problemTree, &QTreeWidget::currentItemChanged, description, [this, description] {
+        description->setPlainText(this->problemTree->currentDescription());
+    });
+    this->problemTree->setCurrentItem(this->problemTree->topLevelItem(0));
+    this->problemTree->setFocus(Qt::OtherFocusReason);
 
     QDialogButtonBox *buttonBox = new QDialogButtonBox;
     mainLayout->addWidget(buttonBox);
@@ -34,6 +54,7 @@ ProblemSelectorDialog::ProblemSelectorDialog(QWidget *parent) :
     buttonBox->addButton(cancelButton,QDialogButtonBox::RejectRole);
 
     this->okButton = new QPushButton(okIcon, tr("OK"));
+    this->okButton->setObjectName(QStringLiteral("confirmProblemTypes"));
     this->okButton->setDisabled(true);
     buttonBox->addButton(this->okButton,QDialogButtonBox::AcceptRole);
 

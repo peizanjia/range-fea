@@ -10,11 +10,6 @@ class ProblemSelectorTree : public QTreeWidget
 
     Q_OBJECT
 
-    protected:
-
-        //! Problem tree widget.
-        QTreeWidget *problemTree;
-
     public:
 
         //! Constructor.
@@ -25,6 +20,9 @@ class ProblemSelectorTree : public QTreeWidget
 
         //! Check if some problem type is selected.
         bool checkProblemIsChecked() const;
+
+        //! Description of the row under keyboard focus.
+        QString currentDescription() const;
 
     protected:
 

@@ -6,7 +6,6 @@
 typedef enum _ProblemSelectorTreeColumn
 {
     PROBLEM_TREE_COLUMN_NAME = 0,
-    PROBLEM_TREE_COLUMN_DESC,
     PROBLEM_TREE_N_COLUMNS
 } ProblemSelectorTreeColumn;
 
@@ -14,16 +13,17 @@ ProblemSelectorTree::ProblemSelectorTree(QWidget *parent)
     : QTreeWidget(parent)
 {
     this->setRootIsDecorated(false);
-    this->setSelectionMode(QAbstractItemView::NoSelection);
+    this->setSelectionMode(QAbstractItemView::SingleSelection);
+    this->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    this->setTextElideMode(Qt::ElideRight);
+    this->setUniformRowHeights(true);
 
     this->setColumnCount(PROBLEM_TREE_N_COLUMNS);
 
     QTreeWidgetItem* headerItem = new QTreeWidgetItem();
     headerItem->setText(PROBLEM_TREE_COLUMN_NAME,tr("Name"));
-    headerItem->setText(PROBLEM_TREE_COLUMN_DESC,tr("Description"));
     this->setHeaderItem(headerItem);
-
-    this->resizeColumnToContents(PROBLEM_TREE_COLUMN_NAME);
+    this->setHeaderHidden(true);
 
     std::vector<RProblemType> prbList(RProblem::getTypes(R_PROBLEM_ALL));
 
@@ -31,20 +31,19 @@ ProblemSelectorTree::ProblemSelectorTree(QWidget *parent)
     {
         QTreeWidgetItem *itemModel = new QTreeWidgetItem(this);
         itemModel->setText(PROBLEM_TREE_COLUMN_NAME, RProblem::getName(prbList[i]));
+        itemModel->setToolTip(PROBLEM_TREE_COLUMN_NAME, itemModel->text(PROBLEM_TREE_COLUMN_NAME));
         itemModel->setData(PROBLEM_TREE_COLUMN_NAME,Qt::CheckStateRole,QVariant(Qt::Unchecked));
         itemModel->setData(PROBLEM_TREE_COLUMN_NAME,Qt::UserRole,QVariant(prbList[i]));
-        itemModel->setText(PROBLEM_TREE_COLUMN_DESC, RProblem::getDesc(prbList[i]));
-
-        QFont font = itemModel->font(PROBLEM_TREE_COLUMN_NAME);
-        font.setBold(true);
-        itemModel->setFont(PROBLEM_TREE_COLUMN_NAME,font);
-    }
-    for (int i=0;i<PROBLEM_TREE_N_COLUMNS;i++)
-    {
-        this->resizeColumnToContents(i);
     }
 
     QObject::connect(this,&QTreeWidget::itemChanged,this,&ProblemSelectorTree::onTreeWidgetItemChanged);
+}
+
+QString ProblemSelectorTree::currentDescription() const
+{
+    const auto *item = this->currentItem();
+    if (!item) return {};
+    return RProblem::getDesc(RProblemType(item->data(PROBLEM_TREE_COLUMN_NAME, Qt::UserRole).toInt()));
 }
 
 RProblemTypeMask ProblemSelectorTree::findProblemTypeMask()

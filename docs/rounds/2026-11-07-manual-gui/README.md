@@ -31,6 +31,8 @@
 
 ## 先读与证据
 
+- 分析类型选择器改为可键盘操作的勾选列表和自动换行的说明区。900×480 隔离桌面上缩到 360×340，实测应力分析长说明、切换和勾选模态分析、确认并应用。Ubuntu 26.04.1、Qt 6.10.2 开发工作区的项目会话回归 53 项通过，包含新增长说明换行及键盘选择用例。 [截图与日志索引](../../../artifacts/manual-gui-workflow-audit-20261107/README.md)
+
 - [GUI_WORKFLOW_OPTIMIZATION_PLAN.md](plans/GUI_WORKFLOW_OPTIMIZATION_PLAN.md)
 - [GUI_WORKFLOW_OPTIMIZATION_HANDOFF_20261111.md](handoff/GUI_WORKFLOW_OPTIMIZATION_HANDOFF_20261111.md)
 - [README.md](../../../artifacts/manual-gui-workflow-audit-20261107/README.md)
