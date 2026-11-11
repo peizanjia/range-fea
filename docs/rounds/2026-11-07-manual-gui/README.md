@@ -33,6 +33,14 @@
 
 - 分析类型选择器改为可键盘操作的勾选列表和自动换行的说明区。900×480 隔离桌面上缩到 360×340，实测应力分析长说明、切换和勾选模态分析、确认并应用。Ubuntu 26.04.1、Qt 6.10.2 开发工作区的项目会话回归 53 项通过，包含新增长说明换行及键盘选择用例。 [截图与日志索引](../../../artifacts/manual-gui-workflow-audit-20261107/README.md)
 
+## 求解启动续作
+
+- 从工具栏启动求解时先检查配置。有阻塞时只显示诊断和关闭操作。已保存模型检查通过后一次确认即可启动，未保存模型在确认后选择位置。取消选择保留原文件路径及撤销历史。对话框返回后重新检查文档身份、修订和警告，避免用过期的确认提交。
+- 启动窗口只展示本次操作所需的信息。模型已有结果时才提供续算选项。命令行可在应用输出中查看。出现警告时，回车默认取消，用户可明确选择继续。
+- Ubuntu 26.04.1、Qt 6.10.2 隔离桌面实测空模型诊断、梁模型警告和静力求解。成功作业生成输入快照、结果清单和日志，源文件哈希一致。项目会话 55 项、求解快照 5 项、定向作业登记 5 项通过。验证基于当前开发工作区，提交限于本批次。 [截图、日志和清理记录](../../../artifacts/manual-gui-workflow-audit-20261107/README.md)
+
+## 计划与交接
+
 - [GUI_WORKFLOW_OPTIMIZATION_PLAN.md](plans/GUI_WORKFLOW_OPTIMIZATION_PLAN.md)
 - [GUI_WORKFLOW_OPTIMIZATION_HANDOFF_20261111.md](handoff/GUI_WORKFLOW_OPTIMIZATION_HANDOFF_20261111.md)
 - [README.md](../../../artifacts/manual-gui-workflow-audit-20261107/README.md)

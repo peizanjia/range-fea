@@ -92,7 +92,7 @@ void SolverSetupChecker::checkMaterials(QStringList &warnings, QStringList &erro
 
         if (pElementGroup->getMaterial().size() == 0)
         {
-            QString errorMessage = QObject::tr("Entity") + " <b>" + pElementGroup->getName() + "</b> " + QObject::tr("has no material assigned.");
+            QString errorMessage = QObject::tr("Entity %1 has no material assigned.").arg(pElementGroup->getName());
             matErrors.append(errorMessage);
         }
     }
@@ -123,7 +123,7 @@ void SolverSetupChecker::checkMaterials(QStringList &warnings, QStringList &erro
 
         if (!pElementGroup->getMaterial().hasProperties(materialProperties))
         {
-            QString errorMessage = QObject::tr("Entity") + " <b>" + pElementGroup->getName() + "</b> " + QObject::tr("has material assigned which is missing required properties.");
+            QString errorMessage = QObject::tr("Entity %1 has a material that is missing required properties.").arg(pElementGroup->getName());
             warnings.append(errorMessage);
         }
     }
@@ -201,13 +201,13 @@ void SolverSetupChecker::checkBoundaryConditions(QStringList &warnings, QStringL
 
         if (!hasExplicit)
         {
-            warnings.append("<b>" + RProblem::getName(problemTypes[i]) + ":</b> " + QObject::tr("No explicit boundary condition assigned."));
+            warnings.append(QObject::tr("%1: No explicit boundary condition assigned.").arg(RProblem::getName(problemTypes[i])));
         }
         // Modal eigenvalue analysis is defined by the constrained stiffness and
         // mass operators; it does not require an implicit load boundary condition.
         if (!hasImplicit && problemTypes[i] != R_PROBLEM_STRESS_MODAL)
         {
-            warnings.append("<b>" + RProblem::getName(problemTypes[i]) + ":</b> " + QObject::tr("No implicit boundary condition assigned."));
+            warnings.append(QObject::tr("%1: No implicit boundary condition assigned.").arg(RProblem::getName(problemTypes[i])));
         }
     }
 }

@@ -2,10 +2,12 @@
 #include <QCoreApplication>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QMetaObject>
@@ -251,6 +253,99 @@ class TestProjectSession : public QObject
 {
     Q_OBJECT
 private slots:
+    void solverStartShowsSetupErrorsBeforeChoosingPath()
+    {
+        auto *session = Application::instance()->getSession();
+        Model empty;
+        empty.setName(QStringLiteral("Unmeshed model"));
+        empty.setProblemTaskTree(RProblemTaskItem(R_PROBLEM_STRESS));
+        session->addModel(empty);
+        session->setModelSelected(0, true);
+        const auto stamp = session->modelCommandStamp(0);
+        QString firstTitle;
+        bool closeOnly = false;
+        QTimer dismiss;
+        connect(&dismiss, &QTimer::timeout, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            if (firstTitle.isEmpty())
+            {
+                firstTitle = dialog->windowTitle();
+                auto *buttons = dialog->findChild<QDialogButtonBox *>();
+                closeOnly = buttons && buttons->buttons().size() == 1 &&
+                            buttons->button(QDialogButtonBox::Close);
+            }
+            dialog->reject();
+        });
+        dismiss.start(20);
+        auto *actions = Application::instance()->getActionList();
+        actions->processAvailability();
+        auto *start = actions->getAction(Action::ACTION_SOLVER_START);
+        QVERIFY(start && start->isEnabled());
+        start->trigger();
+        QCOMPARE(firstTitle, QStringLiteral("Solver setup needs attention"));
+        QVERIFY(closeOnly);
+        QVERIFY(session->getModel(0).getFileName().isEmpty());
+        QCOMPARE(session->modelCommandStamp(0), stamp);
+    }
+
+    void solverStartLeavesUnsavedModelUntouchedWhenPathSelectionIsCancelled()
+    {
+        auto *app = Application::instance();
+        auto *session = app->getSession();
+        auto *settings = app->getApplicationSettings();
+        const QString previousSolver = settings->getSolverPath();
+        const bool nativeDialogsDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        const auto restoreSettings = qScopeGuard([&] {
+            settings->setSolverPath(previousSolver);
+            QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled);
+        });
+        settings->setSolverPath(QCoreApplication::applicationFilePath());
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+
+        Model model;
+        ModelIO::open(model, QStringLiteral(RANGE_WORKFLOW_SOURCE_ROOT "/fea-solver/examples/stage9/stage9_truss4.ram"));
+        model.getProblemSetup().setStructuralControlSetup(RStructuralControlSetup());
+        model.getProblemSetup().getStructuralDynamicsSetup().setEnabled(false);
+        model.getTimeSolver().setEnabled(false);
+        QVERIFY(model.getNLines() > 0);
+        for (uint index = 0; index < model.getNPoints(); ++index)
+            model.getPoint(index).setMaterial(model.getLine(0).getMaterial());
+        model.setFileName(QString());
+        session->addModel(model);
+        session->setModelSelected(0, true);
+        const auto stamp = session->modelCommandStamp(0);
+
+        QStringList dialogs;
+        bool sawSavePicker = false;
+        QTimer driveDialogs;
+        connect(&driveDialogs, &QTimer::timeout, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            dialogs.append(dialog->windowTitle());
+            if (dialogs.size() == 1 && dialog->windowTitle() == QStringLiteral("Start solver"))
+                dialog->accept();
+            else
+            {
+                auto *picker = qobject_cast<QFileDialog *>(dialog);
+                sawSavePicker = picker && picker->acceptMode() == QFileDialog::AcceptSave;
+                dialog->reject();
+            }
+        });
+        driveDialogs.start(20);
+        auto *actions = app->getActionList();
+        actions->processAvailability();
+        auto *start = actions->getAction(Action::ACTION_SOLVER_START);
+        QVERIFY(start && start->isEnabled());
+        start->trigger();
+        const QStringList expectedDialogs{QStringLiteral("Start solver"), QStringLiteral("Save model")};
+        QCOMPARE(dialogs, expectedDialogs);
+        QVERIFY(sawSavePicker);
+        QVERIFY(session->getModel(0).getFileName().isEmpty());
+        QCOMPARE(session->modelCommandStamp(0), stamp);
+        QVERIFY(!session->isUndoAvailable());
+    }
+
     void analysisTypeDescriptionWrapsAndFollowsKeyboardFocus()
     {
         ProblemSelectorDialog dialog;

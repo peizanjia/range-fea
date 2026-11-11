@@ -2025,30 +2025,35 @@ void Action::onProblemReset()
 void Action::onSolverStart()
 {
     R_LOG_TRACE_IN;
-    QList<uint> modelIDs = Application::instance()->getSession()->getSelectedModelIDs();
+    Session *session = Application::instance()->getSession();
+    QWidget *parent = Application::instance()->getMainWindow();
+    QList<QPair<QString,quint64>> targets;
+    for (uint modelID : session->getSelectedModelIDs())
+        targets.append(session->modelCommandStamp(modelID));
 
-    // First perform checks whether the setup is correct.
-    for (int i=0;i<modelIDs.size();i++)
+    for (const auto &target : targets)
     {
-        Model &rModel = Application::instance()->getSession()->getModel(modelIDs[i]);
+        const uint modelID = session->findModelByCommandIdentity(target.first);
+        if (target.first.isEmpty() || modelID == RConstants::eod || session->modelCommandStamp(modelID) != target)
+        {
+            QMessageBox::information(parent, tr("Model changed"),
+                                     tr("A selected model changed or closed. Select it again to start the solver."));
+            continue;
+        }
+        const Model &rModel = session->getModel(modelID);
         if (rModel.getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_NONE)
         {
-            const QString message = modelIDs.size() > 1
+            const QString message = targets.size() > 1
                 ? tr("Select %1 on its own, then choose Set up analysis in the Problem panel.").arg(rModel.getName())
                 : tr("Set up analysis in the Problem panel before starting the solver.");
             QMessageBox notice(QMessageBox::Information, tr("Analysis needed"), message,
-                               QMessageBox::Ok, Application::instance()->getMainWindow());
+                               QMessageBox::Ok, parent);
             notice.setTextFormat(Qt::PlainText);
             notice.exec();
             continue;
         }
-        QString modelFileName = ModelIO::getModelSaveName(Application::instance()->getApplicationSettings(),Application::instance()->getMainWindow(),rModel);
-        if (!modelFileName.isEmpty())
-        {
-            rModel.setFileName(modelFileName);
-            SolverStartDialog solverStartDialog(modelIDs[i],Application::instance()->getMainWindow());
-            solverStartDialog.exec();
-        }
+        SolverStartDialog solverStartDialog(modelID, parent);
+        solverStartDialog.exec();
     }
     R_LOG_TRACE_OUT;
 }

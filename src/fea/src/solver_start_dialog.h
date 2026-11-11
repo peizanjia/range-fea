@@ -2,27 +2,19 @@
 #define SOLVER_START_DIALOG_H
 
 #include <QDialog>
-#include <QCheckBox>
+#include <QJsonObject>
 
-#include "solver_task.h"
+class QCheckBox;
 
 class SolverStartDialog : public QDialog
 {
 
     Q_OBJECT
 
-    protected:
+    private:
 
-        //! Model IDs.
-        uint modelID;
-        //! List of warnings.
-        QStringList warnings;
-        //! List of errors.
-        QStringList errors;
-        //! Restart solver.
-        QCheckBox *restartSolverCheck;
-        //! Pointer to solvr task object.
-        SolverTask *pSolverTask;
+        QJsonObject validation;
+        QCheckBox *restartSolverCheck = nullptr;
 
     public:
 
@@ -30,7 +22,7 @@ class SolverStartDialog : public QDialog
         explicit SolverStartDialog(uint modelID, QWidget *parent = nullptr);
 
         //! Execute dialog.
-        int exec();
+        int exec() override;
 
 };
 

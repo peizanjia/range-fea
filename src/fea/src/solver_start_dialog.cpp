@@ -1,18 +1,14 @@
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
-#include <QLabel>
-#include <QIcon>
-#include <QLineEdit>
-#include <QTextBrowser>
-#include <QScrollBar>
-#include <QScrollArea>
-#include <QPushButton>
+#include <QCheckBox>
 #include <QDialogButtonBox>
-#include <QMessageBox>
 #include <QJsonArray>
+#include <QLabel>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QTextBrowser>
+#include <QVBoxLayout>
 
 #include "application.h"
+#include "model_io.h"
 #include "session.h"
 #include "solver_manager.h"
 #include "solver_start_dialog.h"
@@ -20,165 +16,148 @@
 
 SolverStartDialog::SolverStartDialog(uint modelID, QWidget *parent)
     : QDialog(parent)
-    , modelID(modelID)
-    , pSolverTask(nullptr)
+    , validation(SolverManager::getInstance().validateRun(modelID))
 {
-    const QJsonObject validation = SolverManager::getInstance().validateRun(this->modelID);
-    for (const QJsonValue &value : validation.value(QStringLiteral("warnings")).toArray())
-        this->warnings.append(value.toString());
-    for (const QJsonValue &value : validation.value(QStringLiteral("errors")).toArray())
-        this->errors.append(value.toString());
+    const bool canStart = this->validation.value(QStringLiteral("valid")).toBool();
+    this->setWindowTitle(canStart ? tr("Start solver") : tr("Solver setup needs attention"));
 
-    const QString modelName = validation.value(QStringLiteral("modelName")).toString();
-    const bool modelReadable = validation.value(QStringLiteral("modelReadable")).toBool();
-    if (validation.value(QStringLiteral("valid")).toBool())
-    {
-        this->pSolverTask = new SolverTask(Application::instance()->getApplicationSettings(), this->modelID);
-        this->pSolverTask->setBlocking(false);
-    }
-
-    this->setWindowTitle(tr("Start solver"));
-
-    QIcon cancelIcon(":/icons/action/pixmaps/range-cancel.svg");
-    QIcon okIcon(":/icons/action/pixmaps/range-ok.svg");
-
-    QVBoxLayout *mainLayout = new QVBoxLayout;
-    this->setLayout (mainLayout);
-
-    QLabel *messageLabel = new QLabel;
-    messageLabel->setText(tr("Start solver for model") + ": <b>" +
-                          (modelName.isEmpty() ? tr("Model %1").arg(this->modelID) : modelName) + "</b>");
+    auto *mainLayout = new QVBoxLayout(this);
+    const QString modelName = this->validation.value(QStringLiteral("modelName")).toString();
+    auto *messageLabel = new QLabel(modelName.isEmpty()
+        ? tr("Check the solver setup.")
+        : (canStart ? tr("Start solver for %1?") : tr("Check the solver setup for %1.")).arg(modelName));
+    messageLabel->setTextFormat(Qt::PlainText);
+    messageLabel->setWordWrap(true);
     mainLayout->addWidget(messageLabel);
 
-    if (this->warnings.size() || this->errors.size())
+    QString diagnostics;
+    const auto appendDiagnostics = [&diagnostics](const QString &heading, const QJsonArray &messages)
     {
-        QTextBrowser *messagesBrowser = new QTextBrowser;
+        if (messages.isEmpty()) return;
+        diagnostics += "<h3>" + heading.toHtmlEscaped() + "</h3><ul>";
+        for (const QJsonValue &message : messages)
+            diagnostics += "<li>" + message.toString().toHtmlEscaped() + "</li>";
+        diagnostics += "</ul>";
+    };
+    appendDiagnostics(tr("Resolve before starting"), this->validation.value(QStringLiteral("errors")).toArray());
+    appendDiagnostics(tr("Warnings"), this->validation.value(QStringLiteral("warnings")).toArray());
+    if (!diagnostics.isEmpty())
+    {
+        auto *messagesBrowser = new QTextBrowser;
+        messagesBrowser->setHtml(diagnostics);
         mainLayout->addWidget(messagesBrowser);
-
-        QString htmlMessage;
-
-        if (this->errors.size() > 0)
-        {
-            htmlMessage += "<h3>" + tr("Errors") + "</h3>";
-            htmlMessage += "<ul>";
-            for (int i=0;i<this->errors.size();i++)
-            {
-                htmlMessage += "<li>";
-                htmlMessage += this->errors.at(i);
-                htmlMessage += "</li>";
-            }
-            htmlMessage += "</ul>";
-        }
-
-        if (this->warnings.size() > 0)
-        {
-            htmlMessage += "<h3>" + tr("Warnings") + "</h3>";
-            htmlMessage += "<ul>";
-            for (int i=0;i<this->warnings.size();i++)
-            {
-                htmlMessage += "<li>";
-                htmlMessage += this->warnings.at(i);
-                htmlMessage += "</li>";
-            }
-            htmlMessage += "</ul>";
-        }
-
-        messagesBrowser->insertHtml(htmlMessage);
-
-        QTextCursor textCursor = messagesBrowser->textCursor();
-        textCursor.movePosition(QTextCursor::Start);
-        messagesBrowser->setTextCursor(textCursor);
-
-        this->resize(600,400);
     }
 
-    QLabel *commandTitleLabel = new QLabel(tr("Command line"));
-    mainLayout->addWidget(commandTitleLabel);
-
-    QScrollArea *scrollArea = new QScrollArea;
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Maximum);
-    mainLayout->addWidget(scrollArea);
-
-    QLabel *commandLineLabel = new QLabel(this->pSolverTask
-                                          ? this->pSolverTask->getCommandLine()
-                                          : tr("Solver command is unavailable until validation succeeds."));
-    commandLineLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    commandLineLabel->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Maximum);
-    scrollArea->setWidget(commandLineLabel);
-
-    this->restartSolverCheck = new QCheckBox(tr("Restart solver / continue"));
-    if (!modelReadable || !this->pSolverTask)
+    auto *buttonBox = new QDialogButtonBox;
+    if (canStart)
     {
-        this->restartSolverCheck->setDisabled(true);
-        this->restartSolverCheck->setChecked(false);
-    }
-    else if (Application::instance()->getSession()->getModel(this->modelID).getNVariables() == 0)
-    {
-        this->restartSolverCheck->setDisabled(true);
-        this->restartSolverCheck->setChecked(false);
+        const Model &model = Application::instance()->getSession()->getModel(modelID);
+        if (model.getNVariables() > 0)
+        {
+            this->restartSolverCheck = new QCheckBox(tr("Continue from existing results"));
+            this->restartSolverCheck->setChecked(model.getProblemSetup().getRestart());
+            mainLayout->addWidget(this->restartSolverCheck);
+        }
+        const bool needsPath = model.getFileName().isEmpty();
+        if (needsPath)
+        {
+            auto *pathHint = new QLabel(tr("Choose a model location for the solver files."));
+            pathHint->setWordWrap(true);
+            mainLayout->addWidget(pathHint);
+        }
+        buttonBox->setStandardButtons(QDialogButtonBox::Cancel);
+        auto *startButton = buttonBox->addButton(needsPath ? tr("Choose location…") : tr("Start solver"),
+                                                 QDialogButtonBox::AcceptRole);
+        // Require an explicit start when the user has diagnostics to review.
+        if (!diagnostics.isEmpty())
+        {
+            startButton->setAutoDefault(false);
+            auto *cancelButton = buttonBox->button(QDialogButtonBox::Cancel);
+            cancelButton->setDefault(true);
+            cancelButton->setFocus();
+        }
+        else
+            startButton->setDefault(true);
     }
     else
     {
-        this->restartSolverCheck->setEnabled(true);
-        this->restartSolverCheck->setChecked(Application::instance()->getSession()
-                                             ->getModel(this->modelID).getProblemSetup().getRestart());
+        buttonBox->setStandardButtons(QDialogButtonBox::Close);
     }
-    mainLayout->addWidget(this->restartSolverCheck);
-
-    QDialogButtonBox *buttonBox = new QDialogButtonBox;
     mainLayout->addWidget(buttonBox);
-
-    QPushButton *cancelButton = new QPushButton(cancelIcon, tr("Cancel"));
-    buttonBox->addButton(cancelButton,QDialogButtonBox::RejectRole);
-
-    QPushButton *okButton = new QPushButton(okIcon, tr("OK"));
-    okButton->setDisabled(this->errors.size() > 0);
-    buttonBox->addButton(okButton,QDialogButtonBox::AcceptRole);
-
-    QObject::connect(buttonBox,&QDialogButtonBox::rejected,this,&QDialog::reject);
-    QObject::connect(buttonBox,&QDialogButtonBox::accepted,this,&QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    this->resize(440, diagnostics.isEmpty() ? this->sizeHint().height() : 270);
 }
 
 int SolverStartDialog::exec()
 {
-    int retVal = QDialog::exec();
+    if (QDialog::exec() != QDialog::Accepted || !this->validation.value(QStringLiteral("valid")).toBool())
+        return QDialog::Rejected;
 
-    if (retVal == QDialog::Accepted)
+    Session *session = Application::instance()->getSession();
+    const auto *settings = Application::instance()->getApplicationSettings();
+    auto &manager = SolverManager::getInstance();
+    const QJsonObject stamp = this->validation.value(QStringLiteral("sourceStamp")).toObject();
+    const QString identity = stamp.value(QStringLiteral("documentId")).toString();
+    const QString revision = stamp.value(QStringLiteral("revision")).toString();
+    const auto resolveModel = [session, &identity, &revision]()
     {
-        const QJsonObject validation = SolverManager::getInstance().validateRun(this->modelID);
-        if (!this->pSolverTask || !validation.value(QStringLiteral("valid")).toBool())
-        {
-            const QJsonArray errors = validation.value(QStringLiteral("errors")).toArray();
-            QMessageBox::warning(this, tr("Solver not started"),
-                                 errors.isEmpty() ? tr("The solver validation is no longer valid.") : errors.first().toString());
-            if (this->pSolverTask) this->pSolverTask->deleteLater();
-            this->pSolverTask = nullptr;
-            return QDialog::Rejected;
-        }
-
-        Session *session = Application::instance()->getSession();
-        session->storeCurentModelVersion(this->modelID, tr("Configure solver run"));
-        session->getModel(this->modelID).getProblemSetup().setRestart(this->restartSolverCheck->isChecked());
-        session->getModel(this->modelID).getTimeSolver().harmonizeTimesWithInput(this->restartSolverCheck->isChecked());
-        session->setProblemChanged(this->modelID);
-
-        // Start solver task
-        QString error;
-        const QString jobId = SolverManager::getInstance().submitValidated(
-                    this->pSolverTask, QJsonObject(), true, &error);
-        if (jobId.isEmpty())
-        {
-            QMessageBox::warning(this, tr("Solver not started"),
-                                 error.isEmpty() ? tr("The solver job could not be submitted.") : error);
-            retVal = QDialog::Rejected;
-        }
-    }
-    else
+        const uint id = session->findModelByCommandIdentity(identity);
+        return !identity.isEmpty() && id != RConstants::eod &&
+               QString::number(session->modelCommandStamp(id).second) == revision ? id : RConstants::eod;
+    };
+    const auto rejectStart = [this](const QString &message)
     {
-        if (this->pSolverTask) this->pSolverTask->deleteLater();
-        this->pSolverTask = nullptr;
+        QMessageBox notice(QMessageBox::Warning, tr("Solver not started"), message,
+                           QMessageBox::Ok, this->parentWidget());
+        notice.setTextFormat(Qt::PlainText);
+        notice.exec();
+        return QDialog::Rejected;
+    };
+    const QString changed = tr("The model changed or closed. Review the setup before starting again.");
+    uint modelID = resolveModel();
+    if (modelID == RConstants::eod)
+        return rejectStart(changed);
+
+    QString chosenPath;
+    if (session->getModel(modelID).getFileName().isEmpty())
+    {
+        chosenPath = ModelIO::getModelSaveName(settings, this->parentWidget(), session->getModel(modelID));
+        if (chosenPath.isEmpty()) return QDialog::Rejected;
+        modelID = resolveModel();
+        if (modelID == RConstants::eod || !session->getModel(modelID).getFileName().isEmpty())
+            return rejectStart(changed);
     }
 
-    return retVal;
+    const QJsonObject current = manager.validateRun(modelID);
+    if (!current.value(QStringLiteral("valid")).toBool())
+    {
+        const QJsonArray errors = current.value(QStringLiteral("errors")).toArray();
+        return rejectStart(errors.isEmpty() ? tr("Check the solver setup again.") : errors.first().toString());
+    }
+    if (current.value(QStringLiteral("sourceStamp")).toObject() != stamp)
+        return rejectStart(changed);
+    if (current.value(QStringLiteral("warnings")) != this->validation.value(QStringLiteral("warnings")))
+        return rejectStart(tr("Solver warnings changed. Review them before starting again."));
+
+    session->storeCurentModelVersion(modelID, tr("Configure solver run"));
+    Model &model = session->getModel(modelID);
+    if (!chosenPath.isEmpty())
+        model.setFileName(chosenPath);
+    const bool restart = this->restartSolverCheck && this->restartSolverCheck->isChecked();
+    model.getProblemSetup().setRestart(restart);
+    model.getTimeSolver().harmonizeTimesWithInput(restart);
+    auto *task = new SolverTask(settings, modelID);
+    session->setProblemChanged(modelID);
+
+    QString error;
+    if (manager.submitValidated(task, QJsonObject(), true, &error).isEmpty())
+    {
+        const uint currentID = session->findModelByCommandIdentity(identity);
+        if (!chosenPath.isEmpty() && currentID != RConstants::eod &&
+            session->getModel(currentID).getFileName() == chosenPath)
+            session->getModel(currentID).setFileName(QString());
+        return rejectStart(error.isEmpty() ? tr("The solver job could not be submitted.") : error);
+    }
+    return QDialog::Accepted;
 }
