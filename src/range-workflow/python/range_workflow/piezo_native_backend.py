@@ -354,7 +354,7 @@ class NativeBackend:
             "PID": ("kp", "ki", "kd", "reference", "bias", "derivativeFilterAlpha"),
             "discrete_state_space": ("Ac", "Bc", "Cc", "Dc", "initialState", "reference", "bias", "samplingPeriod", "inputUnits", "outputUnits"),
             "LQR": ("Q", "R", "stateReference", "observer"),
-            "MPC": ("Q", "R", "Qf", "horizon", "stateReference", "observer", "verificationTolerance", "maxIterations")}
+            "MPC": ("Q", "R", "Qf", "horizon", "controlHorizon", "stateReference", "observer", "verificationTolerance", "maxIterations")}
         if not isinstance(cfg, dict) or cfg.get("kind") not in kinds:
             raise design.DesignError("unknown controller kind")
         self.kind = cfg["kind"]
@@ -431,13 +431,19 @@ class NativeBackend:
                 if self.lower is None or self.delta is None:
                     raise design.DesignError("MPC requires absolute amplitude and per-sample rate limits")
                 Qf = _array(cfg["Qf"], "Qf", (self.nx, self.nx))
-                self.control_design = control.constrained_mpc(self.discrete, Q, R, Qf,
-                    _integer(cfg["horizon"], "horizon", 1), lower=self.lower-self.va0,
-                    upper=self.upper-self.va0, delta=self.delta)
-                self.initial_warm = np.zeros((self.control_design.horizon, self.m))
+                horizon = _integer(cfg["horizon"], "horizon", 1)
+                moves = _integer(cfg.get("controlHorizon", horizon), "controlHorizon", 1)
+                if moves > horizon:
+                    raise design.DesignError("controlHorizon must not exceed horizon")
+                self.control_design = control.constrained_mpc(self.discrete, Q, R, Qf, horizon,
+                    lower=self.lower-self.va0, upper=self.upper-self.va0, delta=self.delta,
+                    control_horizon=moves)
+                self.initial_warm = np.zeros((horizon, self.m))
                 self.verification_tol = _number(cfg.get("verificationTolerance", 1e-6), "verificationTolerance", True)
                 self.max_iterations = _integer(cfg.get("maxIterations", 500), "maxIterations", 1)
-                self.design_certificate = {"horizon": self.control_design.horizon}
+                self.design_certificate = {"horizon": horizon}
+                if "controlHorizon" in cfg:
+                    self.design_certificate["controlHorizon"] = moves
             if self.state_source == "sensor_only":
                 observer = cfg.get("observer")
                 _keys(observer, ("processCovariance", "measurementCovariance"), ("initialPrior",), "observer")
@@ -948,7 +954,11 @@ class NativeBackend:
             # JSON [] cannot encode the trailing dimension of an empty matrix.
             if key == "warmStart" and self.initial_warm.size == 0 and value[key] == []:
                 continue
-            _array(value[key], key, shape)
+            parsed = _array(value[key], key, shape)
+            if key == "warmStart" and self.kind == "MPC":
+                last_move = self.control_design.control_horizon-1
+                if not np.all(parsed[last_move:] == parsed[last_move]):
+                    raise design.DesignError("MPC warmStart must hold the final control move")
         if self.lower is not None:
             previous = np.asarray(value["previousApplied"])
             if np.any(previous < self.lower) or np.any(previous > self.upper):

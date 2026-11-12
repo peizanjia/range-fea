@@ -59,6 +59,52 @@ def independent_two_step_qp(x, previous, lower, upper, delta, state_offsets=(0.,
 
 
 class PiezoControlDesignTest(unittest.TestCase):
+    def test_mpc_short_control_horizon_preserves_full_prediction_cost(self):
+        plant = system()
+        horizon, moves = 5, 2
+        d = constrained_mpc(plant, [[.7]], [[1.2]], [[2.3]], horizon,
+                            lower=[-10.], upper=[10.], delta=[10.], control_horizon=moves)
+        aa, bb, hh, x = [.8, 1.1, .9, .7, 1.2], [1.3, .6, .2, 1.1, .4], [.4, -.2, .1, .8, -.3], .7
+
+        def rollout(trajectory):
+            states = [x]
+            for a, b, offset, u in zip(aa, bb, hh, trajectory):
+                states.append(a*states[-1]+b*u+offset)
+            return np.array(states)
+
+        blocks = np.array([[1., 0.], [0., 1.], [0., 1.], [0., 1.], [0., 1.]])
+        free = rollout(np.zeros(horizon))
+        sensitivity = np.column_stack([rollout(column)-free for column in blocks.T])
+        W = np.diag([.7]*horizon+[2.3])
+        optimum = -np.linalg.solve(sensitivity.T@W@sensitivity+1.2*(blocks.T@blocks), sensitivity.T@W@free)
+        expected_trajectory = blocks@optimum
+        expected_states = rollout(expected_trajectory)
+        result = mpc_proposal(d, plant, [x], [0.], warm_start=[[1.], [-1.], [2.], [-2.], [3.]],
+                             state_offsets=np.array(hh)[:, None], state_transitions=np.array(aa)[:, None, None],
+                             input_transitions=np.array(bb)[:, None, None])
+        assert_allclose(result.trajectory[:, 0], expected_trajectory, atol=1e-7)
+        assert_allclose(result.predicted_states[:, 0], expected_states, atol=1e-7)
+        assert_allclose(result.next_warm_start, np.vstack((result.trajectory[1:], result.trajectory[-1:])), atol=0)
+        self.assertAlmostEqual(result.objective, expected_states@W@expected_states+1.2*(expected_trajectory@expected_trajectory))
+        self.assertLess(result.certificate.action_stationarity, 1e-6)
+
+    def test_mpc_short_control_horizon_amplitude_slew_and_validation(self):
+        plant = system()
+        bounds = dict(lower=[-.25], upper=[.25], delta=[.2])
+        for invalid in (True, 0, -1, 2., 6):
+            with self.subTest(control_horizon=invalid), self.assertRaisesRegex(DesignError, 'control_horizon'):
+                constrained_mpc(plant, [[1.]], [[1.]], [[1.]], 5, control_horizon=invalid, **bounds)
+        d = constrained_mpc(plant, [[1.]], [[1.]], [[1.]], 5, control_horizon=2, **bounds)
+        result = mpc_proposal(d, plant, [2.], [.1])
+        # At this corner both cost derivatives are positive, with u[0] at
+        # its lower slew bound and the final held move at its amplitude bound.
+        assert_allclose(result.trajectory[:, 0], [-.1, -.25, -.25, -.25, -.25], atol=1e-7)
+        c = result.certificate
+        self.assertLess(max(c.primal, c.stationarity, c.dual, c.complementarity, c.action_stationarity), 1e-6)
+        one_move = constrained_mpc(plant, [[1.]], [[1.]], [[1.]], 5, control_horizon=1, **bounds)
+        held = mpc_proposal(one_move, plant, [2.], [.1])
+        assert_allclose(held.trajectory[:, 0], [-.1]*5, atol=1e-7)
+
     def test_mpc_varying_transitions_independent_affine_linear_solve(self):
         plant = system()
         d = constrained_mpc(plant, [[.7]], [[1.2]], [[2.3]], 2,

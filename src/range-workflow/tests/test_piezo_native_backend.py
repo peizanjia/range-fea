@@ -1132,7 +1132,8 @@ class NativeBackendTest(unittest.TestCase):
         assert_allclose(p["absoluteVoltages"], 5-gain@x)
 
     def test_actual_mpc_kkt_constraints_and_warm_history(self):
-        b, state, _ = self.initialize(configuration("MPC"))
+        b, state, init = self.initialize(configuration("MPC"))
+        self.assertEqual(init["design"]["controller"], {"horizon": 3})
         original = copy.deepcopy(state)
         p = self.ok(b, {"op": "propose", "opaqueState": state, "q": [4.], "v": [1.]})
         self.assertEqual(state, original)
@@ -1146,6 +1147,32 @@ class NativeBackendTest(unittest.TestCase):
         with patch("range_workflow.piezo_native_backend.control.mpc_proposal", side_effect=ValueError("QP failure")):
             self.bad(b, {"op": "propose", "opaqueState": state, "q": [4.], "v": [1.]}, "QP failure")
         self.assertEqual(state, original)
+
+    def test_mpc_short_control_horizon_preserves_forecast_and_accepted_warm_history(self):
+        message = forced_configuration("MPC", N=2, horizon=20, controlHorizon=5)
+        message["dt"] = .005
+        b, state, init = self.initialize(message)
+        self.assertEqual(init["design"]["controller"], {"horizon": 20, "controlHorizon": 5})
+        self.assertEqual(init["design"]["samplingPeriod"], .01)
+        self.assertEqual(len(state["warmStart"]), 20)
+        p = self.ok(b, {"op": "propose", "opaqueState": state, "q": [4.], "v": [1.]})
+        self.assertEqual(len(p["diagnostics"]["mpc"]["stateOffsets"]), 20)
+        warm = p["candidateOpaqueState"]["warmStart"]
+        self.assertEqual(len(warm), 20)
+        self.assertEqual(warm[4:], [warm[4]]*16)
+        self.assertNotEqual(warm, state["warmStart"])
+        accepted = self.accept(b, p, p["absoluteVoltages"])
+        self.assertEqual(accepted["warmStart"], warm)
+        tampered = copy.deepcopy(accepted)
+        tampered["warmStart"][-1][0] += .1
+        self.bad(b, {"op": "validate", "opaqueState": tampered}, "warmStart must hold")
+
+        for invalid in (True, 0, 2., 21):
+            with self.subTest(controlHorizon=invalid):
+                bad = copy.deepcopy(message)
+                bad["configuration"]["controller"]["controlHorizon"] = invalid
+                self.bad(NativeBackend(), bad, "controlHorizon")
+        self.bad(NativeBackend(), configuration("LQR", controlHorizon=2), "unexpected or missing fields")
 
     def observer_configuration(self, N=3):
         return configuration("LQR", N=N, stateSource="sensor_only", selectedOutputs=["sensor:s"],

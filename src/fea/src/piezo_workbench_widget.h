@@ -128,6 +128,7 @@ private:
     void showPreview(const QJsonObject &result);
     bool hasCurrentPreviewCurrent(bool verifyExternalSources, bool externalSourcesKnownCurrent = false) const;
     void configureController(const QString &kind, const QString &stateSource);
+    void tuneVibrationController();
     int compiledFreeDofs() const;
     QJsonValue valueAt(const QStringList &path) const;
     void setValue(const QStringList &path, const QJsonValue &value);

@@ -1166,6 +1166,30 @@ void PiezoWorkbenchWidget::buildEditors(int activePage,int previousScrollX,int p
             auto *dimension=new QSpinBox(this);dimension->setObjectName("piezoDiscreteStates");dimension->setRange(1,128);dimension->setValue(std::max(1,int(controller.value("Ac").toArray().size())));controlForm->addRow(tr("Controller states"),dimension);
             connect(dimension,&QSpinBox::valueChanged,this,[this,state](int n){setValue({"controller","Ac"},diagonal(n,n));configureController("discrete_state_space",state->currentData().toString());});
         }
+        if(controller.value("kind")==QJsonValue("MPC")){
+            auto *prediction=new QSpinBox(this);
+            auto *moves=new QSpinBox(this);
+            prediction->setObjectName("piezoControllerhorizon");
+            moves->setObjectName("piezoControllercontrolHorizon");
+            prediction->setRange(1,20000);
+            prediction->setValue(controller.value("horizon").toInt(1));
+            moves->setRange(1,prediction->value());
+            moves->setValue(controller.value("controlHorizon").toInt(prediction->value()));
+            controlForm->addRow(tr("Prediction periods"),prediction);
+            controlForm->addRow(tr("Independent voltage moves"),moves);
+            connect(prediction,&QSpinBox::valueChanged,this,[this,moves](int periods){
+                auto draft=recipe.value("controller").toObject();
+                draft["horizon"]=periods;
+                const QSignalBlocker blocker(moves);
+                moves->setMaximum(periods);
+                if(draft.contains("controlHorizon"))draft["controlHorizon"]=moves->value();
+                else moves->setValue(periods);
+                setValue({"controller"},draft);
+            });
+            connect(moves,&QSpinBox::valueChanged,this,[this](int count){
+                setValue({"controller","controlHorizon"},count);
+            });
+        }
     }controlPage->addLayout(controlForm);
     const auto outputs=feedbackCatalog(recipe);
     if(controller.value("kind")!=QJsonValue("none")){
@@ -1176,8 +1200,14 @@ void PiezoWorkbenchWidget::buildEditors(int activePage,int previousScrollX,int p
         auto *resize=new QPushButton(tr("Size controller matrices from current FE / modes / feedback selection"),this);resize->setObjectName("piezoSizeController");controlPage->addWidget(resize);
         connect(resize,&QPushButton::clicked,this,[this,kind,state]{configureController(kind->currentData().toString(),state->currentData().toString());});
     }
+    if(controller.value("kind")==QJsonValue("LQR")||controller.value("kind")==QJsonValue("MPC")){
+        auto *tune=new QPushButton(tr("Initialize vibration-control weights from the ROM"),this);
+        tune->setObjectName("piezoTuneVibrationController");
+        connect(tune,&QPushButton::clicked,this,&PiezoWorkbenchWidget::tuneVibrationController);
+        controlPage->addWidget(tune);
+    }
     for(auto it=controller.begin();it!=controller.end();++it){
-        const auto key=it.key();if(QStringList{"kind","stateSource","controlEveryFESteps","selectedOutputs","inputUnits","outputUnits","observer","external"}.contains(key))continue;
+        const auto key=it.key();if(QStringList{"kind","stateSource","controlEveryFESteps","selectedOutputs","inputUnits","outputUnits","observer","external","horizon","controlHorizon"}.contains(key))continue;
         auto path=QStringList{"controller",key};controlPage->addWidget(note(key,this));
         if(it.value().isDouble())controlPage->addWidget(numberEditor(path,this,"piezoController"+key));
         else if(it.value().isArray()){const auto a=it.value().toArray();if(!a.isEmpty()){int cols=a.first().isArray()?a.first().toArray().size():a.size();int rows=a.first().isArray()?a.size():1;
@@ -1186,8 +1216,8 @@ void PiezoWorkbenchWidget::buildEditors(int activePage,int previousScrollX,int p
     const auto observer=controller.value("observer").toObject();for(auto it=observer.begin();it!=observer.end();++it){auto a=it.value().toArray();controlPage->addWidget(note(tr("Observer %1").arg(it.key()),this));
         if(!a.isEmpty()&&a.size()<=128)controlPage->addWidget(matrixEditor({"controller","observer",it.key()},a.first().isArray()?a.size():1,a.first().isArray()?a.first().toArray().size():a.size(),!a.first().isArray(),this,"piezoObserver"+it.key()));}
     if(controller.value("kind")==QJsonValue("external")){state->setCurrentIndex(1);state->setEnabled(false);addExternalProgramEditor(controlPage,{"controller","external"},"controller");}
-    controlPage->addWidget(note(tr("LQR requires the production Riccati certificate; MPC requires the production constrained QP certificate. Sensor-only LQR/MPC requires an observable/detectable selected measurement set and an explicit observer. Preview failure never substitutes another controller."),this));
-    if(controller.value("kind")==QJsonValue("MPC"))controlPage->addWidget(note(tr("MPC prediction holds the target voltage over each control period. Rate limiting at individual FE steps can make the actual response differ from that prediction. The QP certificate applies to this prediction model."),this));controlPage->addStretch();
+    controlPage->addWidget(note(tr("Select a subset of modes on the Modes page to reduce the controller model. LQR requires a Riccati certificate and MPC requires a constrained QP certificate. Sensor-only LQR/MPC also requires a detectable measurement set and an observer."),this));
+    if(controller.value("kind")==QJsonValue("MPC"))controlPage->addWidget(note(tr("The prediction horizon counts control periods. The control horizon counts independently optimized moves. The last move is held over the remaining prediction periods. Rate limiting at individual FE steps can change the applied voltage."),this));controlPage->addStretch();
 
     auto *excitation=page(tr("Excitation / initial state"));auto *grid=new QFormLayout;
     auto *dt=numberEditor({"dt"},this,"piezoTimeStep",1e-12,1e6);grid->addRow(tr("FE time step (s)"),dt);
@@ -1290,11 +1320,85 @@ void PiezoWorkbenchWidget::configureController(const QString &kind,const QString
         }
         if(kind=="LQR"||kind=="MPC"){
             c["Q"]=diagonal(nx,nx,1);c["R"]=diagonal(m,m,1);c["stateReference"]=zeros(nx);
-            if(kind=="MPC"){c["Qf"]=diagonal(nx,nx,1);c["horizon"]=10;c["verificationTolerance"]=1e-6;c["maxIterations"]=500;}
+            if(kind=="MPC"){c["Qf"]=diagonal(nx,nx,1);c["horizon"]=20;c["controlHorizon"]=5;c["verificationTolerance"]=1e-6;c["maxIterations"]=500;}
             if(stateSource=="sensor_only")c["observer"]=QJsonObject{{"processCovariance",diagonal(nx,nx,1e-6)},{"measurementCovariance",diagonal(p,p,1e-4)},{"initialPrior",zeros(nx)}};
         }
     }
     setValue({"controller"},c);queueEditorRebuild();
+}
+
+void PiezoWorkbenchWidget::tuneVibrationController()
+{
+    if (!templateSynchronized || !externalSourcesCurrent()) {
+        status->setText(tr("Synchronize the template and reload changed external sources before tuning."));
+        return;
+    }
+    RModel source;
+    if (!sourceSnapshot(session, &source)) {
+        status->setText(tr("Select one available source document."));
+        return;
+    }
+    auto controller=recipe.value("controller").toObject();
+    const bool mpc=controller.value("kind")==QJsonValue("MPC");
+    if (!mpc && controller.value("kind")!=QJsonValue("LQR")) return;
+    try {
+        const bool axial=recipe.value("family")==QJsonValue("axialRod");
+        const auto exportDesign=[&](const QJsonObject &draft) {
+            const auto candidate=RPiezoExperimentService::preview(source,draft);
+            if (!candidate.valid) throw std::runtime_error(candidate.message.toStdString());
+            const auto package=axial
+                ? PiezoAxialBackendBridge::create(candidate.candidate).exportPackage
+                : PiezoNativeBackendBridge::create(candidate.candidate).exportPackage;
+            return package.value("design").toObject();
+        };
+        auto draft=recipe;
+        draft["controller"]=QJsonObject{{"kind","none"}};
+        const auto design=exportDesign(draft);
+        const auto omega=design.value("omega").toArray();
+        const auto input=design.value("continuous").toObject().value("B").toArray();
+        const int modes=omega.size();
+        if (modes<=0 || input.size()!=2*modes || omega[0].toDouble()<=0)
+            throw std::runtime_error("A positive-frequency ROM with voltage actuation is required.");
+        const auto first=input[modes].toArray();
+        double actuation=0;
+        for (const auto &entry:first) actuation=std::hypot(actuation,entry.toDouble());
+        // Continuous first-mode energy LQR effort scale. The actual controller
+        // and MPC terminal matrix are designed on the sampled ROM.
+        const double targetDamping=.05;
+        const double scale=std::pow(2*std::hypot(1.,targetDamping)-1,2)-1;
+        const double effort=std::pow(actuation/omega[0].toDouble(),2)/scale;
+        if (!std::isfinite(effort) || effort<=0)
+            throw std::runtime_error("The lowest retained mode has no usable voltage authority.");
+        auto cost=diagonal(2*modes,2*modes,1.);
+        for (int i=0;i<modes;++i) {
+            auto row=cost[i].toArray();
+            row[i]=std::pow(omega[i].toDouble(),2);
+            cost[i]=row;
+        }
+        controller["Q"]=cost;
+        controller["R"]=diagonal(first.size(),first.size(),effort);
+        controller["stateReference"]=zeros(2*modes);
+        if (mpc) {
+            auto terminal=controller;
+            terminal["kind"]="LQR";
+            for (const auto *key:{"Qf","horizon","controlHorizon","verificationTolerance","maxIterations"})
+                terminal.remove(key);
+            draft["controller"]=terminal;
+            const auto p=exportDesign(draft).value("controller").toObject().value("P").toArray();
+            if (p.size()!=2*modes) throw std::runtime_error("The sampled ROM did not certify a terminal matrix.");
+            controller["Qf"]=p;
+        }
+        draft["controller"]=controller;
+        exportDesign(draft);
+        setValue({"controller"},controller);
+        queueEditorRebuild();
+        status->setText(tr("ROM energy weights initialized. Preview the experiment and verify reduction against a control-off run."));
+    } catch (const std::exception &error) {
+        status->setText(tr("ROM controller tuning failed: %1. Check the retained modes, voltage authority, and sampling interval.")
+                            .arg(QString::fromUtf8(error.what())));
+    } catch (...) {
+        status->setText(tr("ROM controller tuning rejected this source."));
+    }
 }
 
 QStringList PiezoWorkbenchWidget::allowedForceDirections() const {

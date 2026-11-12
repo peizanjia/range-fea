@@ -196,13 +196,21 @@ class MPCDesign:
     upper: np.ndarray
     delta: np.ndarray
     identity: Identity
+    control_horizon: int | None = None
 
 
-def constrained_mpc(system, Q, R, Qf, horizon, *, lower, upper, delta):
-    """Freeze a finite-horizon cost sum(x[k]'Q x[k]+u[k]'R u[k])+x[N]'Qf x[N]."""
+def constrained_mpc(system, Q, R, Qf, horizon, *, lower, upper, delta, control_horizon=None):
+    """Freeze sum(x[k]'Q x[k]+u[k]'R u[k])+x[N]'Qf x[N] for N predictions.
+
+    The last independent move is held for every remaining prediction step.
+    """
     a, b, c, d = _system(system)
     if isinstance(horizon, (bool, np.bool_)) or not isinstance(horizon, (int, np.integer)) or horizon <= 0:
         raise DesignError("horizon must be a positive integer")
+    moves = horizon if control_horizon is None else control_horizon
+    if (isinstance(moves, (bool, np.bool_)) or not isinstance(moves, (int, np.integer))
+            or not 1 <= moves <= horizon):
+        raise DesignError("control_horizon must be an integer from 1 through horizon")
     n, m = len(a), b.shape[1]
     q, r, qf = _weight(Q, 'Q', n), _weight(R, 'R', m, True), _weight(Qf, 'Qf', n)
     lo, hi = _array(lower, 'lower', (m,)), _array(upper, 'upper', (m,))
@@ -219,7 +227,7 @@ def constrained_mpc(system, Q, R, Qf, horizon, *, lower, upper, delta):
     # Rate can be infinite, unlike normal persisted numeric arrays.
     rate = np.frombuffer(rate.tobytes(), dtype=float)
     return MPCDesign(*map(_freeze, (q, r, qf)), int(horizon), _freeze(lo), _freeze(hi),
-                     rate, _identity(system, a, b, c, d))
+                     rate, _identity(system, a, b, c, d), int(moves))
 
 
 @dataclass(frozen=True)
@@ -250,7 +258,8 @@ def mpc_proposal(design, system, state, previous_applied, *, warm_start=None,
 
     Rate limits are increments per sample, not per second. previous_applied must
     be the last accepted plant command. Warm starts are optional persisted N*m
-    proposals and are sequentially clamped into the current feasible set.
+    proposals. The independent moves are sequentially clamped into the current
+    feasible set, and the last move is held for the remaining prediction steps.
     state_offsets[k] is a supplied known affine increment in
     x[k+1] = A*x[k] + B*u[k] + state_offsets[k]. It is never persisted here.
     Paired state_transitions/input_transitions optionally supply known per-step
@@ -259,6 +268,7 @@ def mpc_proposal(design, system, state, previous_applied, *, warm_start=None,
     """
     a, b, _, _ = _match(design.identity, system)
     n, m, N = len(a), b.shape[1], design.horizon
+    moves = N if design.control_horizon is None else design.control_horizon
     x = _array(state, 'increment state', (n,))
     for supplied_name, supplied in (("state_offsets", state_offsets),
             ("state_transitions", state_transitions), ("input_transitions", input_transitions)):
@@ -285,25 +295,26 @@ def mpc_proposal(design, system, state, previous_applied, *, warm_start=None,
     if (isinstance(max_iterations, (bool, np.bool_)) or
             not isinstance(max_iterations, (int, np.integer)) or max_iterations <= 0):
         raise DesignError("max_iterations must be a positive integer")
-    start = (np.tile(previous, (N, 1)) if warm_start is None else
-             _array(warm_start, 'warm_start', (N, m)))
+    start = (np.tile(previous, (moves, 1)) if warm_start is None else
+             _array(warm_start, 'warm_start', (N, m))[:moves])
     last = previous.copy()
-    for i in range(N):
+    for i in range(moves):
         start[i] = np.clip(start[i], np.maximum(design.lower, last-design.delta),
                            np.minimum(design.upper, last+design.delta))
         last = start[i].copy()
-    # Condense states x[0]..x[N] = F*x[0]+T*vec(u).
-    F, T = np.zeros(((N+1)*n, n)), np.zeros(((N+1)*n, N*m))
+    # Condense all prediction states using only the independent moves.
+    F, T = np.zeros(((N+1)*n, n)), np.zeros(((N+1)*n, moves*m))
     F[:n] = np.eye(n)
     affine = np.zeros((N+1, n))
-    for i in range(N):
+    move_indices = np.minimum(np.arange(N), moves-1)
+    for i, move in enumerate(move_indices):
         ai, bi = transitions_a[i], transitions_b[i]
         F[(i+1)*n:(i+2)*n] = ai@F[i*n:(i+1)*n]
         T[(i+1)*n:(i+2)*n] = ai@T[i*n:(i+1)*n]
-        T[(i+1)*n:(i+2)*n, i*m:(i+1)*m] += bi
+        T[(i+1)*n:(i+2)*n, move*m:(move+1)*m] += bi
         affine[i+1] = ai@affine[i]+offsets[i]
     W = linalg.block_diag(*([design.Q]*N+[design.Qf]))
-    U = linalg.block_diag(*([design.R]*N))
+    U = linalg.block_diag(*([design.R]*(moves-1)+[(N-moves+1)*design.R]))
     base = _array(F@x+affine.ravel(), 'affine free prediction')
     hessian, linear = 2*(T.T@W@T+U), 2*T.T@W@base
     hessian = _array(hessian, 'condensed Hessian')
@@ -311,13 +322,14 @@ def mpc_proposal(design, system, state, previous_applied, *, warm_start=None,
     constant = float(base@W@base)
     if not np.isfinite(constant):
         raise DesignError('MPC condensed objective overflow')
-    eye = np.eye(N*m)
-    rows, bounds = [eye, -eye], [np.tile(design.upper, N), -np.tile(design.lower, N)]
+    # Held moves duplicate amplitude bounds and add no slew constraints.
+    eye = np.eye(moves*m)
+    rows, bounds = [eye, -eye], [np.tile(design.upper, moves), -np.tile(design.lower, moves)]
     diff = eye.copy()
-    for i in range(1, N):
+    for i in range(1, moves):
         diff[i*m:(i+1)*m, (i-1)*m:i*m] = -np.eye(m)
-    offset = np.concatenate((previous, np.zeros((N-1)*m)))
-    rates = np.tile(design.delta, N)
+    offset = np.concatenate((previous, np.zeros((moves-1)*m)))
+    rates = np.tile(design.delta, moves)
     finite = np.isfinite(rates)
     rows.extend((diff[finite], -diff[finite]))
     bounds.extend(((rates+offset)[finite], (rates-offset)[finite]))
@@ -374,9 +386,9 @@ def mpc_proposal(design, system, state, previous_applied, *, warm_start=None,
         raise DesignError("MPC QP solver failed") from exc
     if not result.success:
         raise DesignError(f"MPC QP solver failed: {result.message}")
-    z = _array(solver_scale*_array(result.x, 'scaled QP solution', (N*m,)),
-               'balanced QP solution', (N*m,))
-    u = _array(variable_scale*z, 'QP solution', (N*m,))
+    z = _array(solver_scale*_array(result.x, 'scaled QP solution', (moves*m,)),
+               'balanced QP solution', (moves*m,))
+    u = _array(variable_scale*z, 'QP solution', (moves*m,))
     slack = _array(h-g@u, 'physical QP constraint slack')
     gradient = _array(hessian@u+linear, 'physical QP objective gradient')
     constraint_scale = np.maximum(1., np.maximum(np.abs(h), np.abs(g)@np.abs(u)))
@@ -399,14 +411,14 @@ def mpc_proposal(design, system, state, previous_applied, *, warm_start=None,
     primal = float(max(0., np.max(-slack/constraint_scale)))
     stationarity = float(np.max(np.abs(physical_stationarity)/term_scale))
     action_stationarity = float(np.max(np.abs(action_error)/
-        np.maximum(1., np.tile(design.upper-design.lower, N))))
+        np.maximum(1., np.tile(design.upper-design.lower, moves))))
     dual = float(np.max(np.maximum(-multipliers, 0)/np.maximum(1., np.abs(multipliers))))
     complementarity = float(np.max(np.abs(multipliers*slack)/
         np.maximum(1., np.abs(multipliers)*constraint_scale)))
     residuals = [primal, stationarity, dual, complementarity, action_stationarity]
     if not np.all(np.isfinite(residuals)) or max(residuals) > tol:
         raise DesignError("MPC feasibility or KKT qualification failed")
-    trajectory = u.reshape(N, m)
+    trajectory = u.reshape(moves, m)[move_indices]
     states = (base+T@u).reshape(N+1, n)
     # Verify uncondensed dynamics independently of the cost/constraint solver.
     next_states = (np.einsum('kij,kj->ki', transitions_a, states[:-1])+

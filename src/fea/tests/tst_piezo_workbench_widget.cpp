@@ -391,6 +391,36 @@ private slots:
         QCOMPARE(c["observer"].toObject()["processCovariance"].toArray().size(),12);
         QCOMPARE(c["observer"].toObject()["measurementCovariance"].toArray().size(),c["selectedOutputs"].toArray().size());
     }
+    void vibrationControllerWeightsUseCurrentRom() {
+        static QTemporaryDir workspace;
+        auto *session=Application::instance()->getSession();
+        QString error;
+        QVERIFY2(session->openProject(workspace.path(),&error),qPrintable(error));
+        session->addModel(beam());
+        session->setModelSelected(0,true);
+        PiezoWorkbenchWidget widget;
+        widget.setSession(session);
+        permitLegacyReplacement(widget);
+        widget.setValue({"design","modeIndices"},QJsonArray{0});
+        widget.findChild<QComboBox*>("piezoController")->setCurrentText("MPC");
+        QCoreApplication::processEvents();
+        const auto before=widget.draftRecipe().value("controller").toObject();
+        QCOMPARE(before.value("horizon").toInt(),20);
+        QCOMPARE(before.value("controlHorizon").toInt(),5);
+        auto *tune=widget.findChild<QPushButton*>("piezoTuneVibrationController");
+        QVERIFY(tune);
+        tune->click();
+        const auto after=widget.draftRecipe().value("controller").toObject();
+        QVERIFY2(after.value("Q")!=before.value("Q"),qPrintable(status(widget)));
+        QCOMPARE(after.value("Q").toArray().size(),2);
+        QVERIFY(after.value("R")!=before.value("R"));
+        QVERIFY(after.value("Qf")!=after.value("Q"));
+        for (const auto *key:{"horizon","controlHorizon","voltageLower","voltageUpper","deltaVoltageLimits"})
+            QCOMPARE(after.value(key),before.value(key));
+        widget.previewExperiment();
+        QVERIFY2(widget.hasCurrentPreview(),qPrintable(status(widget)));
+        QVERIFY(!session->getModel(0).getProblemSetup().getStructuralPiezoLayeredSetup().enabled);
+    }
     void savedReopenedExperimentKeepsEditableDeclarations_data() {
         QTest::addColumn<bool>("axial");QTest::newRow("layered-beam")<<false;QTest::newRow("axial-rods")<<true;
     }
