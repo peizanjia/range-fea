@@ -370,6 +370,7 @@ target_sources(fea PRIVATE src/workflow_process.cpp src/workflow_process.h
                            src/series_plot_widget.cpp src/series_plot_widget.h
                            src/control_monitor_widget.cpp src/control_monitor_widget.h)
 target_sources(fea PRIVATE src/native_results_widget.cpp src/native_results_widget.h)
+target_sources(fea PRIVATE src/mesh_sensitivity_dialog.cpp src/mesh_sensitivity_dialog.h)
 target_sources(fea PRIVATE src/piezo_workbench_widget.cpp src/piezo_workbench_widget.h)
 if(RANGE_ENABLE_AGENT)
     target_sources(fea PRIVATE src/agent_task_runner.cpp src/agent_task_runner.h
@@ -682,6 +683,17 @@ qt_add_translations(fea
 )
 
 if(RANGE_BUILD_TESTS)
+    qt_add_executable(tst_mesh_sensitivity_dialog
+        tests/tst_mesh_sensitivity_dialog.cpp
+        src/mesh_sensitivity_dialog.cpp src/mesh_sensitivity_dialog.h)
+    set_target_properties(tst_mesh_sensitivity_dialog PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
+    target_include_directories(tst_mesh_sensitivity_dialog PRIVATE src)
+    target_link_libraries(tst_mesh_sensitivity_dialog PRIVATE range-application-lib Qt6::Widgets Qt6::Test)
+    add_dependencies(tst_mesh_sensitivity_dialog fea-solver)
+    add_test(NAME tst_mesh_sensitivity_dialog COMMAND tst_mesh_sensitivity_dialog -o -,txt)
+    set_tests_properties(tst_mesh_sensitivity_dialog PROPERTIES TIMEOUT 90 ENVIRONMENT
+        "QT_QPA_PLATFORM=offscreen;RANGE_MESH_TEST_SOLVER=$<TARGET_FILE:fea-solver>;RANGE_MESH_TEST_ARTIFACTS=${CMAKE_SOURCE_DIR}/../artifacts/mesh-sensitivity-tests")
+
     qt_add_executable(tst_series_plot_widget tests/tst_series_plot_main.cpp
         tests/tst_series_plot_widget.cpp src/series_plot_widget.cpp src/series_plot_widget.h)
     target_include_directories(tst_series_plot_widget PRIVATE src)

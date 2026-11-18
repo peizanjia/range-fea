@@ -14,6 +14,7 @@ qt_add_library(range-application-lib STATIC
     src/rgeometry_candidate_service.cpp
     include/rgeometry_candidate_service.h)
 target_sources(range-application-lib PRIVATE src/rmesh_candidate_service.cpp include/rmesh_candidate_service.h)
+target_sources(range-application-lib PRIVATE src/rmesh_sensitivity.cpp include/rmesh_sensitivity.h)
 target_sources(range-application-lib PRIVATE src/rmesh_job_service.cpp include/rmesh_job_service.h)
 target_sources(range-application-lib PRIVATE src/rmesh_rebind_service.cpp include/rmesh_rebind_service.h)
 target_sources(range-application-lib PRIVATE src/rtrusted_mechanics_service.cpp include/rtrusted_mechanics_service.h)

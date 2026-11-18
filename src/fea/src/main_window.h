@@ -4,7 +4,9 @@
 #include <QDockWidget>
 #include <QToolBar>
 #include <QMainWindow>
+#include <QHash>
 #include <QLabel>
+#include <QPointer>
 
 #include <rcl_cloud_session_manager.h>
 
@@ -26,6 +28,7 @@ class RAgentEvaluationCaptureStore;
 #endif
 
 class RProgressBar;
+class MeshSensitivityDialog;
 
 class MainWindow : public QMainWindow
 {
@@ -64,6 +67,9 @@ class MainWindow : public QMainWindow
         QWidget *materialTab;
         //! Results manager tab.
         QWidget *resultsTab;
+        QPointer<MeshSensitivityDialog> meshSensitivity;
+        QHash<QString,quint64> attachedResultRevisions;
+        void openMeshSensitivity();
         //! Central tab widget.
         CentralTabWidget *centralTabWidget;
         //! Model manager.

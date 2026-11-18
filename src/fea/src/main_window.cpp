@@ -11,6 +11,10 @@
 #include <QSet>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QDir>
+#include <QPushButton>
+#include <QStandardPaths>
+#include <QScopeGuard>
 
 #include <rbl_error.h>
 #include <rbl_job_manager.h>
@@ -51,6 +55,8 @@
 #include "extension_widget.h"
 #include "model_io.h"
 #include "model_command_host.h"
+#include "application.h"
+#include "mesh_sensitivity_dialog.h"
 
 #if RANGE_ENABLE_AGENT
 namespace
@@ -289,6 +295,14 @@ MainWindow::MainWindow(Session *session,
     this->materialTab = this->createMaterialTab();
     solverDockTabWidget->addTab(scrollable(this->materialTab, "materialTabScroll"),tr("Material"));
 
+    connect(session, &Session::solverResultAvailable, this,
+            [this](const QString &document, quint64, const QString &, bool attached) {
+        if (!attached || !this->session->trylock()) return;
+        const auto unlock = qScopeGuard([this] { this->session->unlock(); });
+        const uint id = this->session->findModelByCommandIdentity(document);
+        if (id != RConstants::eod)
+            attachedResultRevisions.insert(document, this->session->modelCommandStamp(id).second);
+    });
     this->resultsTab = this->createResultsTab();
     solverDockTabWidget->addTab(scrollable(this->resultsTab, "resultsTabScroll"),tr("Results"));
     auto *controlDock = new QDockWidget(tr("Dynamics & control"), this);
@@ -986,9 +1000,15 @@ QWidget *MainWindow::createResultsTab()
     ResultsVariableSelector *resultsComboBox = new ResultsVariableSelector;
 
     gridLayout->addWidget(resultsComboBox,0,0,1,1);
+    auto *meshStudy = new QPushButton(tr("Mesh sensitivity…"), layoutResults);
+    meshStudy->setObjectName(QStringLiteral("openMeshSensitivity"));
+    meshStudy->setToolTip(tr("Review a solved model and compare one refined mesh when needed."));
+    gridLayout->addWidget(meshStudy,0,1,1,1);
+    gridLayout->setColumnStretch(0,1);
+    connect(meshStudy, &QPushButton::clicked, this, &MainWindow::openMeshSensitivity);
 
     ResultsVariableTree *treeResultsVariable = new ResultsVariableTree;
-    gridLayout->addWidget(treeResultsVariable,1,0,1,1);
+    gridLayout->addWidget(treeResultsVariable,1,0,1,2);
 
     QObject::connect(resultsComboBox,
                      &ResultsVariableSelector::resultsVariableSelected,
@@ -996,6 +1016,86 @@ QWidget *MainWindow::createResultsTab()
                      &ResultsVariableTree::onResultsVariableSelected);
 
     return layoutResults;
+}
+
+void MainWindow::openMeshSensitivity()
+{
+    if (ModelCommandHost::isMutationBlocked() || !session->trylock())
+    {
+        QMessageBox::information(this, tr("Mesh sensitivity"), tr("Wait for the current model operation to finish."));
+        return;
+    }
+    auto unlock = qScopeGuard([this] { session->unlock(); });
+    const auto selected = session->getSelectedModelIDs();
+    if (selected.size() != 1)
+    {
+        session->unlock();
+        unlock.dismiss();
+        QMessageBox::information(this, tr("Mesh sensitivity"), tr("Select one model in the Results panel."));
+        return;
+    }
+    const auto stamp = session->modelCommandStamp(selected.first());
+    if (stamp.first.isEmpty()) return;
+    if (meshSensitivity && !meshSensitivity->belongsTo(stamp) && !meshSensitivity->isRunning())
+    {
+        meshSensitivity->hide();
+        meshSensitivity->deleteLater();
+        meshSensitivity.clear();
+    }
+    if (meshSensitivity)
+    {
+        session->unlock();
+        unlock.dismiss();
+    }
+    else
+    {
+        const auto &model = session->getModel(selected.first());
+        const auto binding = model.getLoadedSourceBinding();
+        const RModel source(model);
+        const QString project = session->projectWorkspace();
+        session->unlock();
+        unlock.dismiss();
+        const bool knownResult = attachedResultRevisions.contains(stamp.first) &&
+                                 attachedResultRevisions.value(stamp.first) == stamp.second;
+        const bool verified = knownResult || (binding && MeshSensitivityDialog::hasNativeCompletion(
+            binding->resolvedSourcePath, binding->savedArtifactHash) && MeshSensitivityDialog::matchesSolvedSnapshot(
+            source, binding->resolvedSourcePath, binding->savedArtifactHash));
+        const QString location = project.isEmpty()
+            ? QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) : project;
+        const QString artifactRoot = location.isEmpty() ? QString() : QDir(location).filePath(QStringLiteral(".range-runs"));
+        auto current = [this, stamp] {
+            if (ModelCommandHost::isMutationBlocked() || !session->trylock()) return false;
+            const auto guard = qScopeGuard([this] { session->unlock(); });
+            const uint id = session->findModelByCommandIdentity(stamp.first);
+            return id != RConstants::eod && session->modelCommandStamp(id) == stamp &&
+                   !session->hasDocumentDraft(id);
+        };
+#if RANGE_ENABLE_AGENT
+        auto *dock = findChild<QDockWidget *>(QStringLiteral("agentDock"));
+        QPointer<AgentWidget> assistant = dock ? qobject_cast<AgentWidget *>(dock->widget()) : nullptr;
+        const bool canAsk = assistant && assistant->isEnabled();
+#else
+        const bool canAsk = false;
+#endif
+        const QString solver = Application::instance()->getApplicationSettings()->getSolverPath();
+        meshSensitivity = new MeshSensitivityDialog(source, solver, artifactRoot, stamp.first,
+                                                     stamp.second, current, canAsk, this, verified);
+        connect(session, &Session::modelChanged, meshSensitivity, &MeshSensitivityDialog::refresh);
+        connect(session, &Session::modelRemoved, meshSensitivity, &MeshSensitivityDialog::refresh);
+        connect(session, &Session::modelAdded, meshSensitivity, &MeshSensitivityDialog::refresh);
+        connect(meshSensitivity, &MeshSensitivityDialog::openResultRequested, this, [](const QString &path) {
+            RJobManager::getInstance().submit(new ModelIO(MODEL_IO_OPEN, path));
+        });
+#if RANGE_ENABLE_AGENT
+        connect(meshSensitivity, &MeshSensitivityDialog::reviewRequested, this, [assistant](const QString &question) {
+            if (assistant && assistant->isEnabled()) assistant->startReadOnlyQuestion(question);
+        });
+#endif
+    }
+    meshSensitivity->refresh();
+    meshSensitivity->show();
+    meshSensitivity->raise();
+    meshSensitivity->activateWindow();
 }
 
 QMenu * MainWindow::createPopupMenu ()
