@@ -4,6 +4,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -16,6 +17,8 @@
 #include <cmath>
 #include <rbl_error.h>
 #include <rsolver.h>
+#include <rmesh_adaptivity.h>
+#include <rmesh_sensitivity.h>
 #include "mesh_sensitivity_dialog.h"
 
 namespace {
@@ -64,6 +67,12 @@ RModel strip(bool triangular = false)
     surface.setMaterial(material);
     surface.setThickness(thickness);
     surface.setStructuralFormulation(RElementFormulation::PlaneStress);
+    // The patch-test oracle has no body load; do not rely on gravity defaults.
+    REnvironmentCondition gravity(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+    gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_X)).add(0, 0);
+    gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_Y)).add(0, 0);
+    gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_Z)).add(0, 0);
+    surface.addEnvironmentCondition(gravity);
     // Component constraints leave axial extension free over the entire strip.
     RBoundaryCondition lateral(R_BOUNDARY_CONDITION_DISPLACEMENT);
     lateral.getComponent(lateral.findComponentPosition(R_VARIABLE_DISPLACEMENT_X)).setEnabled(false);
@@ -383,6 +392,294 @@ private slots:
         QCOMPARE(source.getNElements(), 6u);
     }
 
+    void constantStrainAdaptiveEstimateNeedsNoSolve()
+    {
+        RModel source = strip(true);
+        try { RSolver native(source, QString(), QString()); native.run(); }
+        catch (const RError &error) { QFAIL(qPrintable(error.getMessage())); }
+        const auto estimate = RMeshAdaptivity::estimate(source, 0.5);
+        QVERIFY(std::isfinite(estimate.relativeError));
+        QVERIFY2(estimate.relativeError < 1e-8,
+                 qPrintable(QString("Constant-strain relative error: %1").arg(estimate.relativeError, 0, 'g', 15)));
+        QTemporaryDir artifacts(artifactRoot + "/adaptive-affine-XXXXXX");
+        QVERIFY(artifacts.isValid());
+        MeshSensitivityDialog dialog(source, solver, artifacts.path(), "adaptive-affine", 1,
+                                     [] { return true; }, true);
+        dialog.show();
+        QTest::qWait(50);
+        QVERIFY(!dialog.isRunning());
+        QVERIFY(QDir(artifacts.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+        QVERIFY(dialog.startAdaptive(0.1));
+        QTest::qWait(50);
+        QVERIFY(!dialog.isRunning());
+        const auto receipt = readJson(studyPath(artifacts.path()) + "/study.json");
+        QVERIFY(receipt.value("attempts").toArray().isEmpty());
+        QCOMPARE(receipt.value("levels").toArray().size(), 1);
+        const auto adaptive = receipt.value("adaptive").toObject();
+        QCOMPARE(adaptive.value("status").toString(), "converged");
+        QCOMPARE(adaptive.value("tolerancePercent").toDouble(), 0.1);
+        QCOMPARE(adaptive.value("estimates").toArray().size(), 1);
+
+        QVERIFY(dialog.startAdaptive(0.05));
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog.isRunning(), 10000);
+        const auto reassessed = readJson(studyPath(artifacts.path()) + "/study.json");
+        const auto newReview = reassessed.value("adaptive").toObject();
+        QCOMPARE(newReview.value("status").toString(), "converged");
+        QCOMPARE(newReview.value("tolerancePercent").toDouble(), 0.05);
+        const auto history = newReview.value("previousReviews").toArray();
+        QCOMPARE(history.size(), 1);
+        QCOMPARE(history.first().toObject().value("tolerancePercent").toDouble(), 0.1);
+        QVERIFY(reassessed.value("attempts").toArray().isEmpty());
+        if (qEnvironmentVariableIsSet("RANGE_MESH_CAPTURE_DIALOG"))
+            QVERIFY(dialog.grab().save(artifactRoot + "/adaptive-dialog.png"));
+        auto *accept = dialog.findChild<QPushButton *>("meshSensitivityAccept");
+        QVERIFY(accept->isEnabled());
+        QTest::mouseClick(accept, Qt::LeftButton);
+        const auto accepted = readJson(studyPath(artifacts.path()) + "/study.json");
+        QCOMPARE(accepted.value("status").toString(), "accepted_with_adaptive_estimate");
+        QVERIFY(accepted.value("attempts").toArray().isEmpty());
+    }
+
+    void fullyPrescribedGravityHasZeroFreeResidualAndNoAdaptiveSolve()
+    {
+        RModel source = strip(true);
+        auto &surface = source.getSurface(0);
+        auto &fixed = surface.getBoundaryCondition(R_BOUNDARY_CONDITION_DISPLACEMENT);
+        auto &x = fixed.getComponent(fixed.findComponentPosition(R_VARIABLE_DISPLACEMENT_X));
+        x.setEnabled(true);
+        x.add(0, 0);
+        auto &gravity = surface.getEnvironmentCondition(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+        gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_X)).add(0, 9.81);
+        gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_Y)).add(0, -9.81);
+        source.getLine(1).removeBoundaryCondition(R_BOUNDARY_CONDITION_FORCE);
+        try { RSolver native(source, QString(), QString()); native.run(); }
+        catch (const RError &error) { QFAIL(qPrintable(error.getMessage())); }
+        const auto estimate = RMeshAdaptivity::estimate(source, 0.5);
+        QCOMPARE(estimate.strainEnergy, 0.0);
+        QCOMPARE(estimate.relativeError, 0.0);
+        QCOMPARE(estimate.indicatorEnergy, 0.0);
+        QVERIFY(estimate.markedElements.empty());
+        QTemporaryDir artifacts(artifactRoot + "/adaptive-prescribed-XXXXXX");
+        QVERIFY(artifacts.isValid());
+        MeshSensitivityDialog dialog(source, solver, artifacts.path(), "adaptive-prescribed", 1,
+                                     [] { return true; }, true);
+        dialog.show();
+        QVERIFY(dialog.startAdaptive(0.1));
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog.isRunning(), 10000);
+        const auto receipt = readJson(studyPath(artifacts.path()) + "/study.json");
+        QCOMPARE(receipt.value("adaptive").toObject().value("status").toString(), "converged");
+        QVERIFY(receipt.value("attempts").toArray().isEmpty());
+        QCOMPARE(receipt.value("levels").toArray().size(), 1);
+    }
+
+    void materialInterfaceWithBalancedTractionHasNoResidual()
+    {
+        RModel source = strip(true);
+        // Two axial segments have different strains but continuous normal traction.
+        // A displacement-gradient jump at this interface is therefore not an error.
+        RSurface second = source.getSurface(0);
+        second.resize(0);
+        second.add(2);
+        second.add(3);
+        RMaterial softer = second.getMaterial();
+        RMaterialProperty elastic(RMaterialProperty::ModulusOfElasiticity);
+        elastic.add(293.15, modulus / 2);
+        softer.add(elastic);
+        second.setMaterial(softer);
+        source.getSurface(0).resize(2);
+        source.addSurface(second);
+        try { RSolver native(source, QString(), QString()); native.run(); }
+        catch (const RError &error) { QFAIL(qPrintable(error.getMessage())); }
+        const uint displacement = source.findVariable(R_VARIABLE_DISPLACEMENT);
+        QVERIFY(displacement != RConstants::eod);
+        const auto &values = source.getVariable(displacement);
+        const double unitStrain = force / (modulus * width * thickness);
+        QVERIFY(std::abs(values.getValue(0, 2) - unitStrain) < 1e-12);
+        QVERIFY(std::abs(values.getValue(0, 4) - 3 * unitStrain) < 1e-12);
+        const auto estimate = RMeshAdaptivity::estimate(source, 0.5);
+        QVERIFY(std::isfinite(estimate.relativeError));
+        QVERIFY2(estimate.relativeError < 1e-8,
+                 qPrintable(QString("Balanced interface relative error: %1").arg(estimate.relativeError, 0, 'g', 15)));
+    }
+
+    void tangentialStressJumpAcrossMaterialInterfaceHasNoResidual()
+    {
+        RModel source = strip(true);
+        for (uint layer = 0; layer < 3; ++layer)
+            for (uint side = 0; side < 2; ++side)
+                source.setNode(2 * layer + side, RNode(side * length, layer * width / 2, 0));
+        source.setElement(0, element(R_ELEMENT_TRI1, {0, 1, 3}), false);
+        source.setElement(1, element(R_ELEMENT_TRI1, {0, 3, 2}), false);
+        source.setElement(2, element(R_ELEMENT_TRI1, {2, 3, 5}), false);
+        source.setElement(3, element(R_ELEMENT_TRI1, {2, 5, 4}), false);
+        RSurface upper = source.getSurface(0);
+        upper.resize(0);
+        upper.add(2);
+        upper.add(3);
+        RMaterial softer = upper.getMaterial();
+        RMaterialProperty elastic(RMaterialProperty::ModulusOfElasiticity);
+        elastic.add(293.15, modulus / 2);
+        softer.add(elastic);
+        upper.setMaterial(softer);
+        source.getSurface(0).resize(2);
+        source.addSurface(upper);
+        source.setElement(4, element(R_ELEMENT_TRUSS1, {0, 2}), false);
+        source.addElement(element(R_ELEMENT_TRUSS1, {2, 4}), true, 0);
+        source.setElement(5, element(R_ELEMENT_TRUSS1, {1, 3}), false);
+        source.addElement(element(R_ELEMENT_TRUSS1, {3, 5}), true, 2);
+        source.getLine(2).setCrossArea(0);
+        RBoundaryCondition upperLoad = source.getLine(1).getBoundaryCondition(R_BOUNDARY_CONDITION_FORCE);
+        upperLoad.getComponent(upperLoad.findComponentPosition(R_VARIABLE_FORCE_X)).add(0, force / 2);
+        source.getLine(2).addBoundaryCondition(upperLoad);
+        try { RSolver native(source, QString(), QString()); native.run(); }
+        catch (const RError &error) { QFAIL(qPrintable(error.getMessage())); }
+        const uint displacement = source.findVariable(R_VARIABLE_DISPLACEMENT);
+        QVERIFY(displacement != RConstants::eod);
+        const double strain = force / (modulus * (width / 2) * thickness);
+        for (uint n = 0; n < source.getNNodes(); ++n)
+            QVERIFY(std::abs(source.getVariable(displacement).getValue(0, n) - strain * source.getNode(n).getX()) < 1e-12);
+        // sigma_x differs by two across the horizontal interface, while the
+        // normal traction (sigma_xy, sigma_y) is zero on both sides.
+        const auto estimate = RMeshAdaptivity::estimate(source, 0.5);
+        QVERIFY(std::isfinite(estimate.relativeError));
+        QVERIFY2(estimate.relativeError < 1e-8,
+                 qPrintable(QString("Tangential stress-jump relative error: %1").arg(estimate.relativeError, 0, 'g', 15)));
+    }
+
+    void cancelQueuedAdaptivePassLaunchesNoSolver()
+    {
+        RModel source = strip(true);
+        auto &gravity = source.getSurface(0).getEnvironmentCondition(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+        gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_X)).add(0, 981000.0);
+        try { RSolver native(source, QString(), QString()); native.run(); }
+        catch (const RError &error) { QFAIL(qPrintable(error.getMessage())); }
+        QTemporaryDir artifacts(artifactRoot + "/adaptive-cancel-XXXXXX");
+        QVERIFY(artifacts.isValid());
+        MeshSensitivityDialog dialog(source, solver, artifacts.path(), "adaptive-cancel", 1,
+                                     [] { return true; }, true);
+        dialog.show();
+        QVERIFY(dialog.startAdaptive(1e-5));
+        QVERIFY(dialog.isRunning());
+        auto *cancel = dialog.findChild<QPushButton *>("meshSensitivityCancel");
+        QVERIFY(cancel->isVisible());
+        // Invoke cancellation before the queued estimator/refinement callback.
+        cancel->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog.isRunning(), 10000);
+        QTest::qWait(50);
+        const auto receipt = readJson(studyPath(artifacts.path()) + "/study.json");
+        QCOMPARE(receipt.value("adaptive").toObject().value("status").toString(), "cancelled");
+        QVERIFY(receipt.value("attempts").toArray().isEmpty());
+        QCOMPARE(receipt.value("levels").toArray().size(), 1);
+        QCOMPARE(source.getNElements(), 6u);
+    }
+
+    void gravityAdaptiveLoopPreservesPhysicalLoad()
+    {
+        RModel source = strip(true);
+        constexpr double gravityX = 981000.0;
+        constexpr double densityValue = 7800.0;
+        auto &gravity = source.getSurface(0).getEnvironmentCondition(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+        gravity.getComponent(gravity.findComponentPosition(R_VARIABLE_G_ACCELERATION_X)).add(0, gravityX);
+        try { RSolver native(source, QString(), QString()); native.run(); }
+        catch (const RError &error) { QFAIL(qPrintable(error.getMessage())); }
+        const auto initial = RMeshAdaptivity::estimate(source, 0.5);
+        QVERIFY(std::isfinite(initial.relativeError));
+        QVERIFY(initial.relativeError > 1e-6);
+        QVERIFY(!initial.markedElements.empty());
+        QCOMPARE(RMeshAdaptivity::estimate(source, 0.5).markedElements, initial.markedElements);
+        QVERIFY_EXCEPTION_THROWN(RMeshSensitivity::refineMarked(source, initial.markedElements,
+                                                                source.getNElements()),
+                                 RMeshSensitivity::RefinementLimit);
+        QVERIFY_EXCEPTION_THROWN(RMeshSensitivity::refineMarked(source, initial.markedElements, 1000u, length),
+                                 RMeshSensitivity::RefinementLimit);
+        QTemporaryDir artifacts(artifactRoot + "/adaptive-gravity-XXXXXX");
+        QVERIFY(artifacts.isValid());
+        MeshSensitivityDialog dialog(source, solver, artifacts.path(), "adaptive-gravity", 1,
+                                     [] { return true; }, true);
+        dialog.show();
+        const double tolerancePercent = 1e-5;
+        QVERIFY(dialog.startAdaptive(tolerancePercent));
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog.isRunning(), 120000);
+        // A finished solve may queue the next pass through the event loop.
+        QTRY_VERIFY_WITH_TIMEOUT(
+            readJson(studyPath(artifacts.path()) + "/study.json").value("adaptive").toObject()
+                .value("status").toString() != "running", 120000);
+        const QString directory = studyPath(artifacts.path());
+        const auto receipt = readJson(directory + "/study.json");
+        const auto attempts = receipt.value("attempts").toArray();
+        QVERIFY(!attempts.isEmpty());
+        QVERIFY(attempts.size() <= MeshSensitivityDialog::maximumAttempts);
+        const auto adaptive = receipt.value("adaptive").toObject();
+        const QString status = adaptive.value("status").toString();
+        QVERIFY2(status == "converged" || status == "budget" || status == "stagnated",
+                 qPrintable(QString::fromUtf8(QJsonDocument(receipt).toJson())));
+        QCOMPARE(adaptive.value("tolerancePercent").toDouble(), tolerancePercent);
+        const auto estimates = adaptive.value("estimates").toArray();
+        QCOMPARE(estimates.size(), attempts.size() + 1);
+        for (const auto &entry : estimates)
+        {
+            const auto estimate = entry.toObject();
+            QVERIFY(estimate.value("relativeError").isDouble());
+            QVERIFY(std::isfinite(estimate.value("relativeError").toDouble()));
+            QVERIFY(estimate.value("relativeError").toDouble() >= 0);
+        }
+        QVERIFY(estimates.first().toObject().value("markedCount").toInt() > 0);
+        QVERIFY2(estimates.last().toObject().value("relativeError").toDouble() < initial.relativeError
+                     || status == "budget", qPrintable("Estimator neither decreased nor exhausted the documented budget"));
+        if (status == "converged")
+            QVERIFY(100 * estimates.last().toObject().value("relativeError").toDouble() <= tolerancePercent);
+        if (status == "budget") QCOMPARE(attempts.size(), MeshSensitivityDialog::maximumAttempts);
+        for (const auto &entry : attempts)
+        {
+            const auto attempt = entry.toObject();
+            QCOMPARE(attempt.value("scope").toString(), "adaptive");
+            QCOMPARE(attempt.value("status").toString(), "complete");
+            const QString attemptDirectory = directory + "/" + attempt.value("directory").toString();
+            RModel candidate, result;
+            candidate.read(attemptDirectory + "/candidate.rbm");
+            result.read(attemptDirectory + "/run-00000.rbm");
+            QVERIFY(candidate.getNElements() > source.getNElements());
+            QVERIFY(candidate.getNElements() <= MeshSensitivityDialog::maximumElements);
+            QCOMPARE(result.getNElements(), candidate.getNElements());
+            const auto finalEstimate = RMeshAdaptivity::estimate(result, 0.5);
+            QVERIFY(std::isfinite(finalEstimate.relativeError));
+            double boundaryForce = 0;
+            for (uint g = 0; g < candidate.getNLines(); ++g)
+            {
+                const auto &line = candidate.getLine(g);
+                if (!line.hasBoundaryCondition(R_BOUNDARY_CONDITION_FORCE)) continue;
+                const auto &load = line.getBoundaryCondition(R_BOUNDARY_CONDITION_FORCE);
+                boundaryForce += line.size() * load.getComponent(load.findComponentPosition(R_VARIABLE_FORCE_X)).getValue(0);
+            }
+            QVERIFY(std::abs(boundaryForce - force) < 1e-9);
+            double bodyForce = 0;
+            for (uint g = 0; g < candidate.getNSurfaces(); ++g)
+            {
+                const auto &surface = candidate.getSurface(g);
+                const auto &material = surface.getMaterial();
+                const double rho = material.get(material.findPosition(RMaterialProperty::Density)).getValue(0);
+                const auto &condition = surface.getEnvironmentCondition(R_ENVIRONMENT_CONDITION_G_ACCELERATION);
+                const double acceleration = condition.getComponent(condition.findComponentPosition(R_VARIABLE_G_ACCELERATION_X)).getValue(0);
+                for (uint i = 0; i < surface.size(); ++i)
+                {
+                    const auto &cell = candidate.getElement(surface.get(i));
+                    QCOMPARE(cell.getType(), R_ELEMENT_TRI1);
+                    const auto &a = candidate.getNode(cell.getNodeId(0));
+                    const auto &b = candidate.getNode(cell.getNodeId(1));
+                    const auto &c = candidate.getNode(cell.getNodeId(2));
+                    const double area = 0.5 * std::abs((b.getX() - a.getX()) * (c.getY() - a.getY())
+                        - (b.getY() - a.getY()) * (c.getX() - a.getX()));
+                    bodyForce += area * surface.getThickness() * rho * acceleration;
+                }
+            }
+            const double expectedBodyForce = length * width * thickness * densityValue * gravityX;
+            QVERIFY(std::abs(bodyForce - expectedBodyForce) < 1e-8 * expectedBodyForce);
+            QVERIFY(std::abs(boundaryForce + bodyForce - (force + expectedBodyForce)) < 1e-8 * expectedBodyForce);
+        }
+        QCOMPARE(source.getNNodes(), 6u);
+        QCOMPARE(source.getNElements(), 6u);
+    }
+
     void changedLoadsRequireABaselineSolve()
     {
         QTemporaryDir artifacts(artifactRoot + "/baseline-XXXXXX");
@@ -434,6 +731,101 @@ private slots:
         const auto receipt = readJson(studyPath(artifacts.path()) + "/study.json");
         QCOMPARE(receipt.value("levels").toArray().size(), 1);
         QCOMPARE(receipt.value("attempts").toArray().first().toObject().value("status").toString(), "cancelled");
+    }
+
+    void courseworkAdaptiveVersusGlobalWhenProvided()
+    {
+        const QString path = qEnvironmentVariable("RANGE_MESH_COURSEWORK_RESULT");
+        if (path.isEmpty()) QSKIP("Set RANGE_MESH_COURSEWORK_RESULT for the real adaptive/global benchmark.");
+        RModel source;
+        source.read(path);
+        const QString unsupported = RMeshAdaptivity::eligibility(source);
+        if (!unsupported.isEmpty()) QSKIP(qPrintable(unsupported));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString digest = QString::fromLatin1(QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256).toHex());
+        QVERIFY(MeshSensitivityDialog::hasNativeCompletion(path, digest));
+        QVERIFY(MeshSensitivityDialog::matchesSolvedSnapshot(source, path, digest));
+        const auto initial = RMeshAdaptivity::estimate(source, 0.5);
+        QVERIFY(std::isfinite(initial.relativeError));
+        if (initial.relativeError <= 0) QSKIP("The supplied coursework baseline has no residual to refine.");
+        QTemporaryDir artifacts(artifactRoot + "/coursework-adaptive-global-XXXXXX");
+        QVERIFY(artifacts.isValid());
+        if (qEnvironmentVariableIsSet("RANGE_MESH_KEEP_COURSEWORK")) artifacts.setAutoRemove(false);
+        QVERIFY(QDir().mkpath(artifacts.path() + "/adaptive"));
+        QVERIFY(QDir().mkpath(artifacts.path() + "/global"));
+        MeshSensitivityDialog automatic(source, solver, artifacts.path() + "/adaptive", "coursework-adaptive", 1,
+                                        [] { return true; }, true);
+        automatic.show();
+        // Usually 20%; a baseline already below that target still gets one pass.
+        const double targetPercent = std::min(20.0, initial.relativeError * 50.0);
+        QElapsedTimer automaticTimer;
+        automaticTimer.start();
+        QVERIFY(automatic.startAdaptive(targetPercent));
+        QTRY_VERIFY_WITH_TIMEOUT(!automatic.isRunning(), 450000);
+        const qint64 automaticMs = automaticTimer.elapsed();
+        const QString automaticDirectory = studyPath(artifacts.path() + "/adaptive");
+        const auto automaticReceipt = readJson(automaticDirectory + "/study.json");
+        const auto attempts = automaticReceipt.value("attempts").toArray();
+        QVERIFY(!attempts.isEmpty());
+        const auto estimates = automaticReceipt.value("adaptive").toObject().value("estimates").toArray();
+        QCOMPARE(estimates.size(), attempts.size() + 1);
+        QCOMPARE(automaticReceipt.value("levels").toArray().size(), attempts.size() + 1);
+        for (qsizetype i = 0; i < attempts.size(); ++i)
+        {
+            const auto attempt = attempts.at(i).toObject();
+            QCOMPARE(attempt.value("scope").toString(), "adaptive");
+            QCOMPARE(attempt.value("status").toString(), "complete");
+            const QString attemptDirectory = automaticDirectory + "/" + attempt.value("directory").toString();
+            QVERIFY(QFileInfo::exists(attemptDirectory + "/candidate.rbm"));
+            RModel result;
+            result.read(attemptDirectory + "/run-00000.rbm");
+            const auto estimate = RMeshAdaptivity::estimate(result, 0.5);
+            QVERIFY(std::isfinite(estimate.relativeError));
+            const double recorded = estimates.at(i + 1).toObject().value("relativeError").toDouble();
+            QVERIFY(std::abs(recorded - estimate.relativeError) < 1e-10 * std::max(1.0, recorded));
+            qInfo().noquote() << "Coursework adaptive level" << i + 1 << "eta" << estimate.relativeError
+                              << "elements" << result.getNElements() << "nodes" << result.getNNodes();
+        }
+        const QString terminal = automaticReceipt.value("adaptive").toObject().value("status").toString();
+        QVERIFY2(terminal == "converged" || terminal == "budget" || terminal == "stagnated", qPrintable(terminal));
+        qInfo().noquote() << "Coursework adaptive baseline eta" << initial.relativeError << "elements" << source.getNElements()
+                          << "nodes" << source.getNNodes() << "targetPercent" << targetPercent
+                          << "status" << terminal << "totalMs" << automaticMs << "evidence" << automaticDirectory;
+
+        MeshSensitivityDialog global(source, solver, artifacts.path() + "/global", "coursework-global", 1,
+                                     [] { return true; }, true);
+        global.show();
+        auto *scope = global.findChild<QComboBox *>("meshSensitivityScope");
+        QVERIFY(scope);
+        const int globalIndex = scope->findData("global");
+        QVERIFY(globalIndex >= 0);
+        scope->setCurrentIndex(globalIndex);
+        auto *refine = global.findChild<QPushButton *>("meshSensitivityRefine");
+        QVERIFY(refine->isEnabled());
+        QElapsedTimer globalTimer;
+        globalTimer.start();
+        QTest::mouseClick(refine, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!global.isRunning(), 150000);
+        const qint64 globalMs = globalTimer.elapsed();
+        const QString globalDirectory = studyPath(artifacts.path() + "/global");
+        const auto globalReceipt = readJson(globalDirectory + "/study.json");
+        const auto globalAttempts = globalReceipt.value("attempts").toArray();
+        QCOMPARE(globalAttempts.size(), 1);
+        const auto globalAttempt = globalAttempts.first().toObject();
+        QCOMPARE(globalAttempt.value("scope").toString(), "global");
+        QCOMPARE(globalAttempt.value("status").toString(), "complete");
+        QCOMPARE(globalReceipt.value("levels").toArray().size(), 2);
+        RModel globalResult;
+        globalResult.read(globalDirectory + "/" + globalAttempt.value("directory").toString() + "/run-00000.rbm");
+        QVERIFY(globalResult.getNElements() > source.getNElements());
+        const auto globalEstimate = RMeshAdaptivity::estimate(globalResult, 0.5);
+        QVERIFY(std::isfinite(globalEstimate.relativeError));
+        qInfo().noquote() << "Coursework global h/2 eta" << globalEstimate.relativeError
+                          << "elements" << globalResult.getNElements() << "nodes" << globalResult.getNNodes()
+                          << "totalMs" << globalMs << "evidence" << globalDirectory;
+        // The independent global comparison must leave all adaptive evidence intact.
+        QCOMPARE(readJson(automaticDirectory + "/study.json"), automaticReceipt);
     }
 
     void courseworkWhenProvided()

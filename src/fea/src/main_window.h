@@ -70,6 +70,7 @@ class MainWindow : public QMainWindow
         QPointer<MeshSensitivityDialog> meshSensitivity;
         QHash<QString,quint64> attachedResultRevisions;
         void openMeshSensitivity();
+        bool showMeshSensitivity(const QPair<QString,quint64> &requested, double adaptivePercent);
         //! Central tab widget.
         CentralTabWidget *centralTabWidget;
         //! Model manager.
@@ -96,6 +97,9 @@ class MainWindow : public QMainWindow
 
         //! Show transform geometry dock widget.
         void showTransformGeometryWidget();
+
+        //! Start an explicitly selected adaptive static study on a frozen document revision.
+        bool startAdaptiveMeshStudy(const QPair<QString,quint64> &document, double tolerancePercent);
 
         //! Hide transform geometry dock widget.
         void hideTransformGeometryWidget();

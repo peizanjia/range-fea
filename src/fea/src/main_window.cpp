@@ -1020,22 +1020,35 @@ QWidget *MainWindow::createResultsTab()
 
 void MainWindow::openMeshSensitivity()
 {
+    showMeshSensitivity({}, 0.0);
+}
+
+bool MainWindow::startAdaptiveMeshStudy(const QPair<QString,quint64> &document, double tolerancePercent)
+{
+    return showMeshSensitivity(document, tolerancePercent);
+}
+
+bool MainWindow::showMeshSensitivity(const QPair<QString,quint64> &requested, double adaptivePercent)
+{
     if (ModelCommandHost::isMutationBlocked() || !session->trylock())
     {
         QMessageBox::information(this, tr("Mesh sensitivity"), tr("Wait for the current model operation to finish."));
-        return;
+        return false;
     }
     auto unlock = qScopeGuard([this] { session->unlock(); });
-    const auto selected = session->getSelectedModelIDs();
-    if (selected.size() != 1)
+    const auto selected = requested.first.isEmpty() ? session->getSelectedModelIDs() :
+        QList<uint>{session->findModelByCommandIdentity(requested.first)};
+    if (selected.size() != 1 || selected.first() == RConstants::eod)
     {
         session->unlock();
         unlock.dismiss();
         QMessageBox::information(this, tr("Mesh sensitivity"), tr("Select one model in the Results panel."));
-        return;
+        return false;
     }
     const auto stamp = session->modelCommandStamp(selected.first());
-    if (stamp.first.isEmpty()) return;
+    if (stamp.first.isEmpty() || (!requested.first.isEmpty() && stamp != requested)) return false;
+    if (meshSensitivity && !meshSensitivity->belongsTo(stamp) && meshSensitivity->isRunning() && adaptivePercent > 0)
+        return false;
     if (meshSensitivity && !meshSensitivity->belongsTo(stamp) && !meshSensitivity->isRunning())
     {
         meshSensitivity->hide();
@@ -1083,6 +1096,10 @@ void MainWindow::openMeshSensitivity()
         connect(session, &Session::modelChanged, meshSensitivity, &MeshSensitivityDialog::refresh);
         connect(session, &Session::modelRemoved, meshSensitivity, &MeshSensitivityDialog::refresh);
         connect(session, &Session::modelAdded, meshSensitivity, &MeshSensitivityDialog::refresh);
+        connect(session, &Session::documentRevisionChanged, meshSensitivity, &MeshSensitivityDialog::refresh,
+                Qt::QueuedConnection);
+        connect(session, &Session::documentDraftsCleared, meshSensitivity, &MeshSensitivityDialog::refresh,
+                Qt::QueuedConnection);
         connect(meshSensitivity, &MeshSensitivityDialog::openResultRequested, this, [](const QString &path) {
             RJobManager::getInstance().submit(new ModelIO(MODEL_IO_OPEN, path));
         });
@@ -1096,6 +1113,7 @@ void MainWindow::openMeshSensitivity()
     meshSensitivity->show();
     meshSensitivity->raise();
     meshSensitivity->activateWindow();
+    return adaptivePercent <= 0 || meshSensitivity->startAdaptive(adaptivePercent);
 }
 
 QMenu * MainWindow::createPopupMenu ()

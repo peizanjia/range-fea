@@ -5,6 +5,7 @@
 #include <QJsonObject>
 
 class QCheckBox;
+class QDoubleSpinBox;
 
 class SolverStartDialog : public QDialog
 {
@@ -15,6 +16,8 @@ class SolverStartDialog : public QDialog
 
         QJsonObject validation;
         QCheckBox *restartSolverCheck = nullptr;
+        QCheckBox *adaptiveCheck = nullptr;
+        QDoubleSpinBox *adaptiveTolerance = nullptr;
 
     public:
 

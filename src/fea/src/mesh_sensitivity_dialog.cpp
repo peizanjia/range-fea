@@ -27,11 +27,14 @@
 #include <rbl_error.h>
 #include <rml_file_utils.h>
 #include <rmesh_sensitivity.h>
+#include <rmesh_adaptivity.h>
 #include <rmodel_command_service.h>
 
 namespace
 {
 constexpr int solverTimeoutMs = 120000;
+constexpr int adaptiveTotalMs = 180000;
+constexpr double adaptiveMarkingFraction = 0.5;
 
 QString digestOpenedFile(QFile &file)
 {
@@ -225,6 +228,10 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     layout->addWidget(table, 1);
 
+    manualControls = new QWidget(this);
+    auto *manualLayout = new QVBoxLayout(manualControls);
+    manualLayout->setContentsMargins(0,0,0,0);
+    layout->addWidget(manualControls);
     auto *toleranceRow = new QHBoxLayout;
     auto *toleranceLabel = new QLabel(tr("Displacement tolerance"), this);
     tolerance = new QDoubleSpinBox(this);
@@ -238,7 +245,7 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
     toleranceRow->addWidget(toleranceLabel);
     toleranceRow->addWidget(tolerance);
     toleranceRow->addStretch();
-    layout->addLayout(toleranceRow);
+    manualLayout->addLayout(toleranceRow);
 
     auto *optionsButton = new QToolButton(this);
     optionsButton->setText(tr("Refinement options"));
@@ -246,7 +253,7 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
     optionsButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     optionsButton->setArrowType(Qt::RightArrow);
     toleranceRow->addWidget(optionsButton);
-    auto *options = new QWidget(this);
+    auto *options = new QWidget(manualControls);
     auto *optionsLayout = new QHBoxLayout(options);
     optionsLayout->setContentsMargins(0,0,0,0);
     auto *scopeLabel = new QLabel(tr("Refinement area"), options);
@@ -278,7 +285,7 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
     optionsLayout->addWidget(radiusLabel);
     optionsLayout->addWidget(radius);
     optionsLayout->addStretch();
-    layout->addWidget(options);
+    manualLayout->addWidget(options);
     options->hide();
     connect(optionsButton, &QToolButton::toggled, options, &QWidget::setVisible);
     connect(optionsButton, &QToolButton::toggled, this, [optionsButton](bool shown) {
@@ -292,6 +299,11 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
     status->setTextFormat(Qt::PlainText);
     status->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(status);
+    adaptiveSummary = new QLabel(this);
+    adaptiveSummary->setObjectName(QStringLiteral("meshSensitivityAdaptiveSummary"));
+    adaptiveSummary->setWordWrap(true);
+    adaptiveSummary->hide();
+    layout->addWidget(adaptiveSummary);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     refineButton = buttons->addButton(tr("Refine once"), QDialogButtonBox::ActionRole);
@@ -316,13 +328,13 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
     connect(cancelButton, &QPushButton::clicked, this, [this] { stopRefinement(QStringLiteral("cancelled")); });
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     connect(openButton, &QPushButton::clicked, this, [this] {
-        const QString relative = decision.value(QStringLiteral("result")).toString();
-        if (relative.isEmpty()) return;
+        const auto [relative, hash] = openableArtifact();
+        if (relative.isEmpty() || hash.isEmpty()) return;
         const QString path = QDir(studyDirectory).filePath(relative);
         try
         {
-            if (fileDigest(path) != decision.value(QStringLiteral("resultSha256")).toString())
-                throw std::runtime_error("The accepted result artifact changed.");
+            if (fileDigest(path) != hash)
+                throw std::runtime_error("The recorded result artifact changed.");
             emit openResultRequested(path);
         }
         catch (const std::exception &error) { lastMessage = errorMessage(error); refresh(); }
@@ -358,6 +370,7 @@ MeshSensitivityDialog::MeshSensitivityDialog(const RModel &source, QString solve
 MeshSensitivityDialog::~MeshSensitivityDialog()
 {
     if (!pending) return;
+    if (adaptiveActive) adaptiveStatus = QStringLiteral("interrupted");
     disconnect(&process, nullptr, this, nullptr);
     process.kill();
     process.waitForFinished(1000);
@@ -446,12 +459,25 @@ double MeshSensitivityDialog::maximumChange() const
     return change;
 }
 
+QPair<QString,QString> MeshSensitivityDialog::openableArtifact() const
+{
+    if (!decision.isEmpty())
+        return {decision.value(QStringLiteral("result")).toString(), decision.value(QStringLiteral("resultSha256")).toString()};
+    if (!adaptiveActive && !adaptiveStatus.isEmpty() && baselineVerified && !levels.isEmpty())
+    {
+        const auto latest = levels.last().toObject();
+        return {latest.value(QStringLiteral("result")).toString(), latest.value(QStringLiteral("sha256")).toString()};
+    }
+    return {};
+}
+
 QString MeshSensitivityDialog::statusCode() const
 {
     if (!invalidReason.isEmpty()) return QStringLiteral("unavailable");
     if (!sourceCurrent()) return QStringLiteral("stale_source");
     if (pending) return QStringLiteral("running");
     if (!decision.isEmpty()) return decision.value(QStringLiteral("status")).toString();
+    if (!adaptiveStatus.isEmpty()) return QStringLiteral("adaptive_") + adaptiveStatus;
     if (!baselineVerified) return QStringLiteral("unverified_baseline");
     if (levels.size() < 2) return QStringLiteral("no_comparison");
     return maximumChange() <= tolerance->value() ? QStringLiteral("within_tolerance")
@@ -468,9 +494,11 @@ void MeshSensitivityDialog::refresh()
     else if (state == QStringLiteral("unverified_baseline"))
         text = tr("The current settings could not be matched to a solved snapshot. Solve the baseline to continue.");
     else if (state == QStringLiteral("accepted_by_review")) text = tr("Accepted by review without a mesh comparison.");
+    else if (state == QStringLiteral("accepted_with_adaptive_estimate")) text = tr("Accepted. The adaptive energy error estimate met the target.");
     else if (state == QStringLiteral("accepted_with_comparison")) text = tr("Accepted. The last adjacent mesh comparison met the displacement tolerance.");
     else if (state == QStringLiteral("within_tolerance")) text = tr("The last adjacent mesh comparison is within tolerance.");
     else if (state == QStringLiteral("above_tolerance")) text = tr("The last adjacent mesh comparison exceeds tolerance.");
+    else if (state.startsWith(QStringLiteral("adaptive_"))) text = tr("The table compares displacement at fixed points.");
     else text = tr("No mesh comparison yet. You can accept by review or refine once.");
 
     const bool local = refinementScope->currentData().toString() == QStringLiteral("local");
@@ -482,24 +510,62 @@ void MeshSensitivityDialog::refresh()
     if (!lastMessage.isEmpty())
         text += QStringLiteral("\n") + lastMessage;
     status->setText(text);
-    const bool editable = !pending && invalidReason.isEmpty() && sourceCurrent() && decision.isEmpty();
-    refineButton->setEnabled(editable && budget && QFileInfo(solverPath).isExecutable());
+    const bool editable = !pending && !adaptiveActive && invalidReason.isEmpty() && sourceCurrent() && decision.isEmpty();
+    const bool automaticStudy = !adaptiveStatus.isEmpty();
+    if (automaticStudy)
+    {
+        const auto latest = adaptiveEstimates.isEmpty() ? QJsonObject() : adaptiveEstimates.last().toObject();
+        QString summary;
+        if (adaptiveActive) summary = tr("Adaptive review in progress.");
+        else if (adaptiveStatus == QStringLiteral("converged")) summary = tr("Adaptive error estimate met the target.");
+        else if (adaptiveStatus == QStringLiteral("budget")) summary = tr("Adaptive review stopped at a resource limit.");
+        else if (adaptiveStatus == QStringLiteral("stagnated")) summary = tr("Adaptive review stopped because two passes gave too little improvement.");
+        else if (adaptiveStatus == QStringLiteral("cancelled")) summary = tr("Adaptive review cancelled.");
+        else summary = tr("Adaptive review stopped before reaching the target.");
+        if (!latest.isEmpty())
+        {
+            summary += tr(" Estimated energy error: %1% · Target: %2%")
+                .arg(100.0 * latest.value(QStringLiteral("relativeError")).toDouble(), 0, 'g', 4)
+                .arg(adaptiveTolerancePercent, 0, 'g', 4);
+            if (adaptiveActive && latest.value(QStringLiteral("relativeError")).toDouble() > adaptiveTolerancePercent / 100.0)
+                summary += tr(" · Marked triangles: %1").arg(latest.value(QStringLiteral("markedCount")).toInt());
+            if (pending && !attempts.isEmpty())
+                summary += tr(" · Candidate elements: %1").arg(
+                    attempts.last().toObject().value(QStringLiteral("candidateElements")).toInt());
+            const auto leading = latest.value(QStringLiteral("leadingCells")).toArray();
+            QStringList locations;
+            for (const auto &cell : leading)
+            {
+                const auto xy = cell.toObject().value(QStringLiteral("centerM")).toArray();
+                locations.append(tr("(%1, %2)").arg(xy.at(0).toDouble(), 0, 'g', 4).arg(xy.at(1).toDouble(), 0, 'g', 4));
+            }
+            adaptiveSummary->setToolTip(locations.isEmpty() ? QString() :
+                tr("Leading marked triangle centers (m): %1").arg(locations.join(QStringLiteral(", "))));
+        }
+        adaptiveSummary->setText(summary);
+    }
+    adaptiveSummary->setVisible(automaticStudy);
+    manualControls->setVisible(!automaticStudy);
+    refineButton->setVisible(!automaticStudy);
+    refineButton->setEnabled(editable && !automaticStudy && budget && QFileInfo(solverPath).isExecutable());
     refineButton->setToolTip(!baselineVerified ? tr("Solve the current mesh once to verify its baseline.") :
                              local ? tr("Refine around the selected point and solve one detached candidate.")
                                    : tr("Refine the whole mesh and solve one detached candidate."));
     refineButton->setText(!baselineVerified ? tr("Solve baseline") :
                           local ? tr("Refine locally") : tr("Refine whole mesh"));
-    refinementScope->setEnabled(editable && baselineVerified);
-    radius->setEnabled(editable && baselineVerified);
+    refinementScope->setEnabled(editable && baselineVerified && !automaticStudy);
+    radius->setEnabled(editable && baselineVerified && !automaticStudy);
     radiusLabel->setVisible(local);
     radius->setVisible(local);
     reviewButton->setVisible(agentAvailable);
-    reviewButton->setEnabled(agentAvailable && !pending && invalidReason.isEmpty());
+    reviewButton->setEnabled(agentAvailable && !pending && !adaptiveActive && invalidReason.isEmpty());
     acceptButton->setEnabled(editable && baselineVerified && !levels.isEmpty() &&
-                             (levels.size() < 2 || maximumChange() <= tolerance->value()));
-    tolerance->setEnabled(editable);
-    openButton->setVisible(!decision.value(QStringLiteral("result")).toString().isEmpty());
-    cancelButton->setVisible(pending);
+                             (automaticStudy ? adaptiveStatus == QStringLiteral("converged") :
+                              (levels.size() < 2 || maximumChange() <= tolerance->value())));
+    tolerance->setEnabled(editable && !automaticStudy);
+    openButton->setText(decision.isEmpty() ? tr("Open latest result") : tr("Open accepted model"));
+    openButton->setVisible(!openableArtifact().first.isEmpty());
+    cancelButton->setVisible(pending || adaptiveActive);
 
     if (levels.isEmpty()) return;
     const auto values = levels.last().toObject().value(QStringLiteral("points")).toArray();
@@ -551,7 +617,17 @@ QJsonObject MeshSensitivityDialog::evidence(const QString &state) const
         next.insert(QStringLiteral("pointM"), QJsonArray{point[0], point[1], point[2]});
         next.insert(QStringLiteral("radiusM"), radius->value());
     }
-    data.insert(QStringLiteral("proposedRefinement"), next);
+    if (adaptiveStatus.isEmpty())
+        data.insert(QStringLiteral("proposedRefinement"), next);
+    else
+        data.insert(QStringLiteral("adaptive"), QJsonObject{
+            {QStringLiteral("status"), adaptiveStatus},
+            {QStringLiteral("tolerancePercent"), adaptiveTolerancePercent},
+            {QStringLiteral("markingFraction"), adaptiveMarkingFraction},
+            {QStringLiteral("minimumEdgeM"), adaptiveMinimumEdgeM},
+            {QStringLiteral("maximumSeconds"), adaptiveTotalMs / 1000},
+            {QStringLiteral("estimates"), adaptiveEstimates},
+            {QStringLiteral("previousReviews"), adaptiveHistory}});
     return data;
 }
 
@@ -601,18 +677,157 @@ void MeshSensitivityDialog::saveStudy(const QString &state)
         throw std::runtime_error("Could not save the study evidence.");
 }
 
+bool MeshSensitivityDialog::startAdaptive(double tolerancePercent)
+{
+    if (isRunning() || !decision.isEmpty() ||
+        !sourceCurrent() || !std::isfinite(tolerancePercent) || tolerancePercent <= 0 || tolerancePercent > 100)
+        return false;
+    const QString problem = invalidReason.isEmpty() ? RMeshAdaptivity::eligibility(current) : invalidReason;
+    if (!problem.isEmpty())
+    {
+        lastMessage = problem;
+        refresh();
+        return false;
+    }
+    if (!adaptiveStatus.isEmpty())
+    {
+        auto previous = evidence().value(QStringLiteral("adaptive")).toObject();
+        previous.remove(QStringLiteral("previousReviews"));
+        if (adaptiveHistory.size() >= 3) adaptiveHistory.removeFirst();
+        adaptiveHistory.append(previous);
+        adaptiveEstimates = {};
+        adaptiveMarks.clear();
+    }
+    lastMessage.clear();
+    adaptiveTolerancePercent = tolerancePercent;
+    // An automatic pass never deliberately inserts edges below one millionth
+    // of the model span. The current minimum-size limit is recorded per run.
+    const auto &origin = current.getNode(0);
+    double span = 0.0;
+    for (const auto &node : current.getNodes())
+        span = std::max(span, std::hypot(node.getX()-origin.getX(), node.getY()-origin.getY()));
+    adaptiveMinimumEdgeM = span * 1e-6;
+    adaptiveActive = true;
+    adaptiveStatus = QStringLiteral("running");
+    adaptiveClock.start();
+    refresh();
+    QTimer::singleShot(0, this, &MeshSensitivityDialog::advanceAdaptive);
+    return true;
+}
+
+void MeshSensitivityDialog::advanceAdaptive()
+{
+    if (!adaptiveActive || pending) return;
+    if (!sourceCurrent())
+    {
+        finishAdaptive(QStringLiteral("stale_source"));
+        return;
+    }
+    if (adaptiveClock.elapsed() >= adaptiveTotalMs)
+    {
+        finishAdaptive(QStringLiteral("budget"), tr("The adaptive time budget has been reached."));
+        return;
+    }
+    try
+    {
+        if (baselineVerified)
+        {
+            const auto estimate = RMeshAdaptivity::estimate(current, adaptiveMarkingFraction);
+            QJsonArray leadingCells;
+            for (size_t i = 0; i < std::min<size_t>(estimate.markedElements.size(), 6); ++i)
+            {
+                const uint id = estimate.markedElements[i];
+                const auto &cell = current.getElement(id);
+                double x = 0.0, y = 0.0;
+                for (uint j = 0; j < 3; ++j)
+                {
+                    const auto &node = current.getNode(cell.getNodeId(j));
+                    x += node.getX() / 3.0;
+                    y += node.getY() / 3.0;
+                }
+                leadingCells.append(QJsonObject{{QStringLiteral("elementPhysicalId"), double(current.getElementPhysicalId(id))},
+                                               {QStringLiteral("centerM"), QJsonArray{x,y}}});
+            }
+            adaptiveEstimates.append(QJsonObject{
+                {QStringLiteral("level"), int(levels.size()-1)},
+                {QStringLiteral("leadingCells"), leadingCells},
+                {QStringLiteral("relativeError"), estimate.relativeError},
+                {QStringLiteral("indicatorEnergy"), estimate.indicatorEnergy},
+                {QStringLiteral("strainEnergy"), estimate.strainEnergy},
+                {QStringLiteral("markedCount"), int(estimate.markedElements.size())},
+                {QStringLiteral("elements"), int(current.getNElements())}});
+            if (estimate.relativeError <= adaptiveTolerancePercent / 100.0)
+            {
+                finishAdaptive(QStringLiteral("converged"));
+                return;
+            }
+            if (adaptiveEstimates.size() >= 3)
+            {
+                const qsizetype n = adaptiveEstimates.size();
+                const auto relativeAt = [this](qsizetype i) {
+                    return adaptiveEstimates.at(i).toObject().value(QStringLiteral("relativeError")).toDouble();
+                };
+                if (relativeAt(n-1) >= 0.98 * relativeAt(n-2) && relativeAt(n-2) >= 0.98 * relativeAt(n-3))
+                {
+                    finishAdaptive(QStringLiteral("stagnated"));
+                    return;
+                }
+            }
+            adaptiveMarks = estimate.markedElements;
+        }
+        if (attempts.size() >= maximumAttempts || current.getNElements() > maximumElements)
+        {
+            finishAdaptive(QStringLiteral("budget"));
+            return;
+        }
+        if (!QFileInfo(solverPath).isExecutable())
+        {
+            finishAdaptive(QStringLiteral("failed"), tr("The solver executable is unavailable."));
+            return;
+        }
+        refineOnce();
+    }
+    catch (const RError &error) { finishAdaptive(QStringLiteral("failed"), error.getMessage()); }
+    catch (const std::exception &error) { finishAdaptive(QStringLiteral("failed"), errorMessage(error)); }
+}
+
+void MeshSensitivityDialog::finishAdaptive(const QString &outcome, const QString &message)
+{
+    adaptiveActive = false;
+    adaptiveStatus = outcome;
+    if (!message.isEmpty()) lastMessage = message;
+    try
+    {
+        ensureStudyDirectory();
+        saveStudy();
+    }
+    catch (const RError &error) { lastMessage = error.getMessage(); }
+    catch (const std::exception &error) { lastMessage = errorMessage(error); }
+    refresh();
+}
+
 void MeshSensitivityDialog::refineOnce()
 {
-    if (!refineButton->isEnabled() || pending || !sourceCurrent()) return;
+    if ((!adaptiveActive && !refineButton->isEnabled()) || pending) return;
+    if (!sourceCurrent())
+    {
+        if (adaptiveActive) finishAdaptive(QStringLiteral("stale_source"));
+        return;
+    }
     lastMessage.clear();
     try
     {
-        const QString scope = baselineVerified ? refinementScope->currentData().toString() : QStringLiteral("baseline");
+        const QString scope = !baselineVerified ? QStringLiteral("baseline") :
+            adaptiveActive ? QStringLiteral("adaptive") : refinementScope->currentData().toString();
         const RR3Vector point = scope == QStringLiteral("local")
             ? positions.at(size_t(std::max(0, table->currentRow()))) : RR3Vector();
-        RModel candidate = scope == QStringLiteral("baseline") ? current :
-            scope == QStringLiteral("local") ? RMeshSensitivity::refineLocal(current, point, radius->value(), maximumElements)
-                                             : RMeshSensitivity::refine(current, maximumElements);
+        RModel candidate;
+        if (scope == QStringLiteral("baseline")) candidate = current;
+        else if (scope == QStringLiteral("adaptive"))
+            candidate = RMeshSensitivity::refineMarked(current, adaptiveMarks, maximumElements, adaptiveMinimumEdgeM);
+        else if (scope == QStringLiteral("local"))
+            candidate = RMeshSensitivity::refineLocal(current, point, radius->value(), maximumElements);
+        else candidate = RMeshSensitivity::refine(current, maximumElements);
         candidate.removeAllVariables();
         const QString problem = RMeshSensitivity::eligibility(candidate);
         if (!problem.isEmpty()) throw std::runtime_error(problem.toStdString());
@@ -631,12 +846,19 @@ void MeshSensitivityDialog::refineOnce()
         QJsonObject attempt{{QStringLiteral("directory"), levelName},
                             {QStringLiteral("inputSha256"), fileDigest(input)},
                             {QStringLiteral("scope"), scope},
+                            {QStringLiteral("candidateElements"), int(candidate.getNElements())},
+                            {QStringLiteral("candidateNodes"), int(candidate.getNNodes())},
                             {QStringLiteral("startedUtc"), timestamp()},
                             {QStringLiteral("status"), QStringLiteral("running")}};
         if (scope == QStringLiteral("local"))
         {
             attempt.insert(QStringLiteral("pointM"), QJsonArray{point[0], point[1], point[2]});
             attempt.insert(QStringLiteral("radiusM"), radius->value());
+        }
+        if (adaptiveActive && adaptiveClock.elapsed() >= adaptiveTotalMs)
+        {
+            finishAdaptive(QStringLiteral("budget"), tr("The adaptive time budget has been reached."));
+            return;
         }
         attempts.append(attempt);
         pending = true;
@@ -646,10 +868,20 @@ void MeshSensitivityDialog::refineOnce()
         process.setWorkingDirectory(levelDirectory);
         process.setProcessChannelMode(QProcess::MergedChannels);
         process.setStandardOutputFile(QDir(levelDirectory).filePath(QStringLiteral("solver.log")));
-        deadline.start(solverTimeoutMs);
+        const int remainingMs = adaptiveActive ? int(adaptiveTotalMs - adaptiveClock.elapsed()) : solverTimeoutMs;
+        deadline.start(std::clamp(remainingMs, 1, solverTimeoutMs));
         process.start(solverPath, {QStringLiteral("--file=") + run,
                                    QStringLiteral("--monitoring-file=") + dir.filePath(QStringLiteral("monitoring.txt")),
                                    QStringLiteral("--nthreads=2")});
+    }
+    catch (const RMeshSensitivity::RefinementLimit &error)
+    {
+        if (adaptiveActive)
+        {
+            finishAdaptive(QStringLiteral("budget"), errorMessage(error));
+            return;
+        }
+        lastMessage = errorMessage(error);
     }
     catch (const RError &error) { lastMessage = error.getMessage(); }
     catch (const std::exception &error) { lastMessage = errorMessage(error); }
@@ -658,12 +890,21 @@ void MeshSensitivityDialog::refineOnce()
         stopReason = QStringLiteral("preparation_failed");
         finishRefinement(-1, QProcess::CrashExit);
     }
+    else if (adaptiveActive && !pending && !lastMessage.isEmpty())
+    {
+        finishAdaptive(QStringLiteral("failed"));
+        return;
+    }
     refresh();
 }
 
 void MeshSensitivityDialog::stopRefinement(const QString &reason)
 {
-    if (!pending) return;
+    if (!pending)
+    {
+        if (adaptiveActive) finishAdaptive(reason);
+        return;
+    }
     stopReason = reason;
     process.kill();
 }
@@ -719,6 +960,19 @@ void MeshSensitivityDialog::finishRefinement(int exitCode, QProcess::ExitStatus 
     attempt.insert(QStringLiteral("finishedUtc"), timestamp());
     if (!lastMessage.isEmpty()) attempt.insert(QStringLiteral("detail"), lastMessage);
     attempts.replace(attempts.size()-1, attempt);
+    if (adaptiveActive)
+    {
+        if (outcome == QStringLiteral("complete"))
+        {
+            try { saveStudy(); }
+            catch (const std::exception &error) { finishAdaptive(QStringLiteral("failed"), errorMessage(error)); return; }
+            QTimer::singleShot(0, this, &MeshSensitivityDialog::advanceAdaptive);
+            refresh();
+        }
+        else finishAdaptive(outcome == QStringLiteral("time_limit") ? QStringLiteral("budget") :
+                            outcome == QStringLiteral("cancelled") ? outcome : QStringLiteral("failed"));
+        return;
+    }
     try { saveStudy(); }
     catch (const std::exception &error) { lastMessage = errorMessage(error); }
     refresh();
@@ -735,8 +989,9 @@ void MeshSensitivityDialog::recordAcceptance()
         const QString hash = currentLevel.value(QStringLiteral("sha256")).toString();
         if (fileDigest(QDir(studyDirectory).filePath(resultPath)) != hash)
             throw std::runtime_error("The displayed result artifact changed.");
-        decision = {{QStringLiteral("status"), levels.size() > 1 ? QStringLiteral("accepted_with_comparison")
-                                                                 : QStringLiteral("accepted_by_review")},
+        const QString accepted = adaptiveStatus == QStringLiteral("converged") ? QStringLiteral("accepted_with_adaptive_estimate") :
+            levels.size() > 1 ? QStringLiteral("accepted_with_comparison") : QStringLiteral("accepted_by_review");
+        decision = {{QStringLiteral("status"), accepted},
                     {QStringLiteral("acceptedUtc"), timestamp()},
                     {QStringLiteral("result"), resultPath},
                     {QStringLiteral("resultSha256"), hash}};
@@ -761,10 +1016,11 @@ void MeshSensitivityDialog::requestReview()
         publicAttempts.append(attempt);
     }
     analysis.insert(QStringLiteral("attempts"), publicAttempts);
-    emit reviewRequested(tr("Review this mesh sensitivity evidence. Explain whether the displayed result is "
+    emit reviewRequested(tr("Review this mesh study evidence. Explain whether the displayed result is "
                             "supported for the measured displacements, or whether one more bounded refinement "
                             "or a model correction is warranted. Use the selected scope and remaining budget. "
-                            "A local comparison covers the selected refinement region. A single comparison is "
-                            "limited evidence. Review the displacements and suggest the next step for the user.\n%1")
+                            "For an adaptive study, explain the residual indicator, leading marked regions and "
+                            "termination reason. The estimated error is an indicator. Review the displacements and "
+                            "suggest the next step for the user.\n%1")
                          .arg(QString::fromUtf8(QJsonDocument(analysis).toJson(QJsonDocument::Compact))));
 }

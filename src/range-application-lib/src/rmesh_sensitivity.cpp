@@ -462,7 +462,7 @@ RModel RMeshSensitivity::refineLocal(const RModel &source,const RR3Vector &point
         fail("Local refinement needs a finite point and a positive radius in metres.");
     Sample containing;
     if (!locate(source,point,containing)) fail("The local refinement point is outside the supported planar mesh.");
-    std::set<Edge> marked;
+    std::vector<uint> markedElements;
     std::vector<uint> probeSupport;
     for (size_t i=0;i<containing.nodes.size();++i)
         if (containing.weights[i]>1e-9) probeSupport.push_back(containing.nodes[i]);
@@ -480,10 +480,28 @@ RModel RMeshSensitivity::refineLocal(const RModel &source,const RR3Vector &point
                 [&](uint n) { return el.hasNodeId(n); });
             includedContaining=includedContaining || contains;
             if (!contains && std::hypot(cx-point[0],cy-point[1])>radiusM) continue;
-            for (uint k=0;k<3;++k) marked.insert(edge(el.getNodeId(k),el.getNodeId((k+1)%3)));
+            markedElements.push_back(surface.get(j));
         }
     }
-    if (!includedContaining || marked.empty()) fail("No containing triangle could be selected for local refinement.");
+    if (!includedContaining || markedElements.empty()) fail("No containing triangle could be selected for local refinement.");
+    return refineMarked(source,markedElements,maxElements);
+}
+
+RModel RMeshSensitivity::refineMarked(const RModel &source,const std::vector<uint> &markedElements,
+                                    uint maxElements,double minimumEdgeM)
+{
+    if (!supportsLocal(source)) fail("Marked refinement requires a supported all-TRI1 planar static mesh.");
+    if (!std::isfinite(minimumEdgeM) || minimumEdgeM<0)
+        fail("The minimum refinement edge length must be finite and nonnegative in metres.");
+    if (markedElements.empty()) fail("Marked refinement requires at least one triangle element ID.");
+    std::set<Edge> marked;
+    for (uint e:markedElements)
+    {
+        if (e>=source.getNElements() || source.getElement(e).getType()!=R_ELEMENT_TRI1)
+            fail("Marked refinement requires valid TRI1 surface element IDs.");
+        const auto &el=source.getElement(e);
+        for (uint k=0;k<3;++k) marked.insert(edge(el.getNodeId(k),el.getNodeId((k+1)%3)));
+    }
     // FORCE denotes total force per line element in the native stress solver.
     // A group stores one condition table, so its split state must be uniform.
     // Existing line edges are disjoint by eligibility; this expansion cannot
@@ -515,7 +533,7 @@ RModel RMeshSensitivity::refineLocal(const RModel &source,const RR3Vector &point
             for (uint j=0;j<3;++j) count+=marked.count(edge(el.getNodeId(j),el.getNodeId((j+1)%3)));
         else if (el.getType()==R_ELEMENT_TRUSS1) count+=marked.count(edge(el.getNodeId(0),el.getNodeId(1)));
     }
-    if (count>maxElements || count>=RConstants::eod) fail("The locally refined mesh exceeds the element budget.");
+    if (count>maxElements || count>=RConstants::eod) throw RefinementLimit("The marked refinement exceeds the element budget.");
     RModel result(source);
     result.removeAllVariables(); result.clearSurfaceNeighbors(); result.clearVolumeNeighbors();
     std::map<Edge,uint> midpoints;
@@ -527,6 +545,21 @@ RModel RMeshSensitivity::refineLocal(const RModel &source,const RR3Vector &point
         midpoints.emplace(key,n);
     }
     const auto publish=[&](uint e,uint group,const std::vector<RElement> &children) {
+        // Check the actual subdivision, including interior edges in transition
+        // triangles. Half the marked parent-edge length alone is insufficient.
+        for (const auto &child:children)
+        {
+            const uint edgeCount=child.getType()==R_ELEMENT_TRUSS1 ? 1 : child.size();
+            for (uint j=0;j<edgeCount;++j)
+            {
+                const uint a=child.getNodeId(j),b=child.getNodeId((j+1)%child.size());
+                if (a<source.getNNodes() && b<source.getNNodes()) continue;
+                const auto &na=result.getNode(a),&nb=result.getNode(b);
+                const double length=std::hypot(na.getX()-nb.getX(),na.getY()-nb.getY());
+                if (!std::isfinite(length) || length<=0 || length<minimumEdgeM)
+                    throw RefinementLimit("The marked refinement reaches the minimum edge resolution: a new child edge is shorter than the minimum or cannot be represented.");
+            }
+        }
         result.setElement(e,children.front(),false);
         for (size_t j=1;j<children.size();++j) result.addElement(children[j],true,group);
     };

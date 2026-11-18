@@ -1,5 +1,10 @@
+#include <algorithm>
+
 #include <QCheckBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QHBoxLayout>
+#include <QScopeGuard>
 #include <QJsonArray>
 #include <QLabel>
 #include <QMessageBox>
@@ -8,6 +13,8 @@
 #include <QVBoxLayout>
 
 #include "application.h"
+#include "main_window.h"
+#include "model_command_host.h"
 #include "model_io.h"
 #include "session.h"
 #include "solver_manager.h"
@@ -68,6 +75,53 @@ SolverStartDialog::SolverStartDialog(uint modelID, QWidget *parent)
         buttonBox->setStandardButtons(QDialogButtonBox::Cancel);
         auto *startButton = buttonBox->addButton(needsPath ? tr("Choose location…") : tr("Start solver"),
                                                  QDialogButtonBox::AcceptRole);
+        auto *session = Application::instance()->getSession();
+        bool adaptiveSupported = false;
+        if (!ModelCommandHost::isMutationBlocked() && session->trylock())
+        {
+            const auto unlock = qScopeGuard([session] { session->unlock(); });
+            if (modelID < session->getNModels())
+            {
+                const auto &selected = session->getModel(modelID);
+                // Offer the option from cheap topology checks. Detailed
+                // physical validation runs only on explicit opt-in.
+                adaptiveSupported = selected.getNSurfaces() > 0 &&
+                    selected.getProblemTaskTree().getProblemTypeMask() == R_PROBLEM_STRESS &&
+                    !selected.getTimeSolver().getEnabled() &&
+                    std::all_of(selected.getElements().begin(), selected.getElements().end(), [](const RElement &element) {
+                        const auto type = element.getType();
+                        return type == R_ELEMENT_TRI1 || type == R_ELEMENT_TRUSS1 || type == R_ELEMENT_POINT;
+                    });
+            }
+        }
+        if (adaptiveSupported)
+        {
+            auto *row = new QHBoxLayout;
+            adaptiveCheck = new QCheckBox(tr("Adaptive local refinement"), this);
+            adaptiveCheck->setObjectName(QStringLiteral("solverAdaptiveCheck"));
+            adaptiveCheck->setToolTip(tr("Evaluate a verified TRI3 baseline before launching any additional solve."));
+            auto *target = new QLabel(tr("Energy error target"), this);
+            adaptiveTolerance = new QDoubleSpinBox(this);
+            adaptiveTolerance->setObjectName(QStringLiteral("solverAdaptiveTolerancePercent"));
+            adaptiveTolerance->setRange(0.01, 100.0);
+            adaptiveTolerance->setValue(5.0);
+            adaptiveTolerance->setSuffix(tr(" %"));
+            target->setBuddy(adaptiveTolerance);
+            row->addWidget(adaptiveCheck);
+            row->addStretch();
+            row->addWidget(target);
+            row->addWidget(adaptiveTolerance);
+            mainLayout->addLayout(row);
+            target->hide();
+            adaptiveTolerance->hide();
+            connect(adaptiveCheck, &QCheckBox::toggled, this, [this, target, startButton, needsPath](bool checked) {
+                target->setVisible(checked);
+                adaptiveTolerance->setVisible(checked);
+                if (restartSolverCheck) restartSolverCheck->setEnabled(!checked);
+                startButton->setText(checked ? tr("Start adaptive review") :
+                                     needsPath ? tr("Choose location…") : tr("Start solver"));
+            });
+        }
         // Require an explicit start when the user has diagnostics to review.
         if (!diagnostics.isEmpty())
         {
@@ -119,8 +173,9 @@ int SolverStartDialog::exec()
     if (modelID == RConstants::eod)
         return rejectStart(changed);
 
+    const bool adaptive = adaptiveCheck && adaptiveCheck->isChecked();
     QString chosenPath;
-    if (session->getModel(modelID).getFileName().isEmpty())
+    if (!adaptive && session->getModel(modelID).getFileName().isEmpty())
     {
         chosenPath = ModelIO::getModelSaveName(settings, this->parentWidget(), session->getModel(modelID));
         if (chosenPath.isEmpty()) return QDialog::Rejected;
@@ -139,6 +194,16 @@ int SolverStartDialog::exec()
         return rejectStart(changed);
     if (current.value(QStringLiteral("warnings")) != this->validation.value(QStringLiteral("warnings")))
         return rejectStart(tr("Solver warnings changed. Review them before starting again."));
+
+    if (adaptive)
+    {
+        bool validRevision = false;
+        const quint64 sourceRevision = revision.toULongLong(&validRevision);
+        if (!validRevision || !Application::instance()->getMainWindow()->startAdaptiveMeshStudy(
+                {identity, sourceRevision}, adaptiveTolerance->value()))
+            return rejectStart(tr("The adaptive study could not be started for this model revision."));
+        return QDialog::Accepted;
+    }
 
     session->storeCurentModelVersion(modelID, tr("Configure solver run"));
     Model &model = session->getModel(modelID);

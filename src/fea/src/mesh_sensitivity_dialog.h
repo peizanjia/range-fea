@@ -4,6 +4,7 @@
 #include <functional>
 
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QProcess>
@@ -33,7 +34,10 @@ public:
     static bool hasNativeCompletion(const QString &path, const QString &hash);
     static bool matchesSolvedSnapshot(const RModel &source, const QString &path, const QString &hash);
     bool belongsTo(const QPair<QString,quint64> &stamp) const;
-    bool isRunning() const { return process.state() != QProcess::NotRunning; }
+    bool isRunning() const { return adaptiveActive || pending || process.state() != QProcess::NotRunning; }
+
+    //! Starts one bounded estimate–mark–solve loop; never accepts for the user.
+    bool startAdaptive(double tolerancePercent);
 
 public slots:
     void refresh();
@@ -44,6 +48,8 @@ signals:
 
 private:
     void refineOnce();
+    void advanceAdaptive();
+    void finishAdaptive(const QString &outcome, const QString &message = {});
     void finishRefinement(int exitCode, QProcess::ExitStatus exitStatus);
     void stopRefinement(const QString &reason);
     void recordAcceptance();
@@ -54,6 +60,7 @@ private:
     QString statusCode() const;
     double maximumChange() const;
     void appendLevel(const QJsonArray &values, const QString &fileName);
+    QPair<QString,QString> openableArtifact() const;
 
     RModel current;
     std::vector<RR3Vector> positions;
@@ -73,6 +80,16 @@ private:
     QString stopReason;
     QProcess process;
     QTimer deadline;
+    QElapsedTimer adaptiveClock;
+    bool adaptiveActive = false;
+    double adaptiveTolerancePercent = 5.0;
+    double adaptiveMinimumEdgeM = 0.0;
+    QString adaptiveStatus;
+    QJsonArray adaptiveEstimates;
+    QJsonArray adaptiveHistory;
+    std::vector<uint> adaptiveMarks;
+    QLabel *adaptiveSummary;
+    QWidget *manualControls;
     bool pending = false;
     bool baselineVerified;
     QString baselineProof;
