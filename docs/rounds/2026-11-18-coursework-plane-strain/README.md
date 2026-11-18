@@ -54,3 +54,7 @@
 本机运行目录为 `artifacts/coursework-plane-strain-20261118/`。该目录包含位移与应力 PNG、五级原生输入和结果、网格、监测记录、独立校核 JSON、应力恢复 CSV 与复算脚本。最细一级为 `reference/`。可以在 Range 中直接打开其中的 `input.rbm` 重算，或打开 `coursework-00000.rbm` 查看已有原生结果。
 
 本轮使用 Linux 已有构建 `build/linux-review/fea-solver/fea-solver`（Range FEA 1.3.0，SHA-256 `7637aa1fd0bb9bfaf55a12d9a31760916e4fe69913bf6c98f58e0d500e10208d`）。源码审阅基线为主仓库 `53794b5` 和求解库 `880c5d1` 加现有工作区状态。实测范围为原生 CLI、模型读写和独立后处理，GUI 能力依据源码核对。
+
+## 后续独立核验
+
+[材料力学估算、独立 TRI6 复算与应力峰值诊断](RELIABILITY.md) 补充了沉降量级、载荷分解、E 区底角固定距离应力和 CG 故障重放。
